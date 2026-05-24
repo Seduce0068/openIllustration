@@ -3,16 +3,19 @@
 本ドキュメントは、基本設計に基づきシステムの実装仕様を定義する。
 
 ## 1. API 仕様 (Rust / axum)
+
 全てのエンドポイントは Bearer Token (OID4VP 署名) を必要とする。
 
 ### 1.1. 認証・認可
+
 * `POST /auth/login`: JPKI OID4VP 認証フローを開始。
 * `POST /auth/verify`: 送信された Verifiable Presentation (VP) を検証し、JWT を発行。
 
 ### 1.2. コンテンツ
-* `POST /content/upload`: 
-    * Request: `Content-Type: multipart/form-data`
-    * 処理: 
+
+* `POST /content/upload`:
+  * Request: `Content-Type: multipart/form-data`
+  * 処理:
         1. 投稿者の署名検証。
         2. 画像（JPEG XL）または小説（Markdown）のハッシュ計算。
         3. IPFS へのプッシュおよび CID の取得。
@@ -20,6 +23,7 @@
 * `GET /content/:cid`: IPFS ゲートウェイまたは R2 からコンテンツを返却。
 
 ### 1.3. モデレーション
+
 * `POST /mod/report/:cid`: 違法コンテンツ報告。
 * `POST /mod/vote/:report_id`: 陪審員による投票。
 
@@ -68,5 +72,6 @@ CREATE TABLE votes (
 4. `Authorized`: 18歳以上検証済みトークンの生成。
 
 ## 4. IPFS コンテンツ管理
+
 * コンテンツは IPFS の Content Addressing に従い、CID v1 (base32) を使用する。
 * コンテンツ取得時は `https://ipfs.io/ipfs/<cid>` 等のパブリックゲートウェイを直接参照せず、システム内の安全なゲートウェイ経由で解決する。
