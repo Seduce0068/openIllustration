@@ -12,9 +12,10 @@
 
 ## 2. 技術スタックの確定
 
-* **バックエンド**: Rust (Axum, workers-rs, Wasm)
+* **バックエンド**: Rust (Axum, libSQL/Turso) — `server` crate
+* **共有ロジック**: Rust — `common` crate（署名・チェックサム・年齢検証・監査ログ）
 * **データベース**: Turso (libSQL: 分散型 SQLite)
-* **フロントエンド**: SolidJS + TypeScript
+* **フロントエンド**: Rust (Leptos CSR, Wasm) + Tailwind CSS
 * **スタイリング**: Tailwind CSS (Zero-JS 最適化)
 * **配信・ホスティング**: IPFS / Arweave
 * **インフラ管理**: OpenTofu (HCL)

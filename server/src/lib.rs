@@ -1,0 +1,900 @@
+// Guild Backend library
+mod jpki;
+mod network;
+
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{FromRef, Multipart, Path, State},
+    http::{StatusCode, header},
+    middleware::from_fn,
+    response::{IntoResponse, Response},
+    routing::{get, post},
+};
+use common::Claims;
+use libsql::{Builder, Connection};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tower_http::cors::{Any, CorsLayer};
+use uuid::Uuid;
+
+#[derive(Clone)]
+pub struct AppState {
+    pub db: Arc<Connection>,
+    pub http_client: Client,
+    pub jwt_secret: String,
+    /// 開発用: mock_token およびゼロ署名を許可
+    pub allow_mock_auth: bool,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum AppError {
+    #[error("Database error: {0}")]
+    Database(#[from] libsql::Error),
+    #[error("Internal server error: {0}")]
+    Internal(String),
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+    #[error("Not found")]
+    NotFound,
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+    #[error("Forbidden: {0}")]
+    Forbidden(String),
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, message) = match self {
+            AppError::Database(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB Error: {}", e),
+            ),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
+            AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+        };
+
+        (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+
+// Newtype wrapper to satisfy Orphan Rules for Axum extractor
+pub struct AuthClaims(pub Claims);
+
+impl std::ops::Deref for AuthClaims {
+    type Target = Claims;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+// Axum extractor for JWT validation
+#[axum::async_trait]
+impl<S> axum::extract::FromRequestParts<S> for AuthClaims
+where
+    S: Send + Sync,
+    Arc<AppState>: axum::extract::FromRef<S>,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let state = Arc::<AppState>::from_ref(state);
+
+        let auth_header = parts
+            .headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or(AppError::Unauthorized(
+                "Missing Authorization header".to_string(),
+            ))?;
+
+        if !auth_header.starts_with("Bearer ") {
+            return Err(AppError::Unauthorized(
+                "Invalid Authorization format".to_string(),
+            ));
+        }
+
+        let token = &auth_header[7..];
+
+        let token_data = decode::<Claims>(
+            token,
+            &DecodingKey::from_secret(state.jwt_secret.as_ref()),
+            &Validation::default(),
+        )
+        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+
+        Ok(AuthClaims(token_data.claims))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Oid4vpRequest {
+    pub nonce: String,
+    pub presentation_definition_uri: String,
+}
+
+// End of imports
+
+#[derive(Serialize, Deserialize)]
+pub struct VerifyRequest {
+    pub presentation_token: String,
+    pub public_key_der: Option<Vec<u8>>,
+    /// VC から取得した生年月日 (YYYY-MM-DD)
+    pub birth_date: Option<String>,
+    /// ISO 3166-1 alpha-2 国コード
+    pub country_code: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VerifyResponse {
+    pub authorized: bool,
+    pub user_hash: Option<String>,
+    pub token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ContentMeta {
+    pub cid: String,
+    pub checksum: String,
+    #[serde(rename = "type")]
+    pub content_type: String,
+    pub status: String,
+}
+
+// Governance structures
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Report {
+    pub report_id: i64,
+    pub target_cid: String,
+    pub reason: String,
+    pub status: String, // 'Pending', 'Approved', 'Rejected'
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Vote {
+    pub report_id: i64,
+    pub juror_hash: String,
+    pub result: String, // 'Approve', 'Reject'
+    pub signature: Vec<u8>,
+}
+
+pub async fn run() -> anyhow::Result<()> {
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
+    let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
+
+    let db = Builder::new_remote(db_url, db_token)
+        .build()
+        .await?
+        .connect()?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS users (
+            user_hash TEXT PRIMARY KEY,
+            public_key_der BLOB,
+            is_banned BOOLEAN DEFAULT FALSE,
+            banned_at DATETIME
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS contents (
+            cid TEXT PRIMARY KEY,
+            type TEXT CHECK(type IN ('Illustration', 'Novel')),
+            owner_hash TEXT REFERENCES users(user_hash),
+            checksum TEXT NOT NULL,
+            status TEXT CHECK(status IN ('Approved', 'Reported', 'Rejected')) DEFAULT 'Approved',
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS signatures (
+            signature_id INTEGER PRIMARY KEY,
+            target_id TEXT NOT NULL, -- CID, report_id, or vote_id
+            signer_hash TEXT NOT NULL,
+            signature_blob BLOB NOT NULL,
+            algorithm TEXT NOT NULL, -- e.g., 'RSASSA-PKCS1-v1_5'
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS content_audit_log (
+            log_id INTEGER PRIMARY KEY,
+            cid TEXT REFERENCES contents(cid),
+            old_status TEXT,
+            new_status TEXT,
+            changed_by TEXT,
+            reason TEXT,
+            previous_log_hash TEXT,
+            entry_hash TEXT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS reports (
+            report_id INTEGER PRIMARY KEY,
+            target_cid TEXT REFERENCES contents(cid),
+            reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS votes (
+            vote_id INTEGER PRIMARY KEY,
+            report_id INTEGER REFERENCES reports(report_id),
+            voter_hash TEXT REFERENCES users(user_hash),
+            vote_result TEXT CHECK(vote_result IN ('Approve', 'Reject')),
+            voted_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db),
+        http_client: Client::new(),
+        jwt_secret: std::env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
+        allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(true),
+    });
+
+    let app = build_router(shared_state);
+
+    let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
+    println!("Guild Backend listening on {}", addr);
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
+    Ok(())
+}
+
+pub fn build_router(state: Arc<AppState>) -> Router {
+    Router::new()
+        .route("/auth/login", post(auth_login))
+        .route("/auth/verify", post(auth_verify))
+        .route("/content", get(list_contents))
+        .route("/content/upload", post(upload_content))
+        .route("/mod/report", post(mod_report))
+        .route("/mod/vote", post(mod_vote))
+        .route("/content/:cid", get(get_content))
+        .route("/health", get(|| async { "ok" }))
+        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        )
+        .layer(from_fn(network::ipv6_only_middleware))
+        .with_state(state)
+}
+
+pub async fn auth_login() -> Json<Oid4vpRequest> {
+    let nonce = Uuid::new_v4().to_string();
+    let presentation_definition_uri =
+        "https://guild.example.com/api/presentation-definition".to_string();
+
+    Json(Oid4vpRequest {
+        nonce,
+        presentation_definition_uri,
+    })
+}
+
+pub async fn auth_verify(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<VerifyRequest>,
+) -> Result<Json<VerifyResponse>, AppError> {
+    let birth_date = payload
+        .birth_date
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("birth_date is required".to_string()))?;
+    let country_code = payload
+        .country_code
+        .as_deref()
+        .ok_or_else(|| AppError::BadRequest("country_code is required".to_string()))?;
+    validate_age(birth_date, country_code)?;
+
+    let verified_key = if payload.presentation_token == "mock_token" && state.allow_mock_auth {
+        payload.public_key_der.clone()
+    } else {
+        Some(jpki::verify_presentation(
+            &payload.presentation_token,
+            payload.public_key_der.clone(),
+            state.allow_mock_auth,
+        )?)
+    };
+
+    let user_hash = if let Some(ref der) = verified_key {
+        sha256::digest(&der[..])
+    } else {
+        sha256::digest(format!("{}:{}", birth_date, country_code).as_bytes())
+    };
+
+    ensure_user_not_banned(&state.db, &user_hash).await?;
+
+    if let Some(der) = verified_key {
+        state.db.execute(
+            "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?) ON CONFLICT(user_hash) DO UPDATE SET public_key_der = excluded.public_key_der",
+            (user_hash.clone(), der)
+        ).await?;
+    } else {
+        state
+            .db
+            .execute(
+                "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
+                [user_hash.clone()],
+            )
+            .await?;
+    }
+
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::hours(24))
+        .expect("valid timestamp")
+        .timestamp() as usize;
+
+    let claims = Claims {
+        sub: user_hash.clone(),
+        exp: expiration,
+    };
+
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(state.jwt_secret.as_ref()),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+
+    Ok(Json(VerifyResponse {
+        authorized: true,
+        user_hash: Some(user_hash),
+        token: Some(token),
+    }))
+}
+
+pub async fn get_content(
+    State(state): State<Arc<AppState>>,
+    Path(cid): Path<String>,
+) -> Result<Response, AppError> {
+    let mut rows = state
+        .db
+        .query("SELECT checksum FROM contents WHERE cid = ?", [cid.clone()])
+        .await?;
+
+    let expected_checksum: String = if let Some(row) = rows.next().await? {
+        row.get(0)?
+    } else {
+        return Err(AppError::NotFound);
+    };
+
+    let url = format!("https://ipfs.io/ipfs/{}", cid);
+    let response = state
+        .http_client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("IPFS gateway error: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "IPFS fetch failed with status: {}",
+            response.status()
+        )));
+    }
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to read response body: {}", e)))?;
+
+    let actual_checksum = sha256::digest(&bytes[..]);
+    if actual_checksum != expected_checksum {
+        return Err(AppError::Unauthorized("Integrity check failed".to_string()));
+    }
+
+    Response::builder()
+        .header(header::CONTENT_TYPE, "image/jxl")
+        .header("X-Forensic-Checksum", expected_checksum)
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal(format!("Response build error: {}", e)))
+}
+
+pub async fn list_contents(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ContentMeta>>, AppError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT cid, checksum, type, status FROM contents WHERE status = 'Approved' ORDER BY created_at DESC LIMIT 50",
+            (),
+        )
+        .await?;
+
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().await? {
+        items.push(ContentMeta {
+            cid: row.get(0)?,
+            checksum: row.get(1)?,
+            content_type: row.get(2)?,
+            status: row.get(3)?,
+        });
+    }
+    Ok(Json(items))
+}
+
+pub async fn update_content_status(
+    tx: &libsql::Transaction,
+    cid: &str,
+    new_status: &str,
+    changed_by: &str,
+    reason: &str,
+) -> Result<(), AppError> {
+    // 1. Get current status and latest log hash for chaining
+    let mut rows = tx
+        .query("SELECT status FROM contents WHERE cid = ?", [cid])
+        .await?;
+    let old_status: String = if let Some(row) = rows.next().await? {
+        row.get(0)?
+    } else {
+        return Err(AppError::NotFound);
+    };
+
+    let mut log_rows = tx
+        .query(
+            "SELECT entry_hash FROM content_audit_log ORDER BY log_id DESC LIMIT 1",
+            (),
+        )
+        .await?;
+    let previous_log_hash = if let Some(row) = log_rows.next().await? {
+        row.get(0)?
+    } else {
+        "GENESIS_HASH".to_string()
+    };
+
+    let entry = common::AuditLogEntry {
+        log_id: None,
+        cid: cid.to_string(),
+        old_status: old_status.clone(),
+        new_status: new_status.to_string(),
+        changed_by: changed_by.to_string(),
+        reason: reason.to_string(),
+        previous_log_hash: previous_log_hash.clone(),
+    };
+    let entry_hash = entry.calculate_hash();
+
+    // 2. Perform updates
+    tx.execute(
+        "UPDATE contents SET status = ? WHERE cid = ?",
+        [new_status, cid],
+    )
+    .await?;
+
+    tx.execute(
+        "INSERT INTO content_audit_log (cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash),
+    ).await?;
+
+    Ok(())
+}
+
+pub async fn mod_report(
+    State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
+    Json(report): Json<Report>,
+) -> Result<Json<bool>, AppError> {
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    tx.execute(
+        "INSERT INTO reports (target_cid, reason) VALUES (?, ?)",
+        [report.target_cid.clone(), report.reason.clone()],
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
+
+    // Use forensic helper to update status and log it
+    update_content_status(
+        &tx,
+        &report.target_cid,
+        "Reported",
+        &_claims.sub, // The reporter's hash
+        &format!("User report: {}", report.reason),
+    )
+    .await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+
+    Ok(Json(true))
+}
+
+pub async fn process_report_conclusion(
+    tx: &libsql::Transaction,
+    report_id: i64,
+) -> Result<(), AppError> {
+    // 1. Tally votes
+    let mut rows = tx
+        .query(
+            "SELECT vote_result, COUNT(*) FROM votes WHERE report_id = ? GROUP BY vote_result",
+            [report_id],
+        )
+        .await?;
+
+    let mut approve_count = 0;
+    let mut reject_count = 0;
+
+    while let Some(row) = rows.next().await? {
+        let result: String = row.get(0)?;
+        let count: i64 = row.get(1)?;
+        if result == "Approve" {
+            approve_count = count;
+        } else if result == "Reject" {
+            reject_count = count;
+        }
+    }
+
+    // 2. Define threshold (Example: Conclusion after 3 total votes)
+    let total_votes = approve_count + reject_count;
+    if total_votes >= 3 {
+        let final_status = if reject_count > approve_count {
+            "Rejected"
+        } else {
+            "Approved"
+        };
+
+        // Get target CID
+        let mut report_rows = tx
+            .query(
+                "SELECT target_cid FROM reports WHERE report_id = ?",
+                [report_id],
+            )
+            .await?;
+        if let Some(row) = report_rows.next().await? {
+            let cid: String = row.get(0)?;
+            update_content_status(
+                tx,
+                &cid,
+                final_status,
+                "SYSTEM_GOVERNANCE",
+                &format!(
+                    "Consensus reached: {} Approve, {} Reject",
+                    approve_count, reject_count
+                ),
+            )
+            .await?;
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn mod_vote(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Json(vote): Json<Vote>,
+) -> Result<Json<bool>, AppError> {
+    // 0. Security check: Token sub must match juror_hash
+    if claims.sub != vote.juror_hash {
+        return Err(AppError::Unauthorized("Token sub mismatch".to_string()));
+    }
+
+    // 1. Verify Signature (Auditability)
+    let message = json!( {
+        "report_id": vote.report_id,
+        "result": vote.result
+    })
+    .to_string();
+
+    if !verify_user_signature(
+        &state,
+        &vote.juror_hash,
+        message.as_bytes(),
+        &vote.signature,
+    )
+    .await?
+    {
+        return Err(AppError::Unauthorized(
+            "Invalid digital signature".to_string(),
+        ));
+    }
+
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    // 2. Insert vote record
+    tx.execute(
+        "INSERT INTO votes (report_id, voter_hash, vote_result) VALUES (?, ?, ?)",
+        [
+            vote.report_id.to_string(),
+            vote.juror_hash.clone(),
+            vote.result,
+        ],
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
+
+    // 3. Insert signature for auditability
+    tx.execute(
+        "INSERT INTO signatures (target_id, signer_hash, signature_blob, algorithm) VALUES (?, ?, ?, ?)",
+        (format!("vote:{}", vote.report_id), vote.juror_hash, vote.signature, "JPKI-RSASSA-PKCS1-v1_5")
+    ).await
+        .map_err(|e| AppError::Internal(format!("Signature Insert failed: {}", e)))?;
+
+    // 4. Trigger consensus processing
+    process_report_conclusion(&tx, vote.report_id).await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+
+    Ok(Json(true))
+}
+
+use serde_json::json;
+
+pub async fn verify_user_signature(
+    state: &AppState,
+    user_hash: &str,
+    data: &[u8],
+    signature: &[u8],
+) -> Result<bool, AppError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT public_key_der FROM users WHERE user_hash = ?",
+            [user_hash],
+        )
+        .await?;
+    let der: Vec<u8> = if let Some(row) = rows.next().await? {
+        row.get(0)?
+    } else {
+        return Ok(false);
+    };
+
+    common::verify_rsa_signature(&der, data, signature)
+        .map(|_| true)
+        .map_err(|e| AppError::Unauthorized(format!("Verification failed: {}", e)))
+}
+
+pub async fn pin_to_ipfs(
+    state: &AppState,
+    data: Vec<u8>,
+    filename: &str,
+) -> Result<String, AppError> {
+    let pinata_jwt = std::env::var("PINATA_JWT").unwrap_or_else(|_| "mock_jwt".to_string());
+
+    if pinata_jwt == "mock_jwt" {
+        let checksum = sha256::digest(&data[..]);
+        return Ok(format!("QmMockPinata{}", &checksum[0..10]));
+    }
+
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(data).file_name(filename.to_string()),
+    );
+
+    let res = state
+        .http_client
+        .post("https://api.pinata.cloud/pinning/pinFileToIPFS")
+        .bearer_auth(pinata_jwt)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Pinata request failed: {}", e)))?;
+
+    if !res.status().is_success() {
+        return Err(AppError::Internal(format!(
+            "Pinata upload failed: {}",
+            res.status()
+        )));
+    }
+
+    let json: serde_json::Value = res
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("Invalid Pinata response: {}", e)))?;
+
+    let cid = json["IpfsHash"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal("CID not found in Pinata response".to_string()))?;
+
+    Ok(cid.to_string())
+}
+
+pub async fn upload_content(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    mut multipart: Multipart,
+) -> Result<Json<String>, AppError> {
+    let mut data = None;
+    let mut content_type = None;
+    let mut owner_hash = None;
+    let mut signature = None;
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "file" => {
+                content_type = field.content_type().map(|s| s.to_string());
+                data = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::Internal(format!("Failed to read field: {}", e)))?,
+                );
+            }
+            "owner_hash" => {
+                owner_hash = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("Invalid owner_hash: {}", e)))?,
+                );
+            }
+            "signature" => {
+                signature = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("Invalid signature: {}", e)))?,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    let data = data.ok_or(AppError::BadRequest("Missing file".to_string()))?;
+    let owner_hash = owner_hash.ok_or(AppError::BadRequest("Missing owner_hash".to_string()))?;
+    let signature = signature.ok_or(AppError::BadRequest("Missing signature".to_string()))?;
+
+    // 0. Security check: Token sub must match owner_hash
+    if claims.sub != owner_hash {
+        return Err(AppError::Unauthorized("Token sub mismatch".to_string()));
+    }
+
+    ensure_user_not_banned(&state.db, &owner_hash).await?;
+
+    let content_kind = validate_upload_content_type(content_type.as_deref())?;
+
+    // 1. Verify Signature (dev mock: all-zero signature when ALLOW_MOCK_AUTH)
+    let mock_sig = state.allow_mock_auth && signature.iter().all(|&b| b == 0);
+    if !mock_sig && !verify_user_signature(&state, &owner_hash, &data, &signature).await? {
+        return Err(AppError::Unauthorized(
+            "Invalid digital signature".to_string(),
+        ));
+    }
+
+    let checksum = sha256::digest(&data[..]);
+
+    // 2. Pin to IPFS
+    let cid = pin_to_ipfs(&state, data.to_vec(), "upload.jxl").await?;
+
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    tx.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum) VALUES (?, ?, ?, ?)",
+        [
+            cid.clone(),
+            content_kind.to_string(),
+            owner_hash.clone(),
+            checksum,
+        ],
+    )
+    .await
+    .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
+
+    tx.execute(
+        "INSERT INTO signatures (target_id, signer_hash, signature_blob, algorithm) VALUES (?, ?, ?, ?)",
+        (cid.clone(), owner_hash, signature.to_vec(), "JPKI-RSASSA-PKCS1-v1_5")
+    ).await
+        .map_err(|e| AppError::Internal(format!("Signature Insert failed: {}", e)))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+
+    Ok(Json(cid))
+}
+
+pub async fn ensure_user_not_banned(db: &Connection, user_hash: &str) -> Result<(), AppError> {
+    let mut rows = db
+        .query(
+            "SELECT is_banned FROM users WHERE user_hash = ?",
+            [user_hash],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let banned: bool = row.get(0)?;
+        if banned {
+            return Err(AppError::Forbidden("User is banned".to_string()));
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_age(birth_date: &str, country_code: &str) -> Result<(), AppError> {
+    let today = chrono::Utc::now().date_naive();
+    common::age::is_age_allowed(birth_date, country_code, today).map_err(|e| match e {
+        common::age::AgeValidationError::UnderAge {
+            country,
+            age,
+            threshold,
+        } => AppError::Forbidden(format!(
+            "Age verification failed for {country}: age {age}, required {threshold}"
+        )),
+        common::age::AgeValidationError::InvalidBirthDate(msg) => {
+            AppError::BadRequest(format!("Invalid birth_date: {msg}"))
+        }
+    })
+}
+
+/// INT-02: JPEG XL / Markdown のみ許可
+pub fn validate_upload_content_type(content_type: Option<&str>) -> Result<&'static str, AppError> {
+    let ct = content_type.unwrap_or("").to_lowercase();
+    if ct.contains("zip")
+        || ct.contains("application/x-")
+        || ct.contains("executable")
+        || ct.contains("octet-stream")
+    {
+        return Err(AppError::BadRequest(
+            "Disallowed content type; only JPEG XL illustrations and Markdown novels are accepted"
+                .to_string(),
+        ));
+    }
+    if ct.contains("jxl") || ct.contains("image/") {
+        return Ok("Illustration");
+    }
+    if ct.contains("markdown") || ct.contains("text/plain") || ct.contains("text/") {
+        return Ok("Novel");
+    }
+    Err(AppError::BadRequest(
+        "Unsupported content type; use image/jxl or text/markdown".to_string(),
+    ))
+}
+
+#[cfg(test)]
+mod fuzz_test;
+#[cfg(test)]
+#[allow(clippy::module_inception)]
+mod tests;

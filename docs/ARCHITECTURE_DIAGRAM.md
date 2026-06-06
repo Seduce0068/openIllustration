@@ -8,7 +8,7 @@
 [ ユーザー層 ]
     │ (WebAuthn/OID4VP)
     ▼
-[ プレゼンテーション層 (SolidJS / Rust-Wasm) ]
+[ プレゼンテーション層 (Leptos CSR / Rust-Wasm) ]
     │ (HTTPS / IPFS CID)
     ▼
 [ アプリケーション層 (Rust / Axum / Cloudflare Workers) ]
@@ -34,8 +34,8 @@
 
 ## 4. コンポーネント役割定義
 
-* **Rust Backend (Axum/Workers)**: メモリ安全性を担保し、認証・ガバナンス・IPFSアドレス管理の要となる。
+* **Rust Backend (server crate / Axum)**: メモリ安全性を担保し、認証・ガバナンス・IPFSアドレス管理の要となる。
 * **Turso (libSQL)**: ユーザーハッシュとコンテンツのメタデータを保持する分散型 SQLite。
-* **SolidJS フロントエンド**: ユーザー操作を Wasm モジュールに委譲し、真正性検証を行う。
+* **Leptos フロントエンド (client crate)**: ユーザー操作と Wasm 上の完全性検証を Rust で一元化する。
 * **IPFS / Arweave**: コンテンツの実体を CID ベースで不変的に保持・分散配信する。
 * **Smart Contract**: 陪審員の投票およびモデレーション判断のログを不可逆的に記録する。

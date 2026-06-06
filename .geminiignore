@@ -1,3 +1,9 @@
 # Gemini CLI へのコンテキスト注入を制限する
 
 openIllustration.md
+integrity-verifier/target
+.env
+*.tfstate
+*.tfstate.backup
+.DS_Store
+backend/target

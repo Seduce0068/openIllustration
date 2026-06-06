@@ -1,6 +1,10 @@
-integrity-verifier/target
+/target/
+**/target/
+dist/
+client/dist/
 .env
+*.db
+*.db-*
+.DS_Store
 *.tfstate
 *.tfstate.backup
-.DS_Store
-backend/target
