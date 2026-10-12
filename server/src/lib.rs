@@ -149,6 +149,18 @@ pub struct ContentMeta {
     #[serde(rename = "type")]
     pub content_type: String,
     pub status: String,
+    pub price: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransactionResponse {
+    pub tx_id: i64,
+    pub cid: String,
+    pub sender_hash: String,
+    pub receiver_hash: String,
+    pub amount: i64,
+    pub tx_hash: String,
+    pub created_at: String,
 }
 
 // Governance structures
@@ -172,10 +184,18 @@ pub async fn run() -> anyhow::Result<()> {
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
 
-    let db = Builder::new_remote(db_url, db_token)
-        .build()
-        .await?
-        .connect()?;
+    let db = if db_url.starts_with("file:") || !db_url.contains("://") {
+        let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
+        Builder::new_local(path)
+            .build()
+            .await?
+            .connect()?
+    } else {
+        Builder::new_remote(db_url, db_token)
+            .build()
+            .await?
+            .connect()?
+    };
 
     db.execute(
         "CREATE TABLE IF NOT EXISTS users (
@@ -195,6 +215,21 @@ pub async fn run() -> anyhow::Result<()> {
             owner_hash TEXT REFERENCES users(user_hash),
             checksum TEXT NOT NULL,
             status TEXT CHECK(status IN ('Approved', 'Reported', 'Rejected')) DEFAULT 'Approved',
+            price INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );",
+        (),
+    )
+    .await?;
+
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS transactions (
+            tx_id INTEGER PRIMARY KEY,
+            cid TEXT REFERENCES contents(cid),
+            sender_hash TEXT REFERENCES users(user_hash),
+            receiver_hash TEXT REFERENCES users(user_hash),
+            amount INTEGER NOT NULL,
+            tx_hash TEXT NOT NULL,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );",
         (),
@@ -275,15 +310,31 @@ pub async fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct AuditLogResponse {
+    pub log_id: i64,
+    pub cid: String,
+    pub old_status: Option<String>,
+    pub new_status: String,
+    pub changed_by: String,
+    pub reason: Option<String>,
+    pub created_at: String,
+    pub entry_hash: String,
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/login", post(auth_login))
         .route("/auth/verify", post(auth_verify))
         .route("/content", get(list_contents))
         .route("/content/upload", post(upload_content))
+        .route("/transactions", get(list_transactions))
         .route("/mod/report", post(mod_report))
+        .route("/mod/reports", get(list_reports))
         .route("/mod/vote", post(mod_vote))
         .route("/content/:cid", get(get_content))
+        .route("/content/:cid/audit", get(get_content_audit))
+        .route("/content/:cid/support", post(support_creator))
         .route("/health", get(|| async { "ok" }))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
@@ -295,6 +346,100 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(from_fn(network::ipv6_only_middleware))
         .with_state(state)
 }
+
+#[derive(Serialize, Deserialize)]
+pub struct ReportResponse {
+    pub report_id: i64,
+    pub target_cid: String,
+    pub reason: String,
+    pub created_at: String,
+    pub status: String,
+}
+
+pub async fn list_reports(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<ReportResponse>>, AppError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT r.report_id, r.target_cid, r.reason, r.created_at, c.status 
+             FROM reports r
+             JOIN contents c ON r.target_cid = c.cid
+             WHERE c.status = 'Reported'
+             ORDER BY r.created_at DESC",
+            (),
+        )
+        .await?;
+
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().await? {
+        items.push(ReportResponse {
+            report_id: row.get(0)?,
+            target_cid: row.get(1)?,
+            reason: row.get(2)?,
+            created_at: row.get(3)?,
+            status: row.get(4)?,
+        });
+    }
+    Ok(Json(items))
+}
+
+pub async fn list_transactions(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<TransactionResponse>>, AppError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT tx_id, cid, sender_hash, receiver_hash, amount, tx_hash, created_at 
+             FROM transactions ORDER BY created_at DESC LIMIT 100",
+            (),
+        )
+        .await?;
+
+    let mut items = Vec::new();
+    while let Some(row) = rows.next().await? {
+        items.push(TransactionResponse {
+            tx_id: row.get(0)?,
+            cid: row.get(1)?,
+            sender_hash: row.get(2)?,
+            receiver_hash: row.get(3)?,
+            amount: row.get(4)?,
+            tx_hash: row.get(5)?,
+            created_at: row.get(6)?,
+        });
+    }
+    Ok(Json(items))
+}
+
+pub async fn get_content_audit(
+    State(state): State<Arc<AppState>>,
+    Path(cid): Path<String>,
+) -> Result<Json<Vec<AuditLogResponse>>, AppError> {
+    let mut rows = state
+        .db
+        .query(
+            "SELECT log_id, cid, old_status, new_status, changed_by, reason, created_at, entry_hash 
+             FROM content_audit_log WHERE cid = ? ORDER BY log_id ASC",
+            [cid],
+        )
+        .await?;
+
+    let mut logs = Vec::new();
+    while let Some(row) = rows.next().await? {
+        logs.push(AuditLogResponse {
+            log_id: row.get(0)?,
+            cid: row.get(1)?,
+            old_status: row.get(2)?,
+            new_status: row.get(3)?,
+            changed_by: row.get(4)?,
+            reason: row.get(5)?,
+            created_at: row.get(6)?,
+            entry_hash: row.get(7)?,
+        });
+    }
+    Ok(Json(logs))
+}
+
 
 pub async fn auth_login() -> Json<Oid4vpRequest> {
     let nonce = Uuid::new_v4().to_string();
@@ -393,36 +538,45 @@ pub async fn get_content(
         return Err(AppError::NotFound);
     };
 
-    let url = format!("https://ipfs.io/ipfs/{}", cid);
-    let response = state
-        .http_client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(format!("IPFS gateway error: {}", e)))?;
+    let gateways = [
+        format!("https://ipfs.io/ipfs/{}", cid),
+        format!("https://cloudflare-ipfs.com/ipfs/{}", cid),
+        format!("https://{}.ipfs.dweb.link", cid),
+    ];
 
-    if !response.status().is_success() {
-        return Err(AppError::Internal(format!(
-            "IPFS fetch failed with status: {}",
-            response.status()
-        )));
+    let mut last_error = String::new();
+    
+    for gateway_url in gateways {
+        match state.http_client.get(&gateway_url).send().await {
+            Ok(response) if response.status().is_success() => {
+                let bytes = response.bytes().await.map_err(|e| {
+                    AppError::Internal(format!("Failed to read response body: {}", e))
+                })?;
+
+                let actual_checksum = sha256::digest(&bytes[..]);
+                if actual_checksum != expected_checksum {
+                    return Err(AppError::Unauthorized("Integrity check failed".to_string()));
+                }
+
+                return Response::builder()
+                    .header(header::CONTENT_TYPE, "image/jxl")
+                    .header("X-Forensic-Checksum", expected_checksum)
+                    .body(Body::from(bytes))
+                    .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));
+            }
+            Ok(response) => {
+                last_error = format!("{}: HTTP {}", gateway_url, response.status());
+            }
+            Err(e) => {
+                last_error = format!("{}: {}", gateway_url, e);
+            }
+        }
     }
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to read response body: {}", e)))?;
-
-    let actual_checksum = sha256::digest(&bytes[..]);
-    if actual_checksum != expected_checksum {
-        return Err(AppError::Unauthorized("Integrity check failed".to_string()));
-    }
-
-    Response::builder()
-        .header(header::CONTENT_TYPE, "image/jxl")
-        .header("X-Forensic-Checksum", expected_checksum)
-        .body(Body::from(bytes))
-        .map_err(|e| AppError::Internal(format!("Response build error: {}", e)))
+    Err(AppError::Internal(format!(
+        "All IPFS gateways failed. Last error: {}",
+        last_error
+    )))
 }
 
 pub async fn list_contents(
@@ -431,7 +585,7 @@ pub async fn list_contents(
     let mut rows = state
         .db
         .query(
-            "SELECT cid, checksum, type, status FROM contents WHERE status = 'Approved' ORDER BY created_at DESC LIMIT 50",
+            "SELECT cid, checksum, type, status, price FROM contents WHERE status = 'Approved' ORDER BY created_at DESC LIMIT 50",
             (),
         )
         .await?;
@@ -443,9 +597,43 @@ pub async fn list_contents(
             checksum: row.get(1)?,
             content_type: row.get(2)?,
             status: row.get(3)?,
+            price: row.get(4)?,
         });
     }
     Ok(Json(items))
+}
+
+#[derive(Deserialize)]
+pub struct SupportRequest {
+    pub amount: i64,
+}
+
+pub async fn support_creator(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(cid): Path<String>,
+    Json(payload): Json<SupportRequest>,
+) -> Result<Json<String>, AppError> {
+    // 1. Get content owner
+    let mut rows = state
+        .db
+        .query("SELECT owner_hash FROM contents WHERE cid = ?", [cid.clone()])
+        .await?;
+    let owner_hash: String = if let Some(row) = rows.next().await? {
+        row.get(0)?
+    } else {
+        return Err(AppError::NotFound);
+    };
+
+    // 2. Record transaction (Simulated P2P)
+    let tx_hash = sha256::digest(format!("{}:{}:{}:{}", cid, claims.sub, owner_hash, payload.amount).as_bytes());
+    
+    state.db.execute(
+        "INSERT INTO transactions (cid, sender_hash, receiver_hash, amount, tx_hash) VALUES (?, ?, ?, ?, ?)",
+        (cid, claims.sub.clone(), owner_hash, payload.amount, tx_hash.clone())
+    ).await?;
+
+    Ok(Json(tx_hash))
 }
 
 pub async fn update_content_status(
@@ -615,13 +803,16 @@ pub async fn mod_vote(
     })
     .to_string();
 
-    if !verify_user_signature(
-        &state,
-        &vote.juror_hash,
-        message.as_bytes(),
-        &vote.signature,
-    )
-    .await?
+    let mock_sig = state.allow_mock_auth && vote.signature.iter().all(|&b| b == 0);
+
+    if !mock_sig
+        && !verify_user_signature(
+            &state,
+            &vote.juror_hash,
+            message.as_bytes(),
+            &vote.signature,
+        )
+        .await?
     {
         return Err(AppError::Unauthorized(
             "Invalid digital signature".to_string(),
@@ -743,6 +934,7 @@ pub async fn upload_content(
     let mut content_type = None;
     let mut owner_hash = None;
     let mut signature = None;
+    let mut price = 0;
 
     while let Some(field) = multipart
         .next_field()
@@ -775,6 +967,14 @@ pub async fn upload_content(
                         .await
                         .map_err(|e| AppError::BadRequest(format!("Invalid signature: {}", e)))?,
                 );
+            }
+            "price" => {
+                price = field
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .parse()
+                    .unwrap_or(0);
             }
             _ => {}
         }
@@ -813,13 +1013,14 @@ pub async fn upload_content(
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
 
     tx.execute(
-        "INSERT INTO contents (cid, type, owner_hash, checksum) VALUES (?, ?, ?, ?)",
-        [
+        "INSERT INTO contents (cid, type, owner_hash, checksum, price) VALUES (?, ?, ?, ?, ?)",
+        (
             cid.clone(),
             content_kind.to_string(),
             owner_hash.clone(),
             checksum,
-        ],
+            price,
+        ),
     )
     .await
     .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;

@@ -20,6 +20,42 @@ pub struct ContentMeta {
     #[serde(rename = "type")]
     pub content_type: String,
     pub status: String,
+    pub price: i64,
+}
+
+#[derive(Serialize)]
+pub struct SupportRequest {
+    pub amount: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Transaction {
+    pub tx_id: i64,
+    pub created_at: String,
+    pub sender_hash: String,
+    pub receiver_hash: String,
+    pub amount: i64,
+    pub tx_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuditLog {
+    pub log_id: i64,
+    pub old_status: Option<String>,
+    pub new_status: String,
+    pub changed_by: String,
+    pub reason: Option<String>,
+    pub created_at: String,
+    pub entry_hash: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Report {
+    pub report_id: i64,
+    pub target_cid: String,
+    pub reason: String,
+    pub created_at: String,
+    pub status: String,
 }
 
 #[component]
@@ -38,7 +74,7 @@ pub fn App() -> impl IntoView {
         <div class="min-h-screen bg-black text-white font-mono">
             <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
                 <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD (RUST)</h1>
-                <Show when=move || view.get() != "login">
+                <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
                         <button on:click=move |_| set_view.set("dashboard".to_string())
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-500" })>
@@ -52,6 +88,10 @@ pub fn App() -> impl IntoView {
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-500" })>
                             "MODERATION"
                         </button>
+                        <button on:click=move |_| set_view.set("ledger".to_string())
+                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
+                            "LEDGER"
+                        </button>
                         <span class="text-green-500 border border-green-500/20 px-2">
                             {move || user_hash.get().map(|h| h[0..8.min(h.len())].to_string()).unwrap_or_default()}
                         </span>
@@ -62,10 +102,13 @@ pub fn App() -> impl IntoView {
             <main class="container mx-auto p-4">
                 {move || match view.get().as_str() {
                     "login" => view! { <Login on_success=handle_login_success /> }.into_view(),
-                    "dashboard" => view! { <Dashboard /> }.into_view(),
+                    "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_view(),
                     "upload" => view! { <Upload user_hash=user_hash.get().unwrap_or_default() token=token.get().unwrap_or_default() /> }.into_view(),
                     "moderation" => view! {
                         <Moderation token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() />
+                    }.into_view(),
+                    "ledger" => view! {
+                        <Ledger token=token.get().unwrap_or_default() />
                     }.into_view(),
                     _ => view! { <div class="text-center mt-20 text-gray-600">"UNKNOWN_VIEW"</div> }.into_view(),
                 }}
@@ -124,13 +167,21 @@ where
 }
 
 #[component]
-fn Dashboard() -> impl IntoView {
+fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let (items, set_items) = create_signal(Vec::<ContentMeta>::new());
     let (error, set_error) = create_signal(String::new());
 
+    let token_stored = store_value(token);
+    let user_hash_stored = store_value(user_hash);
+
     create_effect(move |_| {
+        let token = token_stored.get_value();
         spawn_local(async move {
-            match Request::get(&format!("{}/content", API_BASE)).send().await {
+            match Request::get(&format!("{}/content", API_BASE))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await
+            {
                 Ok(res) if res.ok() => {
                     if let Ok(list) = res.json::<Vec<ContentMeta>>().await {
                         set_items.set(list);
@@ -149,11 +200,18 @@ fn Dashboard() -> impl IntoView {
                 key=|item| item.cid.clone()
                 children=move |item| {
                     view! {
-                        <ContentViewer cid=item.cid.clone() expected_checksum=item.checksum.clone() />
+                        <ContentViewer 
+                            cid=item.cid.clone() 
+                            expected_checksum=item.checksum.clone() 
+                            content_type=item.content_type.clone() 
+                            price=item.price 
+                            token=token_stored.get_value()
+                            user_hash=user_hash_stored.get_value()
+                        />
                     }
                 }
             />
-            <Show when=move || items.get().is_empty()>
+            <Show when=move || items.get().is_empty() fallback=|| ()>
                 <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
                     {move || if error.get().is_empty() {
                         "NO_APPROVED_CONTENT".to_string()
@@ -166,50 +224,136 @@ fn Dashboard() -> impl IntoView {
     }
 }
 
+mod jxl;
+
 #[component]
-fn ContentViewer(cid: String, expected_checksum: String) -> impl IntoView {
+fn ContentViewer(
+    cid: String, 
+    expected_checksum: String, 
+    content_type: String, 
+    price: i64,
+    token: String,
+    #[allow(unused_variables)]
+    user_hash: String
+) -> impl IntoView {
     let cid_label = cid.clone();
     let (verified, set_verified) = create_signal(None::<bool>);
-    let (content_url, set_content_url) = create_signal(String::new());
+    let (novel_html, set_novel_html) = create_signal(String::new());
+    let (audit_logs, set_audit_logs) = create_signal(Vec::<AuditLog>::new());
+    let (show_audit, set_show_audit) = create_signal(false);
+    let (support_status, set_support_status) = create_signal(String::new());
+    let canvas_ref = create_node_ref::<html::Canvas>();
 
+    let token_stored = store_value(token);
+
+    let ct_ef = content_type.clone();
     create_effect(move |_| {
         let cid = cid.clone();
         let expected_checksum = expected_checksum.clone();
+        let ct = ct_ef.clone();
+        let token = token_stored.get_value();
         spawn_local(async move {
             let url = format!("{}/content/{}", API_BASE, cid);
-            let res = Request::get(&url).send().await;
+            let res = Request::get(&url)
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await;
 
             if let Ok(response) = res {
-                let header_checksum = response
-                    .headers()
-                    .get("x-forensic-checksum")
-                    .map(|s| s.to_string());
                 let bytes = response.binary().await.unwrap_or_default();
-
-                let reference = header_checksum.unwrap_or(expected_checksum);
-                let is_ok = common::verify_checksum(&bytes, &reference);
-
+                let is_ok = common::verify_checksum(&bytes, &expected_checksum);
                 set_verified.set(Some(is_ok));
+                
                 if is_ok && !bytes.is_empty() {
-                    let blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
-                        &js_sys::Uint8Array::from(&bytes[..]).into(),
-                    ))
-                    .unwrap();
-                    let object_url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
-                    set_content_url.set(object_url);
+                    if ct == "Illustration" {
+                        if let Some(canvas) = canvas_ref.get() {
+                            use wasm_bindgen::JsCast;
+                            let el: web_sys::HtmlCanvasElement = (*canvas).clone().unchecked_into();
+                            let _ = jxl::decode_jxl_to_canvas(&bytes, el);
+                        }
+                    } else {
+                        let text = String::from_utf8_lossy(&bytes).to_string();
+                        let parser = pulldown_cmark::Parser::new(&text);
+                        let mut html_output = String::new();
+                        pulldown_cmark::html::push_html(&mut html_output, parser);
+                        set_novel_html.set(html_output);
+                    }
                 }
             } else {
                 set_verified.set(Some(false));
             }
+
+            if let Ok(audit_res) = Request::get(&format!("{}/content/{}/audit", API_BASE, cid)).send().await {
+                if let Ok(logs) = audit_res.json::<Vec<AuditLog>>().await {
+                    set_audit_logs.set(logs);
+                }
+            }
         });
     });
 
+    let cid_stored = store_value(cid_label.clone());
+
+    let do_support = move |_| {
+        let cid = cid_stored.get_value();
+        let token = token_stored.get_value();
+        let amount = price;
+        set_support_status.set("Processing P2P Support...".to_string());
+        spawn_local(async move {
+            let res = Request::post(&format!("{}/content/{}/support", API_BASE, cid))
+                .header("Authorization", &format!("Bearer {}", token))
+                .json(&SupportRequest { amount })
+                .unwrap()
+                .send()
+                .await;
+            
+            if let Ok(response) = res && response.ok() {
+                if let Ok(tx_hash) = response.json::<String>().await {
+                    set_support_status.set(format!("SUCCESS: Tx recorded ({})", &tx_hash[0..12]));
+                }
+            } else {
+                set_support_status.set("Support failed.".to_string());
+            }
+        });
+    };
+
+    let ct_can = content_type.clone();
+    let ct_nov = content_type.clone();
+    let ct_bad = content_type.clone();
+
     view! {
-        <div class="p-4 border border-white/10 bg-black text-white space-y-4">
-            <p class="text-[8px] text-gray-600 truncate">{cid_label.clone()}</p>
-            <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden">
+        <div class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
+            <div class="flex justify-between items-start">
+                <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
+                <div class="flex gap-2">
+                    <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
+                        class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
+                        "Audit"
+                    </button>
+                </div>
+            </div>
+
+            <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
+                <canvas node_ref=canvas_ref class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
+                
+                <Show when=move || verified.get() == Some(true) && ct_nov == "Novel" fallback=|| ()>
+                    <div class="p-4 text-xs prose prose-invert max-w-none w-full overflow-y-auto h-full" inner_html=move || novel_html.get() />
+                </Show>
+
                 {move || match verified.get() {
-                    Some(true) => view! { <img src=content_url.get() class="max-w-full max-h-full object-contain" /> }.into_view(),
+                    Some(true) => view! { 
+                        <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
+                            <p class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
+                            <p class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
+                            <button on:click=do_support
+                                class="px-6 py-2 border border-white hover:bg-white hover:text-black transition-colors font-bold text-[10px] uppercase">
+                                "Confirm Support"
+                            </button>
+                            <p class="text-[8px] text-gray-400 italic">"100% of payment goes directly to creator."</p>
+                            <Show when=move || !support_status.get().is_empty() fallback=|| ()>
+                                <p class="text-[8px] text-green-500 animate-pulse break-all">{support_status.get()}</p>
+                            </Show>
+                        </div>
+                    }.into_view(),
                     Some(false) => view! {
                         <div class="text-center p-4">
                             <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
@@ -218,19 +362,52 @@ fn ContentViewer(cid: String, expected_checksum: String) -> impl IntoView {
                     }.into_view(),
                     None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_view(),
                 }}
+
+                <Show when=move || show_audit.get() fallback=|| ()>
+                    <div class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
+                        <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
+                        <div class="space-y-4">
+                            <For
+                                each=move || audit_logs.get()
+                                key=|log| log.log_id
+                                children=move |log| {
+                                    view! {
+                                        <div class="text-[8px] space-y-1">
+                                            <div class="flex justify-between text-gray-500">
+                                                <span>{log.created_at.clone()}</span>
+                                                <span class="text-green-500">{log.new_status.clone()}</span>
+                                            </div>
+                                            <p class="text-gray-300">"By: " {log.changed_by.clone()}</p>
+                                            <p class="italic">"Reason: " {log.reason.clone().unwrap_or_default()}</p>
+                                            <p class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
+                                        </div>
+                                    }
+                                }
+                            />
+                        </div>
+                        <button on:click=move |_| set_show_audit.set(false)
+                            class="mt-4 w-full py-2 border border-white/20 text-[8px] hover:bg-white/10">
+                            "CLOSE"
+                        </button>
+                    </div>
+                </Show>
             </div>
-            <div class="text-[10px] tracking-widest font-bold">
-                <span class=move || match verified.get() {
-                    Some(true) => "text-green-500",
-                    Some(false) => "text-red-500",
-                    None => "text-gray-600",
-                }>
-                    {move || match verified.get() {
-                        Some(true) => "● VERIFIED",
-                        Some(false) => "× COMPROMISED",
-                        None => "○ PENDING",
-                    }}
-                </span>
+            <div class="text-[10px] tracking-widest font-bold mt-auto flex justify-between items-center">
+                <div class="flex items-center gap-4">
+                    <span class=move || match verified.get() {
+                        Some(true) => "text-green-500",
+                        Some(false) => "text-red-500",
+                        None => "text-gray-600",
+                    }>
+                        {move || match verified.get() {
+                            Some(true) => "● VERIFIED",
+                            Some(false) => "× COMPROMISED",
+                            None => "○ PENDING",
+                        }}
+                    </span>
+                    <span class="text-gray-500 border border-gray-500/20 px-1">{ct_bad.to_uppercase()}</span>
+                </div>
+                <span class="text-green-500 font-mono">{price} " JPYC"</span>
             </div>
         </div>
     }
@@ -241,6 +418,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = create_signal(String::new());
     let (loading, set_loading) = create_signal(false);
     let (file, set_file) = create_signal(None::<web_sys::File>);
+    let (price, set_price) = create_signal(100);
 
     let on_file_change = move |ev| {
         let input: HtmlInputElement = event_target(&ev);
@@ -255,6 +433,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         let f = file.get().unwrap();
         let user_hash = user_hash.clone();
         let token = token.clone();
+        let price_val = price.get();
         set_loading.set(true);
         set_status.set("Generating forensic evidence...".to_string());
 
@@ -275,6 +454,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 .append_with_blob_and_filename("file", &blob, "upload.jxl")
                 .unwrap();
             form_data.append_with_str("owner_hash", &user_hash).unwrap();
+            form_data.append_with_str("price", &price_val.to_string()).unwrap();
             let sig_blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
                 &js_sys::Uint8Array::from(&mock_signature[..]).into(),
             ))
@@ -311,14 +491,82 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         {move || file.get().map(|f| f.name()).unwrap_or_else(|| "SELECT JXL OR MARKDOWN".to_string())}
                     </label>
                 </div>
+                
+                <div class="space-y-2">
+                    <label class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
+                    <input type="number" 
+                        on:input=move |ev| set_price.set(event_target_value(&ev).parse().unwrap_or(0))
+                        prop:value=price
+                        class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />
+                </div>
+
                 <button on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
                     {move || if loading.get() { "Processing..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
-                <Show when=move || !status.get().is_empty()>
+                <Show when=move || !status.get().is_empty() fallback=|| ()>
                     <div class="p-4 bg-white/5 border border-white/20 text-xs">
                         <span class="text-gray-500 mr-2">"[STATUS]"</span> {move || status.get()}
                     </div>
+                </Show>
+            </div>
+        </div>
+    }
+}
+
+#[component]
+fn Ledger(token: String) -> impl IntoView {
+    let (txs, set_txs) = create_signal(Vec::<Transaction>::new());
+
+    create_effect(move |_| {
+        let token = token.clone();
+        spawn_local(async move {
+            let res = Request::get(&format!("{}/transactions", API_BASE))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await;
+            if let Ok(response) = res && let Ok(data) = response.json::<Vec<Transaction>>().await {
+                set_txs.set(data);
+            }
+        });
+    });
+
+    view! {
+        <div class="max-w-5xl mx-auto mt-12">
+            <h2 class="text-xl font-bold tracking-widest uppercase mb-8">"Forensic Transaction Ledger"</h2>
+            <div class="border border-white/10 overflow-hidden">
+                <table class="w-full text-left text-[10px] font-mono">
+                    <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
+                        <tr>
+                            <th class="p-4">"Date"</th>
+                            <th class="p-4">"Sender (P2P)"</th>
+                            <th class="p-4">"Receiver"</th>
+                            <th class="p-4 text-right">"Amount"</th>
+                            <th class="p-4">"Proof_Hash"</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-white/5">
+                        <For
+                            each=move || txs.get()
+                            key=|tx| tx.tx_id
+                            children=move |tx| {
+                                let sender_prefix = tx.sender_hash[0..12.min(tx.sender_hash.len())].to_string();
+                                let receiver_prefix = tx.receiver_hash[0..12.min(tx.receiver_hash.len())].to_string();
+                                view! {
+                                    <tr class="hover:bg-white/5 transition-colors">
+                                        <td class="p-4 text-gray-500">{tx.created_at}</td>
+                                        <td class="p-4 text-blue-400">{sender_prefix} "..."</td>
+                                        <td class="p-4 text-green-400">{receiver_prefix} "..."</td>
+                                        <td class="p-4 text-right font-bold">{tx.amount} " JPYC"</td>
+                                        <td class="p-4 text-gray-600 text-[6px] break-all max-w-[200px]">{tx.tx_hash}</td>
+                                    </tr>
+                                }
+                            }
+                        />
+                    </tbody>
+                </table>
+                <Show when=move || txs.get().is_empty() fallback=|| ()>
+                    <div class="p-12 text-center text-gray-600 italic">"NO_TRANSACTIONS_RECORDED"</div>
                 </Show>
             </div>
         </div>
@@ -330,11 +578,32 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = create_signal(String::new());
     let (reason, set_reason) = create_signal(String::new());
     let (status, set_status) = create_signal(String::new());
+    let (reports, set_reports) = create_signal(Vec::<Report>::new());
+
+    let token_stored = store_value(token);
+    let user_hash_stored = store_value(user_hash);
+
+    let fetch_reports = move || {
+        let token = token_stored.get_value();
+        spawn_local(async move {
+            let res = Request::get(&format!("{}/mod/reports", API_BASE))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await;
+            if let Ok(response) = res && let Ok(data) = response.json::<Vec<Report>>().await {
+                set_reports.set(data);
+            }
+        });
+    };
+
+    create_effect(move |_| {
+        fetch_reports();
+    });
 
     let submit_report = move |_| {
         let cid = cid.get();
         let reason = reason.get();
-        let token = token.clone();
+        let token = token_stored.get_value();
         set_status.set("Submitting report...".to_string());
         spawn_local(async move {
             let res = Request::post(&format!("{}/mod/report", API_BASE))
@@ -348,38 +617,98 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .unwrap()
                 .send()
                 .await;
-            set_status.set(match res {
-                Ok(r) if r.ok() => "Report accepted. Content marked Reported.".to_string(),
-                Ok(_) => "Report failed.".to_string(),
-                Err(_) => "Network error.".to_string(),
-            });
+            if let Ok(r) = res && r.ok() {
+                set_status.set("Report accepted. Content marked Reported.".to_string());
+                fetch_reports();
+            } else {
+                set_status.set("Report failed.".to_string());
+            }
+        });
+    };
+
+    let do_vote = move |report_id: i64, result: String| {
+        let token = token_stored.get_value();
+        let user_hash = user_hash_stored.get_value();
+        spawn_local(async move {
+            let mock_signature = vec![0u8; 256];
+            let res = Request::post(&format!("{}/mod/vote", API_BASE))
+                .header("Authorization", &format!("Bearer {}", token))
+                .json(&serde_json::json!({
+                    "report_id": report_id,
+                    "juror_hash": user_hash,
+                    "result": result,
+                    "signature": mock_signature
+                }))
+                .unwrap()
+                .send()
+                .await;
+            if let Ok(r) = res && r.ok() {
+                fetch_reports();
+            }
         });
     };
 
     view! {
-        <div class="max-w-xl mx-auto mt-12 border border-white/10 p-8 space-y-6">
-            <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Moderation Console"</h2>
-            <p class="text-[10px] text-gray-500">
-                "Reporter: " {user_hash[0..8.min(user_hash.len())].to_string()}
-            </p>
-            <input
-                type="text"
-                placeholder="TARGET CID"
-                on:input=move |ev| set_cid.set(event_target_value(&ev))
-                class="w-full bg-black border border-white/20 p-3 text-sm"
-            />
-            <textarea
-                placeholder="REASON"
-                on:input=move |ev| set_reason.set(event_target_value(&ev))
-                class="w-full bg-black border border-white/20 p-3 text-sm h-24"
-            />
-            <button on:click=submit_report
-                class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
-                "SUBMIT FORENSIC REPORT"
-            </button>
-            <Show when=move || !status.get().is_empty()>
-                <p class="text-xs text-gray-400">{move || status.get()}</p>
-            </Show>
+        <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
+            <div class="border border-white/10 p-8 space-y-6 h-fit">
+                <h2 class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
+                <p class="text-[10px] text-gray-500">
+                    "Reporter: " {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
+                </p>
+                <input
+                    type="text"
+                    placeholder="TARGET CID"
+                    on:input=move |ev| set_cid.set(event_target_value(&ev))
+                    class="w-full bg-black border border-white/20 p-3 text-sm"
+                />
+                <textarea
+                    placeholder="REASON"
+                    on:input=move |ev| set_reason.set(event_target_value(&ev))
+                    class="w-full bg-black border border-white/20 p-3 text-sm h-24"
+                />
+                <button on:click=submit_report
+                    class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
+                    "SUBMIT FORENSIC REPORT"
+                </button>
+                <Show when=move || !status.get().is_empty() fallback=|| ()>
+                    <p class="text-xs text-gray-400">{move || status.get()}</p>
+                </Show>
+            </div>
+
+            <div class="border border-white/10 p-8 space-y-6">
+                <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
+                <div class="space-y-4">
+                    <For
+                        each=move || reports.get()
+                        key=|report| report.report_id
+                        children=move |report| {
+                            let rid = report.report_id;
+                            view! {
+                                <div class="border border-white/5 p-4 space-y-3">
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-[8px] text-gray-500 truncate mr-2">{report.target_cid.clone()}</span>
+                                        <span class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
+                                    </div>
+                                    <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <button on:click=move |_| do_vote(rid, "Approve".to_string())
+                                            class="py-2 border border-green-500/50 text-green-500 text-[8px] hover:bg-green-500 hover:text-black transition-colors">
+                                            "APPROVE (RESTORE)"
+                                        </button>
+                                        <button on:click=move |_| do_vote(rid, "Reject".to_string())
+                                            class="py-2 border border-red-500/50 text-red-500 text-[8px] hover:bg-red-500 hover:text-black transition-colors">
+                                            "REJECT (BAN)"
+                                        </button>
+                                    </div>
+                                </div>
+                            }
+                        }
+                    />
+                    <Show when=move || reports.get().is_empty() fallback=|| ()>
+                        <div class="text-center py-12 text-[10px] text-gray-600 italic">"NO_PENDING_VOTES"</div>
+                    </Show>
+                </div>
+            </div>
         </div>
     }
 }
@@ -394,6 +723,24 @@ mod tests {
         hasher.update(data);
         let hex = hex::encode(hasher.finalize());
         assert!(common::verify_checksum(data, &hex));
+    }
+
+    /// INT-01: 改ざんされたコンテンツのチェックサム検知
+    #[test]
+    fn wasm_detects_tampered_content() {
+        let original_data = b"original forensic content";
+        let tampered_data = b"tampered forensic content";
+        
+        let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
+        hasher.update(original_data);
+        let original_checksum = hex::encode(hasher.finalize());
+        
+        // 改ざんされたデータは元のチェックサムと一致しない
+        assert!(!common::verify_checksum(tampered_data, &original_checksum));
+        
+        // 正しいデータはチェックサムと一致する
+        assert!(common::verify_checksum(original_data, &original_checksum));
     }
 }
 

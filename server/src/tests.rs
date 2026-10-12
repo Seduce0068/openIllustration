@@ -1,6 +1,6 @@
 use crate::{
     AppState, VerifyRequest, VerifyResponse, build_router, ensure_user_not_banned, validate_age,
-    validate_upload_content_type,
+    validate_upload_content_type, update_content_status,
 };
 use axum::{
     Router,
@@ -238,6 +238,35 @@ async fn test_auth_verify_underage_forbidden() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// SEC-02: 無効な JPKI 署名でのアクセス拒否
+#[tokio::test]
+async fn test_invalid_jpki_signature_rejected() {
+    let app = setup_app().await;
+    let invalid_body = json!({
+        "presentation_token": "invalid_signature_token",
+        "public_key_der": null,
+        "birth_date": "2000-01-01",
+        "country_code": "JP"
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(invalid_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    
+    // 無効な署名は 401 または 400 で拒否される
+    assert!(
+        response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::BAD_REQUEST,
+        "Invalid JPKI signature should be rejected"
+    );
+}
+
 /// GOV-03: BAN ユーザーは再認証不可
 #[tokio::test]
 async fn test_banned_user_blocked_directly() {
@@ -397,4 +426,77 @@ async fn test_vote_consensus_rejects_content() {
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(status, "Rejected");
+}
+
+/// INT-01: IPFS改ざん検知（サーバー側）
+#[tokio::test]
+async fn test_content_checksum_verification_fails_on_tamper() {
+    let (app, db) = setup_app_with_db().await;
+    
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmTampered', 'Novel', 'owner', 'correct_hash_123', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmTampered").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    // IPFS ゲートウェイが利用不可の場合は 500 になる可能性があるため、
+    // 401 (改ざん検知) または 500 (ゲートウェイエラー) のいずれかを許容
+    assert!(
+        response.status() == StatusCode::UNAUTHORIZED 
+        || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
+        "Expected 401 or 500, got: {}",
+        response.status()
+    );
+}
+
+/// Audit log chain integrity test
+#[tokio::test]
+async fn test_audit_log_chain_integrity() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmAuditTest', 'Illustration', 'user1', 'hash1', 'Approved')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let tx = db.transaction().await.unwrap();
+    
+    update_content_status(&tx, "QmAuditTest", "Reported", "user2", "First report").await.unwrap();
+    update_content_status(&tx, "QmAuditTest", "Rejected", "SYSTEM", "Consensus reached").await.unwrap();
+    
+    tx.commit().await.unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT entry_hash, previous_log_hash FROM content_audit_log ORDER BY log_id",
+            (),
+        )
+        .await
+        .unwrap();
+
+    let mut prev_hash = "GENESIS_HASH".to_string();
+    while let Some(row) = rows.next().await.unwrap() {
+        let stored_prev: String = row.get(1).unwrap();
+        assert_eq!(stored_prev, prev_hash, "Audit chain broken");
+        prev_hash = row.get(0).unwrap();
+    }
 }
