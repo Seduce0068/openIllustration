@@ -986,6 +986,7 @@ pub async fn upload_content(
     let mut owner_hash = None;
     let mut signature = None;
     let mut price = 0;
+    let mut price_seen = false;
 
     while let Some(field) = multipart
         .next_field()
@@ -993,8 +994,14 @@ pub async fn upload_content(
         .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
     {
         let name = field.name().unwrap_or_default().to_string();
+        if !matches!(name.as_str(), "file" | "owner_hash" | "signature" | "price") {
+            return Err(AppError::BadRequest(format!("Unexpected field: {name}")));
+        }
         match name.as_str() {
             "file" => {
+                if data.is_some() {
+                    return Err(AppError::BadRequest("Duplicate file field".to_string()));
+                }
                 content_type = field.content_type().map(|s| s.to_string());
                 data = Some(
                     field
@@ -1004,6 +1011,11 @@ pub async fn upload_content(
                 );
             }
             "owner_hash" => {
+                if owner_hash.is_some() {
+                    return Err(AppError::BadRequest(
+                        "Duplicate owner_hash field".to_string(),
+                    ));
+                }
                 owner_hash = Some(
                     field
                         .text()
@@ -1012,6 +1024,11 @@ pub async fn upload_content(
                 );
             }
             "signature" => {
+                if signature.is_some() {
+                    return Err(AppError::BadRequest(
+                        "Duplicate signature field".to_string(),
+                    ));
+                }
                 signature = Some(
                     field
                         .bytes()
@@ -1020,6 +1037,10 @@ pub async fn upload_content(
                 );
             }
             "price" => {
+                if price_seen {
+                    return Err(AppError::BadRequest("Duplicate price field".to_string()));
+                }
+                price_seen = true;
                 price = field
                     .text()
                     .await
@@ -1048,6 +1069,7 @@ pub async fn upload_content(
     ensure_user_not_banned(&state.db, &owner_hash).await?;
 
     let content_kind = validate_upload_content_type(content_type.as_deref())?;
+    validate_upload_content(content_kind, &data)?;
 
     // 1. Verify Signature (dev mock: all-zero signature when ALLOW_MOCK_AUTH)
     let mock_sig = state.allow_mock_auth && signature.iter().all(|&b| b == 0);
@@ -1128,26 +1150,38 @@ pub fn validate_age(birth_date: &str, country_code: &str) -> Result<(), AppError
 
 /// INT-02: JPEG XL / Markdown のみ許可
 pub fn validate_upload_content_type(content_type: Option<&str>) -> Result<&'static str, AppError> {
-    let ct = content_type.unwrap_or("").to_lowercase();
-    if ct.contains("zip")
-        || ct.contains("application/x-")
-        || ct.contains("executable")
-        || ct.contains("octet-stream")
-    {
-        return Err(AppError::BadRequest(
-            "Disallowed content type; only JPEG XL illustrations and Markdown novels are accepted"
-                .to_string(),
-        ));
-    }
-    if ct.contains("jxl") || ct.contains("image/") {
+    let media_type = content_type
+        .and_then(|value| value.split(';').next())
+        .unwrap_or("")
+        .trim();
+    if media_type.eq_ignore_ascii_case("image/jxl") {
         return Ok("Illustration");
     }
-    if ct.contains("markdown") || ct.contains("text/plain") || ct.contains("text/") {
+    if media_type.eq_ignore_ascii_case("text/markdown") {
         return Ok("Novel");
     }
     Err(AppError::BadRequest(
         "Unsupported content type; use image/jxl or text/markdown".to_string(),
     ))
+}
+
+/// Checks that uploaded bytes match the allowed JPEG XL or UTF-8 Markdown format.
+pub fn validate_upload_content(content_kind: &str, data: &[u8]) -> Result<(), AppError> {
+    match content_kind {
+        "Illustration"
+            if data.starts_with(&[0xFF, 0x0A]) || data.starts_with(b"\0\0\0\x0CJXL \r\n\x87\n") =>
+        {
+            Ok(())
+        }
+        "Illustration" => Err(AppError::BadRequest(
+            "Invalid JPEG XL codestream signature".to_string(),
+        )),
+        "Novel" if std::str::from_utf8(data).is_ok() => Ok(()),
+        "Novel" => Err(AppError::BadRequest(
+            "Markdown content must be UTF-8".to_string(),
+        )),
+        _ => Err(AppError::BadRequest("Unsupported content kind".to_string())),
+    }
 }
 
 #[cfg(test)]

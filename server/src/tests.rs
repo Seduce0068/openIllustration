@@ -1,6 +1,6 @@
 use crate::{
     AppState, VerifyRequest, VerifyResponse, build_router, ensure_user_not_banned,
-    update_content_status, validate_age, validate_upload_content_type,
+    update_content_status, validate_age, validate_upload_content, validate_upload_content_type,
 };
 use axum::{
     Router,
@@ -389,6 +389,44 @@ fn test_reject_zip_content_type() {
     assert!(validate_upload_content_type(Some("application/zip")).is_err());
     assert!(validate_upload_content_type(Some("image/jxl")).is_ok());
     assert!(validate_upload_content_type(Some("text/markdown")).is_ok());
+    assert!(validate_upload_content_type(Some("image/png")).is_err());
+    assert!(validate_upload_content_type(Some("text/html")).is_err());
+    assert!(validate_upload_content_type(Some("application/x-image/jxl")).is_err());
+    assert!(validate_upload_content_type(Some("text/markdown; charset=utf-8")).is_ok());
+}
+
+#[test]
+fn test_upload_bytes_match_declared_content_kind() {
+    assert!(validate_upload_content("Illustration", &[0xff, 0x0a, 0x01]).is_ok());
+    assert!(validate_upload_content("Illustration", b"not an image").is_err());
+    assert!(validate_upload_content("Novel", b"# title\n").is_ok());
+    assert!(validate_upload_content("Novel", &[0xff, 0xfe]).is_err());
+}
+
+#[tokio::test]
+async fn test_upload_rejects_unknown_multipart_fields() {
+    let app = setup_app().await;
+    let token = generate_token("test_secret", "test_user").await;
+    let boundary = "test-boundary";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"unexpected\"\r\n\r\nvalue\r\n--{boundary}--\r\n"
+    );
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[test]

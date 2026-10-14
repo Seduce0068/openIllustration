@@ -50,8 +50,5 @@ tags: [documentation, decisions, release-gates]
 
 ## OSS公開上の注意
 
-現時点でリポジトリルートにライセンスファイルは確認できない。
-GNU AGPL v3が候補として示されたが、`AGPL-3.0-only` と
-`AGPL-3.0-or-later` のどちらを採るかは未確定である。
-依存ライセンスの確認とともに確定するまで、ライセンス条件を示した公開準備は
-完了していない。
+ルートの [LICENSE](../LICENSE) は `AGPL-3.0-or-later` を示す。
+依存物のライセンス確認と適用範囲の明示は引き続き必要である。
