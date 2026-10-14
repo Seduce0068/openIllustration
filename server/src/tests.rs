@@ -1,6 +1,6 @@
 use crate::{
-    AppState, VerifyRequest, VerifyResponse, build_router, ensure_user_not_banned, validate_age,
-    validate_upload_content_type, update_content_status,
+    AppState, VerifyRequest, VerifyResponse, build_router, ensure_user_not_banned,
+    update_content_status, validate_age, validate_upload_content_type,
 };
 use axum::{
     Router,
@@ -54,6 +54,7 @@ async fn init_schema(db: &libsql::Connection) {
                 owner_hash TEXT,
                 checksum TEXT,
                 status TEXT DEFAULT 'Approved',
+                price INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );",
         (),
@@ -81,6 +82,20 @@ async fn init_schema(db: &libsql::Connection) {
                 report_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 target_cid TEXT,
                 reason TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "CREATE TABLE transactions (
+                tx_id INTEGER PRIMARY KEY,
+                cid TEXT,
+                sender_hash TEXT,
+                receiver_hash TEXT,
+                amount INTEGER,
+                tx_hash TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );",
         (),
@@ -202,6 +217,51 @@ async fn test_auth_login_returns_nonce() {
 }
 
 #[tokio::test]
+async fn test_read_routes_require_authentication() {
+    let paths = [
+        "/content",
+        "/content/QmTestCID",
+        "/content/QmTestCID/audit",
+        "/transactions",
+        "/mod/reports",
+    ];
+
+    for path in paths {
+        let app = setup_app().await;
+        let response = app
+            .oneshot(with_peer(
+                Request::get(path).body(Body::empty()).unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::UNAUTHORIZED,
+            "Unauthenticated request to {path} must be rejected"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_authenticated_user_can_list_contents() {
+    let app = setup_app().await;
+    let token = generate_token("test_secret", "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
 async fn test_auth_verify_authorized_with_token() {
     let app = setup_app().await;
     let response = app
@@ -259,10 +319,11 @@ async fn test_invalid_jpki_signature_rejected() {
         ))
         .await
         .unwrap();
-    
+
     // 無効な署名は 401 または 400 で拒否される
     assert!(
-        response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::BAD_REQUEST,
+        response.status() == StatusCode::UNAUTHORIZED
+            || response.status() == StatusCode::BAD_REQUEST,
         "Invalid JPKI signature should be rejected"
     );
 }
@@ -347,21 +408,6 @@ async fn test_vote_consensus_rejects_content() {
         .unwrap();
     init_schema(&db).await;
 
-    let mut rng = rand::thread_rng();
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
-    let public_der = private_key
-        .to_public_key()
-        .to_public_key_der()
-        .unwrap()
-        .to_vec();
-    let juror_hash = sha256::digest(&public_der);
-
-    db.execute(
-        "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
-        (juror_hash.clone(), public_der),
-    )
-    .await
-    .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
              VALUES ('QmVoteTest', 'Illustration', 'owner', 'abc', 'Reported')",
@@ -388,6 +434,21 @@ async fn test_vote_consensus_rejects_content() {
     use rsa::signature::{SignatureEncoding, Signer};
 
     for _ in 0..3 {
+        let mut rng = rand::thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_der = private_key
+            .to_public_key()
+            .to_public_key_der()
+            .unwrap()
+            .to_vec();
+        let juror_hash = sha256::digest(&public_der);
+        db.execute(
+            "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
+            (juror_hash.clone(), public_der),
+        )
+        .await
+        .unwrap();
+
         let message = json!({"report_id": 1, "result": "Reject"}).to_string();
         let signing_key = SigningKey::<Sha256>::new(private_key.clone());
         let signature = signing_key.sign(message.as_bytes()).to_vec();
@@ -432,7 +493,7 @@ async fn test_vote_consensus_rejects_content() {
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {
     let (app, db) = setup_app_with_db().await;
-    
+
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
              VALUES ('QmTampered', 'Novel', 'owner', 'correct_hash_123', 'Approved');",
@@ -443,7 +504,13 @@ async fn test_content_checksum_verification_fails_on_tamper() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmTampered").body(Body::empty()).unwrap(),
+            Request::get("/content/QmTampered")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
             test_ipv6_peer(),
         ))
         .await
@@ -452,8 +519,8 @@ async fn test_content_checksum_verification_fails_on_tamper() {
     // IPFS ゲートウェイが利用不可の場合は 500 になる可能性があるため、
     // 401 (改ざん検知) または 500 (ゲートウェイエラー) のいずれかを許容
     assert!(
-        response.status() == StatusCode::UNAUTHORIZED 
-        || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
+        response.status() == StatusCode::UNAUTHORIZED
+            || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
         "Expected 401 or 500, got: {}",
         response.status()
     );
@@ -479,10 +546,20 @@ async fn test_audit_log_chain_integrity() {
     .unwrap();
 
     let tx = db.transaction().await.unwrap();
-    
-    update_content_status(&tx, "QmAuditTest", "Reported", "user2", "First report").await.unwrap();
-    update_content_status(&tx, "QmAuditTest", "Rejected", "SYSTEM", "Consensus reached").await.unwrap();
-    
+
+    update_content_status(&tx, "QmAuditTest", "Reported", "user2", "First report")
+        .await
+        .unwrap();
+    update_content_status(
+        &tx,
+        "QmAuditTest",
+        "Rejected",
+        "SYSTEM",
+        "Consensus reached",
+    )
+    .await
+    .unwrap();
+
     tx.commit().await.unwrap();
 
     let mut rows = db

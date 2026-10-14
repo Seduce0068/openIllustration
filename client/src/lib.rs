@@ -6,6 +6,18 @@ use web_sys::{Blob, FormData, HtmlInputElement};
 
 const API_BASE: &str = "http://localhost:3000";
 
+fn render_markdown(markdown: &str) -> String {
+    let events = pulldown_cmark::Parser::new(markdown).map(|event| match event {
+        pulldown_cmark::Event::Html(html) | pulldown_cmark::Event::InlineHtml(html) => {
+            pulldown_cmark::Event::Text(html)
+        }
+        event => event,
+    });
+    let mut html = String::new();
+    pulldown_cmark::html::push_html(&mut html, events);
+    html
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VerifyResponse {
     pub authorized: bool,
@@ -273,20 +285,20 @@ fn ContentViewer(
                         }
                     } else {
                         let text = String::from_utf8_lossy(&bytes).to_string();
-                        let parser = pulldown_cmark::Parser::new(&text);
-                        let mut html_output = String::new();
-                        pulldown_cmark::html::push_html(&mut html_output, parser);
-                        set_novel_html.set(html_output);
+                        set_novel_html.set(render_markdown(&text));
                     }
                 }
             } else {
                 set_verified.set(Some(false));
             }
 
-            if let Ok(audit_res) = Request::get(&format!("{}/content/{}/audit", API_BASE, cid)).send().await {
-                if let Ok(logs) = audit_res.json::<Vec<AuditLog>>().await {
-                    set_audit_logs.set(logs);
-                }
+            if let Ok(audit_res) = Request::get(&format!("{}/content/{}/audit", API_BASE, cid))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await
+                && let Ok(logs) = audit_res.json::<Vec<AuditLog>>().await
+            {
+                set_audit_logs.set(logs);
             }
         });
     });
@@ -715,6 +727,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn markdown_raw_html_is_escaped() {
+        let rendered =
+            super::render_markdown("<img src=x onerror=alert(1)>\n\n<script>alert(1)</script>");
+
+        assert!(!rendered.contains("<img"));
+        assert!(!rendered.contains("<script>"));
+        assert!(rendered.contains("&lt;img"));
+        assert!(rendered.contains("&lt;script&gt;"));
+    }
+
     #[test]
     fn wasm_checksum_matches_common_crate() {
         let data = b"guild forensic payload";

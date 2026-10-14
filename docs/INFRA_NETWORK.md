@@ -1,41 +1,29 @@
-# インフラ定義とネットワーク制約 (Infrastructure & Network Policy)
+---
+type: Design
+description: 現行ネットワーク実装と本番化に必要な境界・制約を記録する。
+tags: [infrastructure, networking, security]
+---
 
-本ドキュメントは、ネットワークアクセス要件およびインフラ構成における厳格な制約を定義する。
+# インフラ・ネットワーク設計（MVPの制約）
 
-## 1. ネットワーク要件 (IPv6-Only Policy)
+## 1. 現行実装
 
-本システムは、現代的なネットワークプロトコルである **IPv6 限定 (IPv6-Only)** で運用する。
+- AxumサーバーはIPv6 unspecified address (`[::]:3000`) にbindする。
+- `network::ipv6_only_middleware` は接続元IPv4を拒否する。ただし `ALLOW_IPV4_LOCALHOST=1` の場合はIPv4ループバックを許可する。
+- ミドルウェアは `X-Forwarded-For` の先頭値を接続元IPとして使う。現状、信頼済みプロキシの識別・検証は行わない。
+- CORSはローカル開発用の3 originに限定している。本番フロントエンドのoriginは未設定。
 
-* **接続性要件**: ユーザーおよびサーバー間通信は全て IPv6 に限定される。IPv4 のみを利用するクライアントからの接続は、ネットワーク層で拒否する。
-* **採用理由**:
-  * **攻撃対象領域の削減**: IPv4 ターゲットのレガシーボットネットを物理的に遮断する。
-  * **ゼロトラストの徹底**: ネットワーク環境においても現代的なプロトコルを強要することで、ギルドの参加要件を技術的にも高める。
-  * **アドレス空間の完全性**: ユーザーごとのプレフィックス単位での管理を容易にし、共有 IP リスクを排除する。
+## 2. 設計上の注意
 
-## 2. インフラ定義 (OpenTofu)
+- IPv6限定は認証・認可・ボット対策の代替ではなく、ゼロトラストや個人識別を保証しない。
+- プロキシ配下では、信頼できないクライアントが任意の `X-Forwarded-For` を注入できないよう、プロキシ境界とヘッダー上書きを設計する。信頼するプロキシ範囲を設定できない場合、このヘッダーをクライアントIP判定に使わない。
+- IPv4拒否を製品要件として維持するか、ネットワーク層のアクセス制御に置くかは本番インフラ確定時に決定する。IPv6利用者への影響と運用コストを評価する。
+- Cloudflare/OpenTofuの設定例は現行リポジトリにデプロイ可能なIaCとして存在しない。IPv6有効化とIPv4遮断は別要件として検証する。
 
-Cloudflare エッジ設定にて IPv6 接続のみを許可するポリシーを強制する。
+## 3. 本番化に必要な決定
 
-```hcl
-# Cloudflare Zone 設定による IPv6 強制
-resource "cloudflare_zone_settings_override" "guild_settings" {
-  zone_id = var.cloudflare_zone_id
-  settings {
-    # IPv6 の有効化
-    ipv6 = "on"
-    
-    # 悪意のある IPv4 トラフィックを遮断するための WAF ルールを付与
-    # (※実際の実装では cloudflare_ruleset を使用して IPv4 接続を Reject する)
-  }
-}
-```
-
-## 3. ユーザーへの告知 (README / Landing Page)
-
-サイト入場ゲート（Legal Wall）において、以下の警告を明示する。
-> **"IPv6 Only Access Requirement: This guild requires an IPv6-enabled network connection. Legacy IPv4-only networks are not supported. This is a deliberate architectural decision to ensure modern networking security and to filter out automated legacy traffic."**
-> （IPv6 限定アクセス要件: 本ギルドは IPv6 対応ネットワーク接続を必要とします。レガシーな IPv4 専用ネットワークはサポートされません。これはモダンなネットワークセキュリティを確保し、自動化されたレガシー通信を除外するための意図的な設計判断です。）
-
-## 4. 真正性への影響
-
-IPv6 への限定は、IP アドレスベースの不正アクセス判定をより高精度にする。従来の IPv4 NAT 環境下での「同一 IP による攻撃」という懸念を排除し、マイナンバーカードハッシュと IPv6 プレフィックスの相関を強めることで、BAN の精度を最大化する。
+1. TLS終端、公開ポート、リバースプロキシ構成。
+2. クライアントIPを必要とする機能と、信頼済みプロキシ範囲。
+3. 本番CORS originと許可メソッド・ヘッダー。
+4. IPv6/IPv4ポリシー、ヘルスチェック経路、ファイアウォール/WAFルール。
+5. 設定のIaC化、ステージング検証、ロールバック手順。

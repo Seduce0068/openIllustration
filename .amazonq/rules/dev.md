@@ -1,3 +1,9 @@
+---
+type: Playbook
+description: プロジェクト開発時のAIアシスタント向け規則。
+tags: [development, ai-guidance]
+---
+
 # dev.md (Standard Edition)
 
 <metadata>

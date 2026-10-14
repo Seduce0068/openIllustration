@@ -17,7 +17,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -186,10 +186,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let db = if db_url.starts_with("file:") || !db_url.contains("://") {
         let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
-        Builder::new_local(path)
-            .build()
-            .await?
-            .connect()?
+        Builder::new_local(path).build().await?.connect()?
     } else {
         Builder::new_remote(db_url, db_token)
             .build()
@@ -294,7 +291,7 @@ pub async fn run() -> anyhow::Result<()> {
         jwt_secret: std::env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
         allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(true),
+            .unwrap_or(false),
     });
 
     let app = build_router(shared_state);
@@ -339,9 +336,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
             CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
+                .allow_origin([
+                    "http://localhost:8080".parse().expect("valid origin"),
+                    "http://127.0.0.1:8080".parse().expect("valid origin"),
+                    "http://[::1]:8080".parse().expect("valid origin"),
+                ])
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
         .layer(from_fn(network::ipv6_only_middleware))
         .with_state(state)
@@ -358,6 +359,7 @@ pub struct ReportResponse {
 
 pub async fn list_reports(
     State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
 ) -> Result<Json<Vec<ReportResponse>>, AppError> {
     let mut rows = state
         .db
@@ -386,6 +388,7 @@ pub async fn list_reports(
 
 pub async fn list_transactions(
     State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
 ) -> Result<Json<Vec<TransactionResponse>>, AppError> {
     let mut rows = state
         .db
@@ -413,6 +416,7 @@ pub async fn list_transactions(
 
 pub async fn get_content_audit(
     State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
     Path(cid): Path<String>,
 ) -> Result<Json<Vec<AuditLogResponse>>, AppError> {
     let mut rows = state
@@ -439,8 +443,6 @@ pub async fn get_content_audit(
     }
     Ok(Json(logs))
 }
-
-
 pub async fn auth_login() -> Json<Oid4vpRequest> {
     let nonce = Uuid::new_v4().to_string();
     let presentation_definition_uri =
@@ -525,6 +527,7 @@ pub async fn auth_verify(
 
 pub async fn get_content(
     State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
     Path(cid): Path<String>,
 ) -> Result<Response, AppError> {
     let mut rows = state
@@ -545,13 +548,38 @@ pub async fn get_content(
     ];
 
     let mut last_error = String::new();
-    
+
     for gateway_url in gateways {
-        match state.http_client.get(&gateway_url).send().await {
-            Ok(response) if response.status().is_success() => {
-                let bytes = response.bytes().await.map_err(|e| {
-                    AppError::Internal(format!("Failed to read response body: {}", e))
-                })?;
+        match state
+            .http_client
+            .get(&gateway_url)
+            .timeout(std::time::Duration::from_secs(15))
+            .send()
+            .await
+        {
+            Ok(mut response) if response.status().is_success() => {
+                const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > MAX_CONTENT_BYTES as u64)
+                {
+                    return Err(AppError::BadRequest(
+                        "IPFS content exceeds size limit".to_string(),
+                    ));
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?
+                {
+                    if bytes.len().saturating_add(chunk.len()) > MAX_CONTENT_BYTES {
+                        return Err(AppError::BadRequest(
+                            "IPFS content exceeds size limit".to_string(),
+                        ));
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
 
                 let actual_checksum = sha256::digest(&bytes[..]);
                 if actual_checksum != expected_checksum {
@@ -581,6 +609,7 @@ pub async fn get_content(
 
 pub async fn list_contents(
     State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
 ) -> Result<Json<Vec<ContentMeta>>, AppError> {
     let mut rows = state
         .db
@@ -614,10 +643,16 @@ pub async fn support_creator(
     Path(cid): Path<String>,
     Json(payload): Json<SupportRequest>,
 ) -> Result<Json<String>, AppError> {
+    if payload.amount <= 0 {
+        return Err(AppError::BadRequest("amount must be positive".to_string()));
+    }
     // 1. Get content owner
     let mut rows = state
         .db
-        .query("SELECT owner_hash FROM contents WHERE cid = ?", [cid.clone()])
+        .query(
+            "SELECT owner_hash FROM contents WHERE cid = ?",
+            [cid.clone()],
+        )
         .await?;
     let owner_hash: String = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -626,8 +661,10 @@ pub async fn support_creator(
     };
 
     // 2. Record transaction (Simulated P2P)
-    let tx_hash = sha256::digest(format!("{}:{}:{}:{}", cid, claims.sub, owner_hash, payload.amount).as_bytes());
-    
+    let tx_hash = sha256::digest(
+        format!("{}:{}:{}:{}", cid, claims.sub, owner_hash, payload.amount).as_bytes(),
+    );
+
     state.db.execute(
         "INSERT INTO transactions (cid, sender_hash, receiver_hash, amount, tx_hash) VALUES (?, ?, ?, ?, ?)",
         (cid, claims.sub.clone(), owner_hash, payload.amount, tx_hash.clone())
@@ -791,6 +828,9 @@ pub async fn mod_vote(
     claims: AuthClaims,
     Json(vote): Json<Vote>,
 ) -> Result<Json<bool>, AppError> {
+    if vote.report_id <= 0 || !matches!(vote.result.as_str(), "Approve" | "Reject") {
+        return Err(AppError::BadRequest("Invalid vote".to_string()));
+    }
     // 0. Security check: Token sub must match juror_hash
     if claims.sub != vote.juror_hash {
         return Err(AppError::Unauthorized("Token sub mismatch".to_string()));
@@ -824,6 +864,16 @@ pub async fn mod_vote(
         .transaction()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    let mut existing_vote = tx
+        .query(
+            "SELECT 1 FROM votes WHERE report_id = ? AND voter_hash = ? LIMIT 1",
+            (vote.report_id, vote.juror_hash.clone()),
+        )
+        .await?;
+    if existing_vote.next().await?.is_some() {
+        return Err(AppError::BadRequest("Juror has already voted".to_string()));
+    }
 
     // 2. Insert vote record
     tx.execute(
@@ -902,6 +952,7 @@ pub async fn pin_to_ipfs(
         .post("https://api.pinata.cloud/pinning/pinFileToIPFS")
         .bearer_auth(pinata_jwt)
         .multipart(form)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| AppError::Internal(format!("Pinata request failed: {}", e)))?;
@@ -972,9 +1023,14 @@ pub async fn upload_content(
                 price = field
                     .text()
                     .await
-                    .unwrap_or_default()
+                    .map_err(|e| AppError::BadRequest(format!("Invalid price: {e}")))?
                     .parse()
-                    .unwrap_or(0);
+                    .map_err(|_| AppError::BadRequest("price must be an integer".to_string()))?;
+                if price < 0 {
+                    return Err(AppError::BadRequest(
+                        "price must not be negative".to_string(),
+                    ));
+                }
             }
             _ => {}
         }
