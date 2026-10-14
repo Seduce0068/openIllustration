@@ -10,6 +10,9 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 
 現在のコードはPinata/IPFS、libSQL、Leptos、開発用モック認証を用いたプロトタイプです。実JPKI認証、JPYC送金・検証、第三者検証可能な監査、分散運用は未完成であり、必須要件を満たす本番サービスではありません。
 
+プロジェクトは GNU AGPL v3 or any later version
+（SPDX: `AGPL-3.0-or-later`）でライセンスされています。詳細は [LICENSE](LICENSE) を参照してください。
+
 ## 現行プロトタイプと目標要件
 
 - 現行プロトタイプはJPEG XL静止画・Markdown小説、CID/SHA-256照合、JWT、DB内通報・投票を備えます。
