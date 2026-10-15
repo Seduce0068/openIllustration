@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 env:
   CARGO_TERM_COLOR: always
-  JWT_SECRET: ci_test_secret
+  JWT_SECRET: ci_test_secret_for_ci_0123456789abcdef
   ALLOW_MOCK_AUTH: "1"
   ALLOW_IPV4_LOCALHOST: "1"
 
