@@ -6,11 +6,12 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     return crypto.createHash('sha256').update(data).digest('hex');
   };
 
-  test('should support creator and see transaction in ledger', async ({ page }) => {
+  test('should keep mock support disabled and the ledger read-only', async ({ page }) => {
     const mockCID = 'QmSupportTest123';
     const mockPrice = 500;
     const mockContent = Buffer.from('fake-jxl-data');
     const mockHash = computeHash(mockContent);
+    let supportRequested = false;
 
     // 認証のモック
     await page.route('**/auth/login', async route => {
@@ -54,12 +55,13 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
     });
 
-    // 4. Mock support API
+    // 4. Support API must never be called while the mock endpoint is disabled
     await page.route(`**/content/${mockCID}/support`, async route => {
+      supportRequested = true;
       await route.fulfill({
-        status: 200,
+        status: 501,
         contentType: 'application/json',
-        body: JSON.stringify('mock_tx_hash_789012345678')
+        body: JSON.stringify({ error: 'Support API is disabled until JPYC settlement is implemented' })
       });
     });
 
@@ -85,18 +87,18 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'BROWSE' }).click();
     
-    // Hover over content to see support button
+    // Hover over content to see the disabled support affordance
     const contentArea = page.locator('.group').first();
     await expect(contentArea).toBeVisible({ timeout: 20000 });
     await contentArea.hover();
-    
-    const supportButton = page.getByRole('button', { name: 'Confirm Support' });
-    await expect(supportButton).toBeVisible();
-    await supportButton.click();
 
-    await expect(page.locator('text=SUCCESS: Tx recorded')).toBeVisible({ timeout: 10000 });
+    const pendingButton = page.getByRole('button', { name: 'Settlement Pending' });
+    await expect(pendingButton).toBeVisible();
+    await expect(pendingButton).toBeDisabled();
+    await expect(page.locator('text=JPYC settlement verification is in development')).toBeVisible();
+    expect(supportRequested).toBe(false);
 
-    // Go to Ledger
+    // The ledger stays readable for legacy mock records
     await page.getByRole('button', { name: 'LEDGER' }).click();
     await expect(page.locator('text=Forensic Transaction Ledger')).toBeVisible();
     await expect(page.locator('text=500 JPYC')).toBeVisible();

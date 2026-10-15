@@ -1006,6 +1006,61 @@ async fn test_vote_with_invalid_signature_rejected() {
     assert_eq!(count, 0, "a failed signature must not record a vote");
 }
 
+/// ECO-02: 模擬支援APIは無効化しており、認証済みでも 501 を返す
+#[tokio::test]
+async fn test_support_api_disabled_returns_501() {
+    let (app, db) = setup_app_with_db().await;
+    let body = json!({ "amount": 100 }).to_string();
+
+    // 未認証は 401 のまま
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/content/QmSupportTest123/support")
+                .header("content-type", "application/json")
+                .body(Body::from(body.clone()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // 認証済みでも 501 を返し、模擬取引を記録しない
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/content/QmSupportTest123/support")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token("test_secret", "test_user").await
+                    ),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("JPYC"),
+        "response must point at the missing JPYC settlement: {text}"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM transactions", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "the disabled API must not record transactions");
+}
+
 /// INT-01: IPFS改ざん検知（サーバー側）
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {

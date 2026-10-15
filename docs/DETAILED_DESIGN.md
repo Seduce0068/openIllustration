@@ -23,7 +23,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |
 | POST | `/content/upload` | Bearer JWT | コンテンツ投稿 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
-| POST | `/content/:cid/support` | Bearer JWT | 現行コードの模擬支援記録。MVP方針上は削除・無効化対象 |
+| POST | `/content/:cid/support` | Bearer JWT | 無効化済み（501）。模擬ハッシュは支払証明にならないため、JPYC送金検証の実装時に決済APIへ置換する |
 | POST | `/mod/report` | Bearer JWT | 通報登録と `Reported` 遷移 |
 | GET | `/mod/reports` | Bearer JWT | `Reported` コンテンツの通報一覧 |
 | POST | `/mod/vote` | Bearer JWT | 投票署名検証、投票登録、閾値判定 |
@@ -121,7 +121,7 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 ## 8. 既知の未実装・設計保留
 
 - 実JPKI/マイナアプリ連携と信頼検証。
-- JPYC送金・チェーン確認・手数料表示と、現行模擬支援APIの置き換え。
+- JPYC送金・チェーン確認・手数料表示と、無効化済み模擬支援API（501）の決済APIへの置き換え。
 - 第三者検証可能な監査と運用鍵管理。
 - 投票資格・選出・投票期間を含むモデレーション状態機械の完成（重複投票の一意制約と確定後の追加投票拒否は実装済み）。
 - 本番CORSオリジンの決定、ロールバック手順を含むDBマイグレーション運用、可観測性。

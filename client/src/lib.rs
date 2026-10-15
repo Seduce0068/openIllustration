@@ -35,11 +35,6 @@ pub struct ContentMeta {
     pub price: i64,
 }
 
-#[derive(Serialize)]
-pub struct SupportRequest {
-    pub amount: i64,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Transaction {
     pub tx_id: i64,
@@ -252,7 +247,6 @@ fn ContentViewer(
     let (novel_html, set_novel_html) = create_signal(String::new());
     let (audit_logs, set_audit_logs) = create_signal(Vec::<AuditLog>::new());
     let (show_audit, set_show_audit) = create_signal(false);
-    let (support_status, set_support_status) = create_signal(String::new());
     let canvas_ref = create_node_ref::<html::Canvas>();
 
     let token_stored = store_value(token);
@@ -302,33 +296,6 @@ fn ContentViewer(
         });
     });
 
-    let cid_stored = store_value(cid_label.clone());
-
-    let do_support = move |_| {
-        let cid = cid_stored.get_value();
-        let token = token_stored.get_value();
-        let amount = price;
-        set_support_status.set("Processing P2P Support...".to_string());
-        spawn_local(async move {
-            let res = Request::post(&format!("{}/content/{}/support", API_BASE, cid))
-                .header("Authorization", &format!("Bearer {}", token))
-                .json(&SupportRequest { amount })
-                .unwrap()
-                .send()
-                .await;
-
-            if let Ok(response) = res
-                && response.ok()
-            {
-                if let Ok(tx_hash) = response.json::<String>().await {
-                    set_support_status.set(format!("SUCCESS: Tx recorded ({})", &tx_hash[0..12]));
-                }
-            } else {
-                set_support_status.set("Support failed.".to_string());
-            }
-        });
-    };
-
     let ct_can = content_type.clone();
     let ct_nov = content_type.clone();
     let ct_bad = content_type.clone();
@@ -357,14 +324,11 @@ fn ContentViewer(
                         <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
                             <p class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
                             <p class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
-                            <button on:click=do_support
-                                class="px-6 py-2 border border-white hover:bg-white hover:text-black transition-colors font-bold text-[10px] uppercase">
-                                "Confirm Support"
+                            <button disabled
+                                class="px-6 py-2 border border-white/20 text-gray-500 cursor-not-allowed font-bold text-[10px] uppercase">
+                                "Settlement Pending"
                             </button>
-                            <p class="text-[8px] text-gray-400 italic">"100% of payment goes directly to creator."</p>
-                            <Show when=move || !support_status.get().is_empty() fallback=|| ()>
-                                <p class="text-[8px] text-green-500 animate-pulse break-all">{support_status.get()}</p>
-                            </Show>
+                            <p class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
                         </div>
                     }.into_view(),
                     Some(false) => view! {

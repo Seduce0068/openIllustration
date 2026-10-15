@@ -47,6 +47,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("Forbidden: {0}")]
     Forbidden(String),
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl IntoResponse for AppError {
@@ -67,6 +69,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -609,45 +612,13 @@ pub async fn list_contents(
     Ok(Json(items))
 }
 
-#[derive(Deserialize)]
-pub struct SupportRequest {
-    pub amount: i64,
-}
-
-pub async fn support_creator(
-    State(state): State<Arc<AppState>>,
-    claims: AuthClaims,
-    Path(cid): Path<String>,
-    Json(payload): Json<SupportRequest>,
-) -> Result<Json<String>, AppError> {
-    if payload.amount <= 0 {
-        return Err(AppError::BadRequest("amount must be positive".to_string()));
-    }
-    // 1. Get content owner
-    let mut rows = state
-        .db
-        .query(
-            "SELECT owner_hash FROM contents WHERE cid = ?",
-            [cid.clone()],
-        )
-        .await?;
-    let owner_hash: String = if let Some(row) = rows.next().await? {
-        row.get(0)?
-    } else {
-        return Err(AppError::NotFound);
-    };
-
-    // 2. Record transaction (Simulated P2P)
-    let tx_hash = sha256::digest(
-        format!("{}:{}:{}:{}", cid, claims.sub, owner_hash, payload.amount).as_bytes(),
-    );
-
-    state.db.execute(
-        "INSERT INTO transactions (cid, sender_hash, receiver_hash, amount, tx_hash) VALUES (?, ?, ?, ?, ?)",
-        (cid, claims.sub.clone(), owner_hash, payload.amount, tx_hash.clone())
-    ).await?;
-
-    Ok(Json(tx_hash))
+/// 支援APIは無効化している。模擬支援記録はチェーン送金の検証を欠き支払証明に
+/// ならないため、JPYC送金検証の実装まで常に 501 を返す。
+/// 認証は維持し、未認証アクセスには従来どおり 401 を返す。
+pub async fn support_creator(_claims: AuthClaims) -> Result<Json<String>, AppError> {
+    Err(AppError::NotImplemented(
+        "Support API is disabled until JPYC settlement is implemented".to_string(),
+    ))
 }
 
 pub async fn update_content_status(
