@@ -462,9 +462,12 @@ pub async fn get_content(
         return Err(AppError::NotFound);
     };
 
+    // Public gateway candidates, tried in order. Cloudflare's public
+    // gateway (cloudflare-ipfs.com) was shut down in August 2024; Pinata's
+    // gateway replaces it and serves the content pinned by this backend.
     let gateways = [
         format!("https://ipfs.io/ipfs/{}", cid),
-        format!("https://cloudflare-ipfs.com/ipfs/{}", cid),
+        format!("https://gateway.pinata.cloud/ipfs/{}", cid),
         format!("https://{}.ipfs.dweb.link", cid),
     ];
 
