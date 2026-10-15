@@ -786,6 +786,27 @@ pub async fn mod_vote(
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
 
+    // Report must exist and its target content must still be under review.
+    // Votes on concluded reports are rejected so that re-tallying can never
+    // flip an already-decided status.
+    let mut report_rows = tx
+        .query(
+            "SELECT c.status FROM reports r
+             JOIN contents c ON r.target_cid = c.cid
+             WHERE r.report_id = ?",
+            [vote.report_id],
+        )
+        .await?;
+    let target_status: String = match report_rows.next().await? {
+        Some(row) => row.get(0)?,
+        None => return Err(AppError::NotFound),
+    };
+    if target_status != "Reported" {
+        return Err(AppError::BadRequest(
+            "Report is already concluded".to_string(),
+        ));
+    }
+
     let mut existing_vote = tx
         .query(
             "SELECT 1 FROM votes WHERE report_id = ? AND voter_hash = ? LIMIT 1",

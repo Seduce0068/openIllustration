@@ -74,8 +74,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 - 通報は `/mod/report` に `target_cid` と `reason` を送る。通報者のJWT主体を監査ログの `changed_by` に用いる。
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
-  JWT主体と `juror_hash` の一致、結果値、重複投票を検査する。
+  JWT主体と `juror_hash` の一致、結果値、重複投票を検査する。存在しない
+  `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合は400で拒否する。
 - 現行実装は3票以上で多数決し、RejectがApproveを上回る場合に `Rejected`、それ以外を `Approved` とする。同数はApprovedとなる。
+- 確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
 - **未決定**: 投票期間、投票資格・選出方法、同数時の再審査、通報者制限、結果への異議申立て、Rejected後のBAN方針。
 - **未実装**: オンチェーン記録、ランダム陪審員選出、BANテーブル移行。モデレーション結果を法的判断とみなさない。
 
@@ -120,7 +122,7 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 - 実JPKI/マイナアプリ連携と信頼検証。
 - JPYC送金・チェーン確認・手数料表示と、現行模擬支援APIの置き換え。
 - 第三者検証可能な監査と運用鍵管理。
-- 投票資格・状態機械・一意制約を含むDB移行。
+- 投票資格・選出・投票期間を含むモデレーション状態機械の完成（重複投票の一意制約と確定後の追加投票拒否は実装済み）。
 - 環境別CORS、エラー公開方針、ロールバック手順を含むDBマイグレーション運用、可観測性。
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。

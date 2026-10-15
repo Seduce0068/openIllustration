@@ -558,6 +558,173 @@ async fn test_duplicate_vote_rejected() {
     assert_eq!(count, 1, "exactly one vote must be stored");
 }
 
+/// 陪審員としてユーザーを登録し、投票署名用のRSA秘密鍵を返す
+async fn insert_juror(db: &libsql::Connection) -> (String, RsaPrivateKey) {
+    let mut rng = rand::thread_rng();
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let public_der = private_key
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .to_vec();
+    let juror_hash = sha256::digest(&public_der);
+    db.execute(
+        "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
+        (juror_hash.clone(), public_der),
+    )
+    .await
+    .unwrap();
+    (juror_hash, private_key)
+}
+
+/// 署名付きの投票リクエストを送信し、ステータスコードを返す
+async fn send_signed_vote(
+    app: &Router,
+    report_id: i64,
+    result: &str,
+    juror_hash: &str,
+    private_key: &RsaPrivateKey,
+) -> StatusCode {
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let message = json!({"report_id": report_id, "result": result}).to_string();
+    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
+    let signature = signing_key.sign(message.as_bytes()).to_vec();
+    let vote_body = json!({
+        "report_id": report_id,
+        "juror_hash": juror_hash,
+        "result": result,
+        "signature": signature
+    });
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/mod/vote")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", generate_token("test_secret", juror_hash).await),
+                )
+                .body(Body::from(vote_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    response.status()
+}
+
+/// MOD-02: 確定後の追加投票は拒否され、確定状態は変わらない
+#[tokio::test]
+async fn test_vote_after_conclusion_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmConcludedVote', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmConcludedVote', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+    });
+    let app = build_router(shared_state);
+
+    // Three Reject votes conclude the report
+    for _ in 0..3 {
+        let (juror_hash, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror_hash, &key).await,
+            StatusCode::OK,
+            "votes before conclusion should succeed"
+        );
+    }
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM contents WHERE cid = 'QmConcludedVote'",
+            (),
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, "Rejected");
+
+    // A later Approve vote must be rejected and must not flip the status
+    let (late_juror, late_key) = insert_juror(&db).await;
+    assert_eq!(
+        send_signed_vote(&app, 1, "Approve", &late_juror, &late_key).await,
+        StatusCode::BAD_REQUEST,
+        "votes after conclusion must be rejected"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM contents WHERE cid = 'QmConcludedVote'",
+            (),
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, "Rejected", "concluded status must not change");
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 3, "the late vote must not be recorded");
+}
+
+/// 存在しない report_id への投票は 404
+#[tokio::test]
+async fn test_vote_for_missing_report_returns_404() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+    });
+    let app = build_router(shared_state);
+
+    let (juror_hash, key) = insert_juror(&db).await;
+    assert_eq!(
+        send_signed_vote(&app, 9999, "Approve", &juror_hash, &key).await,
+        StatusCode::NOT_FOUND,
+        "unknown report must return 404"
+    );
+}
+
 /// INT-01: IPFS改ざん検知（サーバー側）
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {
