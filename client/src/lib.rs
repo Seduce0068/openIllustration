@@ -212,11 +212,11 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                 key=|item| item.cid.clone()
                 children=move |item| {
                     view! {
-                        <ContentViewer 
-                            cid=item.cid.clone() 
-                            expected_checksum=item.checksum.clone() 
-                            content_type=item.content_type.clone() 
-                            price=item.price 
+                        <ContentViewer
+                            cid=item.cid.clone()
+                            expected_checksum=item.checksum.clone()
+                            content_type=item.content_type.clone()
+                            price=item.price
                             token=token_stored.get_value()
                             user_hash=user_hash_stored.get_value()
                         />
@@ -240,13 +240,12 @@ mod jxl;
 
 #[component]
 fn ContentViewer(
-    cid: String, 
-    expected_checksum: String, 
-    content_type: String, 
+    cid: String,
+    expected_checksum: String,
+    content_type: String,
     price: i64,
     token: String,
-    #[allow(unused_variables)]
-    user_hash: String
+    #[allow(unused_variables)] user_hash: String,
 ) -> impl IntoView {
     let cid_label = cid.clone();
     let (verified, set_verified) = create_signal(None::<bool>);
@@ -275,7 +274,7 @@ fn ContentViewer(
                 let bytes = response.binary().await.unwrap_or_default();
                 let is_ok = common::verify_checksum(&bytes, &expected_checksum);
                 set_verified.set(Some(is_ok));
-                
+
                 if is_ok && !bytes.is_empty() {
                     if ct == "Illustration" {
                         if let Some(canvas) = canvas_ref.get() {
@@ -317,8 +316,10 @@ fn ContentViewer(
                 .unwrap()
                 .send()
                 .await;
-            
-            if let Ok(response) = res && response.ok() {
+
+            if let Ok(response) = res
+                && response.ok()
+            {
                 if let Ok(tx_hash) = response.json::<String>().await {
                     set_support_status.set(format!("SUCCESS: Tx recorded ({})", &tx_hash[0..12]));
                 }
@@ -346,13 +347,13 @@ fn ContentViewer(
 
             <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
                 <canvas node_ref=canvas_ref class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
-                
+
                 <Show when=move || verified.get() == Some(true) && ct_nov == "Novel" fallback=|| ()>
                     <div class="p-4 text-xs prose prose-invert max-w-none w-full overflow-y-auto h-full" inner_html=move || novel_html.get() />
                 </Show>
 
                 {move || match verified.get() {
-                    Some(true) => view! { 
+                    Some(true) => view! {
                         <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
                             <p class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
                             <p class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
@@ -466,7 +467,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 .append_with_blob_and_filename("file", &blob, "upload.jxl")
                 .unwrap();
             form_data.append_with_str("owner_hash", &user_hash).unwrap();
-            form_data.append_with_str("price", &price_val.to_string()).unwrap();
+            form_data
+                .append_with_str("price", &price_val.to_string())
+                .unwrap();
             let sig_blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
                 &js_sys::Uint8Array::from(&mock_signature[..]).into(),
             ))
@@ -503,10 +506,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         {move || file.get().map(|f| f.name()).unwrap_or_else(|| "SELECT JXL OR MARKDOWN".to_string())}
                     </label>
                 </div>
-                
+
                 <div class="space-y-2">
                     <label class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
-                    <input type="number" 
+                    <input type="number"
                         on:input=move |ev| set_price.set(event_target_value(&ev).parse().unwrap_or(0))
                         prop:value=price
                         class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />
@@ -537,7 +540,9 @@ fn Ledger(token: String) -> impl IntoView {
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await;
-            if let Ok(response) = res && let Ok(data) = response.json::<Vec<Transaction>>().await {
+            if let Ok(response) = res
+                && let Ok(data) = response.json::<Vec<Transaction>>().await
+            {
                 set_txs.set(data);
             }
         });
@@ -602,7 +607,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await;
-            if let Ok(response) = res && let Ok(data) = response.json::<Vec<Report>>().await {
+            if let Ok(response) = res
+                && let Ok(data) = response.json::<Vec<Report>>().await
+            {
                 set_reports.set(data);
             }
         });
@@ -629,7 +636,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .unwrap()
                 .send()
                 .await;
-            if let Ok(r) = res && r.ok() {
+            if let Ok(r) = res
+                && r.ok()
+            {
                 set_status.set("Report accepted. Content marked Reported.".to_string());
                 fetch_reports();
             } else {
@@ -654,7 +663,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .unwrap()
                 .send()
                 .await;
-            if let Ok(r) = res && r.ok() {
+            if let Ok(r) = res
+                && r.ok()
+            {
                 fetch_reports();
             }
         });
@@ -753,15 +764,15 @@ mod tests {
     fn wasm_detects_tampered_content() {
         let original_data = b"original forensic content";
         let tampered_data = b"tampered forensic content";
-        
+
         let mut hasher = sha2::Sha256::new();
         use sha2::Digest;
         hasher.update(original_data);
         let original_checksum = hex::encode(hasher.finalize());
-        
+
         // 改ざんされたデータは元のチェックサムと一致しない
         assert!(!common::verify_checksum(tampered_data, &original_checksum));
-        
+
         // 正しいデータはチェックサムと一致する
         assert!(common::verify_checksum(original_data, &original_checksum));
     }
