@@ -515,6 +515,9 @@ fn Ledger(token: String) -> impl IntoView {
     view! {
         <div class="max-w-5xl mx-auto mt-12">
             <h2 class="text-xl font-bold tracking-widest uppercase mb-8">"Forensic Transaction Ledger"</h2>
+            <div class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
+                "LEGACY MOCK RECORDS — Written by the disabled mock support API. These entries are not proof of payment; JPYC settlement is not implemented."
+            </div>
             <div class="border border-white/10 overflow-hidden">
                 <table class="w-full text-left text-[10px] font-mono">
                     <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
@@ -523,7 +526,7 @@ fn Ledger(token: String) -> impl IntoView {
                             <th class="p-4">"Sender (P2P)"</th>
                             <th class="p-4">"Receiver"</th>
                             <th class="p-4 text-right">"Amount"</th>
-                            <th class="p-4">"Proof_Hash"</th>
+                            <th class="p-4">"Record_Hash"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-white/5">

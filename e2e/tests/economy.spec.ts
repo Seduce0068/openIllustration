@@ -98,9 +98,11 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.locator('text=JPYC settlement verification is in development')).toBeVisible();
     expect(supportRequested).toBe(false);
 
-    // The ledger stays readable for legacy mock records
+    // The ledger stays readable for legacy mock records, labeled as such
     await page.getByRole('button', { name: 'LEDGER' }).click();
     await expect(page.locator('text=Forensic Transaction Ledger')).toBeVisible();
+    await expect(page.locator('text=LEGACY MOCK RECORDS')).toBeVisible();
+    await expect(page.locator('text=Record_Hash')).toBeVisible();
     await expect(page.locator('text=500 JPYC')).toBeVisible();
     await expect(page.locator('text=mock_tx_hash_789012345678')).toBeVisible();
   });
