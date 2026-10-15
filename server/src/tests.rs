@@ -297,6 +297,96 @@ async fn test_mod_report_sets_reported_status() {
     assert_eq!(status, "Reported");
 }
 
+/// レビュー中の重複通報は拒否し、通報行を増やさない
+#[tokio::test]
+async fn test_duplicate_report_rejected() {
+    let (app, db) = setup_app_with_db().await;
+    let report_body = json!({
+        "report_id": 0,
+        "target_cid": "QmTestCID",
+        "reason": "First report",
+        "status": "Pending"
+    });
+
+    let first = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", generate_token("test_secret", "reporter").await),
+                )
+                .body(Body::from(report_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token("test_secret", "reporter2").await
+                    ),
+                )
+                .body(Body::from(report_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        second.status(),
+        StatusCode::BAD_REQUEST,
+        "duplicate report while under review must be rejected"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmTestCID'",
+            (),
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "only the first report must be recorded");
+}
+
+/// 存在しないコンテンツへの通報は 404
+#[tokio::test]
+async fn test_report_missing_content_returns_404() {
+    let (app, _db) = setup_app_with_db().await;
+    let report_body = json!({
+        "report_id": 0,
+        "target_cid": "QmMissingContent",
+        "reason": "No such content",
+        "status": "Pending"
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", generate_token("test_secret", "reporter").await),
+                )
+                .body(Body::from(report_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// INT-02: zip は拒否
 #[test]
 fn test_reject_zip_content_type() {
@@ -341,6 +431,65 @@ async fn test_upload_rejects_unknown_multipart_fields() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// 同一コンテンツの再アップロードは 400（CID主キー衝突を500にしない）
+#[tokio::test]
+async fn test_upload_duplicate_content_rejected() {
+    let app = setup_app().await;
+    let token = generate_token("test_secret", "test_user").await;
+    let boundary = "dup-boundary";
+
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.jxl\"\r\nContent-Type: image/jxl\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&[0xFF, 0x0A, 0x01, 0x02, 0x03]);
+    body.extend_from_slice(
+        format!(
+            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&[0u8; 16]);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+
+    let send = |app: Router| {
+        let body = body.clone();
+        let token = token.clone();
+        async move {
+            app.oneshot(with_peer(
+                Request::post("/content/upload")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+        }
+    };
+
+    let first = send(app.clone()).await;
+    assert_eq!(
+        first.status(),
+        StatusCode::OK,
+        "first upload should succeed"
+    );
+
+    let second = send(app.clone()).await;
+    assert_eq!(
+        second.status(),
+        StatusCode::BAD_REQUEST,
+        "duplicate upload must be rejected"
+    );
 }
 
 #[test]

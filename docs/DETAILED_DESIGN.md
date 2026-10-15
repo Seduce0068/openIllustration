@@ -58,7 +58,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - Content-Typeを検査し、IllustrationまたはNovelに分類する。
 - `price` は整数かつ0以上。ファイル全体のHTTP本文上限は10 MiB。
 - 署名対象はファイルのバイト列。開発モックでは全ゼロ署名を許容する。
-- Pinataへのアップロード後、CID・SHA-256チェックサム等をDBへ登録する。
+- Pinataへのアップロード後、CID・SHA-256チェックサム等をDBへ登録する。Pinataへ送るファイル名はコンテンツ種別に応じた固定名（`upload.jxl` / `upload.md`）とし、ユーザー入力名は使わない。
+- 同一バイト列を再投稿すると同一CIDとなるため、既存CIDとの衝突は400で拒否する（主キー衝突による500を返さない）。
 - Content-Typeは `image/jxl` または `text/markdown` のみ許可し、JPEG XLシグネチャまたはMarkdownのUTF-8を検査する。既知フィールドの重複と未知フィールドは拒否する。
 - **未実装**: 完全なJPEG XLデコード検証、画像デコード前検査、料金上限、ファイル内容に応じた安全な保存名。
 
@@ -72,7 +73,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ## 4. モデレーション
 
-- 通報は `/mod/report` に `target_cid` と `reason` を送る。通報者のJWT主体を監査ログの `changed_by` に用いる。
+- 通報は `/mod/report` に `target_cid` と `reason` を送る。通報者のJWT主体を監査ログの `changed_by` に用いる。存在しないコンテンツは404、レビュー中（`Reported`）の重複通報は400で拒否する。
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
   JWT主体と `juror_hash` の一致、結果値、重複投票を検査する。存在しない
   `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合は400で拒否する。

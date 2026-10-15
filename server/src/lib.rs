@@ -663,6 +663,25 @@ pub async fn mod_report(
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
 
+    // The target must exist and must not already be under review. Duplicate
+    // reports while a review is pending would create parallel report rows
+    // that all resolve against the same content status.
+    let mut rows = tx
+        .query(
+            "SELECT status FROM contents WHERE cid = ?",
+            [report.target_cid.clone()],
+        )
+        .await?;
+    let current_status: String = match rows.next().await? {
+        Some(row) => row.get(0)?,
+        None => return Err(AppError::NotFound),
+    };
+    if current_status == "Reported" {
+        return Err(AppError::BadRequest(
+            "Content is already under review".to_string(),
+        ));
+    }
+
     tx.execute(
         "INSERT INTO reports (target_cid, reason) VALUES (?, ?)",
         [report.target_cid.clone(), report.reason.clone()],
@@ -1026,14 +1045,28 @@ pub async fn upload_content(
 
     let checksum = sha256::digest(&data[..]);
 
-    // 2. Pin to IPFS
-    let cid = pin_to_ipfs(&state, data.to_vec(), "upload.jxl").await?;
+    // 2. Pin to IPFS with a filename that matches the declared kind
+    let filename = if content_kind == "Novel" {
+        "upload.md"
+    } else {
+        "upload.jxl"
+    };
+    let cid = pin_to_ipfs(&state, data.to_vec(), filename).await?;
 
     let tx = state
         .db
         .transaction()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    // The same bytes resolve to the same CID and contents is keyed by CID,
+    // so a re-upload would otherwise surface as a primary-key 500.
+    let mut existing = tx
+        .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
+        .await?;
+    if existing.next().await?.is_some() {
+        return Err(AppError::BadRequest("Content already exists".to_string()));
+    }
 
     tx.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, price) VALUES (?, ?, ?, ?, ?)",
