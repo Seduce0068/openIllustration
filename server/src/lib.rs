@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
     body::Body,
     extract::{FromRef, Multipart, Path, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
     middleware::from_fn,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -240,7 +241,43 @@ pub struct AuditLogResponse {
     pub entry_hash: String,
 }
 
+/// 開発用の既定CORSオリジン。本番では `ALLOWED_ORIGINS` で上書きする。
+const DEV_ALLOWED_ORIGINS: [&str; 3] = [
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://[::1]:8080",
+];
+
+/// Parse the `ALLOWED_ORIGINS` environment value (comma-separated) into
+/// header values. Falls back to the local development origins when unset;
+/// invalid entries are ignored, and an empty result rejects all origins.
+pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
+    match env_value {
+        Some(value) => value
+            .split(',')
+            .filter_map(|origin| {
+                let origin = origin.trim();
+                if origin.is_empty() {
+                    return None;
+                }
+                match origin.parse::<HeaderValue>() {
+                    Ok(parsed) => Some(parsed),
+                    Err(_) => {
+                        warn!("Ignoring invalid ALLOWED_ORIGINS entry: {:?}", origin);
+                        None
+                    }
+                }
+            })
+            .collect(),
+        None => DEV_ALLOWED_ORIGINS
+            .iter()
+            .map(|origin| origin.parse().expect("valid dev origin"))
+            .collect(),
+    }
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
+    let allowed_origins_env = std::env::var("ALLOWED_ORIGINS").ok();
     Router::new()
         .route("/auth/login", post(auth_login))
         .route("/auth/verify", post(auth_verify))
@@ -257,11 +294,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
             CorsLayer::new()
-                .allow_origin([
-                    "http://localhost:8080".parse().expect("valid origin"),
-                    "http://127.0.0.1:8080".parse().expect("valid origin"),
-                    "http://[::1]:8080".parse().expect("valid origin"),
-                ])
+                .allow_origin(allowed_origins(allowed_origins_env.as_deref()))
                 .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )

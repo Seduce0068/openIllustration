@@ -1,5 +1,5 @@
 use crate::{
-    AppState, VerifyRequest, VerifyResponse, build_router, ensure_user_not_banned,
+    AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router, ensure_user_not_banned,
     update_content_status, validate_age, validate_upload_content, validate_upload_content_type,
 };
 use axum::{
@@ -115,6 +115,29 @@ async fn test_ipv6_address_allowed() {
     );
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// SEC-03: ALLOWED_ORIGINS 未設定時は開発用オリジンのみ許可
+#[test]
+fn test_allowed_origins_defaults_to_dev_origins() {
+    let origins = allowed_origins(None);
+    assert_eq!(origins.len(), 3);
+}
+
+/// SEC-03: ALLOWED_ORIGINS がカンマ区切りで反映される
+#[test]
+fn test_allowed_origins_parses_env_value() {
+    let origins = allowed_origins(Some("https://example.com, https://app.example.com"));
+    assert_eq!(origins.len(), 2);
+    assert!(origins.iter().any(|o| o == "https://app.example.com"));
+}
+
+/// SEC-03: 不正なエントリは無視する（制御文字はヘッダ値にできない）
+#[test]
+fn test_allowed_origins_ignores_invalid_entries() {
+    let origins = allowed_origins(Some("bad\norigin, https://ok.example.com"));
+    assert_eq!(origins.len(), 1);
+    assert_eq!(origins[0], "https://ok.example.com");
 }
 
 #[tokio::test]
