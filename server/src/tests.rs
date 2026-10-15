@@ -1,12 +1,14 @@
 use crate::{
-    AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router, ensure_user_not_banned,
-    update_content_status, validate_age, validate_upload_content, validate_upload_content_type,
+    AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
+    ensure_user_not_banned, update_content_status, validate_age, validate_upload_content,
+    validate_upload_content_type,
 };
 use axum::{
     Router,
     body::{Body, to_bytes},
     extract::ConnectInfo,
     http::{Request, StatusCode},
+    response::IntoResponse,
 };
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
@@ -138,6 +140,35 @@ fn test_allowed_origins_ignores_invalid_entries() {
     let origins = allowed_origins(Some("bad\norigin, https://ok.example.com"));
     assert_eq!(origins.len(), 1);
     assert_eq!(origins[0], "https://ok.example.com");
+}
+
+/// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
+#[tokio::test]
+async fn test_internal_error_details_visibility() {
+    unsafe { std::env::remove_var("EXPOSE_INTERNAL_ERRORS") };
+
+    // Default: generic message without internal details
+    let hidden = AppError::Internal("no such table: users".to_string()).into_response();
+    assert_eq!(hidden.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = to_bytes(hidden.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        !text.contains("no such table"),
+        "details must be hidden: {text}"
+    );
+    assert!(text.contains("Internal server error"));
+
+    // Opt-in: details visible for debugging
+    unsafe { std::env::set_var("EXPOSE_INTERNAL_ERRORS", "1") };
+    let exposed = AppError::Internal("no such table: users".to_string()).into_response();
+    let body = to_bytes(exposed.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("no such table"),
+        "details must be visible: {text}"
+    );
+
+    unsafe { std::env::remove_var("EXPOSE_INTERNAL_ERRORS") };
 }
 
 #[tokio::test]
@@ -895,6 +926,84 @@ async fn test_vote_for_missing_report_returns_404() {
         StatusCode::NOT_FOUND,
         "unknown report must return 404"
     );
+}
+
+/// 無効署名の投票は 401 で拒否し、票を記録しない
+#[tokio::test]
+async fn test_vote_with_invalid_signature_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmBadSig', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmBadSig', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+    });
+    let app = build_router(shared_state);
+
+    let (juror_hash, _key) = insert_juror(&db).await;
+    let vote_body = json!({
+        "report_id": 1,
+        "juror_hash": juror_hash,
+        "result": "Approve",
+        "signature": vec![0xABu8; 256]
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/mod/vote")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token("test_secret", &juror_hash).await
+                    ),
+                )
+                .body(Body::from(vote_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("Invalid digital signature"),
+        "client must receive a generic 401: {text}"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "a failed signature must not record a vote");
 }
 
 /// INT-01: IPFS改ざん検知（サーバー側）

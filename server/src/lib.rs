@@ -54,12 +54,14 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::Database(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("DB Error: {}", e),
+                internal_error_body(format!("DB Error: {}", e)),
             ),
-            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::Internal(msg) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, internal_error_body(msg))
+            }
             AppError::Io(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("IO Error: {}", e),
+                internal_error_body(format!("IO Error: {}", e)),
             ),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
@@ -68,6 +70,24 @@ impl IntoResponse for AppError {
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
+    }
+}
+
+/// 内部エラーの詳細をクライアントへ公開するか。未設定時は一般化メッセージを返す。
+/// 開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を確認できる。
+fn expose_internal_errors() -> bool {
+    std::env::var("EXPOSE_INTERNAL_ERRORS")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+/// 500系レスポンスのボディを決定する。詳細は常にログへ出し、公開はフラグに従う。
+fn internal_error_body(details: String) -> String {
+    tracing::error!("Internal error: {}", details);
+    if expose_internal_errors() {
+        details
+    } else {
+        "Internal server error".to_string()
     }
 }
 
@@ -922,9 +942,16 @@ pub async fn verify_user_signature(
         return Ok(false);
     };
 
-    common::verify_rsa_signature(&der, data, signature)
-        .map(|_| true)
-        .map_err(|e| AppError::Unauthorized(format!("Verification failed: {}", e)))
+    match common::verify_rsa_signature(&der, data, signature) {
+        Ok(()) => Ok(true),
+        Err(e) => {
+            // Keep the crypto detail in logs; the client sees a generic 401.
+            warn!("Signature verification failed: {}", e);
+            Err(AppError::Unauthorized(
+                "Invalid digital signature".to_string(),
+            ))
+        }
+    }
 }
 
 pub async fn pin_to_ipfs(
