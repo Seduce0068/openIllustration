@@ -91,7 +91,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`content_audit_log`|状態、主体、理由、連鎖ハッシュ、時刻|DB内状態遷移記録|
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 
-DDLは起動時に `CREATE TABLE IF NOT EXISTS` で作成される。バージョン管理されたマイグレーション、ロールバック、外部キー有効化の保証は未整備。
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ
 
@@ -121,6 +121,6 @@ DDLは起動時に `CREATE TABLE IF NOT EXISTS` で作成される。バージ�
 - JPYC送金・チェーン確認・手数料表示と、現行模擬支援APIの置き換え。
 - 第三者検証可能な監査と運用鍵管理。
 - 投票資格・状態機械・一意制約を含むDB移行。
-- 環境別CORS、エラー公開方針、DBマイグレーション、可観測性。
+- 環境別CORS、エラー公開方針、ロールバック手順を含むDBマイグレーション運用、可観測性。
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。

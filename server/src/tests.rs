@@ -36,97 +36,7 @@ async fn generate_token(secret: &str, sub: &str) -> String {
 }
 
 async fn init_schema(db: &libsql::Connection) {
-    db.execute(
-        "CREATE TABLE users (
-                user_hash TEXT PRIMARY KEY,
-                public_key_der BLOB,
-                is_banned BOOLEAN DEFAULT FALSE,
-                banned_at DATETIME
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE contents (
-                cid TEXT PRIMARY KEY,
-                type TEXT,
-                owner_hash TEXT,
-                checksum TEXT,
-                status TEXT DEFAULT 'Approved',
-                price INTEGER DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE content_audit_log (
-                log_id INTEGER PRIMARY KEY,
-                cid TEXT,
-                old_status TEXT,
-                new_status TEXT,
-                changed_by TEXT,
-                reason TEXT,
-                previous_log_hash TEXT,
-                entry_hash TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE reports (
-                report_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                target_cid TEXT,
-                reason TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE transactions (
-                tx_id INTEGER PRIMARY KEY,
-                cid TEXT,
-                sender_hash TEXT,
-                receiver_hash TEXT,
-                amount INTEGER,
-                tx_hash TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE votes (
-                vote_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                report_id INTEGER,
-                voter_hash TEXT,
-                vote_result TEXT,
-                voted_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "CREATE TABLE signatures (
-                signature_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                target_id TEXT,
-                signer_hash TEXT,
-                signature_blob BLOB,
-                algorithm TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );",
-        (),
-    )
-    .await
-    .unwrap();
+    crate::migration::run_migrations(db).await.unwrap();
 }
 
 async fn setup_app_with_db() -> (Router, Arc<libsql::Connection>) {
@@ -139,6 +49,10 @@ async fn setup_app_with_db() -> (Router, Arc<libsql::Connection>) {
             .unwrap(),
     );
     init_schema(&db).await;
+    // Insert test user first (required for FK constraint)
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
              VALUES ('QmTestCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
@@ -446,6 +360,20 @@ async fn test_vote_consensus_rejects_content() {
         .unwrap();
     init_schema(&db).await;
 
+    // Insert required users first
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('juror1')", ())
+        .await
+        .unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('juror2')", ())
+        .await
+        .unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('juror3')", ())
+        .await
+        .unwrap();
+
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
              VALUES ('QmVoteTest', 'Illustration', 'owner', 'abc', 'Reported')",
@@ -527,10 +455,118 @@ async fn test_vote_consensus_rejects_content() {
     assert_eq!(status, "Rejected");
 }
 
+/// MOD-01: 同一ユーザーの同一通報への再投票は拒否
+#[tokio::test]
+async fn test_duplicate_vote_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmDupVote', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmDupVote', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+    });
+    let app = build_router(shared_state);
+
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let mut rng = rand::thread_rng();
+    let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let public_der = private_key
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .to_vec();
+    let juror_hash = sha256::digest(&public_der);
+    db.execute(
+        "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
+        (juror_hash.clone(), public_der),
+    )
+    .await
+    .unwrap();
+
+    let message = json!({"report_id": 1, "result": "Approve"}).to_string();
+    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
+    let signature = signing_key.sign(message.as_bytes()).to_vec();
+    let vote_body = json!({
+        "report_id": 1,
+        "juror_hash": juror_hash,
+        "result": "Approve",
+        "signature": signature
+    });
+
+    let send_vote = |app: Router| {
+        let body = vote_body.to_string();
+        let token_sub = juror_hash.clone();
+        async move {
+            app.oneshot(with_peer(
+                Request::post("/mod/vote")
+                    .header("content-type", "application/json")
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", generate_token("test_secret", &token_sub).await),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+        }
+    };
+
+    let first = send_vote(app.clone()).await;
+    assert_eq!(first.status(), StatusCode::OK, "first vote should succeed");
+
+    let second = send_vote(app.clone()).await;
+    assert_eq!(
+        second.status(),
+        StatusCode::BAD_REQUEST,
+        "duplicate vote must be rejected"
+    );
+
+    // DB-level unique index also guards against duplicates
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "exactly one vote must be stored");
+}
+
 /// INT-01: IPFS改ざん検知（サーバー側）
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {
     let (app, db) = setup_app_with_db().await;
+
+    // Insert required user first
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
@@ -574,6 +610,14 @@ async fn test_audit_log_chain_integrity() {
         .connect()
         .unwrap();
     init_schema(&db).await;
+
+    // Insert required users first
+    db.execute("INSERT INTO users (user_hash) VALUES ('user1')", ())
+        .await
+        .unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('user2')", ())
+        .await
+        .unwrap();
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)

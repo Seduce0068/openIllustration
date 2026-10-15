@@ -1,5 +1,6 @@
 // Guild Backend library
 mod jpki;
+mod migration;
 mod network;
 
 use axum::{
@@ -35,6 +36,8 @@ pub enum AppError {
     Database(#[from] libsql::Error),
     #[error("Internal server error: {0}")]
     Internal(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
     #[error("Not found")]
@@ -53,6 +56,10 @@ impl IntoResponse for AppError {
                 format!("DB Error: {}", e),
             ),
             AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            AppError::Io(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("IO Error: {}", e),
+            ),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
@@ -194,96 +201,10 @@ pub async fn run() -> anyhow::Result<()> {
             .connect()?
     };
 
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS users (
-            user_hash TEXT PRIMARY KEY,
-            public_key_der BLOB,
-            is_banned BOOLEAN DEFAULT FALSE,
-            banned_at DATETIME
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS contents (
-            cid TEXT PRIMARY KEY,
-            type TEXT CHECK(type IN ('Illustration', 'Novel')),
-            owner_hash TEXT REFERENCES users(user_hash),
-            checksum TEXT NOT NULL,
-            status TEXT CHECK(status IN ('Approved', 'Reported', 'Rejected')) DEFAULT 'Approved',
-            price INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS transactions (
-            tx_id INTEGER PRIMARY KEY,
-            cid TEXT REFERENCES contents(cid),
-            sender_hash TEXT REFERENCES users(user_hash),
-            receiver_hash TEXT REFERENCES users(user_hash),
-            amount INTEGER NOT NULL,
-            tx_hash TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS signatures (
-            signature_id INTEGER PRIMARY KEY,
-            target_id TEXT NOT NULL, -- CID, report_id, or vote_id
-            signer_hash TEXT NOT NULL,
-            signature_blob BLOB NOT NULL,
-            algorithm TEXT NOT NULL, -- e.g., 'RSASSA-PKCS1-v1_5'
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS content_audit_log (
-            log_id INTEGER PRIMARY KEY,
-            cid TEXT REFERENCES contents(cid),
-            old_status TEXT,
-            new_status TEXT,
-            changed_by TEXT,
-            reason TEXT,
-            previous_log_hash TEXT,
-            entry_hash TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS reports (
-            report_id INTEGER PRIMARY KEY,
-            target_cid TEXT REFERENCES contents(cid),
-            reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
-
-    db.execute(
-        "CREATE TABLE IF NOT EXISTS votes (
-            vote_id INTEGER PRIMARY KEY,
-            report_id INTEGER REFERENCES reports(report_id),
-            voter_hash TEXT REFERENCES users(user_hash),
-            vote_result TEXT CHECK(vote_result IN ('Approve', 'Reject')),
-            voted_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );",
-        (),
-    )
-    .await?;
+    // Run database migrations
+    migration::run_migrations(&db).await?;
+    // Detect checksum drift in already-applied migrations
+    migration::verify_migrations(&db).await?;
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
