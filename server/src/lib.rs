@@ -230,10 +230,14 @@ pub async fn run() -> anyhow::Result<()> {
     // Detect checksum drift in already-applied migrations
     migration::verify_migrations(&db).await?;
 
+    let jwt_secret = std::env::var("JWT_SECRET")
+        .map_err(|_| anyhow::anyhow!("JWT_SECRET must be set (at least 32 random bytes)"))?;
+    validate_jwt_secret(&jwt_secret).map_err(|e| anyhow::anyhow!(e))?;
+
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::new(),
-        jwt_secret: std::env::var("JWT_SECRET").expect("JWT_SECRET must be set"),
+        jwt_secret,
         allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
@@ -296,6 +300,19 @@ pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
             .iter()
             .map(|origin| origin.parse().expect("valid dev origin"))
             .collect(),
+    }
+}
+
+/// HS256 の鍵はハッシュ出力（32バイト）以上の長さを必須とする（RFC 7518 §3.2）。
+/// 短い鍵は総当たり・辞書攻撃で偽造トークンを作られるため、起動時に拒否する。
+pub fn validate_jwt_secret(secret: &str) -> Result<(), String> {
+    if secret.len() < 32 {
+        Err(format!(
+            "JWT_SECRET must be at least 32 bytes for HS256 (got {} bytes)",
+            secret.len()
+        ))
+    } else {
+        Ok(())
     }
 }
 

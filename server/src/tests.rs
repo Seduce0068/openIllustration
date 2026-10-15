@@ -1,7 +1,7 @@
 use crate::{
     AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
-    ensure_user_not_banned, update_content_status, validate_age, validate_upload_content,
-    validate_upload_content_type,
+    ensure_user_not_banned, update_content_status, validate_age, validate_jwt_secret,
+    validate_upload_content, validate_upload_content_type,
 };
 use axum::{
     Router,
@@ -140,6 +140,13 @@ fn test_allowed_origins_ignores_invalid_entries() {
     let origins = allowed_origins(Some("bad\norigin, https://ok.example.com"));
     assert_eq!(origins.len(), 1);
     assert_eq!(origins[0], "https://ok.example.com");
+}
+
+/// SEC-05: HS256 は32バイト未満の JWT 秘密鍵を拒否する（RFC 7518 §3.2）
+#[test]
+fn test_jwt_secret_minimum_length() {
+    assert!(validate_jwt_secret(&"a".repeat(32)).is_ok());
+    assert!(validate_jwt_secret("short_secret").is_err());
 }
 
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する

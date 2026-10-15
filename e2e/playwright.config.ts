@@ -24,7 +24,7 @@ export default defineConfig({
   // 開発サーバーを自動起動する設定
   webServer: [
     {
-      command: 'export JWT_SECRET=test_secret_for_e2e && export ALLOW_MOCK_AUTH=1 && export ALLOW_IPV4_LOCALHOST=1 && cd ../server && cargo run',
+      command: 'export JWT_SECRET=test_secret_for_e2e_0123456789abcdef && export ALLOW_MOCK_AUTH=1 && export ALLOW_IPV4_LOCALHOST=1 && cd ../server && cargo run',
       url: 'http://127.0.0.1:3000/health',
       timeout: 120 * 1000,
       reuseExistingServer: !process.env.CI,

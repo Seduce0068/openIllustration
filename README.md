@@ -42,8 +42,8 @@ rustup target add wasm32-unknown-unknown
 ### 2. バックエンドの起動
 
 ```bash
-# JWT_SECRET を設定して起動（開発時は IPv4 ループバックを許可可能）
-export JWT_SECRET="your_secure_secret"
+# JWT_SECRET に32バイト以上のランダム値を設定して起動（未設定・短すぎる場合は起動しない）
+export JWT_SECRET="$(openssl rand -hex 32)"
 export ALLOW_IPV4_LOCALHOST=1   # ローカル開発のみ
 export ALLOW_MOCK_AUTH=1          # 開発専用: mock JPKI / ゼロ署名。本番では未設定または 0
 cargo run -p server

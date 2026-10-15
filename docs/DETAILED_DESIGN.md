@@ -30,7 +30,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ### API横断規則
 
-- JWTはHS256既定検証を用い、有効期限を確認する。鍵の強度・ローテーション・発行者/audience検証は別途要件化する。
+- JWTはHS256既定検証を用い、有効期限を確認する。起動時に32バイト未満の `JWT_SECRET` を拒否する。鍵のローテーション・発行者/audience検証は別途要件化する。
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。未設定時はローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]` の8080）のみ許可する。本番配信オリジンの決定と値の運用は未決定。
 - リクエスト本文は最大10 MiB。IPFS取得応答は15秒タイムアウト、最大10 MiB。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
