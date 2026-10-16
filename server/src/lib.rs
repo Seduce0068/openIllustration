@@ -211,7 +211,20 @@ pub struct Vote {
     pub signature: Vec<u8>,
 }
 
+/// `RUST_LOG` でフィルタ可能なログ subscriber を初期化する。未設定時は INFO。
+/// タイムスタンプは RFC 3339 (UTC)。
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+        .init();
+}
+
 pub async fn run() -> anyhow::Result<()> {
+    init_tracing();
+
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
 

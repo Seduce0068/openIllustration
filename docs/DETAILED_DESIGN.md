@@ -34,6 +34,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。未設定時はローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]` の8080）のみ許可する。本番配信オリジンの決定と値の運用は未決定。
 - リクエスト本文は最大10 MiB。IPFS取得応答は15秒タイムアウト、最大10 MiB。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
+- ログは `tracing` + `tracing-subscriber` で標準出力へ出し、`RUST_LOG` でレベルを制御する（未設定時は INFO、タイムスタンプは RFC 3339 UTC）。
 
 ## 2. 認証・認可（必須要件 / 現行実装との差分）
 
@@ -124,6 +125,6 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 - JPYC送金・チェーン確認・手数料表示と、無効化済み模擬支援API（501）の決済APIへの置き換え。
 - 第三者検証可能な監査と運用鍵管理。
 - 投票資格・選出・投票期間を含むモデレーション状態機械の完成（重複投票の一意制約と確定後の追加投票拒否は実装済み）。
-- 本番CORSオリジンの決定、ロールバック手順を含むDBマイグレーション運用、可観測性。
+- 本番CORSオリジンの決定、ロールバック手順を含むDBマイグレーション運用、ログ集約・アラート。
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。
