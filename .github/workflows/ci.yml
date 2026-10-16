@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main, master]
 
+# ジョブはソースの読み取りのみ必要とする（最小権限）
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   JWT_SECRET: ci_test_secret_for_ci_0123456789abcdef
@@ -14,9 +18,10 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # ubuntu-latest は 2026-10-19〜2026-11-19 に Ubuntu 26.04 へ段階移行するため固定する
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -36,9 +41,9 @@ jobs:
         run: cargo test --workspace
 
   wasm-client:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
