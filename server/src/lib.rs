@@ -259,14 +259,42 @@ pub async fn run() -> anyhow::Result<()> {
     let app = build_router(shared_state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
-    println!("Guild Backend listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    println!("Guild Backend listening on {}", addr);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// SIGINT / SIGTERM を待つ。受信後は `axum::serve` が処理中リクエストの完了を待って停止する。
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            signal.recv().await;
+        } else {
+            // SIGTERM を購読できない場合は ctrl-c のみで停止する。
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("Shutdown signal received; draining in-flight requests");
 }
 
 #[derive(Serialize, Deserialize)]
@@ -297,12 +325,13 @@ fn is_origin_shape(origin: &str) -> bool {
 /// Parse the `ALLOWED_ORIGINS` environment value (comma-separated) into
 /// header values. Falls back to the local development origins when unset;
 /// invalid entries are ignored, and an empty result rejects all origins.
+/// Trailing slashes are removed because browsers never send them in `Origin`.
 pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
     match env_value {
         Some(value) => value
             .split(',')
             .filter_map(|origin| {
-                let origin = origin.trim();
+                let origin = origin.trim().trim_end_matches('/');
                 if origin.is_empty() {
                     return None;
                 }

@@ -151,6 +151,15 @@ fn test_allowed_origins_requires_scheme() {
     assert_eq!(origins[1], "null");
 }
 
+/// SEC-03: 末尾スラッシュはブラウザが送らないため除去する
+#[test]
+fn test_allowed_origins_trims_trailing_slash() {
+    let origins = allowed_origins(Some("https://ok.example.com/, http://localhost:3000//"));
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0], "https://ok.example.com");
+    assert_eq!(origins[1], "http://localhost:3000");
+}
+
 /// SEC-05: HS256 は32バイト未満の JWT 秘密鍵を拒否する（RFC 7518 §3.2）
 #[test]
 fn test_jwt_secret_minimum_length() {
