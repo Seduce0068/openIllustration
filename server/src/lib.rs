@@ -288,6 +288,12 @@ const DEV_ALLOWED_ORIGINS: [&str; 3] = [
     "http://[::1]:8080",
 ];
 
+/// ブラウザの `Origin` は `scheme://host[:port]` 形式か `null` のみ送られる。
+/// scheme のない設定値はどのリクエストにも一致しないため、設定ミスとして無視する。
+fn is_origin_shape(origin: &str) -> bool {
+    origin == "null" || origin.starts_with("http://") || origin.starts_with("https://")
+}
+
 /// Parse the `ALLOWED_ORIGINS` environment value (comma-separated) into
 /// header values. Falls back to the local development origins when unset;
 /// invalid entries are ignored, and an empty result rejects all origins.
@@ -298,6 +304,13 @@ pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
             .filter_map(|origin| {
                 let origin = origin.trim();
                 if origin.is_empty() {
+                    return None;
+                }
+                if !is_origin_shape(origin) {
+                    warn!(
+                        "Ignoring ALLOWED_ORIGINS entry without an http(s) scheme: {:?}",
+                        origin
+                    );
                     return None;
                 }
                 match origin.parse::<HeaderValue>() {

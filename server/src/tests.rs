@@ -142,6 +142,15 @@ fn test_allowed_origins_ignores_invalid_entries() {
     assert_eq!(origins[0], "https://ok.example.com");
 }
 
+/// SEC-03: scheme のないエントリは無視する（ブラウザの Origin と一致しないため）
+#[test]
+fn test_allowed_origins_requires_scheme() {
+    let origins = allowed_origins(Some("localhost:8080, https://ok.example.com, null"));
+    assert_eq!(origins.len(), 2);
+    assert_eq!(origins[0], "https://ok.example.com");
+    assert_eq!(origins[1], "null");
+}
+
 /// SEC-05: HS256 は32バイト未満の JWT 秘密鍵を拒否する（RFC 7518 §3.2）
 #[test]
 fn test_jwt_secret_minimum_length() {
