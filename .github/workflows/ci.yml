@@ -1,58 +1,32 @@
+# 個人リポジトリ共通の再利用可能ワークフロー
+# （onoderakeita/workflows の rust-gates.yml）へ委譲する。テスト用の
+# 環境変数は env_vars、clippy の追加引数は clippy_args で渡し、
+# client の wasm ビルドは extra_gates で追加する。
 name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - master
   pull_request:
-    branches: [main, master]
+  workflow_dispatch:
 
-# ジョブはソースの読み取りのみ必要とする（最小権限）
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
-env:
-  CARGO_TERM_COLOR: always
-  JWT_SECRET: ci_test_secret_for_ci_0123456789abcdef
-  ALLOW_MOCK_AUTH: "1"
-  ALLOW_IPV4_LOCALHOST: "1"
-
 jobs:
-  test:
-    # ubuntu-latest は 2026-10-19〜2026-11-19 に Ubuntu 26.04 へ段階移行するため固定する
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::module-inception
-
-      - name: Test workspace
-        run: cargo test --workspace
-
-  wasm-client:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build client wasm
-        run: cargo build -p client --target wasm32-unknown-unknown
+  gates:
+    uses: onoderakeita/workflows/.github/workflows/rust-gates.yml@v1
+    with:
+      env_vars: |
+        JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
+        ALLOW_MOCK_AUTH=1
+        ALLOW_IPV4_LOCALHOST=1
+      clippy_args: "-A clippy::module-inception"
+      wasm_targets: wasm32-unknown-unknown
+      extra_gates: |
+        cargo build -p client --target wasm32-unknown-unknown --locked
