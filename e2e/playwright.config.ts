@@ -10,6 +10,10 @@ const clientUrl = 'http://127.0.0.1:8080';
 const e2eJwtSecret =
   process.env.E2E_JWT_SECRET ?? 'test_secret_for_e2e_0123456789abcdef';
 
+// ローカルは既存プロセスと `server/local.db` を再利用する。CI は常に
+// 起動し直し、`E2E_REUSE=0` でローカルでも再利用を無効化できる。
+const reuseExistingServer = process.env.E2E_REUSE !== '0' && !process.env.CI;
+
 export default defineConfig({
   testDir: './tests',
   fullyParallel: true,
@@ -45,14 +49,14 @@ export default defineConfig({
       },
       url: `${serverUrl}/health`,
       timeout: 120 * 1000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer,
     },
     {
       command: 'trunk serve --address 127.0.0.1 --port 8080',
       cwd: '../client',
       url: clientUrl,
       timeout: 120 * 1000,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer,
     },
   ],
 });

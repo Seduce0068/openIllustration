@@ -23,6 +23,7 @@ jobs:
   gates:
     uses: onoderakeita/workflows/.github/workflows/rust-gates.yml@v1
     with:
+      timeout_minutes: 30
       env_vars: |
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
