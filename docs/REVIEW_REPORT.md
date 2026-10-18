@@ -90,7 +90,8 @@ tags: [review, security, architecture, operations]
 - **根拠:** クライアントはMarkdown出力を `inner_html` で描画していた。
 - **影響:** raw HTMLを含む投稿が、そのままDOM要素として解釈される可能性があった。
 - **対応:** pulldown-cmarkのHTMLイベントをテキストイベントへ変換してからHTML化し、タグをエスケープする回帰テストを追加。
-- **残課題:** URLリンク先等、raw HTML以外の描画安全性は別途検証が必要。
+- **対応:** URLリンク先も検証し、`http` / `https` とリンクの `mailto`、相対URLのみを許可する。その他のスキームは `#` に置換し、危険リンク・画像URLと安全URLの回帰テストを追加。
+- **残課題:** ブラウザ別URL解釈のE2E確認。
 
 ## 指摘のトリアージ
 

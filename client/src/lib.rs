@@ -8,6 +8,36 @@ const API_BASE: &str = "http://localhost:3000";
 
 fn render_markdown(markdown: &str) -> String {
     let events = pulldown_cmark::Parser::new(markdown).map(|event| match event {
+        pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link {
+            link_type,
+            dest_url: if is_safe_markdown_url(&dest_url, false) {
+                dest_url
+            } else {
+                "#".into()
+            },
+            title,
+            id,
+        }),
+        pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image {
+            link_type,
+            dest_url: if is_safe_markdown_url(&dest_url, true) {
+                dest_url
+            } else {
+                "#".into()
+            },
+            title,
+            id,
+        }),
         pulldown_cmark::Event::Html(html) | pulldown_cmark::Event::InlineHtml(html) => {
             pulldown_cmark::Event::Text(html)
         }
@@ -16,6 +46,35 @@ fn render_markdown(markdown: &str) -> String {
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
     html
+}
+
+/// Markdown links and images may only use web-safe schemes or relative destinations.
+fn is_safe_markdown_url(destination: &str, image: bool) -> bool {
+    if destination
+        .bytes()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return false;
+    }
+
+    let Some((scheme, _)) = destination.split_once(':') else {
+        return true;
+    };
+    if scheme.is_empty()
+        || !scheme.bytes().enumerate().all(|(index, byte)| match byte {
+            b'a'..=b'z' | b'A'..=b'Z' => true,
+            b'0'..=b'9' | b'+' | b'.' | b'-' => index > 0,
+            _ => false,
+        })
+    {
+        return true;
+    }
+
+    match scheme.to_ascii_lowercase().as_str() {
+        "http" | "https" => true,
+        "mailto" => !image,
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -714,6 +773,34 @@ mod tests {
         assert!(!rendered.contains("<script>"));
         assert!(rendered.contains("&lt;img"));
         assert!(rendered.contains("&lt;script&gt;"));
+    }
+
+    #[test]
+    fn markdown_unsafe_link_and_image_schemes_are_neutralized() {
+        let rendered = super::render_markdown(
+            "[script](javascript:alert%281%29) [mixed](JaVaScRiPt:alert%281%29) [data](data:text/html,alert) ![svg](data:image/svg+xml,%3Csvg%20onload=alert%281%29%3E)",
+        );
+
+        assert!(!rendered.contains("href=\"javascript:"));
+        assert!(!rendered.contains("href=\"JaVaScRiPt:"));
+        assert!(!rendered.contains("href=\"data:"));
+        assert!(!rendered.contains("src=\"data:"));
+        assert!(rendered.contains("href=\"#\""));
+        assert!(rendered.contains("src=\"#\""));
+        assert!(!super::is_safe_markdown_url(" javascript:alert(1)", false));
+        assert!(!super::is_safe_markdown_url("java\tscript:alert(1)", false));
+    }
+
+    #[test]
+    fn markdown_safe_link_schemes_and_relative_urls_are_preserved() {
+        let rendered = super::render_markdown(
+            "[secure](https://example.com) [email](mailto:user@example.com) [relative](../chapter/1) [fragment](#section)",
+        );
+
+        assert!(rendered.contains("href=\"https://example.com\""));
+        assert!(rendered.contains("href=\"mailto:user@example.com\""));
+        assert!(rendered.contains("href=\"../chapter/1\""));
+        assert!(rendered.contains("href=\"#section\""));
     }
 
     #[test]
