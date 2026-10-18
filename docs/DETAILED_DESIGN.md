@@ -58,7 +58,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 入力: `multipart/form-data` の `file`、`owner_hash`、`signature`、任意の `price`。
 - JWT主体と `owner_hash` の一致を確認する。
 - Content-Typeを検査し、IllustrationまたはNovelに分類する。
-- `price` は整数かつ0以上。ファイル全体のHTTP本文上限は10 MiB。
+- `price` は64bit整数かつ0以上。上限は表現範囲（`i64::MAX`）のみで、取引上限は未実装（後述）。ファイル全体のHTTP本文上限は10 MiB。
 - 署名対象はファイルのバイト列。開発モックでは全ゼロ署名を許容する。
 - Pinataへのアップロード後、CID・SHA-256チェックサム等をDBへ登録する。Pinataへ送るファイル名はコンテンツ種別に応じた固定名（`upload.jxl` / `upload.md`）とし、ユーザー入力名は使わない。
 - 同一バイト列を再投稿すると同一CIDとなるため、既存CIDとの衝突は400で拒否する（主キー衝突による500を返さない）。
@@ -71,6 +71,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 1要求15秒、応答最大10 MiB。受信ストリームを上限内で蓄積し、SHA-256一致後に返却する。
 - 現行応答のContent-Typeは `image/jxl` 固定。Novel対応の正しいContent-Type付与は未実装。
 - クライアントはMarkdownのraw HTMLイベントをテキストとしてHTML化し、タグをエスケープしてから `inner_html` に渡す。
+- リンク・画像のURLは `http` / `https` と、リンクに限り `mailto`、およびスキームとして成立しない接頭辞（相対URL・フラグメント）のみ許可する。それ以外のスキームは `#` に置換する。この検査は描画境界のクライアントでのみ実施し、サーバーはMarkdownを描画せず原本バイト列を保持する。
 - パブリックゲートウェイ依存（候補はコード内固定で、廃止・劣化に応じた見直しが必要）、CID形式検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順は未確定。
 
 ## 4. モデレーション
