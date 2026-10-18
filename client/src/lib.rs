@@ -803,6 +803,24 @@ mod tests {
         assert!(rendered.contains("href=\"#section\""));
     }
 
+    /// 参照リンク定義・自動リンク・実体参照で難読化したスキームも中立化する。
+    /// これらはすべて `Tag::Link` / `Tag::Image` として解決されるため、
+    /// インライン記法と同じ検査を通る。
+    #[test]
+    fn markdown_reference_autolink_and_entity_schemes_are_neutralized() {
+        let rendered = super::render_markdown(
+            "[ref][target] ![badge][badge-src] [entity](javascript&#58;alert%281%29)\n\n<data:text/html,alert>\n\n[rel][chapter]\n\n[target]: javascript:alert(1)\n[badge-src]: data:image/svg+xml,%3Csvg%20onload=alert%281%29%3E\n[chapter]: /chapter/1\n",
+        );
+
+        assert!(!rendered.contains("href=\"javascript:"));
+        assert!(!rendered.contains("href=\"data:"));
+        assert!(!rendered.contains("src=\"data:"));
+        // 参照リンク・実体参照リンク・自動リンクの3件が中立化される。
+        assert_eq!(rendered.matches("href=\"#\"").count(), 3, "{rendered}");
+        assert_eq!(rendered.matches("src=\"#\"").count(), 1, "{rendered}");
+        assert!(rendered.contains("href=\"/chapter/1\""), "{rendered}");
+    }
+
     #[test]
     fn wasm_checksum_matches_common_crate() {
         let data = b"guild forensic payload";
