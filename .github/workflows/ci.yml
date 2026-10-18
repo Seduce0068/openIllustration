@@ -1,7 +1,7 @@
 # 個人リポジトリ共通の再利用可能ワークフロー
 # （onoderakeita/workflows の rust-gates.yml）へ委譲する。テスト用の
 # 環境変数は env_vars、clippy の追加引数は clippy_args で渡し、
-# client の wasm ビルドは extra_gates で追加する。
+# client の wasm ビルドと E2E（Playwright）は extra_gates で追加する。
 name: CI
 
 on:
@@ -30,3 +30,4 @@ jobs:
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
         cargo build -p client --target wasm32-unknown-unknown --locked
+        bash e2e/ci-e2e.sh
