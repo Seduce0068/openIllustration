@@ -1,10 +1,12 @@
 import { defineConfig } from '@playwright/test';
 
+// ポートは server/src/lib.rs（3000）と client/Trunk.toml（8080）に合わせる。
 const serverUrl = 'http://127.0.0.1:3000';
 const clientUrl = 'http://127.0.0.1:8080';
 
-// E2E 専用の開発用固定値。CI を含め、モック認証と IPv4 ループバック例外を
-// 明示的に有効化する。`E2E_JWT_SECRET` でシークレットを上書きできる。
+// E2E 専用の開発用固定値。モック認証と IPv4 ループバック例外を明示的に
+// 有効化する。`E2E_JWT_SECRET` で上書きでき、CI では e2e/ci-e2e.sh が
+// 実行ごとにランダム生成した値を渡す。本番の JWT_SECRET へ流用しない。
 const e2eJwtSecret =
   process.env.E2E_JWT_SECRET ?? 'test_secret_for_e2e_0123456789abcdef';
 

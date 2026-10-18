@@ -74,6 +74,7 @@ cargo test -p server
 # 共通クレート（年齢検証・チェックサム・監査ログ）
 cargo test -p common
 
-# E2E（初回は cd e2e && npm ci。開発サーバーは Playwright が自動起動する）
+# E2E（初回は cd e2e && npm ci。Google Chrome と trunk が必要。
+# 開発サーバーは Playwright が自動起動する）
 cd e2e && npx playwright test
 ```

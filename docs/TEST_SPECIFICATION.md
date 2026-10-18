@@ -69,12 +69,21 @@ cd e2e && npx playwright test
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
 開発サーバーとクライアントは `e2e/playwright.config.ts` の `webServer` が
-自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、開発用の固定 JWT シークレット。
-シークレットは `E2E_JWT_SECRET` で上書きできる）。
+自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、ローカルでは開発用の
+固定 JWT シークレット。`E2E_JWT_SECRET` で上書きできる）。
+`channel: chrome` を使うため Google Chrome と、クライアントビルド用の
+trunk が必要である。
 
 CI では共通ワークフロー `rust-gates.yml` の追加ゲートとして
 `e2e/ci-e2e.sh` を実行する。チェックアウト直後のクリーンな DB と
-クリーンなワークスペースで起動し、`channel: chrome` の Chrome を使う。
+クリーンなワークスペースで起動し、trunk は v0.21.14 に固定
+（sha256 検証）、E2E 用 JWT シークレットは実行ごとに生成する。
+型検査（`npm run typecheck`）も同じゲートで実行する。
+
+CI では HTML レポート・trace をアップロードしない（追加ゲートの制約）。
+失敗時は list レポーターのジョブログで原因を確認する。レポートの添付が
+必要になった場合は、独立した E2E ジョブへの昇格を検討する。
+
 実JPKI実機・JPYCテスト環境の試験計画は、対応仕様を確定した後に作成する。これらの必須ゲートを通過する前に本番利用資格判定・決済を有効化しない。
 
 ## 5. リリース証跡

@@ -1,7 +1,8 @@
 # 個人リポジトリ共通の再利用可能ワークフロー
-# （onoderakeita/workflows の rust-gates.yml）へ委譲する。テスト用の
+# （onoderakeita/workflows の rust-gates.yml）へ委譲する。cargo test 用の
 # 環境変数は env_vars、clippy の追加引数は clippy_args で渡し、
 # client の wasm ビルドと E2E（Playwright）は extra_gates で追加する。
+# E2E の JWT シークレットは e2e/ci-e2e.sh が実行ごとに生成する。
 name: CI
 
 on:
