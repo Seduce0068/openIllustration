@@ -1063,7 +1063,9 @@ pub async fn upload_content(
     let mut content_type = None;
     let mut owner_hash = None;
     let mut signature = None;
-    let mut price = 0;
+    // 価格は `contents.price`（SQLite INTEGER）と `Content::price` と同じ64bit整数で扱う。
+    // 型を省略すると i32 にフォールバックし、文書化された整数値を不正として拒否する。
+    let mut price: i64 = 0;
     let mut price_seen = false;
 
     while let Some(field) = multipart
