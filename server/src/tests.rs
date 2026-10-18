@@ -7,7 +7,7 @@ use axum::{
     Router,
     body::{Body, to_bytes},
     extract::ConnectInfo,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
     response::IntoResponse,
 };
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -103,6 +103,33 @@ async fn test_ipv4_public_address_forbidden() {
     let req = with_peer(
         Request::get("/health").body(Body::empty()).unwrap(),
         IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+    );
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// NET-02: クライアント注入の X-Forwarded-For では IPv4 拒否を迂回できない。
+/// `TRUSTED_PROXY_CIDRS` 未設定時はピアアドレスのみを判定に使う。
+#[tokio::test]
+async fn test_spoofed_forwarded_header_cannot_bypass_ipv4_gate() {
+    let app = setup_app().await;
+    let mut req = Request::get("/health").body(Body::empty()).unwrap();
+    req.headers_mut().insert(
+        "x-forwarded-for",
+        "2001:db8::1".parse::<HeaderValue>().unwrap(),
+    );
+    let req = with_peer(req, IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)));
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// NET-02: IPv4-mapped IPv6（dual-stack での IPv4 ピア表現）も IPv4 として拒否する
+#[tokio::test]
+async fn test_ipv4_mapped_peer_is_rejected() {
+    let app = setup_app().await;
+    let req = with_peer(
+        Request::get("/health").body(Body::empty()).unwrap(),
+        "::ffff:203.0.113.1".parse().unwrap(),
     );
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

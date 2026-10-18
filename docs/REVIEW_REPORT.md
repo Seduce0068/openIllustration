@@ -275,8 +275,10 @@ tags: [review, security, architecture, operations]
 - `channel: chromium` への切替はローカル開発との検証乖離のため見送り。
 - flake 率の集計、ドキュメントのみの変更での paths 条件、CI での
   HTML レポート無効化は、現段階のテスト規模では効果が小さいため見送り。
-- `X-Forwarded-For` の信頼境界は既知の未解消事項（NET-02）であり、
-  本変更セットでは導入も悪化もしていないため対象外。
+- `X-Forwarded-For` の信頼境界は本変更セットの対象外（NET-02）とした。
+  別コミットで `TRUSTED_PROXY_CIDRS` による信頼モデルとして対応した
+  （実装・レビュー・残存制約は末尾「NET-02 実装セキュリティレビュー」
+  節を参照）。
 - git 履歴内の node_modules blob は履歴書き換えの破壊性のため除去しない。
 
 ### 検証
@@ -290,3 +292,59 @@ tags: [review, security, architecture, operations]
   成功（4m26s）。
 - ローカル検証: `bash -n`、`tsc --noEmit`、YAML/JSON 構文検証、
   `cargo run --locked` 起動、`git diff --check`。
+
+## NET-02 実装セキュリティレビュー（2026-10-18）
+
+`TRUSTED_PROXY_CIDRS` による `X-Forwarded-For` 信頼モデル（NET-02）の
+実装に対し、security-reviewer（読み取り専用）レビューを 2 回実施した。
+1 回目で Critical 1・High 1・Medium 4・Low 4 を検出して修正し、
+2 回目で Verdict: APPROVE（新規 Critical / High なし）を確認した。
+
+- 実装: `server/src/network.rs`（信頼判定・正規化）、`server/src/lib.rs`
+  （起動時評価）、`server/src/tests.rs`（統合回帰）。
+
+### 1 回目の指摘と対応
+
+| ID | 重大度 | 指摘 | 対応 |
+| --- | --- | --- | --- |
+| C-1 | Critical | IPv4-mapped IPv6（`::ffff:a.b.c.d`）が IPv4 判定をすり抜け、dual-stack bind で IPv4 拒否（SEC-01）が発火しない | 実機で修正前の 200 迂回を確認。ピア・XFF・範囲指定・照合対象を `Ipv6Addr::to_ipv4_mapped` で正規化 |
+| H-1 | High | 信頼済みプロキシで XFF 解決不能時にピアへフォールバックし、IPv6 プロキシ越しの IPv4 クライアントが通過し得る | 解決不能時は 403（fail-closed）に変更 |
+| M-1 | Medium | 多段プロキシでは末尾値が直前ホップのアドレスになる | 単一ホップ前提として `INFRA_NETWORK.md` に記録 |
+| M-2 | Medium | 全アドレス範囲（`/0`）が無検証で受理され、不正要素も黙って無視される | プレフィックス長 0・幅超過・不正形式を無効化し、起動時に警告。評価は `OnceLock` で一度だけ |
+| M-3 | Medium | 拒否時に理由が記録されない | IPv4 拒否は debug、解決不能は warn。IP アドレスは出力しない |
+| M-4 | Medium | 文書が「迂回を解消した」と断定 | 実装に合わせて `INFRA_NETWORK.md`・`OPERATIONAL_POLICY.md` を修正 |
+| L-1 | Low | プレフィックス長の暗黙丸め | 幅超過を無効化 |
+| L-2 | Low | テストの環境変数依存 | 判定本体を `evaluate_access` に分離し、環境非依存テストを追加 |
+| L-3 | Low | リクエスト毎の環境変数再評価 | 起動時評価へ変更し、設定状態をログ出力 |
+| L-4 | Low | 開発フラグの本番ガードなし | 本変更の範囲外。本番移行ゲートで扱う |
+
+### 2 回目の新規指摘と対応
+
+- **[Medium] fail-closed とプローブの相互作用**: 信頼範囲内からの
+  XFF なしリクエストは 403 となるため、liveness/readiness プローブ・
+  監視・内部呼び出しの経路設計が必要。`INFRA_NETWORK.md` に決定事項
+  として記録（本番インフラ確定時に決定）。
+- **[Medium] 信頼済み経路の自動テスト不在**: 判定本体を
+  `evaluate_access` として分離し、fail-closed・IPv4 拒否・許可・
+  偽装 XFF 無視を環境非依存で検証するテストを追加。
+- **[Medium] プロキシ側の前提（`real_ip` 等）**: クライアント供給
+  ヘッダから `$remote_addr` を再定義する構成の制限を
+  `INFRA_NETWORK.md` に追記。
+- **[Low] v4-mapped 表記の CIDR・v4-compatible 表記・`/1` 分割・
+  テストの残存 env 依存**: 実害なしまたは範囲外として記録。v4-mapped
+  表記の CIDR は正規形指定の要件として `OPERATIONAL_POLICY.md` に明記。
+
+APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追記）は、
+全テストと実バイナリの再プローブで再検証した。
+
+### 実行時検証（一時 DB・実バイナリ）
+
+- 既定構成: IPv4 直接接続 403（修正前 200）、偽装 XFF でも 403。
+- `ALLOW_IPV4_LOCALHOST=1`: IPv4 ループバック 200（開発・E2E 互換）。
+- `TRUSTED_PROXY_CIDRS="127.0.0.1/32, 0.0.0.0/0, bogus"`:
+  XFF なし 403、`::1` 200、`::ffff:203.0.113.1` 403、
+  `::ffff:127.0.0.1` 200、不正 XFF 403。起動ログに無効要素の警告と
+  有効範囲数を確認。
+- `cargo fmt --all` / `cargo check -p server --all-targets` /
+  `cargo test --workspace`（server 51 件を含め全件成功）/
+  `cargo clippy --workspace --all-targets -- -D warnings` を通過。

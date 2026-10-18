@@ -247,6 +247,17 @@ pub async fn run() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("JWT_SECRET must be set (at least 32 random bytes)"))?;
     validate_jwt_secret(&jwt_secret).map_err(|e| anyhow::anyhow!(e))?;
 
+    // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
+    let trusted_proxy_ranges = network::trusted_proxy_ranges();
+    if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
+        tracing::info!(
+            "TRUSTED_PROXY_CIDRS: {} valid range(s) enabled",
+            trusted_proxy_ranges.len()
+        );
+    } else {
+        tracing::info!("TRUSTED_PROXY_CIDRS: not configured");
+    }
+
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::new(),
