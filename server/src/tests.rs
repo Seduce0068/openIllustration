@@ -95,6 +95,17 @@ fn with_peer(req: Request<Body>, ip: IpAddr) -> Request<Body> {
     req
 }
 
+fn multipart_upload_request(token: &str, boundary: &str, body: String) -> Request<Body> {
+    Request::post("/content/upload")
+        .header("authorization", format!("Bearer {token}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap()
+}
+
 /// SEC-01: パブリック IPv4 は 403
 #[tokio::test]
 async fn test_ipv4_public_address_forbidden() {
@@ -536,6 +547,46 @@ async fn test_upload_rejects_unknown_multipart_fields() {
         .await
         .unwrap();
 
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// CONTENT-01: 許可外 MIME、負価格、非整数価格は外部保存前に 400 で拒否する。
+#[tokio::test]
+async fn test_upload_rejects_invalid_media_type_and_price() {
+    let app = setup_app().await;
+    let token = generate_token("test_secret", "test_user").await;
+
+    for (index, price) in ["-1", "1.5", "not-an-integer"].into_iter().enumerate() {
+        let boundary = format!("invalid-price-{index}");
+        let body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"price\"\r\n\r\n{price}\r\n--{boundary}--\r\n"
+        );
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                multipart_upload_request(&token, &boundary, body),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "price {price:?} must be rejected"
+        );
+    }
+
+    let boundary = "unsupported-media-type";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"payload.zip\"\r\nContent-Type: application/zip\r\n\r\npayload\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\nmock-signature\r\n--{boundary}--\r\n"
+    );
+    let response = app
+        .oneshot(with_peer(
+            multipart_upload_request(&token, boundary, body),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
