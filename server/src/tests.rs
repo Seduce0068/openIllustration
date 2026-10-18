@@ -95,7 +95,7 @@ fn with_peer(req: Request<Body>, ip: IpAddr) -> Request<Body> {
     req
 }
 
-fn multipart_upload_request(token: &str, boundary: &str, body: String) -> Request<Body> {
+fn multipart_upload_request(token: &str, boundary: &str, body: Vec<u8>) -> Request<Body> {
     Request::post("/content/upload")
         .header("authorization", format!("Bearer {token}"))
         .header(
@@ -104,6 +104,68 @@ fn multipart_upload_request(token: &str, boundary: &str, body: String) -> Reques
         )
         .body(Body::from(body))
         .unwrap()
+}
+
+/// `/content/upload` の multipart 本文を組み立てる。
+/// `price` 以外は常に正常値にし、400 の原因を価格検証へ限定できるようにする。
+/// 署名は全ゼロ（`ALLOW_MOCK_AUTH` のモック署名）を使う。
+fn multipart_upload_body(boundary: &str, file_bytes: &[u8], price: Option<&str>) -> Vec<u8> {
+    multipart_upload_body_as(boundary, "upload.jxl", "image/jxl", file_bytes, price)
+}
+
+/// 許可外 MIME の検証用に、宣言するファイル名と Content-Type を指定する。
+fn multipart_upload_body_as(
+    boundary: &str,
+    filename: &str,
+    content_type: &str,
+    file_bytes: &[u8],
+    price: Option<&str>,
+) -> Vec<u8> {
+    let mut body = Vec::new();
+    if let Some(price) = price {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"price\"\r\n\r\n{price}\r\n"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(file_bytes);
+    body.extend_from_slice(
+        format!(
+            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n"
+        )
+        .as_bytes(),
+    );
+    body.extend_from_slice(&[0u8; 16]);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body
+}
+
+/// アップロード1回分の応答（状態コードと本文）を返す。
+async fn send_upload(
+    app: &Router,
+    token: &str,
+    boundary: &str,
+    body: Vec<u8>,
+) -> (StatusCode, String) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            multipart_upload_request(token, boundary, body),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// SEC-01: パブリック IPv4 は 403
@@ -540,7 +602,7 @@ async fn test_upload_rejects_unknown_multipart_fields() {
                     "content-type",
                     format!("multipart/form-data; boundary={boundary}"),
                 )
-                .body(Body::from(body))
+                .body(Body::from(body.into_bytes()))
                 .unwrap(),
             test_ipv6_peer(),
         ))
@@ -550,44 +612,108 @@ async fn test_upload_rejects_unknown_multipart_fields() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
-/// CONTENT-01: 許可外 MIME、負価格、非整数価格は外部保存前に 400 で拒否する。
+/// CONTENT-01: 負価格・非整数・64bit範囲外の価格は保存前に400で拒否する。
+/// 価格以外は正常な multipart 本文で送信し、400 が価格検証そのものに
+/// 由来することを保証する（価格検証を外すと200で保存される）。
 #[tokio::test]
-async fn test_upload_rejects_invalid_media_type_and_price() {
-    let app = setup_app().await;
+async fn test_upload_rejects_invalid_price() {
+    let (app, db) = setup_app_with_db().await;
     let token = generate_token("test_secret", "test_user").await;
 
-    for (index, price) in ["-1", "1.5", "not-an-integer"].into_iter().enumerate() {
+    let invalid_prices = [
+        ("-1", "price must not be negative"),
+        ("1.5", "price must be an integer"),
+        ("not-an-integer", "price must be an integer"),
+        // 64bit整数の範囲外は切り捨てずに拒否する。
+        ("9223372036854775808", "price must be an integer"),
+        ("-9223372036854775809", "price must be an integer"),
+        ("-9223372036854775808", "price must not be negative"),
+    ];
+    for (index, (price, expected_error)) in invalid_prices.into_iter().enumerate() {
         let boundary = format!("invalid-price-{index}");
-        let body = format!(
-            "--{boundary}\r\nContent-Disposition: form-data; name=\"price\"\r\n\r\n{price}\r\n--{boundary}--\r\n"
-        );
-        let response = app
-            .clone()
-            .oneshot(with_peer(
-                multipart_upload_request(&token, &boundary, body),
-                test_ipv6_peer(),
-            ))
-            .await
-            .unwrap();
+        let body = multipart_upload_body(&boundary, &[0xFF, 0x0A, 0x00, index as u8], Some(price));
+        let (status, response_body) = send_upload(&app, &token, &boundary, body).await;
         assert_eq!(
-            response.status(),
+            status,
             StatusCode::BAD_REQUEST,
             "price {price:?} must be rejected"
         );
+        assert!(
+            response_body.contains(expected_error),
+            "price {price:?} must fail on price validation, got {response_body}"
+        );
     }
 
+    // 拒否は外部保存より前に起きる（fixture の1件のみが残る）。
+    let mut rows = db.query("SELECT COUNT(*) FROM contents", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "rejected uploads must not be persisted");
+}
+
+/// CONTENT-01: 許可外 MIME は400で拒否する。本文は有効な JPEG XL シグネチャにし、
+/// 400 が Content-Type 検査に由来することを保証する（検査を外すと200で保存される）。
+#[tokio::test]
+async fn test_upload_rejects_unsupported_media_type() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token("test_secret", "test_user").await;
     let boundary = "unsupported-media-type";
-    let body = format!(
-        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"payload.zip\"\r\nContent-Type: application/zip\r\n\r\npayload\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\nmock-signature\r\n--{boundary}--\r\n"
+    let body = multipart_upload_body_as(
+        boundary,
+        "payload.zip",
+        "application/zip",
+        &[0xFF, 0x0A, 0x01, 0x02, 0x03],
+        None,
     );
-    let response = app
-        .oneshot(with_peer(
-            multipart_upload_request(&token, boundary, body),
-            test_ipv6_peer(),
-        ))
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let (status, response_body) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "application/zip must be rejected, got {response_body}"
+    );
+    assert!(
+        response_body.contains("Unsupported content type"),
+        "application/zip must fail on content type validation, got {response_body}"
+    );
+
+    let mut rows = db.query("SELECT COUNT(*) FROM contents", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "rejected uploads must not be persisted");
+}
+
+/// CONTENT-01: 正常な価格境界（未指定=既定値、明示的な下限0、64bit上限）は
+/// 受理され、指定した値がそのまま保存される。
+#[tokio::test]
+async fn test_upload_accepts_valid_price_boundaries() {
+    let cases: [(Option<&str>, i64); 3] = [
+        (None, 0),
+        (Some("0"), 0),
+        (Some("9223372036854775807"), i64::MAX),
+    ];
+
+    for (index, (price, expected)) in cases.into_iter().enumerate() {
+        let (app, db) = setup_app_with_db().await;
+        let token = generate_token("test_secret", "test_user").await;
+        let boundary = format!("valid-price-{index}");
+        let body = multipart_upload_body(&boundary, &[0xFF, 0x0A, 0x01, index as u8], price);
+        let (status, response_body) = send_upload(&app, &token, &boundary, body).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "price {price:?} must be accepted, got {response_body}"
+        );
+
+        let cid: String = serde_json::from_str(&response_body).unwrap();
+        let mut rows = db
+            .query("SELECT price FROM contents WHERE cid = ?", [cid])
+            .await
+            .unwrap();
+        let stored: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            stored, expected,
+            "price {price:?} must be stored unmodified"
+        );
+    }
 }
 
 /// 同一コンテンツの再アップロードは 400（CID主キー衝突を500にしない）
