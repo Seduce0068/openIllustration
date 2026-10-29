@@ -1,5 +1,6 @@
 use gloo_net::http::Request;
-use leptos::*;
+use leptos::prelude::*;
+use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 use web_sys::{Blob, FormData, HtmlInputElement};
@@ -126,9 +127,9 @@ pub struct Report {
 
 #[component]
 pub fn App() -> impl IntoView {
-    let (view, set_view) = create_signal("login".to_string());
-    let (user_hash, set_user_hash) = create_signal(None::<String>);
-    let (token, set_token) = create_signal(None::<String>);
+    let (view, set_view) = signal("login".to_string());
+    let (user_hash, set_user_hash) = signal(None::<String>);
+    let (token, set_token) = signal(None::<String>);
 
     let handle_login_success = move |hash: String, jwt: String| {
         set_user_hash.set(Some(hash));
@@ -167,16 +168,16 @@ pub fn App() -> impl IntoView {
 
             <main class="container mx-auto p-4">
                 {move || match view.get().as_str() {
-                    "login" => view! { <Login on_success=handle_login_success /> }.into_view(),
-                    "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_view(),
-                    "upload" => view! { <Upload user_hash=user_hash.get().unwrap_or_default() token=token.get().unwrap_or_default() /> }.into_view(),
+                    "login" => view! { <Login on_success=handle_login_success /> }.into_any(),
+                    "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_any(),
+                    "upload" => view! { <Upload user_hash=user_hash.get().unwrap_or_default() token=token.get().unwrap_or_default() /> }.into_any(),
                     "moderation" => view! {
                         <Moderation token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() />
-                    }.into_view(),
+                    }.into_any(),
                     "ledger" => view! {
                         <Ledger token=token.get().unwrap_or_default() />
-                    }.into_view(),
-                    _ => view! { <div class="text-center mt-20 text-gray-600">"UNKNOWN_VIEW"</div> }.into_view(),
+                    }.into_any(),
+                    _ => view! { <div class="text-center mt-20 text-gray-600">"UNKNOWN_VIEW"</div> }.into_any(),
                 }}
             </main>
         </div>
@@ -188,7 +189,7 @@ fn Login<F>(on_success: F) -> impl IntoView
 where
     F: Fn(String, String) + 'static + Clone,
 {
-    let (loading, set_loading) = create_signal(false);
+    let (loading, set_loading) = signal(false);
 
     let do_login = move |_| {
         set_loading.set(true);
@@ -234,13 +235,13 @@ where
 
 #[component]
 fn Dashboard(token: String, user_hash: String) -> impl IntoView {
-    let (items, set_items) = create_signal(Vec::<ContentMeta>::new());
-    let (error, set_error) = create_signal(String::new());
+    let (items, set_items) = signal(Vec::<ContentMeta>::new());
+    let (error, set_error) = signal(String::new());
 
-    let token_stored = store_value(token);
-    let user_hash_stored = store_value(user_hash);
+    let token_stored = StoredValue::new(token);
+    let user_hash_stored = StoredValue::new(user_hash);
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         let token = token_stored.get_value();
         spawn_local(async move {
             match Request::get(&format!("{}/content", API_BASE))
@@ -302,16 +303,16 @@ fn ContentViewer(
     #[allow(unused_variables)] user_hash: String,
 ) -> impl IntoView {
     let cid_label = cid.clone();
-    let (verified, set_verified) = create_signal(None::<bool>);
-    let (novel_html, set_novel_html) = create_signal(String::new());
-    let (audit_logs, set_audit_logs) = create_signal(Vec::<AuditLog>::new());
-    let (show_audit, set_show_audit) = create_signal(false);
-    let canvas_ref = create_node_ref::<html::Canvas>();
+    let (verified, set_verified) = signal(None::<bool>);
+    let (novel_html, set_novel_html) = signal(String::new());
+    let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
+    let (show_audit, set_show_audit) = signal(false);
+    let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
-    let token_stored = store_value(token);
+    let token_stored = StoredValue::new(token);
 
     let ct_ef = content_type.clone();
-    create_effect(move |_| {
+    Effect::new(move |_| {
         let cid = cid.clone();
         let expected_checksum = expected_checksum.clone();
         let ct = ct_ef.clone();
@@ -389,14 +390,14 @@ fn ContentViewer(
                             </button>
                             <p class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
                         </div>
-                    }.into_view(),
+                    }.into_any(),
                     Some(false) => view! {
                         <div class="text-center p-4">
                             <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
                             <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
                         </div>
-                    }.into_view(),
-                    None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_view(),
+                    }.into_any(),
+                    None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
                 }}
 
                 <Show when=move || show_audit.get() fallback=|| ()>
@@ -451,10 +452,10 @@ fn ContentViewer(
 
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
-    let (status, set_status) = create_signal(String::new());
-    let (loading, set_loading) = create_signal(false);
-    let (file, set_file) = create_signal(None::<web_sys::File>);
-    let (price, set_price) = create_signal(100);
+    let (status, set_status) = signal(String::new());
+    let (loading, set_loading) = signal(false);
+    let (file, set_file) = signal(None::<web_sys::File>);
+    let (price, set_price) = signal(100);
 
     let on_file_change = move |ev| {
         let input: HtmlInputElement = event_target(&ev);
@@ -554,9 +555,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 
 #[component]
 fn Ledger(token: String) -> impl IntoView {
-    let (txs, set_txs) = create_signal(Vec::<Transaction>::new());
+    let (txs, set_txs) = signal(Vec::<Transaction>::new());
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         let token = token.clone();
         spawn_local(async move {
             let res = Request::get(&format!("{}/transactions", API_BASE))
@@ -618,13 +619,13 @@ fn Ledger(token: String) -> impl IntoView {
 
 #[component]
 fn Moderation(token: String, user_hash: String) -> impl IntoView {
-    let (cid, set_cid) = create_signal(String::new());
-    let (reason, set_reason) = create_signal(String::new());
-    let (status, set_status) = create_signal(String::new());
-    let (reports, set_reports) = create_signal(Vec::<Report>::new());
+    let (cid, set_cid) = signal(String::new());
+    let (reason, set_reason) = signal(String::new());
+    let (status, set_status) = signal(String::new());
+    let (reports, set_reports) = signal(Vec::<Report>::new());
 
-    let token_stored = store_value(token);
-    let user_hash_stored = store_value(user_hash);
+    let token_stored = StoredValue::new(token);
+    let user_hash_stored = StoredValue::new(user_hash);
 
     let fetch_reports = move || {
         let token = token_stored.get_value();
@@ -641,7 +642,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         });
     };
 
-    create_effect(move |_| {
+    Effect::new(move |_| {
         fetch_reports();
     });
 

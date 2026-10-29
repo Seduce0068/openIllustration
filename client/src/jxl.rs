@@ -10,26 +10,27 @@ pub fn decode_jxl_to_canvas(jxl_data: &[u8], canvas: HtmlCanvasElement) -> Resul
         .dyn_into::<CanvasRenderingContext2d>()?;
 
     let reader = Cursor::new(jxl_data);
-    let image = jxl_oxide::JxlImage::from_reader(reader)
+    let image = jxl_oxide::JxlImage::read_with_defaults(reader)
         .map_err(|e| JsValue::from_str(&format!("JXL decode error: {:?}", e)))?;
 
     let render = image
         .render_frame(0)
         .map_err(|e| JsValue::from_str(&format!("JXL render error: {:?}", e)))?;
 
-    let fb = render.image();
-    let width = fb.width() as u32;
-    let height = fb.height() as u32;
+    let fb = render.image_all_channels();
+    let width = fb.width();
+    let height = fb.height();
+    let channels = fb.channels();
 
-    canvas.set_width(width);
-    canvas.set_height(height);
+    canvas.set_width(width as u32);
+    canvas.set_height(height as u32);
 
-    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    let buf = fb.buf();
 
-    for y in 0..height as usize {
-        for x in 0..width as usize {
-            let offset = (y * width as usize + x) * 3;
-            let buf = fb.buf();
+    for y in 0..height {
+        for x in 0..width {
+            let offset = (y * width + x) * channels;
 
             if offset + 2 < buf.len() {
                 rgba.push((buf[offset] * 255.0) as u8);
@@ -42,8 +43,11 @@ pub fn decode_jxl_to_canvas(jxl_data: &[u8], canvas: HtmlCanvasElement) -> Resul
         }
     }
 
-    let image_data =
-        ImageData::new_with_u8_clamped_array_and_sh(wasm_bindgen::Clamped(&rgba), width, height)?;
+    let image_data = ImageData::new_with_u8_clamped_array_and_sh(
+        wasm_bindgen::Clamped(&rgba),
+        width as u32,
+        height as u32,
+    )?;
 
     context.put_image_data(&image_data, 0.0, 0.0)?;
 

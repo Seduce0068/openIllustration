@@ -107,7 +107,6 @@ impl std::ops::Deref for AuthClaims {
 }
 
 // Axum extractor for JWT validation
-#[axum::async_trait]
 impl<S> axum::extract::FromRequestParts<S> for AuthClaims
 where
     S: Send + Sync,
@@ -393,9 +392,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/mod/report", post(mod_report))
         .route("/mod/reports", get(list_reports))
         .route("/mod/vote", post(mod_vote))
-        .route("/content/:cid", get(get_content))
-        .route("/content/:cid/audit", get(get_content_audit))
-        .route("/content/:cid/support", post(support_creator))
+        .route("/content/{cid}", get(get_content))
+        .route("/content/{cid}/audit", get(get_content_audit))
+        .route("/content/{cid}/support", post(support_creator))
         .route("/health", get(|| async { "ok" }))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(

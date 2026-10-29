@@ -1,5 +1,6 @@
 pub mod age;
 
+use rsa::sha2::Sha256 as RsaSha256;
 use rsa::{Pkcs1v15Sign, RsaPublicKey, pkcs8::DecodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -47,7 +48,7 @@ pub fn verify_rsa_signature(
     let digest = hasher.finalize();
 
     public_key
-        .verify(Pkcs1v15Sign::new::<Sha256>(), &digest, signature)
+        .verify(Pkcs1v15Sign::new::<RsaSha256>(), &digest, signature)
         .map_err(|e| ForensicError::InvalidSignature(e.to_string()))
 }
 

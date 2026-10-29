@@ -18,9 +18,9 @@ fn test_ipv6_peer() -> IpAddr {
 use common::Claims;
 use jsonwebtoken::{EncodingKey, Header, encode};
 use libsql::Builder;
+use rsa::sha2::Sha256;
 use rsa::{RsaPrivateKey, pkcs8::EncodePublicKey};
 use serde_json::json;
-use sha2::Sha256;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -832,7 +832,7 @@ async fn test_vote_consensus_rejects_content() {
     use rsa::signature::{SignatureEncoding, Signer};
 
     for _ in 0..3 {
-        let mut rng = rand::thread_rng();
+        let mut rng = rsa::rand_core::OsRng;
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let public_der = private_key
             .to_public_key()
@@ -926,7 +926,7 @@ async fn test_duplicate_vote_rejected() {
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
 
-    let mut rng = rand::thread_rng();
+    let mut rng = rsa::rand_core::OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
     let public_der = private_key
         .to_public_key()
@@ -992,7 +992,7 @@ async fn test_duplicate_vote_rejected() {
 
 /// 陪審員としてユーザーを登録し、投票署名用のRSA秘密鍵を返す
 async fn insert_juror(db: &libsql::Connection) -> (String, RsaPrivateKey) {
-    let mut rng = rand::thread_rng();
+    let mut rng = rsa::rand_core::OsRng;
     let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
     let public_der = private_key
         .to_public_key()
