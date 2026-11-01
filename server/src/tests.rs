@@ -6,11 +6,12 @@ use crate::{
 use axum::{
     Router,
     body::{Body, to_bytes},
-    extract::ConnectInfo,
-    http::{HeaderValue, Request, StatusCode},
-    response::IntoResponse,
+    extract::{ConnectInfo, Path},
+    http::{HeaderValue, Request, StatusCode, header},
+    response::{IntoResponse, Response},
 };
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::time::Duration;
 
 fn test_ipv6_peer() -> IpAddr {
     IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
@@ -42,6 +43,17 @@ async fn init_schema(db: &libsql::Connection) {
 }
 
 async fn setup_app_with_db() -> (Router, Arc<libsql::Connection>) {
+    setup_app_with_options(Vec::new(), Duration::from_secs(15), true).await
+}
+
+/// テスト用アプリを構築する。IPFS ゲートウェイは既定で無効にし、
+/// 外部ネットワークへ接続しない。取得を検証するテストだけが
+/// ローカルモックの URL テンプレートを渡す。
+async fn setup_app_with_options(
+    ipfs_gateways: Vec<String>,
+    ipfs_timeout: Duration,
+    allow_mock_auth: bool,
+) -> (Router, Arc<libsql::Connection>) {
     let db = Arc::new(
         Builder::new_local(":memory:")
             .build()
@@ -67,7 +79,9 @@ async fn setup_app_with_db() -> (Router, Arc<libsql::Connection>) {
         db: db.clone(),
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
-        allow_mock_auth: true,
+        allow_mock_auth,
+        ipfs_gateways,
+        ipfs_timeout,
     });
 
     let router = build_router(shared_state);
@@ -76,6 +90,71 @@ async fn setup_app_with_db() -> (Router, Arc<libsql::Connection>) {
 
 async fn setup_app() -> Router {
     setup_app_with_db().await.0
+}
+
+/// テスト用のローカル IPFS ゲートウェイ。
+/// 外部ネットワークに依存せず、応答の状態・遅延・宣言長を制御できる。
+struct MockGateway {
+    template: String,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl MockGateway {
+    async fn start(response: MockResponse) -> Self {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind mock gateway");
+        let addr = listener.local_addr().expect("mock gateway address");
+        let app = Router::new()
+            .route("/{*path}", axum::routing::get(mock_gateway_handler))
+            .with_state(Arc::new(response));
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("mock gateway server");
+        });
+        Self {
+            template: format!("http://{addr}/{{cid}}"),
+            handle,
+        }
+    }
+}
+
+impl Drop for MockGateway {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+#[derive(Clone)]
+struct MockResponse {
+    status: StatusCode,
+    body: Vec<u8>,
+    delay: Duration,
+    /// 要求パスがこの CID と一致しない場合は 404 を返す。
+    /// `{cid}` 置換の欠落をテストで検出するために使う。
+    expected_cid: Option<String>,
+}
+
+async fn mock_gateway_handler(
+    axum::extract::State(response): axum::extract::State<Arc<MockResponse>>,
+    Path(path): Path<String>,
+) -> Response {
+    if let Some(expected) = &response.expected_cid
+        && path.trim_start_matches('/') != expected
+    {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .expect("mock not found response");
+    }
+    if !response.delay.is_zero() {
+        tokio::time::sleep(response.delay).await;
+    }
+    Response::builder()
+        .status(response.status)
+        .body(Body::from(response.body.clone()))
+        .expect("mock response")
 }
 
 fn verify_body(birth_date: &str, country: &str) -> String {
@@ -121,6 +200,29 @@ fn multipart_upload_body_as(
     file_bytes: &[u8],
     price: Option<&str>,
 ) -> Vec<u8> {
+    multipart_upload_body_full(
+        boundary,
+        filename,
+        content_type,
+        file_bytes,
+        price,
+        "test_user",
+        &[0u8; 16],
+    )
+}
+
+/// multipart の全フィールドを指定して本文を組み立てる。
+/// 署名検証を無効化した状態でゼロ署名・未知ユーザーを再現するために使う。
+#[allow(clippy::too_many_arguments)]
+fn multipart_upload_body_full(
+    boundary: &str,
+    filename: &str,
+    content_type: &str,
+    file_bytes: &[u8],
+    price: Option<&str>,
+    owner_hash: &str,
+    signature: &[u8],
+) -> Vec<u8> {
     let mut body = Vec::new();
     if let Some(price) = price {
         body.extend_from_slice(
@@ -139,11 +241,11 @@ fn multipart_upload_body_as(
     body.extend_from_slice(file_bytes);
     body.extend_from_slice(
         format!(
-            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n"
+            "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\n{owner_hash}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n"
         )
         .as_bytes(),
     );
-    body.extend_from_slice(&[0u8; 16]);
+    body.extend_from_slice(signature);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
     body
 }
@@ -265,6 +367,37 @@ fn test_allowed_origins_trims_trailing_slash() {
 fn test_jwt_secret_minimum_length() {
     assert!(validate_jwt_secret(&"a".repeat(32)).is_ok());
     assert!(validate_jwt_secret("short_secret").is_err());
+}
+
+/// T-01: IPFS ゲートウェイ設定の既定値と無効要素の除外。
+#[test]
+fn test_ipfs_gateway_configuration() {
+    let defaults = crate::ipfs_gateways(None);
+    assert_eq!(defaults.len(), 3);
+    assert!(defaults.iter().all(|gateway| gateway.contains("{cid}")));
+
+    let parsed = crate::ipfs_gateways(Some(
+        "http://a.example/{cid}, ,http://b.example/no-placeholder,http://c.example/{cid}",
+    ));
+    assert_eq!(
+        parsed,
+        vec!["http://a.example/{cid}", "http://c.example/{cid}"]
+    );
+
+    assert!(crate::ipfs_gateways(Some("")).is_empty());
+    assert!(crate::ipfs_gateways(Some("ftp://a.example/{cid}")).is_empty());
+    assert!(crate::ipfs_gateways(Some("file:///tmp/{cid}")).is_empty());
+}
+
+/// T-01: IPFS タイムアウトの既定値と不正値のフォールバック。
+#[test]
+fn test_ipfs_timeout_configuration() {
+    assert_eq!(crate::ipfs_timeout(None), Duration::from_secs(15));
+    assert_eq!(crate::ipfs_timeout(Some("3")), Duration::from_secs(3));
+    assert_eq!(crate::ipfs_timeout(Some("0")), Duration::from_secs(15));
+    assert_eq!(crate::ipfs_timeout(Some("bad")), Duration::from_secs(15));
+    assert_eq!(crate::ipfs_timeout(Some("301")), Duration::from_secs(15));
+    assert_eq!(crate::ipfs_timeout(Some("300")), Duration::from_secs(300));
 }
 
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
@@ -825,6 +958,8 @@ async fn test_vote_consensus_rejects_content() {
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
         allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
     });
     let app = build_router(shared_state);
 
@@ -920,6 +1055,8 @@ async fn test_duplicate_vote_rejected() {
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
         allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
     });
     let app = build_router(shared_state);
 
@@ -1081,6 +1218,8 @@ async fn test_vote_after_conclusion_rejected() {
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
         allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
     });
     let app = build_router(shared_state);
 
@@ -1146,6 +1285,8 @@ async fn test_vote_for_missing_report_returns_404() {
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
         allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
     });
     let app = build_router(shared_state);
 
@@ -1190,6 +1331,8 @@ async fn test_vote_with_invalid_signature_rejected() {
         http_client: reqwest::Client::new(),
         jwt_secret: "test_secret".to_string(),
         allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
     });
     let app = build_router(shared_state);
 
@@ -1290,19 +1433,23 @@ async fn test_support_api_disabled_returns_501() {
     assert_eq!(count, 0, "the disabled API must not record transactions");
 }
 
-/// INT-01: IPFS改ざん検知（サーバー側）
+/// INT-01 / CONTENT-03: IPFS から取得したデータの SHA-256 が
+/// DB の checksum と一致しない場合、コンテンツを返さず 401 で拒否する。
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {
-    let (app, db) = setup_app_with_db().await;
-
-    // Insert required user first
-    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
-        .await
-        .unwrap();
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: b"tampered content".to_vec(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmTampered".to_string()),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTampered', 'Novel', 'owner', 'correct_hash_123', 'Approved');",
+             VALUES ('QmTampered', 'Novel', 'test_user', 'correct_hash_123', 'Approved');",
         (),
     )
     .await
@@ -1322,13 +1469,443 @@ async fn test_content_checksum_verification_fails_on_tamper() {
         .await
         .unwrap();
 
-    // IPFS ゲートウェイが利用不可の場合は 500 になる可能性があるため、
-    // 401 (改ざん検知) または 500 (ゲートウェイエラー) のいずれかを許容
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "checksum mismatch must reject the content"
+    );
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
     assert!(
-        response.status() == StatusCode::UNAUTHORIZED
-            || response.status() == StatusCode::INTERNAL_SERVER_ERROR,
-        "Expected 401 or 500, got: {}",
-        response.status()
+        body.contains("Integrity check failed"),
+        "rejection must come from integrity verification: {body}"
+    );
+    assert!(
+        !body.contains("tampered content"),
+        "gateway body must not be returned: {body}"
+    );
+}
+
+/// CONTENT-03: checksum が一致する場合だけ、完全なデータを返す。
+#[tokio::test]
+async fn test_get_content_returns_verified_bytes() {
+    let body = b"valid jxl codestream".to_vec();
+    let checksum = sha256::digest(&body);
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmValid".to_string()),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmValid', 'Illustration', 'test_user', ?, 'Approved');",
+        [checksum.clone()],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmValid")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/jxl");
+    assert_eq!(response.headers()["x-forensic-checksum"], checksum.as_str());
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &body[..]);
+}
+
+/// CONTENT-02: 10 MiB を超える応答は 400 で拒否する。
+#[tokio::test]
+async fn test_get_content_rejects_oversize_body() {
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: vec![0u8; 10 * 1024 * 1024 + 1],
+        delay: Duration::ZERO,
+        expected_cid: Some("QmOversize".to_string()),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmOversize', 'Illustration', 'test_user', 'unused', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmOversize")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(
+        body.contains("IPFS content exceeds size limit"),
+        "rejection must come from the size limit: {body}"
+    );
+}
+
+/// CONTENT-02: ゲートウェイが応答しない場合は 500 を返し、
+/// 部分データを完全なコンテンツとして返さない。
+#[tokio::test]
+async fn test_get_content_times_out_gateway() {
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: b"late".to_vec(),
+        delay: Duration::from_secs(5),
+        expected_cid: Some("QmTimeout".to_string()),
+    })
+    .await;
+    let (app, db) = setup_app_with_options(
+        vec![gateway.template.clone()],
+        Duration::from_millis(100),
+        true,
+    )
+    .await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmTimeout', 'Illustration', 'test_user', 'unused', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmTimeout")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(
+        body.contains("Internal server error"),
+        "internal details must stay hidden: {body}"
+    );
+    assert!(
+        !body.contains("late"),
+        "gateway body must not be returned: {body}"
+    );
+}
+
+/// CONTENT-02: 先頭のゲートウェイが失敗しても、次のゲートウェイで成功すれば返す。
+#[tokio::test]
+async fn test_get_content_falls_back_to_next_gateway() {
+    let failing = MockGateway::start(MockResponse {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: Vec::new(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmFallback".to_string()),
+    })
+    .await;
+    let body = b"fallback content".to_vec();
+    let checksum = sha256::digest(&body);
+    let healthy = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmFallback".to_string()),
+    })
+    .await;
+    let (app, db) = setup_app_with_options(
+        vec![failing.template.clone(), healthy.template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmFallback', 'Illustration', 'test_user', ?, 'Approved');",
+        [checksum],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmFallback")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &body[..]);
+}
+
+/// CONTENT-02: 10 MiB ちょうどの応答は受理する（境界の off-by-one 検出）。
+#[tokio::test]
+async fn test_get_content_accepts_exact_size_limit() {
+    let body = vec![0u8; 10 * 1024 * 1024];
+    let checksum = sha256::digest(&body);
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmBoundary".to_string()),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(5), true).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmBoundary', 'Illustration', 'test_user', ?, 'Approved');",
+        [checksum],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmBoundary")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(bytes.len(), body.len());
+}
+
+/// CONTENT-02: ゲートウェイが未設定の場合は 500 を返す。
+#[tokio::test]
+async fn test_get_content_without_gateways_returns_500() {
+    let (app, db) = setup_app_with_options(Vec::new(), Duration::from_secs(1), true).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmNoGateway', 'Illustration', 'test_user', 'unused', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmNoGateway")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// CONTENT-02: 全ゲートウェイが失敗した場合は 500 を返し、
+/// ゲートウェイの応答本文を漏らさない。
+#[tokio::test]
+async fn test_get_content_all_gateways_fail() {
+    let first = MockGateway::start(MockResponse {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        body: b"secret gateway body".to_vec(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmAllFail".to_string()),
+    })
+    .await;
+    let second = MockGateway::start(MockResponse {
+        status: StatusCode::BAD_GATEWAY,
+        body: b"another secret".to_vec(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmAllFail".to_string()),
+    })
+    .await;
+    let (app, db) = setup_app_with_options(
+        vec![first.template.clone(), second.template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmAllFail', 'Illustration', 'test_user', 'unused', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmAllFail")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(body.contains("Internal server error"), "{body}");
+    assert!(
+        !body.contains("secret gateway body"),
+        "gateway body leaked: {body}"
+    );
+    assert!(
+        !body.contains("another secret"),
+        "gateway body leaked: {body}"
+    );
+}
+
+/// CONTENT-03: Novel の取得も現行実装では image/jxl を返す。
+/// 正しい Content-Type の付与は未実装（詳細設計書 §3）。
+#[tokio::test]
+async fn test_get_content_novel_uses_current_mime() {
+    let body = b"novel markdown".to_vec();
+    let checksum = sha256::digest(&body);
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmNovel".to_string()),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmNovel', 'Novel', 'test_user', ?, 'Approved');",
+        [checksum],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmNovel")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "image/jxl",
+        "current implementation returns image/jxl for Novel"
+    );
+}
+
+/// AUTH-01: ALLOW_MOCK_AUTH が無効な場合、mock_token を受理しない。
+#[tokio::test]
+async fn test_mock_token_rejected_when_mock_auth_disabled() {
+    let (app, _db) = setup_app_with_options(Vec::new(), Duration::from_secs(1), false).await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(verify_body("1990-01-01", "JP")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// AUTH-01: ALLOW_MOCK_AUTH が無効な場合、ゼロ署名の投稿を拒否する。
+/// トークン主体と owner_hash を一致させ、署名検証まで到達させる。
+#[tokio::test]
+async fn test_zero_signature_rejected_when_mock_auth_disabled() {
+    let (app, db) = setup_app_with_options(Vec::new(), Duration::from_secs(1), false).await;
+    let (owner_hash, _private_key) = insert_juror(&db).await;
+    let token = generate_token("test_secret", &owner_hash).await;
+    let boundary = "auth01-zero-signature";
+    let body = multipart_upload_body_full(
+        boundary,
+        "upload.jxl",
+        "image/jxl",
+        &[0xFF, 0x0A, 0x01, 0x00],
+        None,
+        &owner_hash,
+        &[0u8; 16],
+    );
+
+    let (status, response_body) = send_upload(&app, &token, boundary, body).await;
+
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "zero signature must be rejected: {response_body}"
+    );
+    assert!(
+        response_body.contains("Invalid digital signature"),
+        "rejection must come from signature verification: {response_body}"
     );
 }
 

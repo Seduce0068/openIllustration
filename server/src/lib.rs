@@ -18,6 +18,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tracing::warn;
 use uuid::Uuid;
@@ -29,6 +30,11 @@ pub struct AppState {
     pub jwt_secret: String,
     /// 開発用: mock_token およびゼロ署名を許可
     pub allow_mock_auth: bool,
+    /// IPFS ゲートウェイの URL テンプレート。`{cid}` を CID で置換する。
+    /// 空の場合は取得を試みず、常に失敗する。
+    pub ipfs_gateways: Vec<String>,
+    /// 各 IPFS ゲートウェイへのリクエストタイムアウト。
+    pub ipfs_timeout: Duration,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -246,6 +252,19 @@ pub async fn run() -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("JWT_SECRET must be set (at least 32 random bytes)"))?;
     validate_jwt_secret(&jwt_secret).map_err(|e| anyhow::anyhow!(e))?;
 
+    let ipfs_gateways_env = std::env::var("IPFS_GATEWAYS").ok();
+    let ipfs_gateways = ipfs_gateways(ipfs_gateways_env.as_deref());
+    if ipfs_gateways.is_empty() {
+        warn!("IPFS_GATEWAYS is empty; content retrieval will fail");
+    } else {
+        tracing::info!(
+            "IPFS_GATEWAYS: {} gateway(s) configured",
+            ipfs_gateways.len()
+        );
+    }
+    let ipfs_timeout_env = std::env::var("IPFS_TIMEOUT_SECS").ok();
+    let ipfs_timeout = ipfs_timeout(ipfs_timeout_env.as_deref());
+
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
     let trusted_proxy_ranges = network::trusted_proxy_ranges();
     if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
@@ -264,6 +283,8 @@ pub async fn run() -> anyhow::Result<()> {
         allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
+        ipfs_gateways,
+        ipfs_timeout,
     });
 
     let app = build_router(shared_state);
@@ -379,6 +400,69 @@ pub fn validate_jwt_secret(secret: &str) -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// 既定の IPFS ゲートウェイ。`{cid}` が CID に置換される。
+const DEFAULT_IPFS_GATEWAYS: [&str; 3] = [
+    "https://ipfs.io/ipfs/{cid}",
+    "https://gateway.pinata.cloud/ipfs/{cid}",
+    "https://{cid}.ipfs.dweb.link",
+];
+
+const DEFAULT_IPFS_TIMEOUT_SECS: u64 = 15;
+
+/// `IPFS_GATEWAYS`（カンマ区切り）を解析する。
+/// 未設定時は既定のゲートウェイを使う。空要素、`{cid}` を含まない値、
+/// http(s) 以外の URL テンプレートは設定ミスとして警告し、無視する。
+pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
+    match env_value {
+        Some(value) => value
+            .split(',')
+            .map(str::trim)
+            .filter(|gateway| !gateway.is_empty())
+            .filter(|gateway| {
+                if !gateway.contains("{cid}") {
+                    warn!(
+                        "Ignoring IPFS_GATEWAYS entry without a {{cid}} placeholder: {:?}",
+                        gateway
+                    );
+                    return false;
+                }
+                // `{cid}` を有効な CIDv1 に置換して URL として検証する。
+                let probe = gateway.replace(
+                    "{cid}",
+                    "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+                );
+                match reqwest::Url::parse(&probe) {
+                    Ok(url) if matches!(url.scheme(), "http" | "https") => true,
+                    _ => {
+                        warn!(
+                            "Ignoring IPFS_GATEWAYS entry that is not an http(s) URL template: {:?}",
+                            gateway
+                        );
+                        false
+                    }
+                }
+            })
+            .map(str::to_string)
+            .collect(),
+        None => DEFAULT_IPFS_GATEWAYS
+            .iter()
+            .map(|gateway| (*gateway).to_string())
+            .collect(),
+    }
+}
+
+/// `IPFS_TIMEOUT_SECS` を解析する。未設定・0・不正値・上限超過は既定の 15 秒。
+/// 上限は、設定ミスでリクエストが実質無期限にハングするのを防ぐ。
+pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
+    const MAX_IPFS_TIMEOUT_SECS: u64 = 300;
+
+    env_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| (1..=MAX_IPFS_TIMEOUT_SECS).contains(secs))
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(DEFAULT_IPFS_TIMEOUT_SECS))
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -600,22 +684,20 @@ pub async fn get_content(
         return Err(AppError::NotFound);
     };
 
-    // Public gateway candidates, tried in order. Cloudflare's public
-    // gateway (cloudflare-ipfs.com) was shut down in August 2024; Pinata's
-    // gateway replaces it and serves the content pinned by this backend.
-    let gateways = [
-        format!("https://ipfs.io/ipfs/{}", cid),
-        format!("https://gateway.pinata.cloud/ipfs/{}", cid),
-        format!("https://{}.ipfs.dweb.link", cid),
-    ];
-
+    // ゲートウェイは設定順に試す。すべて失敗した場合は 500 を返し、
+    // 部分的なデータを完全なコンテンツとして返さない。
     let mut last_error = String::new();
 
-    for gateway_url in gateways {
+    if state.ipfs_gateways.is_empty() {
+        last_error = "no IPFS gateways configured".to_string();
+    }
+
+    for gateway_template in &state.ipfs_gateways {
+        let gateway_url = gateway_template.replace("{cid}", &cid);
         match state
             .http_client
             .get(&gateway_url)
-            .timeout(std::time::Duration::from_secs(15))
+            .timeout(state.ipfs_timeout)
             .send()
             .await
         {

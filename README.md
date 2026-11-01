@@ -47,6 +47,9 @@ rustup target add wasm32-unknown-unknown
 export JWT_SECRET="$(openssl rand -hex 32)"
 export ALLOW_IPV4_LOCALHOST=1   # ローカル開発のみ
 export ALLOW_MOCK_AUTH=1          # 開発専用: mock JPKI / ゼロ署名。本番では未設定または 0
+# 任意: IPFS ゲートウェイ（`{cid}` を含む URL テンプレート）とタイムアウト
+export IPFS_GATEWAYS="https://ipfs.io/ipfs/{cid},https://gateway.pinata.cloud/ipfs/{cid}"
+export IPFS_TIMEOUT_SECS=15
 cargo run -p server
 ```
 
