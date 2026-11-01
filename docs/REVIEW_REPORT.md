@@ -448,3 +448,47 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   `#[cfg(test)]` モジュール追加とサーバーの整数型注釈で、E2E が通る経路を
   変更しないため、失敗はローカルの並列実行によるリソース競合と判断した。
 - Markdown描画のブラウザ別URL解釈は未実施のまま（CONTENT-04 の残課題）。
+
+## 変更差分クロスレビュー（2026-11-02）: IPFSゲートウェイ設定とP0テスト基盤
+
+- 対象: `server/src/lib.rs`、`server/src/tests.rs`、`deny.toml`、
+  `.github/workflows/ci.yml`、`README.md`、関連docs。
+- レビュー観点: セキュリティ、テスト品質。
+- 結果: **承認（P0範囲）**。Critical 1件、High 3件は修正済み。
+- 検証: `cargo fmt --all --check` 成功、
+  `cargo clippy --all-targets -- -D warnings` 警告なし、
+  `cargo test --workspace` 77件成功（common 6 / client 5 / server 66）、
+  `cargo deny check licenses` 成功。
+
+### 変更内容
+
+- `AppState` に `ipfs_gateways` と `ipfs_timeout` を追加し、
+  `IPFS_GATEWAYS` / `IPFS_TIMEOUT_SECS` で上書き可能にした。
+- テストの外部ネットワーク依存を除去し、ローカルHTTPモックで
+  チェックサム不一致、10 MiB超過、タイムアウト、フォールバック、
+  全ゲートウェイ失敗を検証する。
+- `ALLOW_MOCK_AUTH` 無効時の `mock_token` とゼロ署名の拒否を検証する。
+- `cargo-deny` 0.20.2 と `deny.toml` を追加し、CIで
+  `cargo deny check licenses` を実行する。
+
+### 指摘と対応
+
+| ID | 重要度 | 指摘 | 対応 |
+| --- | --- | --- | --- |
+| T-1 | Critical | ゼロ署名テストが `sub` 不一致で早期401になり、署名検証に到達していなかった | `insert_juror` で主体と `owner_hash` を一致させ、`Invalid digital signature` を検証 |
+| T-2 | High | モックがCIDパスを検証せず、`{cid}` 置換の欠落を検出できなかった | `expected_cid` を追加し、不一致は404 |
+| T-3 | High | Novel経路のContent-Typeが未検証だった | 現行の `image/jxl` 固定を明示する回帰テストを追加 |
+| T-4 | High | 全ゲートウェイ失敗と未設定の経路が未検証だった | 500と本文非漏えいを検証するテストを追加 |
+| S-1 | Medium | `IPFS_GATEWAYS` がスキーム検証を行っていなかった | http(s)のみ許可する検証を追加 |
+| S-2 | Medium | `cargo deny check advisories` が未導入 | 既存依存に未修正のRUSTSECが複数あるため、別タスクへ分離 |
+| S-3 | Low | `IPFS_TIMEOUT_SECS` に上限がなかった | 1〜300秒に制限 |
+
+### 残課題
+
+- `cargo deny check advisories` は、既存依存のRUSTSEC
+  （`rsa`、`rustls-webpki`、`h2`、`ttf-parser` 等）により失敗する。
+  依存更新とリスク受容の判断を別タスクで行う。
+- `std::env` を変更する既存テストは並列実行で競合し得る。
+  `EXPOSE_INTERNAL_ERRORS` の状態注入を`AppState`へ移す改善を検討する。
+- CID形式検証、ゲートウェイURLのログマスク、`cargo-deny`の
+  バイナリ導入は未対応。
