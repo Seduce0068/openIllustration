@@ -31,6 +31,7 @@ client(wasm) 307、和集合 475）。
 cargo metadata --format-version 1 > /tmp/meta.json
 cargo tree -p server --edges normal --prefix none | sort -u
 cargo tree -p client --target wasm32-unknown-unknown --edges normal --prefix none | sort -u
+cargo deny check licenses
 ```
 
 SPDX フィールドを持たないクレートは自リポジトリの 3 クレートのみで、
@@ -68,5 +69,6 @@ SPDX フィールドを持たないクレートは自リポジトリの 3 クレ
 
 - 配布形態ごとにライセンス本文・NOTICE の同梱方法を決める
   （Apache-2.0 依存の帰属表示と、AGPL のソース提供義務の履行手段）。
-- `cargo-deny` 等による依存ライセンスの CI 検査導入を判断する。
+- `cargo-deny` 0.20.2 を CI に導入した。`deny.toml` の許可リストで
+  `cargo deny check licenses` を実行し、違反時は CI を失敗させる。
 - 依存更新のたびに本監査を再実行する（現状は手動。手順は §2）。
