@@ -69,7 +69,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 - DBから期待チェックサムを取得し、設定されたIPFSゲートウェイ候補（`IPFS_GATEWAYS`、既定3件、http(s)のみ）を順に要求する。
 - 1要求は `IPFS_TIMEOUT_SECS`（既定15秒、1〜300秒）、応答最大10 MiB。受信ストリームを上限内で蓄積し、SHA-256一致後に返却する。
-- 現行応答のContent-Typeは `image/jxl` 固定。Novel対応の正しいContent-Type付与は未実装。
+- Content-TypeはIllustrationで `image/jxl`、Novelで `text/markdown; charset=utf-8` を返す。
 - クライアントはMarkdownのraw HTMLイベントをテキストとしてHTML化し、タグをエスケープしてから `inner_html` に渡す。
 - リンク・画像のURLは `http` / `https` と、リンクに限り `mailto`、およびスキームとして成立しない接頭辞（相対URL・フラグメント）のみ許可する。それ以外のスキームは `#` に置換する。この検査は描画境界のクライアントでのみ実施し、サーバーはMarkdownを描画せず原本バイト列を保持する。
 - パブリックゲートウェイ依存（候補は `IPFS_GATEWAYS` で変更できるが、既定はパブリックで廃止・劣化に応じた見直しが必要）、CID形式検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順は未確定。

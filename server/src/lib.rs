@@ -675,13 +675,24 @@ pub async fn get_content(
 ) -> Result<Response, AppError> {
     let mut rows = state
         .db
-        .query("SELECT checksum FROM contents WHERE cid = ?", [cid.clone()])
+        .query(
+            "SELECT checksum, type FROM contents WHERE cid = ?",
+            [cid.clone()],
+        )
         .await?;
 
-    let expected_checksum: String = if let Some(row) = rows.next().await? {
-        row.get(0)?
+    let (expected_checksum, content_kind): (String, String) = if let Some(row) = rows.next().await?
+    {
+        (row.get(0)?, row.get(1)?)
     } else {
         return Err(AppError::NotFound);
+    };
+
+    // 保存済みのコンテンツ種別に応じた MIME を返す。
+    let response_content_type = if content_kind == "Novel" {
+        "text/markdown; charset=utf-8"
+    } else {
+        "image/jxl"
     };
 
     // ゲートウェイは設定順に試す。すべて失敗した場合は 500 を返し、
@@ -731,7 +742,7 @@ pub async fn get_content(
                 }
 
                 return Response::builder()
-                    .header(header::CONTENT_TYPE, "image/jxl")
+                    .header(header::CONTENT_TYPE, response_content_type)
                     .header("X-Forensic-Checksum", expected_checksum)
                     .body(Body::from(bytes))
                     .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));

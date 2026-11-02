@@ -1813,10 +1813,9 @@ async fn test_get_content_all_gateways_fail() {
     );
 }
 
-/// CONTENT-03: Novel の取得も現行実装では image/jxl を返す。
-/// 正しい Content-Type の付与は未実装（詳細設計書 §3）。
+/// CONTENT-03: Novel は Markdown の Content-Type を返す。
 #[tokio::test]
-async fn test_get_content_novel_uses_current_mime() {
+async fn test_get_content_novel_returns_markdown_mime() {
     let body = b"novel markdown".to_vec();
     let checksum = sha256::digest(&body);
     let gateway = MockGateway::start(MockResponse {
@@ -1854,8 +1853,7 @@ async fn test_get_content_novel_uses_current_mime() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers()[header::CONTENT_TYPE],
-        "image/jxl",
-        "current implementation returns image/jxl for Novel"
+        "text/markdown; charset=utf-8"
     );
 }
 
