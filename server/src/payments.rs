@@ -141,6 +141,24 @@ pub fn jpy_to_wei(amount_jpy: u64) -> Result<String, AppError> {
     Ok(wei.to_string())
 }
 
+/// xprv から注文用の受取アドレスを BIP44 パスで派生する。
+pub fn derive_receiving_address(xprv: &str, index: u32) -> Result<String, AppError> {
+    use coins_bip32::xkeys::XPriv;
+
+    let root: XPriv = xprv
+        .parse()
+        .map_err(|e| AppError::Internal(format!("invalid receiving xprv: {e}")))?;
+    let path = format!("m/44'/60'/0'/0/{index}");
+    let child = root
+        .derive_path(path.as_str())
+        .map_err(|e| AppError::Internal(format!("receiving address derivation failed: {e}")))?;
+    let signing_key: &coins_bip32::prelude::SigningKey = child.as_ref();
+    let secret = signing_key.to_bytes();
+    let key = k256::ecdsa::SigningKey::from_slice(&secret[..])
+        .map_err(|e| AppError::Internal(format!("derived key is invalid: {e}")))?;
+    Ok(address_from_verifying_key(key.verifying_key()))
+}
+
 /// EIP-191 `personal_sign` の署名から Ethereum アドレスを復元する。
 pub fn recover_ethereum_address(message: &[u8], signature_hex: &str) -> Result<String, AppError> {
     let raw = signature_hex.strip_prefix("0x").unwrap_or(signature_hex);
@@ -227,9 +245,26 @@ pub async fn create_order(
     claims: AuthClaims,
     Json(payload): Json<CreateOrderRequest>,
 ) -> Result<Json<CreateOrderResponse>, AppError> {
-    let receiving_address = state.payment_receiving_address.clone().ok_or_else(|| {
-        AppError::NotImplemented("JPYC receiving address is not configured".to_string())
-    })?;
+    let (recipient_address, derivation_index) = if let Some(xprv) = &state.payment_receiving_xprv {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT COALESCE(MAX(derivation_index), -1) + 1 FROM payment_orders",
+                (),
+            )
+            .await?;
+        let index: i64 = match rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => 0,
+        };
+        (derive_receiving_address(xprv, index as u32)?, Some(index))
+    } else if let Some(address) = &state.payment_receiving_address {
+        (normalize_address(address), None)
+    } else {
+        return Err(AppError::NotImplemented(
+            "JPYC receiving address is not configured".to_string(),
+        ));
+    };
 
     if !is_allowed_chain(payload.chain_id) {
         return Err(AppError::BadRequest("unsupported chain".to_string()));
@@ -250,17 +285,18 @@ pub async fn create_order(
         .execute(
             "INSERT INTO payment_orders
                 (order_id, ppid, chain_id, wallet_address, recipient_address,
-                 amount_wei, status, expires_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 amount_wei, status, expires_at, derivation_index)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 order_id.clone(),
                 claims.sub.clone(),
                 payload.chain_id,
                 wallet_address,
-                normalize_address(&receiving_address),
+                recipient_address.clone(),
                 amount_wei.clone(),
                 STATUS_PENDING,
                 expires_at.clone(),
+                derivation_index,
             ),
         )
         .await?;
@@ -268,7 +304,7 @@ pub async fn create_order(
     Ok(Json(CreateOrderResponse {
         order_id,
         chain_id: payload.chain_id,
-        recipient_address: normalize_address(&receiving_address),
+        recipient_address,
         amount_wei,
         expires_at,
     }))

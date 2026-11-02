@@ -40,6 +40,8 @@ pub struct AppState {
     pub ipfs_timeout: Duration,
     /// JPYC 注文の受取アドレス。未設定時は注文作成を 501 で拒否する。
     pub payment_receiving_address: Option<String>,
+    /// BIP44 派生用の xprv。設定時は注文ごとの受取アドレスを派生する。
+    pub payment_receiving_xprv: Option<String>,
     /// チェーン上の送金を検証する境界。未設定時は検証 API を 501 で拒否する。
     pub payment_verifier: Option<Arc<dyn payments::PaymentVerifier>>,
     /// OIDC/JPKI 認証の設定。未設定時は OIDC エンドポイントを 501 で拒否する。
@@ -302,6 +304,15 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("OIDC is not configured; JPKI OIDC endpoints are disabled");
     }
 
+    let payment_receiving_xprv = std::env::var("PAYMENT_RECEIVING_XPRV").ok().filter(|xprv| {
+        if payments::derive_receiving_address(xprv, 0).is_ok() {
+            true
+        } else {
+            warn!("PAYMENT_RECEIVING_XPRV is invalid; HD derivation is disabled");
+            false
+        }
+    });
+
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
     let trusted_proxy_ranges = network::trusted_proxy_ranges();
     if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
@@ -323,6 +334,7 @@ pub async fn run() -> anyhow::Result<()> {
         ipfs_gateways,
         ipfs_timeout,
         payment_receiving_address,
+        payment_receiving_xprv,
         payment_verifier: None,
         oidc,
         revoked_sessions: Arc::new(Mutex::new(HashSet::new())),

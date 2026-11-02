@@ -105,8 +105,9 @@ Polygon 256、Kaia 12と公表されている。
 
 - 注文作成、ウォレット所有証明（EIP-191）、検証インターフェース、
   状態機械を実装した。
-- 受取アドレスは初期実装では `PAYMENT_RECEIVING_ADDRESS` の単一アドレスを
-  使う。注文ごとのHD派生は本番有効化前の必須項目として残る。
+- `PAYMENT_RECEIVING_XPRV` を設定した場合、注文ごとに BIP44
+  (`m/44'/60'/0'/0/{index}`) で受取アドレスを派生する。未設定時は
+  `PAYMENT_RECEIVING_ADDRESS` の単一アドレスを使う。
 - RPC検証と2-of-3クォーラムは未実装。`PaymentVerifier` の本番実装を
   追加するまで検証APIは501を返す。
 - バックグラウンドの確認ワーカー、返金、AML/KYCは未実装。

@@ -94,6 +94,7 @@ async fn setup_app_with_options(
         ipfs_gateways,
         ipfs_timeout,
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -144,6 +145,7 @@ async fn setup_app_with_payments(
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: Some(receiving_address.to_string()),
+        payment_receiving_xprv: None,
         payment_verifier: Some(verifier),
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -151,6 +153,37 @@ async fn setup_app_with_payments(
 
     let router = build_router(shared_state);
     (router, db)
+}
+
+async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connection>) {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: Some(xprv.to_string()),
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    });
+
+    (build_router(shared_state), db)
 }
 
 async fn setup_app() -> Router {
@@ -330,6 +363,7 @@ async fn setup_app_with_oidc() -> (
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: Some(oidc.clone()),
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -1274,6 +1308,7 @@ async fn test_vote_consensus_rejects_content() {
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -1375,6 +1410,7 @@ async fn test_duplicate_vote_rejected() {
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -1542,6 +1578,7 @@ async fn test_vote_after_conclusion_rejected() {
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -1613,6 +1650,7 @@ async fn test_vote_for_missing_report_returns_404() {
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -1663,6 +1701,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
+        payment_receiving_xprv: None,
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
@@ -2690,4 +2729,56 @@ async fn test_backchannel_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// JPYC: BIP44派生が決定的で、indexごとに異なるアドレスを返す。
+#[test]
+fn test_derive_receiving_address() {
+    let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+    let first = crate::payments::derive_receiving_address(xprv, 0).unwrap();
+    let again = crate::payments::derive_receiving_address(xprv, 0).unwrap();
+    let second = crate::payments::derive_receiving_address(xprv, 1).unwrap();
+    assert_eq!(first, again);
+    assert_ne!(first, second);
+    assert!(crate::payments::is_valid_eth_address(&first));
+    assert!(crate::payments::is_valid_eth_address(&second));
+}
+
+/// JPYC: 注文ごとに異なる受取アドレスを派生する。
+#[tokio::test]
+async fn test_payment_orders_derive_unique_addresses() {
+    let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+    let (app, _db) = setup_app_with_hd_payments(xprv).await;
+    let token = generate_token("test_secret", "test_user").await;
+    let mut addresses = Vec::new();
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/payments/orders")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "chain_id": 137,
+                            "wallet_address": "0x1111111111111111111111111111111111111111",
+                            "amount_jpy": 1000,
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let created: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        addresses.push(created["recipient_address"].as_str().unwrap().to_string());
+    }
+
+    assert_ne!(addresses[0], addresses[1]);
+    assert!(crate::payments::is_valid_eth_address(&addresses[0]));
+    assert!(crate::payments::is_valid_eth_address(&addresses[1]));
 }

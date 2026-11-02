@@ -547,10 +547,13 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   検証インターフェース、状態遷移を実装。
 - API: `POST /payments/orders`、`GET /payments/orders/:id`、
   `POST /payments/orders/:id/bind`、`POST /payments/orders/:id/verify`。
-- テスト: 注文ライフサイクル、未対応チェーン、誤ウォレット署名。
-- 検証: `cargo test -p server --lib payment` 3件成功。
-- 未実装: 実RPC検証、2-of-3クォーラム、HDアドレス派生、
-  バックグラウンド確認ワーカー、返金、AML/KYC。
+- `PAYMENT_RECEIVING_XPRV` による注文ごとのBIP44受取アドレス派生を追加。
+- テスト: 注文ライフサイクル、未対応チェーン、誤ウォレット署名、
+  派生の決定性・一意性、注文ごとのアドレス差分。
+- 検証: `cargo test -p server --lib payment` 4件、
+  `derive_receiving` 1件成功。
+- 未実装: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
+  返金、AML/KYC。
 
 ## 実装記録（2026-11-02）: JPKI OIDC認証
 
