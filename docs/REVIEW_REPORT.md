@@ -492,6 +492,8 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   `EXPOSE_INTERNAL_ERRORS` の状態注入を`AppState`へ移す改善を検討する。
 - CID形式検証、ゲートウェイURLのログマスク、`cargo-deny`の
   バイナリ導入は未対応。
+- 追記: ゲートウェイURLのログマスクとCIDのURLパス注入拒否は対応済み。
+  厳密なCID仕様検証と`cargo-deny`のバイナリ導入は未対応。
 
 ## ADRクロスレビュー（2026-11-02）: JPKI認証とJPYC決済
 
