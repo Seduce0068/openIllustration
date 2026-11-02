@@ -17,6 +17,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | --- | --- | --- | --- |
 | POST | `/auth/login` | 不要 | OID4VP風のnonce応答。完全な認証フローではない |
 | POST | `/auth/verify` | 不要 | 開発用モックまたは証明書入力を処理しJWTを発行 |
+| GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
+| GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
@@ -56,6 +58,23 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 現行 `/auth/login` のnonceは `/auth/verify` の検証に結び付いていない。nonce再利用防止やVP署名検証も未実装。
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定はリクエストされた生年月日・国コードに依存する。モックでは本人属性として信頼しない。
+
+### OIDC認証フロー（実装済み・モックOPで検証）
+
+1. `GET /auth/oidc/start` が `state`、`nonce`、`code_verifier` を生成し、
+   サーバー側に10分間保存する。
+2. 認可URLには `response_type=code`、`client_id`、`redirect_uri`、`scope`、
+   `state`、`nonce`、`code_challenge`、`code_challenge_method=S256` を含める。
+3. `GET /auth/oidc/callback` は `state` を単回消費し、認可コードと
+   `code_verifier` をトークンエンドポイントへ送る。
+4. IDトークンはJWKSの `kid` でES256署名を検証し、`iss`、`aud`、`exp`、
+   `nbf`、`iat`、`nonce`、`at_hash` を確認する。
+5. `sub`（PPID）を `user_hash` としてセッションJWTを発行し、
+   HttpOnly Cookieで返す。
+6. 未実装: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
+   セッション失効、back-channel logout、リフレッシュトークン。
+7. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
+   現行のテストはローカルOPモックでフローと検証項目を確認する。
 
 ## 3. コンテンツ処理
 

@@ -67,6 +67,16 @@ tags: [operations, security, payments]
 | `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む http(s) URL であること。空要素、`{cid}` を含まない要素、http(s) 以外の要素は警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
 | `IPFS_TIMEOUT_SECS` | 任意 | `15` | 各ゲートウェイへのリクエストタイムアウト秒（1〜300）。範囲外・不正値は既定値。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
+| `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。 |
+| `OIDC_CLIENT_ID` | 任意 | 未設定 | RP のクライアントID。 |
+| `OIDC_CLIENT_SECRET` | 任意 | 未設定 | RP のクライアントシークレット。秘密管理基盤から注入する。 |
+| `OIDC_REDIRECT_URI` | 任意 | 未設定 | 認可コードのリダイレクトURI。BFF のコールバックを指定する。 |
+| `OIDC_AUTHORIZATION_ENDPOINT` | 任意 | 未設定 | 認可エンドポイント。 |
+| `OIDC_TOKEN_ENDPOINT` | 任意 | 未設定 | トークンエンドポイント。 |
+| `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
+| `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
+| `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で Cookie の `Secure` を外す。開発時のみ。 |
+| `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数。 |
 | `PINATA_JWT` | 任意 | `mock_jwt`（模擬） | IPFSピン用トークン。未設定時は模擬動作となり、本番では使用しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |
 | `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | `1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。 |

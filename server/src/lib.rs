@@ -2,6 +2,7 @@
 mod jpki;
 mod migration;
 mod network;
+mod oidc;
 mod payments;
 
 use axum::{
@@ -40,6 +41,8 @@ pub struct AppState {
     pub payment_receiving_address: Option<String>,
     /// チェーン上の送金を検証する境界。未設定時は検証 API を 501 で拒否する。
     pub payment_verifier: Option<Arc<dyn payments::PaymentVerifier>>,
+    /// OIDC/JPKI 認証の設定。未設定時は OIDC エンドポイントを 501 で拒否する。
+    pub oidc: Option<Arc<oidc::OidcState>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -281,6 +284,11 @@ pub async fn run() -> anyhow::Result<()> {
             }
         });
 
+    let oidc = oidc::OidcState::from_env();
+    if oidc.is_none() {
+        tracing::info!("OIDC is not configured; JPKI OIDC endpoints are disabled");
+    }
+
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
     let trusted_proxy_ranges = network::trusted_proxy_ranges();
     if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
@@ -303,6 +311,7 @@ pub async fn run() -> anyhow::Result<()> {
         ipfs_timeout,
         payment_receiving_address,
         payment_verifier: None,
+        oidc,
     });
 
     let app = build_router(shared_state);
@@ -488,6 +497,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/auth/login", post(auth_login))
         .route("/auth/verify", post(auth_verify))
+        .route("/auth/oidc/start", get(oidc::start))
+        .route("/auth/oidc/callback", get(oidc::callback))
         .route("/content", get(list_contents))
         .route("/content/upload", post(upload_content))
         .route("/transactions", get(list_transactions))
@@ -680,6 +691,7 @@ pub async fn auth_verify(
     let claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
+        sid: None,
     };
 
     let token = encode(

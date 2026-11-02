@@ -87,6 +87,17 @@ tags: [adr, authentication, jpki, oidc, proposed]
     本番へ引き継がず、テストデータのみを対象に破棄する。本番有効化は、
     申込・認定・実機試験・運用承認の完了後とする。
 
+## 実装状況（2026-11-02）
+
+- `/auth/oidc/start` と `/auth/oidc/callback` を実装した。
+- state、nonce、code_verifier はサーバー側に10分間保存し、state は単回消費する。
+- IDトークンはJWKSの `kid` でES256署名を検証し、`iss`、`aud`、`exp`、
+  `nbf`、`iat`、`nonce`、`at_hash` を確認する。
+- `sub`（PPID）を `user_hash` としてセッションJWTとHttpOnly Cookieに結合する。
+- テストはローカルOPモックで、正常系・state再利用・nonce不一致を検証する。
+- 未実装: `acr`/`amr`、`auth_time`/`max_age`、セッション失効、
+  back-channel logout、リフレッシュトークン、実サービス接続、事業者申込。
+
 ## Consequences
 
 - 認証の信頼根拠をJ-LISとデジタル認証サービスに置く。自前の証明書検証を

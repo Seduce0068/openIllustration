@@ -551,3 +551,16 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
 - 検証: `cargo test -p server --lib payment` 3件成功。
 - 未実装: 実RPC検証、2-of-3クォーラム、HDアドレス派生、
   バックグラウンド確認ワーカー、返金、AML/KYC。
+
+## 実装記録（2026-11-02）: JPKI OIDC認証
+
+- `server/src/oidc.rs` を追加し、`/auth/oidc/start` と
+  `/auth/oidc/callback` を実装。
+- state/nonce/code_verifier のサーバー側保存と単回消費、PKCE。
+- JWKS の `kid` による ES256 署名検証、`iss`/`aud`/`exp`/`nbf`/`iat`/
+  `nonce`/`at_hash` の検証。
+- PPID を `user_hash` としてセッションJWTとHttpOnly Cookieに結合。
+- テスト: 正常系、state 再利用拒否、nonce 不一致拒否。
+- 検証: `cargo test -p server --lib oidc` 3件成功。
+- 未実装: `acr`/`amr`、`auth_time`/`max_age`、セッション失効、
+  back-channel logout、リフレッシュトークン、実サービス接続。

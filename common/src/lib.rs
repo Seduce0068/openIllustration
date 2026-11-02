@@ -9,6 +9,9 @@ use sha2::{Digest, Sha256};
 pub struct Claims {
     pub sub: String,
     pub exp: usize,
+    /// セッション識別子。既存トークンとの互換のため省略可能。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

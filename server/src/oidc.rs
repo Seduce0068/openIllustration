@@ -1,0 +1,433 @@
+//! Digital Agency OIDC authentication (ADR-0002).
+//!
+//! The BFF starts an authorization code + PKCE flow, keeps `state`, `nonce`,
+//! and `code_verifier` server-side, and consumes them once at the callback.
+//! ID tokens are verified against the provider's JWKS with ES256.
+
+use crate::{AppError, AppState, Claims, VerifyResponse};
+use axum::{
+    Json,
+    extract::{Query, State},
+    http::{HeaderValue, header},
+    response::{IntoResponse, Response},
+};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use chrono::{Duration, Utc};
+use jsonwebtoken::{
+    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, decode_header, jwk::JwkSet,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::{Duration as StdDuration, Instant},
+};
+use uuid::Uuid;
+
+const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
+const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
+const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
+
+#[derive(Clone)]
+pub struct OidcConfig {
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: String,
+    pub redirect_uri: String,
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    pub jwks_uri: String,
+    pub scopes: String,
+    pub cookie_secure: bool,
+    pub clock_skew_secs: u64,
+}
+
+struct PendingAuth {
+    nonce: String,
+    code_verifier: String,
+    created_at: Instant,
+}
+
+pub struct OidcState {
+    config: OidcConfig,
+    pending: Mutex<HashMap<String, PendingAuth>>,
+    jwks_cache: Mutex<Option<(JwkSet, Instant)>>,
+}
+
+impl OidcState {
+    pub fn new(config: OidcConfig) -> Self {
+        Self {
+            config,
+            pending: Mutex::new(HashMap::new()),
+            jwks_cache: Mutex::new(None),
+        }
+    }
+
+    /// 必須の環境変数が揃っている場合だけ有効化する。
+    /// 不完全な設定で中途半端に起動しないよう fail-closed にする。
+    pub fn from_env() -> Option<Arc<Self>> {
+        let issuer = std::env::var("OIDC_ISSUER").ok()?;
+        let client_id = std::env::var("OIDC_CLIENT_ID").ok()?;
+        let client_secret = std::env::var("OIDC_CLIENT_SECRET").ok()?;
+        let redirect_uri = std::env::var("OIDC_REDIRECT_URI").ok()?;
+        let authorization_endpoint = std::env::var("OIDC_AUTHORIZATION_ENDPOINT").ok()?;
+        let token_endpoint = std::env::var("OIDC_TOKEN_ENDPOINT").ok()?;
+        let jwks_uri = std::env::var("OIDC_JWKS_URI").ok()?;
+        let scopes = std::env::var("OIDC_SCOPES").unwrap_or_else(|_| "openid".to_string());
+        let cookie_secure = std::env::var("OIDC_COOKIE_SECURE")
+            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+            .unwrap_or(true);
+        let clock_skew_secs = std::env::var("OIDC_CLOCK_SKEW_SECS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(60);
+
+        Some(Arc::new(Self::new(OidcConfig {
+            issuer,
+            client_id,
+            client_secret,
+            redirect_uri,
+            authorization_endpoint,
+            token_endpoint,
+            jwks_uri,
+            scopes,
+            cookie_secure,
+            clock_skew_secs,
+        })))
+    }
+
+    fn take_pending(&self, state: &str) -> Result<PendingAuth, AppError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| AppError::Internal("OIDC pending store is poisoned".to_string()))?;
+        let now = Instant::now();
+        pending.retain(|_, auth| now.duration_since(auth.created_at) < PENDING_TTL);
+        pending
+            .remove(state)
+            .ok_or_else(|| AppError::BadRequest("invalid or expired state".to_string()))
+    }
+
+    fn cached_jwks(&self) -> Option<JwkSet> {
+        let cache = self.jwks_cache.lock().ok()?;
+        cache.as_ref().and_then(|(jwks, fetched_at)| {
+            if fetched_at.elapsed() < JWKS_TTL {
+                Some(jwks.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    fn store_jwks(&self, jwks: JwkSet) {
+        if let Ok(mut cache) = self.jwks_cache.lock() {
+            *cache = Some((jwks, Instant::now()));
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_nonce(&self, state: &str) -> Option<String> {
+        self.pending
+            .lock()
+            .ok()?
+            .get(state)
+            .map(|auth| auth.nonce.clone())
+    }
+}
+
+#[derive(Serialize)]
+pub struct StartResponse {
+    pub authorization_url: String,
+    pub state: String,
+}
+
+#[derive(Deserialize)]
+pub struct CallbackQuery {
+    pub code: String,
+    pub state: String,
+}
+
+#[derive(Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    id_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct IdTokenClaims {
+    iss: String,
+    #[serde(deserialize_with = "deserialize_audience")]
+    aud: Vec<String>,
+    exp: usize,
+    iat: usize,
+    nbf: Option<usize>,
+    sub: String,
+    nonce: Option<String>,
+    at_hash: Option<String>,
+}
+
+fn deserialize_audience<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Audience {
+        Single(String),
+        Multiple(Vec<String>),
+    }
+
+    Ok(match Audience::deserialize(deserializer)? {
+        Audience::Single(value) => vec![value],
+        Audience::Multiple(values) => values,
+    })
+}
+
+fn random_token() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+
+fn code_challenge(verifier: &str) -> String {
+    let digest = Sha256::digest(verifier.as_bytes());
+    URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn verify_at_hash(access_token: &str, expected: &str) -> bool {
+    let digest = Sha256::digest(access_token.as_bytes());
+    URL_SAFE_NO_PAD.encode(&digest[..16]) == expected
+}
+
+async fn fetch_jwks(
+    http_client: &reqwest::Client,
+    config: &OidcConfig,
+) -> Result<JwkSet, AppError> {
+    let response = http_client
+        .get(&config.jwks_uri)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("JWKS request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Internal(
+            "JWKS endpoint returned an error".to_string(),
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("JWKS decode failed: {e}")))
+}
+
+async fn exchange_code(
+    http_client: &reqwest::Client,
+    config: &OidcConfig,
+    code: &str,
+    code_verifier: &str,
+) -> Result<TokenResponse, AppError> {
+    let response = http_client
+        .post(&config.token_endpoint)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", config.redirect_uri.as_str()),
+            ("client_id", config.client_id.as_str()),
+            ("client_secret", config.client_secret.as_str()),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("token request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(AppError::Unauthorized(
+            "token endpoint rejected the authorization code".to_string(),
+        ));
+    }
+    response
+        .json()
+        .await
+        .map_err(|e| AppError::Internal(format!("token response decode failed: {e}")))
+}
+
+async fn verify_id_token(
+    http_client: &reqwest::Client,
+    oidc: &OidcState,
+    id_token: &str,
+    expected_nonce: &str,
+) -> Result<IdTokenClaims, AppError> {
+    let header = decode_header(id_token)
+        .map_err(|_| AppError::Unauthorized("invalid ID token header".to_string()))?;
+    let kid = header
+        .kid
+        .ok_or_else(|| AppError::Unauthorized("ID token has no kid".to_string()))?;
+
+    let jwks = match oidc.cached_jwks() {
+        Some(jwks) => jwks,
+        None => {
+            let jwks = fetch_jwks(http_client, &oidc.config).await?;
+            oidc.store_jwks(jwks.clone());
+            jwks
+        }
+    };
+
+    let jwk = match jwks.find(&kid).cloned() {
+        Some(jwk) => jwk,
+        None => {
+            // 鍵ローテーション直後は未知の kid が来るため、一度だけ再取得する。
+            let jwks = fetch_jwks(http_client, &oidc.config).await?;
+            oidc.store_jwks(jwks.clone());
+            jwks.find(&kid)
+                .cloned()
+                .ok_or_else(|| AppError::Unauthorized("unknown signing key".to_string()))?
+        }
+    };
+
+    let key = DecodingKey::from_jwk(&jwk)
+        .map_err(|_| AppError::Unauthorized("invalid signing key".to_string()))?;
+
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(std::slice::from_ref(&oidc.config.issuer));
+    validation.set_audience(std::slice::from_ref(&oidc.config.client_id));
+    validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+    validation.leeway = oidc.config.clock_skew_secs;
+
+    let data = decode::<IdTokenClaims>(id_token, &key, &validation)
+        .map_err(|_| AppError::Unauthorized("ID token validation failed".to_string()))?;
+    let claims = data.claims;
+
+    let now = Utc::now().timestamp() as usize;
+    if claims.iat > now + oidc.config.clock_skew_secs as usize {
+        return Err(AppError::Unauthorized(
+            "ID token was issued in the future".to_string(),
+        ));
+    }
+    if claims.nonce.as_deref() != Some(expected_nonce) {
+        return Err(AppError::Unauthorized(
+            "ID token nonce mismatch".to_string(),
+        ));
+    }
+    if claims.iss != oidc.config.issuer {
+        return Err(AppError::Unauthorized(
+            "ID token issuer mismatch".to_string(),
+        ));
+    }
+
+    Ok(claims)
+}
+
+pub async fn start(State(state): State<Arc<AppState>>) -> Result<Json<StartResponse>, AppError> {
+    let oidc = state
+        .oidc
+        .as_ref()
+        .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
+
+    let auth_state = random_token();
+    let nonce = random_token();
+    let code_verifier = random_token();
+    let challenge = code_challenge(&code_verifier);
+
+    oidc.pending
+        .lock()
+        .map_err(|_| AppError::Internal("OIDC pending store is poisoned".to_string()))?
+        .insert(
+            auth_state.clone(),
+            PendingAuth {
+                nonce: nonce.clone(),
+                code_verifier,
+                created_at: Instant::now(),
+            },
+        );
+
+    let mut url = reqwest::Url::parse(&oidc.config.authorization_endpoint)
+        .map_err(|_| AppError::Internal("invalid authorization endpoint".to_string()))?;
+    url.query_pairs_mut()
+        .append_pair("response_type", "code")
+        .append_pair("client_id", &oidc.config.client_id)
+        .append_pair("redirect_uri", &oidc.config.redirect_uri)
+        .append_pair("scope", &oidc.config.scopes)
+        .append_pair("state", &auth_state)
+        .append_pair("nonce", &nonce)
+        .append_pair("code_challenge", &challenge)
+        .append_pair("code_challenge_method", "S256");
+
+    Ok(Json(StartResponse {
+        authorization_url: url.to_string(),
+        state: auth_state,
+    }))
+}
+
+pub async fn callback(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<CallbackQuery>,
+) -> Result<Response, AppError> {
+    let oidc = state
+        .oidc
+        .as_ref()
+        .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
+
+    let pending = oidc.take_pending(&query.state)?;
+    let token = exchange_code(
+        &state.http_client,
+        &oidc.config,
+        &query.code,
+        &pending.code_verifier,
+    )
+    .await?;
+    let id_claims =
+        verify_id_token(&state.http_client, oidc, &token.id_token, &pending.nonce).await?;
+
+    let at_hash = id_claims
+        .at_hash
+        .as_deref()
+        .ok_or_else(|| AppError::Unauthorized("ID token has no at_hash".to_string()))?;
+    if !verify_at_hash(&token.access_token, at_hash) {
+        return Err(AppError::Unauthorized("at_hash mismatch".to_string()));
+    }
+
+    let user_hash = id_claims.sub;
+    state
+        .db
+        .execute(
+            "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
+            [user_hash.clone()],
+        )
+        .await?;
+
+    let expiration = Utc::now()
+        .checked_add_signed(Duration::seconds(SESSION_TTL_SECS))
+        .expect("valid timestamp")
+        .timestamp() as usize;
+    let session_claims = Claims {
+        sub: user_hash.clone(),
+        exp: expiration,
+        sid: Some(Uuid::new_v4().to_string()),
+    };
+    let session_token = jsonwebtoken::encode(
+        &Header::default(),
+        &session_claims,
+        &EncodingKey::from_secret(state.jwt_secret.as_ref()),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+
+    let cookie = format!(
+        "session={session_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{}",
+        if oidc.config.cookie_secure {
+            "; Secure"
+        } else {
+            ""
+        }
+    );
+
+    let mut response = Json(VerifyResponse {
+        authorized: true,
+        user_hash: Some(user_hash),
+        token: Some(session_token),
+    })
+    .into_response();
+    response.headers_mut().insert(
+        header::SET_COOKIE,
+        HeaderValue::from_str(&cookie)
+            .map_err(|_| AppError::Internal("invalid session cookie".to_string()))?,
+    );
+    Ok(response)
+}

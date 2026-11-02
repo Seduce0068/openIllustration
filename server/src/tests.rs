@@ -7,13 +7,18 @@ use crate::{
 };
 use async_trait::async_trait;
 use axum::{
-    Router,
+    Json, Router,
     body::{Body, to_bytes},
-    extract::{ConnectInfo, Path},
+    extract::{ConnectInfo, Form, Path, State},
     http::{HeaderValue, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use k256::ecdsa::SigningKey;
+use p256::pkcs8::EncodePrivateKey;
+use serde::Deserialize;
+use sha2::Digest as _;
+use sha2::Sha256 as Sha2Sha256;
 use sha3::{Digest, Keccak256};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
@@ -22,7 +27,7 @@ fn test_ipv6_peer() -> IpAddr {
     IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
 }
 use common::Claims;
-use jsonwebtoken::{EncodingKey, Header, encode};
+use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use libsql::Builder;
 use rsa::sha2::Sha256;
 use rsa::{RsaPrivateKey, pkcs8::EncodePublicKey};
@@ -34,6 +39,7 @@ async fn generate_token(secret: &str, sub: &str) -> String {
     let claims = Claims {
         sub: sub.to_string(),
         exp: 10000000000,
+        sid: None,
     };
     encode(
         &Header::default(),
@@ -89,6 +95,7 @@ async fn setup_app_with_options(
         ipfs_timeout,
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
 
     let router = build_router(shared_state);
@@ -137,6 +144,7 @@ async fn setup_app_with_payments(
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: Some(receiving_address.to_string()),
         payment_verifier: Some(verifier),
+        oidc: None,
     });
 
     let router = build_router(shared_state);
@@ -145,6 +153,168 @@ async fn setup_app_with_payments(
 
 async fn setup_app() -> Router {
     setup_app_with_db().await.0
+}
+
+struct MockOidcServer {
+    base_url: String,
+    nonce: Arc<std::sync::Mutex<Option<String>>>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl MockOidcServer {
+    async fn start() -> Self {
+        let mut rng = p256::elliptic_curve::rand_core::OsRng;
+        let signing_key = p256::ecdsa::SigningKey::random(&mut rng);
+        let der = signing_key.to_pkcs8_der().unwrap();
+        let encoding_key = EncodingKey::from_ec_der(der.as_bytes());
+        let point = signing_key.verifying_key().to_encoded_point(false);
+        let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
+        let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
+
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind mock OIDC server");
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://{addr}");
+        let nonce = Arc::new(std::sync::Mutex::new(None));
+        let state = Arc::new(MockOidcState {
+            base_url: base_url.clone(),
+            client_id: "test-client".to_string(),
+            nonce: nonce.clone(),
+            encoding_key,
+            jwks: json!({
+                "keys": [{
+                    "kty": "EC",
+                    "crv": "P-256",
+                    "kid": "test-kid",
+                    "use": "sig",
+                    "alg": "ES256",
+                    "x": x,
+                    "y": y,
+                }]
+            }),
+        });
+        let app = Router::new()
+            .route("/jwks", axum::routing::get(mock_jwks))
+            .route("/token", axum::routing::post(mock_token))
+            .with_state(state);
+        let handle = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("mock OIDC server");
+        });
+
+        Self {
+            base_url,
+            nonce,
+            handle,
+        }
+    }
+}
+
+impl Drop for MockOidcServer {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
+struct MockOidcState {
+    base_url: String,
+    client_id: String,
+    nonce: Arc<std::sync::Mutex<Option<String>>>,
+    encoding_key: EncodingKey,
+    jwks: serde_json::Value,
+}
+
+async fn mock_jwks(State(state): State<Arc<MockOidcState>>) -> Json<serde_json::Value> {
+    Json(state.jwks.clone())
+}
+
+#[derive(Deserialize)]
+struct MockTokenRequest {
+    code: String,
+    code_verifier: String,
+}
+
+async fn mock_token(
+    State(state): State<Arc<MockOidcState>>,
+    Form(payload): Form<MockTokenRequest>,
+) -> Json<serde_json::Value> {
+    assert!(!payload.code.is_empty());
+    assert!(
+        payload.code_verifier.len() >= 43,
+        "PKCE verifier is too short"
+    );
+
+    let nonce = state.nonce.lock().unwrap().clone().unwrap_or_default();
+    let now = chrono::Utc::now().timestamp() as usize;
+    let access_token = "test_access_token";
+    let digest = Sha2Sha256::digest(access_token.as_bytes());
+    let at_hash = URL_SAFE_NO_PAD.encode(&digest[..16]);
+    let claims = json!({
+        "iss": state.base_url,
+        "aud": state.client_id,
+        "exp": now + 300,
+        "iat": now,
+        "nbf": now - 10,
+        "sub": "test-ppid",
+        "nonce": nonce,
+        "at_hash": at_hash,
+    });
+    let mut header = Header::new(Algorithm::ES256);
+    header.kid = Some("test-kid".to_string());
+    let id_token = encode(&header, &claims, &state.encoding_key).unwrap();
+
+    Json(json!({
+        "access_token": access_token,
+        "id_token": id_token,
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }))
+}
+
+async fn setup_app_with_oidc() -> (
+    Router,
+    Arc<crate::oidc::OidcState>,
+    MockOidcServer,
+    Arc<libsql::Connection>,
+) {
+    let mock = MockOidcServer::start().await;
+    let config = crate::oidc::OidcConfig {
+        issuer: mock.base_url.clone(),
+        client_id: "test-client".to_string(),
+        client_secret: "test-secret".to_string(),
+        redirect_uri: "http://localhost/callback".to_string(),
+        authorization_endpoint: format!("{}/authorize", mock.base_url),
+        token_endpoint: format!("{}/token", mock.base_url),
+        jwks_uri: format!("{}/jwks", mock.base_url),
+        scopes: "openid".to_string(),
+        cookie_secure: false,
+        clock_skew_secs: 60,
+    };
+    let oidc = Arc::new(crate::oidc::OidcState::new(config));
+
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
+        oidc: Some(oidc.clone()),
+    });
+
+    (build_router(shared_state), oidc, mock, db)
 }
 
 /// テスト用のローカル IPFS ゲートウェイ。
@@ -1046,6 +1216,7 @@ async fn test_vote_consensus_rejects_content() {
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
     let app = build_router(shared_state);
 
@@ -1145,6 +1316,7 @@ async fn test_duplicate_vote_rejected() {
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
     let app = build_router(shared_state);
 
@@ -1310,6 +1482,7 @@ async fn test_vote_after_conclusion_rejected() {
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
     let app = build_router(shared_state);
 
@@ -1379,6 +1552,7 @@ async fn test_vote_for_missing_report_returns_404() {
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
     let app = build_router(shared_state);
 
@@ -1427,6 +1601,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         ipfs_timeout: Duration::from_secs(15),
         payment_receiving_address: None,
         payment_verifier: None,
+        oidc: None,
     });
     let app = build_router(shared_state);
 
@@ -2235,6 +2410,141 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
                     json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
                 ))
                 .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// ADR-0002: OIDC start と callback で PPID をセッションJWTへ結合する。
+#[tokio::test]
+async fn test_oidc_start_and_callback() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert!(
+        started["authorization_url"]
+            .as_str()
+            .unwrap()
+            .contains("code_challenge_method=S256")
+    );
+    let auth_state = started["state"].as_str().unwrap().to_string();
+
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get(header::SET_COOKIE)
+        .expect("session cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(cookie.contains("HttpOnly"));
+    assert!(cookie.contains("SameSite=Lax"));
+    assert!(cookie.contains("session="));
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["authorized"], true);
+    assert_eq!(body["user_hash"], "test-ppid");
+    assert!(body["token"].as_str().unwrap().len() > 20);
+}
+
+/// ADR-0002: state は単回消費であり、再利用は拒否する。
+#[tokio::test]
+async fn test_oidc_callback_rejects_reused_state() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).unwrap();
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let uri = format!("/auth/oidc/callback?code=test-code&state={auth_state}");
+    let first = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str()).body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = app
+        .oneshot(with_peer(
+            Request::get(uri.as_str()).body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+}
+
+/// ADR-0002: IDトークンの nonce 不一致を拒否する。
+#[tokio::test]
+async fn test_oidc_rejects_nonce_mismatch() {
+    let (app, _oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    *mock.nonce.lock().unwrap() = Some("wrong-nonce".to_string());
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
             test_ipv6_peer(),
         ))
         .await
