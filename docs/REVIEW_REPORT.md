@@ -539,3 +539,15 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
 - HDウォレットのマスターシード保管構成と承認者。
 - 追加チェーンの受入基準。
 - Accepted 昇格にはプロジェクトオーナーの承認が必要。
+
+## 実装記録（2026-11-02）: JPYC決済基盤
+
+- `server/migrations/002_payment_orders.sql` を追加。
+- `server/src/payments.rs` に注文作成、ウォレット所有証明（EIP-191）、
+  検証インターフェース、状態遷移を実装。
+- API: `POST /payments/orders`、`GET /payments/orders/:id`、
+  `POST /payments/orders/:id/bind`、`POST /payments/orders/:id/verify`。
+- テスト: 注文ライフサイクル、未対応チェーン、誤ウォレット署名。
+- 検証: `cargo test -p server --lib payment` 3件成功。
+- 未実装: 実RPC検証、2-of-3クォーラム、HDアドレス派生、
+  バックグラウンド確認ワーカー、返金、AML/KYC。

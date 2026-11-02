@@ -37,6 +37,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 hex = "0.4"
 sha2 = "0.11"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
 
 [dev-dependencies]
 rcgen = "0.14"

@@ -1,8 +1,11 @@
 use crate::{
     AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
-    ensure_user_not_banned, update_content_status, validate_age, validate_jwt_secret,
-    validate_upload_content, validate_upload_content_type,
+    ensure_user_not_banned,
+    payments::{PaymentOrder, PaymentVerification, PaymentVerifier},
+    update_content_status, validate_age, validate_jwt_secret, validate_upload_content,
+    validate_upload_content_type,
 };
+use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -10,6 +13,8 @@ use axum::{
     http::{HeaderValue, Request, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use k256::ecdsa::SigningKey;
+use sha3::{Digest, Keccak256};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
@@ -82,6 +87,56 @@ async fn setup_app_with_options(
         allow_mock_auth,
         ipfs_gateways,
         ipfs_timeout,
+        payment_receiving_address: None,
+        payment_verifier: None,
+    });
+
+    let router = build_router(shared_state);
+    (router, db)
+}
+
+#[derive(Default)]
+struct MockVerifier {
+    verification: std::sync::Mutex<Option<PaymentVerification>>,
+}
+
+#[async_trait]
+impl PaymentVerifier for MockVerifier {
+    async fn verify(&self, _order: &PaymentOrder) -> Result<PaymentVerification, AppError> {
+        self.verification
+            .lock()
+            .expect("verification lock")
+            .clone()
+            .ok_or_else(|| AppError::Internal("verification not configured".to_string()))
+    }
+}
+
+async fn setup_app_with_payments(
+    receiving_address: &str,
+    verifier: Arc<dyn PaymentVerifier>,
+) -> (Router, Arc<libsql::Connection>) {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_secret: "test_secret".to_string(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: Some(receiving_address.to_string()),
+        payment_verifier: Some(verifier),
     });
 
     let router = build_router(shared_state);
@@ -989,6 +1044,8 @@ async fn test_vote_consensus_rejects_content() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
     });
     let app = build_router(shared_state);
 
@@ -1086,6 +1143,8 @@ async fn test_duplicate_vote_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
     });
     let app = build_router(shared_state);
 
@@ -1249,6 +1308,8 @@ async fn test_vote_after_conclusion_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
     });
     let app = build_router(shared_state);
 
@@ -1316,6 +1377,8 @@ async fn test_vote_for_missing_report_returns_404() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
     });
     let app = build_router(shared_state);
 
@@ -1362,6 +1425,8 @@ async fn test_vote_with_invalid_signature_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_verifier: None,
     });
     let app = build_router(shared_state);
 
@@ -1994,4 +2059,185 @@ async fn test_audit_log_chain_integrity() {
         assert_eq!(stored_prev, prev_hash, "Audit chain broken");
         prev_hash = row.get(0).unwrap();
     }
+}
+
+/// JPYC: 注文作成、ウォレット所有証明、送金検証、確定。
+#[tokio::test]
+async fn test_payment_order_lifecycle() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let mut rng = k256::elliptic_curve::rand_core::OsRng;
+    let wallet_key = SigningKey::random(&mut rng);
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token("test_secret", "test_user").await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": 137,
+                        "wallet_address": wallet,
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let created: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(created["amount_wei"], "1000000000000000000000");
+    assert_eq!(created["recipient_address"], receiving);
+    let order_id = created["order_id"].as_str().unwrap().to_string();
+
+    let message = crate::payments::wallet_bind_message(&order_id);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest).unwrap();
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: created["amount_wei"].as_str().unwrap().to_string(),
+    });
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/verify"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(order["status"], "FINALIZED");
+    assert_eq!(order["tx_hash"], "0xabc");
+    assert_eq!(order["confirmations"], 256);
+}
+
+/// JPYC: 未対応チェーンは注文作成を拒否する。
+#[tokio::test]
+async fn test_payment_order_rejects_unsupported_chain() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token("test_secret", "test_user").await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": 999,
+                        "wallet_address": "0x1111111111111111111111111111111111111111",
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// JPYC: 注文のウォレットと異なる署名は拒否する。
+#[tokio::test]
+async fn test_payment_order_rejects_wrong_wallet_signature() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let mut rng = k256::elliptic_curve::rand_core::OsRng;
+    let wallet_key = SigningKey::random(&mut rng);
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let other_key = SigningKey::random(&mut rng);
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token("test_secret", "test_user").await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": 137,
+                        "wallet_address": wallet,
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let created: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let order_id = created["order_id"].as_str().unwrap().to_string();
+
+    let message = crate::payments::wallet_bind_message(&order_id);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = other_key.sign_prehash_recoverable(&digest).unwrap();
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

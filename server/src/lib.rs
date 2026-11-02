@@ -2,6 +2,7 @@
 mod jpki;
 mod migration;
 mod network;
+mod payments;
 
 use axum::{
     Json, Router,
@@ -35,6 +36,10 @@ pub struct AppState {
     pub ipfs_gateways: Vec<String>,
     /// 各 IPFS ゲートウェイへのリクエストタイムアウト。
     pub ipfs_timeout: Duration,
+    /// JPYC 注文の受取アドレス。未設定時は注文作成を 501 で拒否する。
+    pub payment_receiving_address: Option<String>,
+    /// チェーン上の送金を検証する境界。未設定時は検証 API を 501 で拒否する。
+    pub payment_verifier: Option<Arc<dyn payments::PaymentVerifier>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -265,6 +270,17 @@ pub async fn run() -> anyhow::Result<()> {
     let ipfs_timeout_env = std::env::var("IPFS_TIMEOUT_SECS").ok();
     let ipfs_timeout = ipfs_timeout(ipfs_timeout_env.as_deref());
 
+    let payment_receiving_address = std::env::var("PAYMENT_RECEIVING_ADDRESS")
+        .ok()
+        .filter(|address| {
+            if payments::is_valid_eth_address(address) {
+                true
+            } else {
+                warn!("PAYMENT_RECEIVING_ADDRESS is not a valid 0x address; payment orders are disabled");
+                false
+            }
+        });
+
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
     let trusted_proxy_ranges = network::trusted_proxy_ranges();
     if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
@@ -285,6 +301,8 @@ pub async fn run() -> anyhow::Result<()> {
             .unwrap_or(false),
         ipfs_gateways,
         ipfs_timeout,
+        payment_receiving_address,
+        payment_verifier: None,
     });
 
     let app = build_router(shared_state);
@@ -479,6 +497,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
         .route("/content/{cid}/support", post(support_creator))
+        .route("/payments/orders", post(payments::create_order))
+        .route("/payments/orders/{order_id}", get(payments::get_order))
+        .route(
+            "/payments/orders/{order_id}/bind",
+            post(payments::bind_wallet),
+        )
+        .route(
+            "/payments/orders/{order_id}/verify",
+            post(payments::verify_order),
+        )
         .route("/health", get(|| async { "ok" }))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
