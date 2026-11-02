@@ -6,8 +6,9 @@ tags: [adr, authentication, jpki, oidc, proposed]
 
 # ADR-0002: JPKI認証連携方式
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-02
+- Approved: 2026-11-02（プロジェクトオーナーの包括委任）
 - Decision owners: Project owner
 - Scope: 本番の利用資格判定に用いる認証方式
 

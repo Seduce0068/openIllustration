@@ -6,8 +6,9 @@ tags: [adr, payment, jpyc, settlement, proposed]
 
 # ADR-0003: JPYC決済方式
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-02
+- Approved: 2026-11-02（プロジェクトオーナーの包括委任）
 - Decision owners: Project owner
 - Scope: 有償取引・支援の決済と送金検証
 

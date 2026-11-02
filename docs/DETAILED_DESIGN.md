@@ -39,6 +39,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ## 2. 認証・認可（必須要件 / 現行実装との差分）
 
+目標方式は [ADR-0002](adr/ADR-0002-jpki-authentication.md) を参照。
+
 - 指定マイナアプリ/JPKIで認証できない利用者は、閲覧を含むサイト機能を利用できない。
 - 現行の閲覧系ルート（`GET /content`、`GET /content/:cid`、
   `GET /content/:cid/audit`、`GET /transactions`、`GET /mod/reports`）は
@@ -114,6 +116,8 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 トークン発行は検証済み認証トランザクションにサーバー側で結び付ける。クライアントが送る `user_hash` を認証主体として信用しない。安定識別子の生成方式は個人間追跡可能性を抑える設計と合わせて決定する。
 
 ### JPYC決済
+
+目標方式は [ADR-0003](adr/ADR-0003-jpyc-settlement.md) を参照。
 
 決済要求、利用者ウォレット署名、チェーン送信、トランザクション確認、最終性、失敗・再試行を別状態として扱う。受理対象チェーンとJPYCコントラクトをallowlistで識別し、要求ID・金額・受取先に結び付く送金を検証した後だけ有償機能を解放する。成功を確認できた取引だけを決済成立とする。実際の手数料と確認時間を利用者へ提示する。
 
