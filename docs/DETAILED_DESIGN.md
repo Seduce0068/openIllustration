@@ -72,9 +72,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 5. `sub`（PPID）を `user_hash` としてセッションJWTを発行し、
    HttpOnly Cookieで返す。JWTは `sid` を含み、`POST /auth/logout` で
    `sid` を失効させると以後のAPIは401を返す。
-6. 未実装: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
-   back-channel logout、リフレッシュトークン。
-7. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
+6. `POST /auth/backchannel-logout` は logout token の署名・`iss`・`aud`・
+   `events` を検証し、`sid` を失効させる。`sub` のみの logout は未実装で 501。
+7. 未実装: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
+   リフレッシュトークン、`sub` 単位の全セッション失効。
+8. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
    現行のテストはローカルOPモックでフローと検証項目を確認する。
 
 ## 3. コンテンツ処理

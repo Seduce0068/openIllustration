@@ -7,8 +7,8 @@
 use crate::{AppError, AppState, Claims, VerifyResponse};
 use axum::{
     Json,
-    extract::{Query, State},
-    http::{HeaderValue, header},
+    extract::{Form, Query, State},
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -168,6 +168,24 @@ struct IdTokenClaims {
     at_hash: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct LogoutTokenClaims {
+    iss: String,
+    #[serde(deserialize_with = "deserialize_audience")]
+    aud: Vec<String>,
+    exp: usize,
+    iat: usize,
+    sub: Option<String>,
+    sid: Option<String>,
+    events: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+pub struct LogoutTokenRequest {
+    pub logout_token: String,
+}
+
 fn deserialize_audience<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -249,6 +267,36 @@ async fn exchange_code(
         .map_err(|e| AppError::Internal(format!("token response decode failed: {e}")))
 }
 
+async fn verification_key(
+    http_client: &reqwest::Client,
+    oidc: &OidcState,
+    kid: &str,
+) -> Result<DecodingKey, AppError> {
+    let jwks = match oidc.cached_jwks() {
+        Some(jwks) => jwks,
+        None => {
+            let jwks = fetch_jwks(http_client, &oidc.config).await?;
+            oidc.store_jwks(jwks.clone());
+            jwks
+        }
+    };
+
+    let jwk = match jwks.find(kid).cloned() {
+        Some(jwk) => jwk,
+        None => {
+            // 鍵ローテーション直後は未知の kid が来るため、一度だけ再取得する。
+            let jwks = fetch_jwks(http_client, &oidc.config).await?;
+            oidc.store_jwks(jwks.clone());
+            jwks.find(kid)
+                .cloned()
+                .ok_or_else(|| AppError::Unauthorized("unknown signing key".to_string()))?
+        }
+    };
+
+    DecodingKey::from_jwk(&jwk)
+        .map_err(|_| AppError::Unauthorized("invalid signing key".to_string()))
+}
+
 async fn verify_id_token(
     http_client: &reqwest::Client,
     oidc: &OidcState,
@@ -261,29 +309,7 @@ async fn verify_id_token(
         .kid
         .ok_or_else(|| AppError::Unauthorized("ID token has no kid".to_string()))?;
 
-    let jwks = match oidc.cached_jwks() {
-        Some(jwks) => jwks,
-        None => {
-            let jwks = fetch_jwks(http_client, &oidc.config).await?;
-            oidc.store_jwks(jwks.clone());
-            jwks
-        }
-    };
-
-    let jwk = match jwks.find(&kid).cloned() {
-        Some(jwk) => jwk,
-        None => {
-            // 鍵ローテーション直後は未知の kid が来るため、一度だけ再取得する。
-            let jwks = fetch_jwks(http_client, &oidc.config).await?;
-            oidc.store_jwks(jwks.clone());
-            jwks.find(&kid)
-                .cloned()
-                .ok_or_else(|| AppError::Unauthorized("unknown signing key".to_string()))?
-        }
-    };
-
-    let key = DecodingKey::from_jwk(&jwk)
-        .map_err(|_| AppError::Unauthorized("invalid signing key".to_string()))?;
+    let key = verification_key(http_client, oidc, &kid).await?;
 
     let mut validation = Validation::new(Algorithm::ES256);
     validation.set_issuer(std::slice::from_ref(&oidc.config.issuer));
@@ -309,6 +335,46 @@ async fn verify_id_token(
     if claims.iss != oidc.config.issuer {
         return Err(AppError::Unauthorized(
             "ID token issuer mismatch".to_string(),
+        ));
+    }
+
+    Ok(claims)
+}
+
+async fn verify_logout_token(
+    http_client: &reqwest::Client,
+    oidc: &OidcState,
+    logout_token: &str,
+) -> Result<LogoutTokenClaims, AppError> {
+    let header = decode_header(logout_token)
+        .map_err(|_| AppError::Unauthorized("invalid logout token header".to_string()))?;
+    let kid = header
+        .kid
+        .ok_or_else(|| AppError::Unauthorized("logout token has no kid".to_string()))?;
+    let key = verification_key(http_client, oidc, &kid).await?;
+
+    let mut validation = Validation::new(Algorithm::ES256);
+    validation.set_issuer(std::slice::from_ref(&oidc.config.issuer));
+    validation.set_audience(std::slice::from_ref(&oidc.config.client_id));
+    validation.set_required_spec_claims(&["exp", "iss", "aud"]);
+    validation.leeway = oidc.config.clock_skew_secs;
+
+    let data = decode::<LogoutTokenClaims>(logout_token, &key, &validation)
+        .map_err(|_| AppError::Unauthorized("logout token validation failed".to_string()))?;
+    let claims = data.claims;
+
+    if claims
+        .events
+        .get("http://schemas.openid.net/event/backchannel-logout")
+        .is_none()
+    {
+        return Err(AppError::Unauthorized(
+            "logout token is missing the backchannel event".to_string(),
+        ));
+    }
+    if claims.sid.is_none() && claims.sub.is_none() {
+        return Err(AppError::Unauthorized(
+            "logout token has neither sid nor sub".to_string(),
         ));
     }
 
@@ -430,4 +496,32 @@ pub async fn callback(
             .map_err(|_| AppError::Internal("invalid session cookie".to_string()))?,
     );
     Ok(response)
+}
+
+/// OIDC Back-Channel Logout。`sid` を失効させ、該当セッションを拒否する。
+pub async fn backchannel_logout(
+    State(state): State<Arc<AppState>>,
+    Form(payload): Form<LogoutTokenRequest>,
+) -> Result<StatusCode, AppError> {
+    let oidc = state
+        .oidc
+        .as_ref()
+        .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
+    let claims = verify_logout_token(&state.http_client, oidc, &payload.logout_token).await?;
+
+    if let Some(sid) = claims.sid {
+        state
+            .revoked_sessions
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .insert(sid);
+    } else {
+        // sub 単位の全セッション失効にはセッション表が必要。未実装の間は
+        // 成功を装わず fail-closed にする。
+        return Err(AppError::NotImplemented(
+            "sub-based logout is not supported".to_string(),
+        ));
+    }
+
+    Ok(StatusCode::OK)
 }

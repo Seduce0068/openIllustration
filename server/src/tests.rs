@@ -160,6 +160,7 @@ async fn setup_app() -> Router {
 struct MockOidcServer {
     base_url: String,
     nonce: Arc<std::sync::Mutex<Option<String>>>,
+    state: Arc<MockOidcState>,
     handle: tokio::task::JoinHandle<()>,
 }
 
@@ -199,7 +200,7 @@ impl MockOidcServer {
         let app = Router::new()
             .route("/jwks", axum::routing::get(mock_jwks))
             .route("/token", axum::routing::post(mock_token))
-            .with_state(state);
+            .with_state(state.clone());
         let handle = tokio::spawn(async move {
             axum::serve(listener, app).await.expect("mock OIDC server");
         });
@@ -207,8 +208,25 @@ impl MockOidcServer {
         Self {
             base_url,
             nonce,
+            state,
             handle,
         }
+    }
+
+    fn logout_token(&self, sid: &str) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = json!({
+            "iss": self.state.base_url,
+            "aud": self.state.client_id,
+            "exp": now + 300,
+            "iat": now,
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sid": sid,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+        });
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("test-kid".to_string());
+        encode(&header, &claims, &self.state.encoding_key).unwrap()
     }
 }
 
@@ -2611,6 +2629,49 @@ async fn test_logout_revokes_session() {
             Request::post("/auth/logout")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// ADR-0002: back-channel logout で sid を失効させる。
+#[tokio::test]
+async fn test_backchannel_logout_revokes_session() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        &token,
+        &jsonwebtoken::DecodingKey::from_secret(b"test_secret"),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let sid = claims.sid.expect("session id");
+    let logout_token = mock.logout_token(&sid);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
                 .unwrap(),
             test_ipv6_peer(),
         ))

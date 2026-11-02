@@ -514,6 +514,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/auth/oidc/start", get(oidc::start))
         .route("/auth/oidc/callback", get(oidc::callback))
         .route("/auth/logout", post(logout))
+        .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
         .route("/content", get(list_contents))
         .route("/content/upload", post(upload_content))
         .route("/transactions", get(list_transactions))

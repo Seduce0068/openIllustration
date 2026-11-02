@@ -94,10 +94,10 @@ tags: [adr, authentication, jpki, oidc, proposed]
 - IDトークンはJWKSの `kid` でES256署名を検証し、`iss`、`aud`、`exp`、
   `nbf`、`iat`、`nonce`、`at_hash` を確認する。
 - `sub`（PPID）を `user_hash` としてセッションJWTとHttpOnly Cookieに結合する。
-  ログアウト時は `sid` を失効させ、以後のJWTを拒否する。
+  ログアウト時と back-channel logout 時に `sid` を失効させ、以後のJWTを拒否する。
 - テストはローカルOPモックで、正常系・state再利用・nonce不一致・
-  ログアウト失効を検証する。
-- 未実装: `acr`/`amr`、`auth_time`/`max_age`、back-channel logout、
+  ログアウト失効・back-channel logout を検証する。
+- 未実装: `acr`/`amr`、`auth_time`/`max_age`、`sub` 単位の全セッション失効、
   リフレッシュトークン、実サービス接続、事業者申込。
 
 ## Consequences
