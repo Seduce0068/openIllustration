@@ -492,3 +492,48 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   `EXPOSE_INTERNAL_ERRORS` の状態注入を`AppState`へ移す改善を検討する。
 - CID形式検証、ゲートウェイURLのログマスク、`cargo-deny`の
   バイナリ導入は未対応。
+
+## ADRクロスレビュー（2026-11-02）: JPKI認証とJPYC決済
+
+- 対象: `docs/adr/ADR-0002-jpki-authentication.md`、
+  `docs/adr/ADR-0003-jpyc-settlement.md`。
+- レビュー観点: アーキテクチャ、セキュリティ。
+- 結果: **条件付き承認（Proposedのまま）**。Critical 2件、High 9件、
+  Mediumの主要項目を反映済み。Accepted への昇格は未承認。
+- 検証: ドキュメントのみ。`git diff --check` 成功。
+
+### 主要な指摘と対応
+
+- [Critical] JPYCの送金元ウォレットとPPIDの結合が未定義。
+  → 注文作成時のウォレット署名検証と `(ppid, wallet_address)` の
+  結合を Decision 3 に追加。
+- [Critical] 受取アドレスの生成・秘密鍵管理が未定義。
+  → 注文ごとのHD派生アドレス、HSM/マルチシグ、Runbook化を Decision 4 に追加。
+  共有アドレス方式は注文を識別できないため不採用とした。
+- [High] `state`/`nonce`/`code_verifier` の保存・単回消費が未定義。
+  → BFFの短寿命ストアとone-time消費を Decision 2 に追加。
+- [High] 認証保証レベル（`acr`/`amr`）の確認がない。
+  → Decision 3 に要求を追加し、提供有無を Open Questions に残した。
+- [High] 現行HS256 JWTとの移行方針がない。
+  → Decision 6 に移行期間・停止・失効を追加。
+- [High] UserInfo属性の1時間削除と監査証跡が両立しない。
+  → 取得を生年月日・居住地域に限定し、長期保持項目を Decision 7 に列挙。
+- [High] 二重使用防止が `tx_hash` 単独。
+  → `(chain_id, tx_hash, log_index)` の複合一意制約に変更。
+- [High] `Transfer` ログの真正性検証がない。
+  → `logs[N].address`、`removed`、`decimals()`、`status == 1` を追加。
+- [High] allowlistの更新権限・緊急delistがない。
+  → コード定数、ADR・マイグレーション、DEC-03完了条件を追加。
+- [High] RPCの単一応答依存。
+  → 2-of-3の一致、stale判定、不一致時の非確定を Decision 9 に追加。
+- [Medium] セッション失効、リフレッシュトークンのローテーション・盗用検知、
+  注文IDのエントロピー、`decimals`の整数比較、`pause`監視、reorg再評価、
+  秘密管理を反映。
+
+### 残課題
+
+- `acr`/`amr` の提供有無と要求値の確定。
+- 本人確認、疑わしい取引の届出、記録保存の具体化（後続ADR）。
+- HDウォレットのマスターシード保管構成と承認者。
+- 追加チェーンの受入基準。
+- Accepted 昇格にはプロジェクトオーナーの承認が必要。
