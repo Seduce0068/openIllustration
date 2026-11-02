@@ -697,11 +697,22 @@ fn describe_reqwest_error(error: &reqwest::Error) -> &'static str {
     }
 }
 
+/// CID を URL パスへ埋め込む前の安全検査。
+/// 英数字のみを許可し、`/`、`..`、`?`、`#` などのパス・クエリ注入を拒否する。
+/// 厳密な CID 仕様の検証は別途行う。
+pub fn is_safe_cid(cid: &str) -> bool {
+    !cid.is_empty() && cid.len() <= 128 && cid.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 pub async fn get_content(
     State(state): State<Arc<AppState>>,
     _claims: AuthClaims,
     Path(cid): Path<String>,
 ) -> Result<Response, AppError> {
+    if !is_safe_cid(&cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+
     let mut rows = state
         .db
         .query(

@@ -414,6 +414,21 @@ fn test_redact_url_removes_credentials_and_query() {
     assert_eq!(crate::redact_url("not a url?token=secret"), "not a url");
 }
 
+/// CID の URL パス注入を拒否する。
+#[test]
+fn test_cid_validation_rejects_path_characters() {
+    assert!(crate::is_safe_cid("QmTestCID"));
+    assert!(crate::is_safe_cid(
+        "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+    ));
+    assert!(!crate::is_safe_cid("../etc/passwd"));
+    assert!(!crate::is_safe_cid("Qm?x=1"));
+    assert!(!crate::is_safe_cid("Qm#fragment"));
+    assert!(!crate::is_safe_cid("Qm/extra"));
+    assert!(!crate::is_safe_cid(""));
+    assert!(!crate::is_safe_cid(&"a".repeat(129)));
+}
+
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
