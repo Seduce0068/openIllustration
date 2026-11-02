@@ -400,6 +400,20 @@ fn test_ipfs_timeout_configuration() {
     assert_eq!(crate::ipfs_timeout(Some("300")), Duration::from_secs(300));
 }
 
+/// ログ用 URL から userinfo と query を除去する。
+#[test]
+fn test_redact_url_removes_credentials_and_query() {
+    assert_eq!(
+        crate::redact_url("https://user:pass@example.com/path?token=secret"),
+        "https://example.com/path"
+    );
+    assert_eq!(
+        crate::redact_url("https://example.com/path?token=secret"),
+        "https://example.com/path"
+    );
+    assert_eq!(crate::redact_url("not a url?token=secret"), "not a url");
+}
+
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
 #[tokio::test]
 async fn test_internal_error_details_visibility() {

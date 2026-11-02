@@ -668,6 +668,35 @@ pub async fn auth_verify(
     }))
 }
 
+/// ログへ出す URL から userinfo と query を除去する。
+/// ゲートウェイ URL に認証情報やトークンが含まれても記録しない。
+pub fn redact_url(url: &str) -> String {
+    match reqwest::Url::parse(url) {
+        Ok(mut parsed) => {
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.set_query(None);
+            parsed.to_string()
+        }
+        Err(_) => url.split('?').next().unwrap_or(url).to_string(),
+    }
+}
+
+/// `reqwest::Error` の詳細には URL が含まれ得るため、分類だけを返す。
+fn describe_reqwest_error(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connection failed"
+    } else if error.is_body() {
+        "body error"
+    } else if error.is_decode() {
+        "decode error"
+    } else {
+        "request failed"
+    }
+}
+
 pub async fn get_content(
     State(state): State<Arc<AppState>>,
     _claims: AuthClaims,
@@ -748,10 +777,14 @@ pub async fn get_content(
                     .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));
             }
             Ok(response) => {
-                last_error = format!("{}: HTTP {}", gateway_url, response.status());
+                last_error = format!("{}: HTTP {}", redact_url(&gateway_url), response.status());
             }
             Err(e) => {
-                last_error = format!("{}: {}", gateway_url, e);
+                last_error = format!(
+                    "{}: {}",
+                    redact_url(&gateway_url),
+                    describe_reqwest_error(&e)
+                );
             }
         }
     }
