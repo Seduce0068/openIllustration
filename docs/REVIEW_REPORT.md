@@ -560,7 +560,7 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
 - JWKS の `kid` による ES256 署名検証、`iss`/`aud`/`exp`/`nbf`/`iat`/
   `nonce`/`at_hash` の検証。
 - PPID を `user_hash` としてセッションJWTとHttpOnly Cookieに結合。
-- テスト: 正常系、state 再利用拒否、nonce 不一致拒否。
+- テスト: 正常系、state 再利用拒否、nonce 不一致拒否、ログアウト後の `sid` 失効。
 - 検証: `cargo test -p server --lib oidc` 3件成功。
 - 未実装: `acr`/`amr`、`auth_time`/`max_age`、セッション失効、
   back-channel logout、リフレッシュトークン、実サービス接続。

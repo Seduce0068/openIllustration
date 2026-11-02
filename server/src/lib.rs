@@ -18,8 +18,9 @@ use common::Claims;
 use libsql::{Builder, Connection};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower_http::cors::CorsLayer;
 use tracing::warn;
@@ -43,6 +44,8 @@ pub struct AppState {
     pub payment_verifier: Option<Arc<dyn payments::PaymentVerifier>>,
     /// OIDC/JPKI 認証の設定。未設定時は OIDC エンドポイントを 501 で拒否する。
     pub oidc: Option<Arc<oidc::OidcState>>,
+    /// 失効したセッションID。ログアウト済みの JWT を即時拒否する。
+    pub revoked_sessions: Arc<Mutex<HashSet<String>>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -156,6 +159,16 @@ where
             &Validation::default(),
         )
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+
+        if let Some(sid) = &token_data.claims.sid {
+            let revoked = state
+                .revoked_sessions
+                .lock()
+                .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+            if revoked.contains(sid) {
+                return Err(AppError::Unauthorized("Session revoked".to_string()));
+            }
+        }
 
         Ok(AuthClaims(token_data.claims))
     }
@@ -312,6 +325,7 @@ pub async fn run() -> anyhow::Result<()> {
         payment_receiving_address,
         payment_verifier: None,
         oidc,
+        revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
     });
 
     let app = build_router(shared_state);
@@ -499,6 +513,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/auth/verify", post(auth_verify))
         .route("/auth/oidc/start", get(oidc::start))
         .route("/auth/oidc/callback", get(oidc::callback))
+        .route("/auth/logout", post(logout))
         .route("/content", get(list_contents))
         .route("/content/upload", post(upload_content))
         .route("/transactions", get(list_transactions))
@@ -706,6 +721,21 @@ pub async fn auth_verify(
         user_hash: Some(user_hash),
         token: Some(token),
     }))
+}
+
+/// セッションを失効させる。以後、同じ `sid` の JWT は拒否される。
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+) -> Result<Json<bool>, AppError> {
+    if let Some(sid) = &claims.sid {
+        state
+            .revoked_sessions
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .insert(sid.clone());
+    }
+    Ok(Json(true))
 }
 
 /// ログへ出す URL から userinfo と query を除去する。

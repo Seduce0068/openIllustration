@@ -96,6 +96,7 @@ async fn setup_app_with_options(
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
 
     let router = build_router(shared_state);
@@ -145,6 +146,7 @@ async fn setup_app_with_payments(
         payment_receiving_address: Some(receiving_address.to_string()),
         payment_verifier: Some(verifier),
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
 
     let router = build_router(shared_state);
@@ -312,9 +314,48 @@ async fn setup_app_with_oidc() -> (
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: Some(oidc.clone()),
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
 
     (build_router(shared_state), oidc, mock, db)
+}
+
+async fn oidc_login(
+    app: &Router,
+    oidc: &crate::oidc::OidcState,
+    mock: &MockOidcServer,
+) -> serde_json::Value {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
 }
 
 /// テスト用のローカル IPFS ゲートウェイ。
@@ -1217,6 +1258,7 @@ async fn test_vote_consensus_rejects_content() {
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let app = build_router(shared_state);
 
@@ -1317,6 +1359,7 @@ async fn test_duplicate_vote_rejected() {
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let app = build_router(shared_state);
 
@@ -1483,6 +1526,7 @@ async fn test_vote_after_conclusion_rejected() {
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let app = build_router(shared_state);
 
@@ -1553,6 +1597,7 @@ async fn test_vote_for_missing_report_returns_404() {
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let app = build_router(shared_state);
 
@@ -1602,6 +1647,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         payment_receiving_address: None,
         payment_verifier: None,
         oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
     });
     let app = build_router(shared_state);
 
@@ -2545,6 +2591,39 @@ async fn test_oidc_rejects_nonce_mismatch() {
             ))
             .body(Body::empty())
             .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// ADR-0002: ログアウトしたセッションJWTは以後のAPIで拒否される。
+#[tokio::test]
+async fn test_logout_revokes_session() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
             test_ipv6_peer(),
         ))
         .await
