@@ -19,6 +19,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/auth/verify` | 不要 | 開発用モックまたは証明書入力を処理しJWTを発行 |
 | GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
 | GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
+| POST | `/auth/logout` | Bearer JWT | `sid` を失効させる |
+| POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` を失効させる |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
@@ -50,12 +52,13 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 指定マイナアプリ/JPKIで認証できない利用者は、閲覧を含むサイト機能を利用できない。
 - 現行の閲覧系ルート（`GET /content`、`GET /content/:cid`、
   `GET /content/:cid/audit`、`GET /transactions`、`GET /mod/reports`）は
-  JWT認証を要求する。JPKI認証でJWTを発行するフローは未実装であり、
-  現行JWT認証だけでは本番要件を満たさない。
+  JWT認証を要求する。OIDC認証でJWTを発行するフローは実装済みだが、
+  実デジタル認証サービスへの接続・事業者申込・実機検証は未完了であり、
+  本番要件を満たすには追加の検証が必要。
 - `/health` とJPKI認証開始・静的ログイン画面は認証前アクセスを許容できるが、コンテンツや利用者データを返さない。
 - 開発用モックは `ALLOW_MOCK_AUTH=1` の場合のみ許可する。未設定時は無効。
 - 認証が必要な読み取りルートは `AuthClaims` によりJWTを検証する。未認証アクセスを拒否するが、本人確認の真正性を確立するものではない。
-- 現行 `/auth/login` のnonceは `/auth/verify` の検証に結び付いていない。nonce再利用防止やVP署名検証も未実装。
+- `/auth/login` と `/auth/verify` は開発用モック経路であり、nonce再利用防止やVP署名検証は未実装。本番では OIDC 経路を使用する。
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定はリクエストされた生年月日・国コードに依存する。モックでは本人属性として信頼しない。
 
