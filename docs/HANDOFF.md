@@ -14,7 +14,7 @@ generated:
 ## 1. リポジトリ状態
 
 - ブランチ: `master`
-- 最新コミット: `8fb989c`
+- 最新コミット: `8fb989c`（この文書の作成時点）
   （docs: add development handoff context）
 - リモート: `origin/master` と同期済み
 - 作業ツリー: clean
