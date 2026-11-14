@@ -19,13 +19,13 @@ thiserror = "2.0.11"
 async-trait = "0.1.86"
 axum = { version = "0.8", features = ["multipart"] }
 chrono = "0.4.39"
-jsonwebtoken = { version = "11.0", features = ["rust_crypto"] }
+jsonwebtoken = { version = "12.0", features = ["rust_crypto"] }
 libsql = "0.10"
 reqwest = { version = "0.13", features = ["json", "multipart", "stream", "form"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.138"
 sha256 = "1.6.0"
-rsa = { version = "0.9.7", features = ["sha2"] }
+rsa = { version = "0.10", features = ["pkcs1v15"] }
 tokio = { version = "1.43.0", features = ["full"] }
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.23.1", features = ["v4"] }
@@ -37,12 +37,12 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 hex = "0.4"
 sha2 = "0.11"
-k256 = { version = "0.13", features = ["ecdsa"] }
+k256 = { version = "0.14", features = ["ecdsa"] }
 sha3 = "0.10"
 coins-bip32 = "0.17"
 
 [dev-dependencies]
 rcgen = "0.14"
 tokio-test = "0.4.5"
-rsa = { version = "0.9.7", features = ["sha2", "getrandom"] }
-p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+rsa = { version = "0.10", features = ["pkcs1v15", "getrandom"] }
+p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }

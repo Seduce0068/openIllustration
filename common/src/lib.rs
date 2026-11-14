@@ -1,7 +1,7 @@
 pub mod age;
 
 use rsa::sha2::Sha256 as RsaSha256;
-use rsa::{Pkcs1v15Sign, RsaPublicKey, pkcs8::DecodePublicKey};
+use rsa::{Pkcs1v15Sign, PublicKey, pkcs8::DecodePublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -43,7 +43,7 @@ pub fn verify_rsa_signature(
     data: &[u8],
     signature: &[u8],
 ) -> Result<(), ForensicError> {
-    let public_key = RsaPublicKey::from_public_key_der(public_key_der)
+    let public_key = PublicKey::from_public_key_der(public_key_der)
         .map_err(|e| ForensicError::Crypto(format!("Invalid public key: {}", e)))?;
 
     let mut hasher = Sha256::new();

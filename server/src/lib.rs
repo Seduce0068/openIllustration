@@ -155,12 +155,10 @@ where
 
         let token = &auth_header[7..];
 
-        let token_data = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(state.jwt_secret.as_ref()),
-            &Validation::default(),
-        )
-        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+        let decoding_key = DecodingKey::from_secret(state.jwt_secret.as_ref())
+            .map_err(|_| AppError::Unauthorized("Invalid token".to_string()))?;
+        let token_data = decode::<Claims>(token, &decoding_key, &Validation::default())
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
 
         if let Some(sid) = &token_data.claims.sid {
             let revoked = state
@@ -722,12 +720,10 @@ pub async fn auth_verify(
         sid: None,
     };
 
-    let token = encode(
-        &Header::default(),
-        &claims,
-        &EncodingKey::from_secret(state.jwt_secret.as_ref()),
-    )
-    .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+    let encoding_key = EncodingKey::from_secret(state.jwt_secret.as_ref())
+        .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+    let token = encode(&Header::default(), &claims, &encoding_key)
+        .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
 
     Ok(Json(VerifyResponse {
         authorized: true,

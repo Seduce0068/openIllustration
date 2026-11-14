@@ -195,7 +195,7 @@ pub fn recover_ethereum_address(message: &[u8], signature_hex: &str) -> Result<S
 }
 
 pub fn address_from_verifying_key(key: &VerifyingKey) -> String {
-    let point = key.to_encoded_point(false);
+    let point = key.to_sec1_point(false);
     let hash = Keccak256::digest(&point.as_bytes()[1..]);
     format!("0x{}", hex::encode(&hash[12..]))
 }

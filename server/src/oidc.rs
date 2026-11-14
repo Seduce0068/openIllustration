@@ -468,12 +468,10 @@ pub async fn callback(
         exp: expiration,
         sid: Some(Uuid::new_v4().to_string()),
     };
-    let session_token = jsonwebtoken::encode(
-        &Header::default(),
-        &session_claims,
-        &EncodingKey::from_secret(state.jwt_secret.as_ref()),
-    )
-    .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+    let encoding_key = EncodingKey::from_secret(state.jwt_secret.as_ref())
+        .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+    let session_token = jsonwebtoken::encode(&Header::default(), &session_claims, &encoding_key)
+        .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
 
     let cookie = format!(
         "session={session_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{}",

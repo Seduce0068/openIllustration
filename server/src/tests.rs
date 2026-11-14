@@ -23,6 +23,49 @@ use sha3::{Digest, Keccak256};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 
+/// テスト専用の決定的RNG。RSA 鍵生成のテストにだけ使う。
+struct TestRng(u64);
+
+impl TestRng {
+    fn new() -> Self {
+        // 同一プロセス内で連続して生成しても別の鍵になるようカウンタを混ぜる。
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self(0x9E37_79B9_7F4A_7C15 ^ n.wrapping_mul(0x2545_F491_4F6C_DD1D))
+    }
+
+    fn next_u64_inner(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+}
+
+impl rsa::rand_core::TryRng for TestRng {
+    type Error = rsa::rand_core::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok((self.next_u64_inner() >> 32) as u32)
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok(self.next_u64_inner())
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        for chunk in dst.chunks_mut(8) {
+            let value = self.next_u64_inner().to_le_bytes();
+            chunk.copy_from_slice(&value[..chunk.len()]);
+        }
+        Ok(())
+    }
+}
+
+impl rsa::rand_core::TryCryptoRng for TestRng {}
+
 fn test_ipv6_peer() -> IpAddr {
     IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1))
 }
@@ -30,7 +73,7 @@ use common::Claims;
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
 use libsql::Builder;
 use rsa::sha2::Sha256;
-use rsa::{RsaPrivateKey, pkcs8::EncodePublicKey};
+use rsa::{PrivateKey, pkcs8::EncodePublicKey};
 use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -44,7 +87,7 @@ async fn generate_token(secret: &str, sub: &str) -> String {
     encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(secret.as_ref()),
+        &EncodingKey::from_secret(secret.as_ref()).unwrap(),
     )
     .unwrap()
 }
@@ -199,11 +242,11 @@ struct MockOidcServer {
 
 impl MockOidcServer {
     async fn start() -> Self {
-        let mut rng = p256::elliptic_curve::rand_core::OsRng;
-        let signing_key = p256::ecdsa::SigningKey::random(&mut rng);
+        let signing_key =
+            p256::ecdsa::SigningKey::from_slice(&[0x01u8; 32]).expect("valid p256 test scalar");
         let der = signing_key.to_pkcs8_der().unwrap();
         let encoding_key = EncodingKey::from_ec_der(der.as_bytes());
-        let point = signing_key.verifying_key().to_encoded_point(false);
+        let point = signing_key.verifying_key().to_sec1_point(false);
         let x = URL_SAFE_NO_PAD.encode(point.x().unwrap());
         let y = URL_SAFE_NO_PAD.encode(point.y().unwrap());
 
@@ -1319,8 +1362,8 @@ async fn test_vote_consensus_rejects_content() {
     use rsa::signature::{SignatureEncoding, Signer};
 
     for _ in 0..3 {
-        let mut rng = rsa::rand_core::OsRng;
-        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let mut rng = TestRng::new();
+        let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
         let public_der = private_key
             .to_public_key()
             .to_public_key_der()
@@ -1420,8 +1463,8 @@ async fn test_duplicate_vote_rejected() {
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
 
-    let mut rng = rsa::rand_core::OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+    let mut rng = TestRng::new();
+    let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
     let public_der = private_key
         .to_public_key()
         .to_public_key_der()
@@ -1485,9 +1528,9 @@ async fn test_duplicate_vote_rejected() {
 }
 
 /// 陪審員としてユーザーを登録し、投票署名用のRSA秘密鍵を返す
-async fn insert_juror(db: &libsql::Connection) -> (String, RsaPrivateKey) {
-    let mut rng = rsa::rand_core::OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+async fn insert_juror(db: &libsql::Connection) -> (String, PrivateKey) {
+    let mut rng = TestRng::new();
+    let private_key = PrivateKey::new(&mut rng, 2048).unwrap();
     let public_der = private_key
         .to_public_key()
         .to_public_key_der()
@@ -1509,7 +1552,7 @@ async fn send_signed_vote(
     report_id: i64,
     result: &str,
     juror_hash: &str,
-    private_key: &RsaPrivateKey,
+    private_key: &PrivateKey,
 ) -> StatusCode {
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
@@ -2343,8 +2386,7 @@ async fn test_audit_log_chain_integrity() {
 #[tokio::test]
 async fn test_payment_order_lifecycle() {
     let receiving = "0x1111111111111111111111111111111111111111";
-    let mut rng = k256::elliptic_curve::rand_core::OsRng;
-    let wallet_key = SigningKey::random(&mut rng);
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
     let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
     let verifier = Arc::new(MockVerifier::default());
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
@@ -2381,7 +2423,7 @@ async fn test_payment_order_lifecycle() {
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
     let digest = hasher.finalize();
-    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest).unwrap();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
     let mut sig_bytes = signature.to_bytes().to_vec();
     sig_bytes.push(recovery_id.to_byte());
 
@@ -2464,10 +2506,9 @@ async fn test_payment_order_rejects_unsupported_chain() {
 #[tokio::test]
 async fn test_payment_order_rejects_wrong_wallet_signature() {
     let receiving = "0x1111111111111111111111111111111111111111";
-    let mut rng = k256::elliptic_curve::rand_core::OsRng;
-    let wallet_key = SigningKey::random(&mut rng);
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
     let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
-    let other_key = SigningKey::random(&mut rng);
+    let other_key = SigningKey::from_slice(&[0x22u8; 32]).expect("valid k256 test scalar");
     let verifier = Arc::new(MockVerifier::default());
     let (app, _db) = setup_app_with_payments(receiving, verifier).await;
     let token = generate_token("test_secret", "test_user").await;
@@ -2500,7 +2541,7 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
     let digest = hasher.finalize();
-    let (signature, recovery_id) = other_key.sign_prehash_recoverable(&digest).unwrap();
+    let (signature, recovery_id) = other_key.sign_prehash_recoverable(&digest);
     let mut sig_bytes = signature.to_bytes().to_vec();
     sig_bytes.push(recovery_id.to_byte());
 
@@ -2697,7 +2738,7 @@ async fn test_backchannel_logout_revokes_session() {
 
     let claims = jsonwebtoken::decode::<common::Claims>(
         &token,
-        &jsonwebtoken::DecodingKey::from_secret(b"test_secret"),
+        &jsonwebtoken::DecodingKey::from_secret(b"test_secret").unwrap(),
         &jsonwebtoken::Validation::default(),
     )
     .unwrap()
