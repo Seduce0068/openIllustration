@@ -11,18 +11,16 @@ generated:
   at: "2026-11-03T03:10:00+09:00"
 ---
 
-# 開発引き継ぎコンテキスト
-
 ## 1. リポジトリ状態
 
 - ブランチ: `master`
-- 最新コミット: `4b4eaef`
-  （docs: align the detailed design with the OIDC and payment endpoints）
+- 最新コミット: `8fb989c`
+  （docs: add development handoff context）
 - リモート: `origin/master` と同期済み
 - 作業ツリー: clean
 - 最終 CI: success
-  <https://github.com/onoderakeita/openIllustration/actions/runs/41495693098>
-- テスト: 89 件成功（common 6 / client 5 / server 78）
+  <https://github.com/onoderakeita/openIllustration/actions/runs/41579032881>
+- テスト: 89 件成功（client 6 / common 5 / server 78）
 
 PC では最初に以下を実行する。
 
@@ -80,12 +78,14 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 ```
 
 E2E は Google Chrome、trunk 0.21.14、Node 18 以上が必要。
+クライアントの待受ポートは既定 8080。8080 が他プロセス
+（例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
 
 ```bash
 cd e2e
 npm ci
 npm run typecheck
-npm test
+E2E_CLIENT_PORT=18080 npm test
 ```
 
 ## 4. PC でのセットアップ
@@ -185,7 +185,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - モデレーション: ADR-0004 承認後の投票期間・定足数・同数処理。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
 - 依存: `libsql`、`jsonwebtoken`、`imageproc`、`rsa` 経由の
-  RUSTSEC。上流更新を待つか代替へ移行する。
+  RUSTSEC。到達可能性と更新案は
+  [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
 - E2E: ブラウザ別の URL 解釈、モデレーションの期限・異議。
 
 ## 8. 注意事項
@@ -197,6 +198,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   （公式リポジトリ、公式サイト、Explorer）で再確認する。
 - 旧 JPYC Prepaid の `0x431D...` は現行コントラクトではない。
 - `cargo deny check advisories` は既存の RUSTSEC で失敗する。
-  `cargo deny check licenses` のみ CI に導入済み。
+  `cargo deny check licenses` のみ CI に導入済み。詳細は
+  [脆弱性トリアージ](SECURITY_ADVISORIES.md)。
 - Termux 固有の `rustls-platform-verifier` 失敗は、テストの
   ローカルモック化により解消済み。
