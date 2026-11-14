@@ -1,5 +1,5 @@
 # 個人リポジトリ共通の再利用可能ワークフロー
-# （onoderakeita/workflows の rust-gates.yml）へ委譲する。cargo test 用の
+# （Seduce0068/workflows の rust-gates.yml）へ委譲する。cargo test 用の
 # 環境変数は env_vars、clippy の追加引数は clippy_args で渡し、
 # client の wasm ビルド、ライセンス検査、E2E（Playwright）は extra_gates で追加する。
 # E2E の JWT シークレットは e2e/ci-e2e.sh が実行ごとに生成する。
@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   gates:
-    uses: onoderakeita/workflows/.github/workflows/rust-gates.yml@v1
+    uses: Seduce0068/workflows/.github/workflows/rust-gates.yml@v1
     with:
       timeout_minutes: 30
       env_vars: |

@@ -19,7 +19,7 @@ generated:
 - リモート: `origin/master` と同期済み
 - 作業ツリー: clean
 - 最終 CI: success
-  <https://github.com/onoderakeita/openIllustration/actions/runs/41579032881>
+  <https://github.com/Seduce0068/openIllustration/actions/runs/41579032881>
 - テスト: 89 件成功（client 6 / common 5 / server 78）
 
 PC では最初に以下を実行する。
