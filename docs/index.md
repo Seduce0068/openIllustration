@@ -16,5 +16,7 @@
 * [Age validation policy](AGE_VALIDATION_POLICY.md) - 年齢判定の制約。
 * [Test specification](TEST_SPECIFICATION.md) - 回帰テストと受け入れ条件。
 * [Dependency licenses](DEPENDENCY_LICENSES.md) - 実行時依存のライセンス棚卸しと再現手順。
+* [Security advisories](SECURITY_ADVISORIES.md) - RUSTSEC 勧告の到達可能性と対応方針。
 * [Review report](REVIEW_REPORT.md) - クロスレビュー結果。
 * [Documentation status](DOCUMENT_STATUS.md) - 確定済み方針と本番化前の未決事項。
+* [Handoff](HANDOFF.md) - 別端末で再開するための現状と残タスク。

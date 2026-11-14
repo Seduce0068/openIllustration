@@ -72,3 +72,5 @@ SPDX フィールドを持たないクレートは自リポジトリの 3 クレ
 - `cargo-deny` 0.20.2 を CI に導入した。`deny.toml` の許可リストで
   `cargo deny check licenses` を実行し、違反時は CI を失敗させる。
 - 依存更新のたびに本監査を再実行する（現状は手動。手順は §2）。
+- 脆弱性勧告（RUSTSEC）はライセンスとは別に
+  [Security advisories](SECURITY_ADVISORIES.md) で管理する。
