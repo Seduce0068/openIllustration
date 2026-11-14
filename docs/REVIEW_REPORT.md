@@ -570,3 +570,22 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   `backchannel` 1件成功。
 - 未実装: `acr`/`amr`、`auth_time`/`max_age`、`sub` 単位の全セッション失効、
   リフレッシュトークン、実サービス接続。
+
+## 実装記録（2026-11-15）: RustCrypto 依存の更新
+
+- `jsonwebtoken` 11.1.0 → 12.0.0、`rsa` 0.9.10 → 0.10.0、
+  `k256` 0.13.4 → 0.14.0、`p256` 0.13.2 → 0.14.0 へ更新。
+- 解消: RUSTSEC-2023-0071（Marvin）と RUSTSEC-2026-0387
+  （crypto-bigint の timing）。`cargo deny check advisories` の検出は
+  13 件から 11 件になった。
+- 追従した API 変更: `EncodingKey`/`DecodingKey::from_secret` の
+  `Result` 化、`VerifyingKey::to_encoded_point` → `to_sec1_point`、
+  `sign_prehash_recoverable` の戻り値変更、`rsa::PrivateKey` への改名。
+- テスト用 RSA 鍵生成は `rand_core` 0.10 で `OsRng` が廃止されたため、
+  テスト専用の決定的 RNG へ置き換えた（新規依存なし）。
+- 検証: `cargo fmt --all --check`、`cargo clippy --workspace
+  --all-targets -- -D warnings`、`cargo test --workspace` 89 件、
+  `cargo deny check licenses`、`cargo build -p client --target
+  wasm32-unknown-unknown --locked`、ローカル E2E 9 件がすべて成功。
+- 未対応: `cargo deny check advisories` の CI 導入（libsql 0.10 由来の
+  既知勧告 10 件と paste 1 件が残るため）。

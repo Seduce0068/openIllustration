@@ -61,6 +61,12 @@ cargo test --workspace
 - モック verifier で注文ライフサイクル、未対応チェーン、
   誤ウォレット署名、アドレス派生を検証。
 
+### 依存更新（2026-11-15）
+
+- `jsonwebtoken` 12.0.0、`rsa` 0.10.0、`k256` 0.14.0、`p256` 0.14.0 へ更新。
+- Marvin 攻撃と crypto-bigint の timing 勧告を解消（RUSTSEC 13 → 11 件）。
+- テスト 89 件、clippy、wasm ビルド、E2E 9 件が成功。
+
 ### 設計
 
 - ADR-0002（JPKI）と ADR-0003（JPYC）を Accepted に昇格。
@@ -185,8 +191,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   コントラクトの `pause` 監視、再編成の再評価。
 - モデレーション: ADR-0004 承認後の投票期間・定足数・同数処理。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
-- 依存: `libsql`、`jsonwebtoken`、`rsa` 経由の
-  RUSTSEC。到達可能性と更新案は
+- 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
+  到達可能性と更新案は
   [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
 - E2E: ブラウザ別の URL 解釈、モデレーションの期限・異議。
 
@@ -198,8 +204,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - JPYC のコントラクトアドレスと確認数は、実装前に JPYC の一次ソース
   （公式リポジトリ、公式サイト、Explorer）で再確認する。
 - 旧 JPYC Prepaid の `0x431D...` は現行コントラクトではない。
-- `cargo deny check advisories` は既存の RUSTSEC で失敗する。
-  `cargo deny check licenses` のみ CI に導入済み。詳細は
+- `cargo deny check advisories` は `libsql` 由来の 10 件と `paste` 1 件で
+  失敗する。`cargo deny check licenses` のみ CI に導入済み。詳細は
   [脆弱性トリアージ](SECURITY_ADVISORIES.md)。
 - Termux 固有の `rustls-platform-verifier` 失敗は、テストの
   ローカルモック化により解消済み。

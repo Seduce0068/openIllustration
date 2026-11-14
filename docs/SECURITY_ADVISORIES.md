@@ -16,13 +16,13 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ## 1. 結論
 
-- `cargo deny check advisories`（cargo-deny 0.20.2）は 13 件の勧告で
-  失敗する（未使用依存の削除前は 14 件）。内訳は vulnerability 10 件、
-  unmaintained 3 件。
-- 13 件は 3 系統に集約できる。
+- `cargo deny check advisories`（cargo-deny 0.20.2）は 11 件の勧告で
+  失敗する（初回は 14 件）。内訳は vulnerability 8 件、unmaintained 3 件。
+- 11 件は 2 系統に集約できる。
   - libsql 0.10.0 の TLS / gRPC スタック: 10 件
-  - RustCrypto 0.13 系（jsonwebtoken 11 / rsa 0.9 / k256 0.13）: 2 件
   - leptos 経由のビルド時依存 paste: 1 件
+- RustCrypto 0.13 系（RUSTSEC-2023-0071、RUSTSEC-2026-0387）は
+  2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
   解消済み（§3.3、§8）。
 - 既定の開発構成（`DATABASE_URL` 未設定で `file:local.db`）では、libsql の
@@ -35,7 +35,8 @@ stale_after: "2027-02-15T00:00:00+09:00"
 ## 2. 検出条件
 
 - 対象: `master` の `8fb989c`（2026-11-03）。
-- 実行: 2026-11-15 01:11 JST、cargo-deny 0.20.2。
+- 実行: 2026-11-15 01:11 JST（初回）、同日 02:20 JST（依存更新後）。
+  cargo-deny 0.20.2。
 - コマンド: `cargo deny check advisories`。
 - `Cargo.lock` には修正済みの新しい版（例: `rustls 0.23.46`、
   `rustls-webpki 0.103.16`、`h2 0.4.20`、`crypto-bigint 0.7.10`）が
@@ -87,17 +88,19 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - 評価: 既知の emSign 中間鍵を含む経路を受理し得る。リモート接続時に
     注意が必要で、10 件の中では優先度が高い。
 
-### 3.2 RustCrypto 0.13 系（2 件）
+### 3.2 RustCrypto 0.13 系（2 件）— 解消済み
 
 - `RUSTSEC-2026-0387` crypto-bigint 0.5.5（timing）
   - 経路: `k256 0.13.4` / `jsonwebtoken 11.1.0` →
     `elliptic-curve 0.13.8` → `crypto-bigint 0.5.5`
   - 修正版: `>=0.7.6`
   - 評価: 秘密値に対する定数時間演算の欠陥。現行の利用は公開鍵検証のみ。
+  - 対応: 2026-11-15 の依存更新で crypto-bigint 0.7.11 になり解消。
 - `RUSTSEC-2023-0071` rsa 0.9.10（Marvin 攻撃）
   - 経路: `common` / `server` の直接依存と `jsonwebtoken 11.1.0`
   - 修正版: `>=0.10.0`
   - 評価: 秘密鍵演算のタイミング漏えい。現行の利用は公開鍵検証のみ。
+  - 対応: 2026-11-15 に rsa 0.10.0 へ更新して解消。
 
 ### 3.3 ビルド時・未使用依存（2 件、うち ttf-parser は解消済み）
 
@@ -129,9 +132,10 @@ stale_after: "2027-02-15T00:00:00+09:00"
 - サーバーの RSA 秘密鍵演算は `server/src/tests.rs` の署名生成だけ。
 - `k256` はウォレット署名の検証（公開鍵演算）に使う
   （`server/src/payments.rs` 10 行目付近）。
-- よって Marvin（RUSTSEC-2023-0071）と crypto-bigint の timing 勧告
-  （RUSTSEC-2026-0387）は、現行の実行時経路では実害が考えにくい。
-  ただし将来、サーバー側で RSA 署名や秘密鍵演算を追加すると影響する。
+- 2026-11-15 に rsa 0.10.0 / jsonwebtoken 12.0.0 / k256 0.14.0 へ更新し、
+  Marvin（RUSTSEC-2023-0071）と crypto-bigint の timing 勧告
+  （RUSTSEC-2026-0387）は解消した。引き続き実行時の秘密鍵演算は
+  テストに限られ、サーバー側で RSA 署名を追加する場合は再評価する。
 
 ### 4.3 クライアント
 
@@ -148,10 +152,9 @@ stale_after: "2027-02-15T00:00:00+09:00"
 - D1: 既定構成のまま本番公開しない。DEC-08（本番ネットワーク）と
   DEC-09（OSS ライセンス）のゲートと整合させる。
 - D2: 解消可能な系統から段階的に更新する。
-  - RustCrypto: `jsonwebtoken` 11 → 12（`rsa ^0.10`、`p256 ^0.14`、
-    `p384 ^0.14`）、`rsa` 0.9 → 0.10、`k256` 0.13 → 0.14 で 3.2 の
-    2 件を解消できる見込み。認証・決済のクリティカル経路のため、
-    別ブランチでユニットテストと E2E を必須にする。
+  - RustCrypto: `jsonwebtoken` 12.0.0、`rsa` 0.10.0、`k256` 0.14.0、
+    `p256` 0.14.0 へ 2026-11-15 に更新し、3.2 の 2 件を解消した。
+    ユニットテスト 89 件と E2E 9 件で回帰を確認済み。
   - クライアント: 未使用の `image` / `imageproc` / `image-webp` を削除し、
     3.3 の ttf-parser を解消した（2026-11-15）。
   - libsql: 0.10.0 が最新で、上流の tonic / rustls 更新待ち。
@@ -177,3 +180,5 @@ cargo deny check advisories
 
 - 2026-11-15: 初版。`master` `8fb989c` 時点の 14 件を記録。
 - 2026-11-15: 未使用の image 依存を削除し、ttf-parser を解消（14 → 13 件）。
+- 2026-11-15: RustCrypto 系を更新し、rsa と crypto-bigint の勧告を解消
+  （13 → 11 件）。
