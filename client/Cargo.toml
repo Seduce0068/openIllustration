@@ -25,9 +25,6 @@ sha2 = "0.11"
 hex = "0.4"
 base64 = "0.23"
 jxl-oxide = "0.12"
-image = "0.25.10"
-imageproc = "0.27.0"
-image-webp = "0.2.4"
 pulldown-cmark = { version = "0.13.4", features = ["default"] }
 
 # rsa 0.9 が rand_core 0.6 経由で getrandom 0.2 を要求する。

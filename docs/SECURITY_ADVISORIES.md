@@ -16,13 +16,15 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ## 1. 結論
 
-- `cargo deny check advisories`（cargo-deny 0.20.2）は 14 件の勧告で
-  失敗する。内訳は vulnerability 10 件、unmaintained 4 件。
-- 14 件は 4 系統に集約できる。
+- `cargo deny check advisories`（cargo-deny 0.20.2）は 13 件の勧告で
+  失敗する（未使用依存の削除前は 14 件）。内訳は vulnerability 10 件、
+  unmaintained 3 件。
+- 13 件は 3 系統に集約できる。
   - libsql 0.10.0 の TLS / gRPC スタック: 10 件
   - RustCrypto 0.13 系（jsonwebtoken 11 / rsa 0.9 / k256 0.13）: 2 件
   - leptos 経由のビルド時依存 paste: 1 件
-  - 未使用の imageproc 経由の ttf-parser: 1 件
+- 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
+  解消済み（§3.3、§8）。
 - 既定の開発構成（`DATABASE_URL` 未設定で `file:local.db`）では、libsql の
   TLS / gRPC 経路は実行時に使われない。libsql 由来の 10 件は
   「ビルドはされるが既定構成では到達しない」。
@@ -97,16 +99,16 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - 修正版: `>=0.10.0`
   - 評価: 秘密鍵演算のタイミング漏えい。現行の利用は公開鍵検証のみ。
 
-### 3.3 ビルド時・未使用依存（2 件）
+### 3.3 ビルド時・未使用依存（2 件、うち ttf-parser は解消済み）
 
 - `RUSTSEC-2024-0436` paste 1.0.15（unmaintained）
   - 経路: `leptos 0.8.22` / `imageproc 0.27.0`
   - 修正版: なし（pastey / with_builtin_macros への移行）
   - 評価: 手続きマクロ。ビルド時にのみ使われ、実行時コードに残らない。
-- `RUSTSEC-2026-0192` ttf-parser 0.25.1（unmaintained）
+- `RUSTSEC-2026-0192` ttf-parser 0.25.1（unmaintained）— 解消済み
   - 経路: `imageproc 0.27.0` → `ab_glyph 0.2.32` → `ttf-parser 0.25.1`
-  - 修正版: なし（skrifa への移行）
-  - 評価: `imageproc` は client から参照されていない未使用依存。
+  - 対応: `image` / `imageproc` / `image-webp` を 2026-11-15 に削除。
+  - 評価: 未使用依存だったため、削除後は依存グラフに含まれない。
 
 ## 4. 到達可能性の評価
 
@@ -138,8 +140,8 @@ stale_after: "2027-02-15T00:00:00+09:00"
 - ttf-parser は `imageproc` → `ab_glyph` 経由で入る。`client/Cargo.toml`
   は `image`（28 行目）、`imageproc`（29 行目）、`image-webp`（30 行目）を
   宣言するが、`client/src` から参照されていない。
-- したがって 3.3 の 2 件は実行時影響がない。未使用依存の削除で
-  ttf-parser は依存グラフから外れる見込み。
+- したがって 3.3 の paste は実行時影響がない。ttf-parser は未使用依存の
+  削除により依存グラフから外れた（2026-11-15）。
 
 ## 5. 対応方針
 
@@ -151,7 +153,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
     2 件を解消できる見込み。認証・決済のクリティカル経路のため、
     別ブランチでユニットテストと E2E を必須にする。
   - クライアント: 未使用の `image` / `imageproc` / `image-webp` を削除し、
-    3.3 の ttf-parser を解消する。
+    3.3 の ttf-parser を解消した（2026-11-15）。
   - libsql: 0.10.0 が最新で、上流の tonic / rustls 更新待ち。
     リモート DB 採用前に代替 crate を再評価する。
 - D3: `cargo deny check advisories` の CI 導入は、既知勧告の ignore
@@ -174,3 +176,4 @@ cargo deny check advisories
 ## 8. 更新履歴
 
 - 2026-11-15: 初版。`master` `8fb989c` 時点の 14 件を記録。
+- 2026-11-15: 未使用の image 依存を削除し、ttf-parser を解消（14 → 13 件）。
