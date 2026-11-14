@@ -1,8 +1,11 @@
 import { defineConfig } from '@playwright/test';
 
 // ポートは server/src/lib.rs（3000）と client/Trunk.toml（8080）に合わせる。
+// 8080 が他プロセス（例: code-server）に使われている場合は、ローカル実行に
+// 限り E2E_CLIENT_PORT でクライアントの待受ポートを変更できる。
 const serverUrl = 'http://127.0.0.1:3000';
-const clientUrl = 'http://127.0.0.1:8080';
+const clientPort = process.env.E2E_CLIENT_PORT ?? '8080';
+const clientUrl = `http://127.0.0.1:${clientPort}`;
 
 // E2E 専用の開発用固定値。モック認証と IPv4 ループバック例外を明示的に
 // 有効化する。`E2E_JWT_SECRET` で上書きでき、CI では e2e/ci-e2e.sh が
@@ -46,13 +49,20 @@ export default defineConfig({
         JWT_SECRET: e2eJwtSecret,
         ALLOW_MOCK_AUTH: '1',
         ALLOW_IPV4_LOCALHOST: '1',
+        // クライアントのポートを変えた場合も CORS で許可する。
+        // 既定値（server/src/lib.rs の DEV_ALLOWED_ORIGINS）と同じ3種。
+        ALLOWED_ORIGINS: [
+          `http://127.0.0.1:${clientPort}`,
+          `http://localhost:${clientPort}`,
+          `http://[::1]:${clientPort}`,
+        ].join(','),
       },
       url: `${serverUrl}/health`,
       timeout: 120 * 1000,
       reuseExistingServer,
     },
     {
-      command: 'trunk serve --address 127.0.0.1 --port 8080',
+      command: `trunk serve --address 127.0.0.1 --port ${clientPort}`,
       cwd: '../client',
       url: clientUrl,
       timeout: 120 * 1000,

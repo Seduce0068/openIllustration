@@ -80,6 +80,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 E2E は Google Chrome、trunk 0.21.14、Node 18 以上が必要。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
+2026-11-15 に trunk 0.22.1・`E2E_CLIENT_PORT=18080` で 9 件成功を確認。
 
 ```bash
 cd e2e
