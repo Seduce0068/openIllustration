@@ -185,7 +185,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   コントラクトの `pause` 監視、再編成の再評価。
 - モデレーション: ADR-0004 承認後の投票期間・定足数・同数処理。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
-- 依存: `libsql`、`jsonwebtoken`、`imageproc`、`rsa` 経由の
+- 依存: `libsql`、`jsonwebtoken`、`rsa` 経由の
   RUSTSEC。到達可能性と更新案は
   [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
 - E2E: ブラウザ別の URL 解釈、モデレーションの期限・異議。
