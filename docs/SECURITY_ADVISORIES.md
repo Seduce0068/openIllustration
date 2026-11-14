@@ -25,6 +25,8 @@ stale_after: "2027-02-15T00:00:00+09:00"
   2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
   解消済み（§3.3、§8）。
+- `cargo deny check advisories` は既知の 11 件を理由付きで ignore して
+  CI に導入済み。新しい勧告は CI を失敗させる（§5）。
 - 既定の開発構成（`DATABASE_URL` 未設定で `file:local.db`）では、libsql の
   TLS / gRPC 経路は実行時に使われない。libsql 由来の 10 件は
   「ビルドはされるが既定構成では到達しない」。
@@ -105,9 +107,12 @@ stale_after: "2027-02-15T00:00:00+09:00"
 ### 3.3 ビルド時・未使用依存（2 件、うち ttf-parser は解消済み）
 
 - `RUSTSEC-2024-0436` paste 1.0.15（unmaintained）
-  - 経路: `leptos 0.8.22` / `imageproc 0.27.0`
+  - 経路: `leptos 0.8.22`（`either_of` / `reactive_graph` / `tachys`）
   - 修正版: なし（pastey / with_builtin_macros への移行）
   - 評価: 手続きマクロ。ビルド時にのみ使われ、実行時コードに残らない。
+  - 対応: leptos 0.8.23 と 0.9.0-rc1 も `paste ^1.0` に依存するため
+    削除は不可。既知の脆弱性がないため ignore で受容し、leptos の
+    更新時に再評価する（§5）。
 - `RUSTSEC-2026-0192` ttf-parser 0.25.1（unmaintained）— 解消済み
   - 経路: `imageproc 0.27.0` → `ab_glyph 0.2.32` → `ttf-parser 0.25.1`
   - 対応: `image` / `imageproc` / `image-webp` を 2026-11-15 に削除。
@@ -159,9 +164,19 @@ stale_after: "2027-02-15T00:00:00+09:00"
     3.3 の ttf-parser を解消した（2026-11-15）。
   - libsql: 0.10.0 が最新で、上流の tonic / rustls 更新待ち。
     リモート DB 採用前に代替 crate を再評価する。
-- D3: `cargo deny check advisories` の CI 導入は、既知勧告の ignore
-  リストと承認が揃うまで見送る。現状は手動実行で監視する。
+- D3: `cargo deny check advisories` を ignore リスト付きで CI に導入した。
+  新しい勧告は CI を失敗させ、不要になった ignore も検出する。
 - D4: 再評価のトリガーは、依存更新時、四半期ごと、本番化判断時。
+
+### CI ゲートと ignore 運用
+
+- `deny.toml` の `[advisories].ignore` に既知の 11 件を理由付きで列挙する。
+  理由は「到達経路」と「受容の根拠」を1行で示す。
+- `unused-ignored-advisory = "deny"` により、依存から消えた勧告の
+  ignore が残っていれば CI を失敗させる。
+- 新しい勧告は ignore しない限り CI を失敗させる。ignore の追加は
+  本書の到達可能性評価を更新してから行う。
+- 見直しは四半期ごと、依存更新時、本番化判断時に行う。
 
 ## 6. 再現手順
 
@@ -174,7 +189,6 @@ cargo deny check advisories
 - libsql のローカル接続で bincode が実際に使われるかは未確認。
 - リモート接続時の rustls / h2 経路はコード上の分岐のみ確認し、
   実接続試験は未実施。
-- CI 用の ignore 運用（勧告 ID ごとの理由と見直し期限）は未決定。
 
 ## 8. 更新履歴
 
@@ -182,3 +196,5 @@ cargo deny check advisories
 - 2026-11-15: 未使用の image 依存を削除し、ttf-parser を解消（14 → 13 件）。
 - 2026-11-15: RustCrypto 系を更新し、rsa と crypto-bigint の勧告を解消
   （13 → 11 件）。
+- 2026-11-15: 既知 11 件を ignore して `cargo deny check advisories` を
+  CI に導入。paste は上流修正がないため受容した。

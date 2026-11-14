@@ -589,3 +589,13 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   wasm32-unknown-unknown --locked`、ローカル E2E 9 件がすべて成功。
 - 未対応: `cargo deny check advisories` の CI 導入（libsql 0.10 由来の
   既知勧告 10 件と paste 1 件が残るため）。
+
+## 実装記録（2026-11-15）: 脆弱性勧告の CI ゲート
+
+- `deny.toml` の `[advisories]` に既知 11 件の ignore と理由を追加し、
+  `unused-ignored-advisory = "deny"` を設定した。
+- CI の追加ゲートに `cargo deny check advisories` を追加した。
+- `paste`（RUSTSEC-2024-0436）は leptos 0.8.23 / 0.9.0-rc1 も依存し
+  削除できないため、ビルド時のみ・既知の脆弱性なしとして受容した。
+- 検証: `cargo deny check advisories` と `cargo deny check licenses` が
+  ローカルで成功。不要な ignore を追加すると失敗することも確認した。

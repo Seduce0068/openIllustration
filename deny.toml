@@ -35,3 +35,25 @@ allow = [
     "Unlicense",
     "Zlib",
 ]
+
+# 脆弱性勧告の検査。既知の勧告は理由付きで許容し、新しい勧告は CI を
+# 失敗させる。見直しは四半期ごと、依存更新時、本番化判断時に行う。
+# 評価の詳細は docs/SECURITY_ADVISORIES.md を参照する。
+[advisories]
+# 依存から消えた勧告の ignore が残っていないか検査する。
+unused-ignored-advisory = "deny"
+ignore = [
+  # libsql 0.10.0 の TLS / gRPC スタック（上流の更新待ち）
+  { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 は libsql 内部依存。上流更新待ち" },
+  { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 は libsql/tonic 経由。リモートDB接続時のみ" },
+  { id = "RUSTSEC-2026-0346", reason = "rustls 0.22.4 は libsql 経由。リモートDB接続時のみ" },
+  { id = "RUSTSEC-2026-0349", reason = "rustls 0.22.4 は libsql 経由。リモートDB接続時のみ" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 は libsql 経由。未保守のみ" },
+  { id = "RUSTSEC-2026-0049", reason = "rustls-webpki 0.102.8 は libsql 経由。CRL 未使用" },
+  { id = "RUSTSEC-2026-0098", reason = "rustls-webpki 0.102.8 は libsql 経由。誤発行が前提" },
+  { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102.8 は libsql 経由。誤発行が前提" },
+  { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102.8 は libsql 経由。CRL 未使用" },
+  { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 は libsql 経由。リモートDB採用前に解消" },
+  # ビルド時のみ使われるマクロ（既知の脆弱性なし）
+  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 は leptos のビルド時マクロ。leptos 更新待ち" },
+]
