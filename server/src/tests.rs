@@ -153,6 +153,7 @@ async fn setup_app_with_options(
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
 
@@ -196,6 +197,7 @@ async fn setup_app_with_jwt_keys(
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     (build_router(shared_state), db)
@@ -246,6 +248,7 @@ async fn setup_app_with_payments(
         payment_verifier: Some(verifier),
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
 
@@ -279,6 +282,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
 
@@ -354,6 +358,22 @@ impl MockOidcServer {
             "iat": now,
             "jti": uuid::Uuid::new_v4().to_string(),
             "sid": sid,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+        });
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("test-kid".to_string());
+        encode(&header, &claims, &self.state.encoding_key).unwrap()
+    }
+
+    fn logout_token_for_sub(&self, sub: &str) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = json!({
+            "iss": self.state.base_url,
+            "aud": self.state.client_id,
+            "exp": now + 300,
+            "iat": now,
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sub": sub,
             "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
         });
         let mut header = Header::new(Algorithm::ES256);
@@ -466,6 +486,7 @@ async fn setup_app_with_oidc() -> (
         payment_verifier: None,
         oidc: Some(oidc.clone()),
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
 
@@ -1424,6 +1445,7 @@ async fn test_vote_consensus_rejects_content() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
@@ -1527,6 +1549,7 @@ async fn test_duplicate_vote_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
@@ -1702,6 +1725,7 @@ async fn test_vote_after_conclusion_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
@@ -1775,6 +1799,7 @@ async fn test_vote_for_missing_report_returns_404() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
@@ -1827,6 +1852,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
@@ -2825,6 +2851,48 @@ async fn test_backchannel_logout_revokes_session() {
     .claims;
     let sid = claims.sid.expect("session id");
     let logout_token = mock.logout_token(&sid);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// back-channel logout: sub 指定時は当該ユーザーの既存セッションを失効させる。
+#[tokio::test]
+async fn test_backchannel_logout_revokes_sessions_for_sub() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        &token,
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let logout_token = mock.logout_token_for_sub(&claims.sub);
 
     let response = app
         .clone()

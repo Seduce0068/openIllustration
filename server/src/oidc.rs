@@ -458,15 +458,29 @@ pub async fn callback(
         .await?;
 
     let now = Utc::now();
+    let now_ts = now.timestamp() as usize;
     let expiration = now
         .checked_add_signed(Duration::seconds(SESSION_TTL_SECS))
         .expect("valid timestamp")
         .timestamp() as usize;
+    let iat = {
+        let mut revoked_subs = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?;
+        let issued_at = match revoked_subs.get(&user_hash).copied() {
+            Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
+            None => now_ts,
+        };
+        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
+        revoked_subs.remove(&user_hash);
+        issued_at
+    };
     let session_claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
         sid: Some(Uuid::new_v4().to_string()),
-        iat: Some(now.timestamp() as usize),
+        iat: Some(iat),
     };
     let session_token = jsonwebtoken::encode(
         &state.jwt_keys.header(),
@@ -515,12 +529,15 @@ pub async fn backchannel_logout(
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
             .insert(sid);
-    } else {
-        // sub 単位の全セッション失効にはセッション表が必要。未実装の間は
-        // 成功を装わず fail-closed にする。
-        return Err(AppError::NotImplemented(
-            "sub-based logout is not supported".to_string(),
-        ));
+    }
+
+    if let Some(sub) = claims.sub {
+        let revoked_at = Utc::now().timestamp() as usize;
+        state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .insert(sub, revoked_at);
     }
 
     Ok(StatusCode::OK)

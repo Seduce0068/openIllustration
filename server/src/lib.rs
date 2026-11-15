@@ -19,7 +19,7 @@ use common::Claims;
 use libsql::{Builder, Connection};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,6 +50,9 @@ pub struct AppState {
     pub oidc: Option<Arc<oidc::OidcState>>,
     /// 失効したセッションID。ログアウト済みの JWT を即時拒否する。
     pub revoked_sessions: Arc<Mutex<HashSet<String>>>,
+    /// sub 単位の失効閾値（Unix秒）。`iat <= threshold` のトークンを拒否する。
+    /// back-channel logout 等で「その時点以前の全セッション」を失効させる。
+    pub revoked_subs_before: Arc<Mutex<HashMap<String, usize>>>,
     /// DEC-02: 年齢判定の有効ポリシー（非秘密。公開APIで常時参照可能にする）。
     pub age_policy: common::age::AgePolicy,
 }
@@ -174,6 +177,17 @@ where
                 .lock()
                 .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
             if revoked.contains(sid) {
+                return Err(AppError::Unauthorized("Session revoked".to_string()));
+            }
+        }
+
+        let revoked_subs = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        if let Some(&threshold) = revoked_subs.get(&token_data.claims.sub) {
+            let issued_at = token_data.claims.iat.unwrap_or(0);
+            if issued_at <= threshold {
                 return Err(AppError::Unauthorized("Session revoked".to_string()));
             }
         }
@@ -359,6 +373,7 @@ pub async fn run() -> anyhow::Result<()> {
         payment_verifier: None,
         oidc,
         revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
+        revoked_subs_before: Arc::new(Mutex::new(HashMap::new())),
         age_policy,
     });
 
@@ -751,16 +766,31 @@ pub async fn auth_verify(
     }
 
     let now = chrono::Utc::now();
+    let now_ts = now.timestamp() as usize;
     let expiration = now
         .checked_add_signed(chrono::Duration::hours(24))
         .expect("valid timestamp")
         .timestamp() as usize;
 
+    let iat = {
+        let mut revoked_subs = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        let issued_at = match revoked_subs.get(&user_hash).copied() {
+            Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
+            None => now_ts,
+        };
+        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
+        revoked_subs.remove(&user_hash);
+        issued_at
+    };
+
     let claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
         sid: None,
-        iat: Some(now.timestamp() as usize),
+        iat: Some(iat),
     };
 
     let token = encode(

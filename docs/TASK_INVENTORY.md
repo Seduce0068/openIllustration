@@ -30,7 +30,7 @@ status: current
 
 | 区分 | 内容 | 状態/根拠 | 次のアクション |
 | --- | --- | --- | --- |
-| DEC-01 JPKI認証連携 | 実サービス接続、`acr`/`amr`、`sub` 単位の全セッション失効、事業者申込・クライアントID/シークレット/リダイレクトURI登録 | ADR-0002 Accepted。OIDCフローはモックOPで検証済みだが実JPKI/実機・失効・保証レベルは未検証（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 事業者申込と認定、実OP接続情報の取得・秘密管理、保証レベル要件の確定 |
+| DEC-01 JPKI認証連携 | 実サービス接続、`acr`/`amr`、`sub` 単位の全セッション失効の永続化/運用整合、事業者申込・クライアントID/シークレット/リダイレクトURI登録 | ADR-0002 Accepted。OIDCフローはモックOPで検証済み、`sub` 単位失効はインメモリの閾値方式を実装済みだが、永続化・多プロセス共有・実JPKI/実機・失効・保証レベルは未検証（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 事業者申込と認定、実OP接続情報の取得・秘密管理、保証レベル要件の確定、失効方式の運用/永続化方針の確定 |
 | DEC-02 年齢・対象地域 | 対象地域、必要属性、最終閾値、属性保持期間の専門家/法務レビューと確定。検証済み年齢/居住地属性の入力経路（DEC-01連携）と保持・開示方針の確定 | **方針採用・実装進行中（法的確定/専門家レビューは未完）**（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md)）。コード/テストで反映済み: 保守的一律既定 `21`、国別上書き・対象地域・適用モードの構成、明示設定必須のフェイルクローズ、信頼属性必須モードのフェイルクローズ、認証不要 `GET /policy/age` による有効設定値の常時公開（非秘密） | 法務/専門家レビューで対象地域・適用法令・最終閾値・保持期間を確定し、DEC-01の検証済み属性と接続。公開設定に秘密情報が含まれないことを継続確認 |
 | DEC-03 JPYC決済 | 実RPCプロバイダ契約、鍵運用（HSM/マルチシグ）、返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。コントラクトアドレス/確認数は実装前に一次ソースで再確認 | ADR-0003 Accepted。注文作成・署名検証・状態機械・BIP44派生等は実装済み、実チェーン検証/鍵運用は未着手（[HANDOFF.md](HANDOFF.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 契約・法務確認、一次ソース確認、鍵管理方式の決定と秘密管理基盤 |
 | DEC-04 検証可能な監査 | 対象イベント、正規化形式、署名鍵、外部検証方式、公開範囲、削除・訂正との調整 | 未決定。DB内ハッシュ連鎖は第三者検証可能な監査ではない（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 監査要件の定義（外部アンカー/追記専用媒体/独立検証コマンド/鍵管理）と承認 |
@@ -47,7 +47,7 @@ status: current
 ### 3.1 認証・セッション（JPKI/OIDC/JWT）
 
 - [高][要判断] **実JPKI/実OP接続と検証**: 実機・失効確認・`acr`/`amr` の保証レベル検証、`auth_time`/`max_age` 対応（`server/src/oidc.rs`, [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [高] **`sub` 単位の全セッション失効**: 現状 back-channel logout で `sub` のみの場合は 501（`server/src/oidc.rs`）。セッション表/失効方式の設計と実装（DEC-01/ADR-0002 の運用要件と整合させる）。
+- [中] **`sub` 単位の全セッション失効（インメモリ）**: back-channel logout で `sid`/`sub` を失効対象として受け付け、`sub` 指定時は失効閾値（`iat` 比較）で既存セッションを拒否する実装を追加（`server/src/oidc.rs`, `server/src/lib.rs`）。再認証時は閾値より新しい `iat` を発行して再ログインを許容。永続化・多プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
 - [中] **リフレッシュトークンのローテーションと盗用検知**（[HANDOFF.md](HANDOFF.md)）。
 - [中][運用設計] **RS256 運用強化**: 鍵ローテーション、`kid` による複数鍵併用、HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布方針（現状は PEM 環境変数注入のみ）。`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] 開発用モック経路 `/auth/login`,`/auth/verify` の nonce再利用防止・VP署名検証は未実装（本番は OIDC 経路を使用する前提、[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
@@ -107,7 +107,7 @@ status: current
 
 | 領域 | 未実施/不足の例 |
 | --- | --- |
-| 認証 | 実JPKI/OID4VP・失効・期限切れの実機検証、`acr`/`amr`/`auth_time`/`max_age`、`sub`全失効、リフレッシュローテーション/盗用検知 |
+| 認証 | 実JPKI/OID4VP・失効・期限切れの実機検証、`acr`/`amr`/`auth_time`/`max_age`、`sub`全失効の永続化/多プロセス/実OP連携検証、リフレッシュローテーション/盗用検知 |
 | 決済 | 実チェーンRPC、再編成・二重通知・別コントラクト、クォーラム/ワーカー/pause監視、実送金証明 |
 | モデレーション | 並行投票、同数、期限、異議申立て、実運用手続 |
 | 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— ローカル検証コマンドは追加済み。第三者検証可能な方式・公開範囲・実運用試験は未実施（DEC-04） |
