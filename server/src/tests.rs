@@ -3108,6 +3108,217 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// テスト用に支払い注文を作成し、order_id と amount_wei を返す
+async fn create_payment_order(
+    app: &Router,
+    token: &str,
+    wallet: &str,
+    chain_id: i64,
+    amount_jpy: u64,
+) -> (String, String) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": chain_id,
+                        "wallet_address": wallet,
+                        "amount_jpy": amount_jpy,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "order creation must succeed"
+    );
+    let created: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    (
+        created["order_id"].as_str().unwrap().to_string(),
+        created["amount_wei"].as_str().unwrap().to_string(),
+    )
+}
+
+/// 支払い注文の verify を実行しレスポンスを返す
+async fn verify_payment_order(app: &Router, token: &str, order_id: &str) -> Response {
+    app.clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/verify"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap()
+}
+
+/// JPYC: 送金内容が注文と一致しない場合は 400 で拒否し、注文を MISMATCH にする。
+#[tokio::test]
+async fn test_payment_verify_rejects_transfer_mismatch() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    // 金額だけが注文と異なる送金検証結果を設定する。
+    let wrong_amount = (amount_wei.parse::<u128>().unwrap() + 1).to_string();
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: wrong_amount,
+    });
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("transfer does not match the order"),
+        "client must receive the mismatch rejection: {text}"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status,
+        crate::payments::STATUS_MISMATCH,
+        "mismatched order must be marked as MISMATCH"
+    );
+}
+
+/// JPYC: 同一送金の再利用は拒否される（UNIQUE(chain_id, tx_hash, log_index)）。
+#[tokio::test]
+async fn test_payment_verify_rejects_reused_transaction() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_a, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    let (order_b, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: amount_wei.clone(),
+    });
+
+    let first = verify_payment_order(&app, &token, &order_a).await;
+    assert_eq!(first.status(), StatusCode::OK, "first use must be accepted");
+
+    let second = verify_payment_order(&app, &token, &order_b).await;
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("transaction is already used by another order"),
+        "client must receive the reuse rejection: {text}"
+    );
+}
+
+/// JPYC: 期限切れ注文の verify は 400 で拒否される。
+#[tokio::test]
+async fn test_payment_verify_rejects_expired_order() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei,
+    });
+
+    db.execute(
+        "UPDATE payment_orders SET status = ? WHERE order_id = ?",
+        (crate::payments::STATUS_EXPIRED, order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("order is no longer verifiable"),
+        "client must receive the expired rejection: {text}"
+    );
+}
+
+/// JPYC: 確認数が規定未満の送金は CONFIRMING で保持される。
+#[tokio::test]
+async fn test_payment_verify_keeps_confirming_until_threshold() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    // Polygon (chain 137) の必要確認数は 256。1 不足の状態を再現する。
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 255,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei,
+    });
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        order["status"], "CONFIRMING",
+        "order below the confirmation threshold must stay CONFIRMING"
+    );
+    assert_eq!(order["confirmations"], 255);
+}
+
 /// ADR-0002: OIDC start と callback で PPID をセッションJWTへ結合する。
 #[tokio::test]
 async fn test_oidc_start_and_callback() {
