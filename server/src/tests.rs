@@ -380,6 +380,23 @@ impl MockOidcServer {
         header.kid = Some("test-kid".to_string());
         encode(&header, &claims, &self.state.encoding_key).unwrap()
     }
+
+    fn logout_token_for_sid_and_sub(&self, sid: &str, sub: &str) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let claims = json!({
+            "iss": self.state.base_url,
+            "aud": self.state.client_id,
+            "exp": now + 300,
+            "iat": now,
+            "jti": uuid::Uuid::new_v4().to_string(),
+            "sid": sid,
+            "sub": sub,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+        });
+        let mut header = Header::new(Algorithm::ES256);
+        header.kid = Some("test-kid".to_string());
+        encode(&header, &claims, &self.state.encoding_key).unwrap()
+    }
 }
 
 impl Drop for MockOidcServer {
@@ -2963,6 +2980,52 @@ async fn test_backchannel_logout_for_sub_allows_reauthentication() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// back-channel logout: sid と sub の両方が指定された場合も既存セッションを失効させる。
+#[tokio::test]
+async fn test_backchannel_logout_revokes_session_with_sid_and_sub() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let token = body["token"].as_str().unwrap().to_string();
+
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        &token,
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let sid = claims
+        .sid
+        .clone()
+        .expect("OIDC-issued token should have sid");
+    let logout_token = mock.logout_token_for_sid_and_sub(&sid, &claims.sub);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// JPYC: BIP44派生が決定的で、indexごとに異なるアドレスを返す。
