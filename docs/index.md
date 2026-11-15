@@ -13,7 +13,7 @@
 
 * [Operational policy](OPERATIONAL_POLICY.md) - 運用方針と本番化条件。
 * [Infrastructure and network](INFRA_NETWORK.md) - ネットワーク設計。
-* [Age validation policy](AGE_VALIDATION_POLICY.md) - 年齢判定の制約。
+* [Age validation policy](AGE_VALIDATION_POLICY.md) - DEC-02採用方針・公開設定・実装制約。
 * [Test specification](TEST_SPECIFICATION.md) - 回帰テストと受け入れ条件。
 * [Dependency licenses](DEPENDENCY_LICENSES.md) - 実行時依存のライセンス棚卸しと再現手順。
 * [Security advisories](SECURITY_ADVISORIES.md) - RUSTSEC 勧告の到達可能性と対応方針。

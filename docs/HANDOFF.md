@@ -14,15 +14,12 @@ generated:
 ## 1. リポジトリ状態
 
 - ブランチ: `master`
-- 最新コミット: `8fb989c`（この文書の作成時点）
-  （docs: add development handoff context）
-- リモート: `origin/master` と同期済み
-- 作業ツリー: clean
-- 最終 CI: success
-  <https://github.com/Seduce0068/openIllustration/actions/runs/41579032881>
-- テスト: 89 件成功（client 6 / common 5 / server 78）
+- 基準コミット（本セッション開始時）: `2b6afbf`（`origin/master` と同期）
+- 作業ツリー: **DEC-02 採用方針の実装/ドキュメント更新を含む未コミット変更あり**（`common/src/age.rs`, `server/src/lib.rs`, `server/src/tests.rs`, DEC-02関連ドキュメント）。`client/dist/` は未追跡の生成物。
+- 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。本セッションの変更は未 push / 未CI。
+- 直近のローカル検証（本セッション、touch範囲）: `cargo fmt --all --check`、`cargo clippy -p server -p common --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common --quiet`（11件成功）、`cargo test -p server --quiet`（86件成功）。
 
-PC では最初に以下を実行する。
+PC/別端末で再開する場合は以下を実行する。
 
 ```bash
 git pull --ff-only
@@ -30,6 +27,14 @@ cargo test --workspace
 ```
 
 ## 2. 完了した作業
+
+### DEC-02 年齢/地域ポリシー方針の採用と実装（本セッション）
+
+- `common/src/age.rs`: `AgePolicy`/`AgeEnforcementMode`/`AgeValidationError` と `from_env()`・`public_settings()`・`is_age_allowed_with_policy()` を実装。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）、国別上書き・対象地域・明示設定必須フェイルクローズ・信頼属性必須モード（現時点フェイルクローズ）をサポート。
+- `server/src/lib.rs`: 起動時に年齢ポリシーを読込/検証し `AppState.age_policy` に保持。認証不要の `GET /policy/age` で有効設定値（非秘密、`settings_always_public=true`）を常時公開。投稿時年齢検証をポリシーベースへ更新。
+- `server/src/tests.rs`, `common/src/age.rs`: ポリシー公開・フェイルクローズ・既定/上書き等のテストを追加/更新。
+- DEC-02関連ドキュメントを採用方針・公開設定要件・制約に合わせて更新（法的確定/専門家レビューは未完）。
+- ローカル検証（touch範囲）: `cargo fmt --all --check`、`cargo clippy -p server -p common --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common --quiet`（11件）、`cargo test -p server --quiet`（86件）成功。
 
 ### P0 検証基盤
 
@@ -65,13 +70,12 @@ cargo test --workspace
 
 - `jsonwebtoken` 12.0.0、`rsa` 0.10.0、`k256` 0.14.0、`p256` 0.14.0 へ更新。
 - Marvin 攻撃と crypto-bigint の timing 勧告を解消（RUSTSEC 13 → 11 件）。
-- テスト 89 件、clippy、wasm ビルド、E2E 9 件が成功。
 
 ### 設計
 
 - ADR-0002（JPKI）と ADR-0003（JPYC）を Accepted に昇格。
 - ADR-0004（モデレーション手続）を Proposed として追加。
-- `docs/DOCUMENT_STATUS.md` の DEC-01/03/05 を実装状況に合わせて更新。
+- `docs/DOCUMENT_STATUS.md` の DEC-01/03/05 を実装状況に合わせて更新。DEC-02 は方針採用・実装進行中（法的確定/専門家レビュー未完）として更新。
 
 ## 3. 検証コマンド
 
@@ -142,6 +146,15 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `IPFS_TIMEOUT_SECS`: 1〜300。既定 15。
 - `PINATA_JWT`: 未設定時は模擬動作。
 
+### 年齢/地域ポリシー（DEC-02、非秘密・常時公開）
+
+- `AGE_DEFAULT_MINIMUM`: 既定 `21`（保守的安全余裕ベースライン）。
+- `AGE_COUNTRY_OVERRIDES`: `CC=NN,...`（例: `JP=18,US=21`）。
+- `AGE_TARGET_REGIONS`: 対象地域コード（カンマ区切り）。
+- `AGE_ENFORCEMENT_MODE`: `self_reported`（既定）または `trusted_attribute_required`（現時点フェイルクローズ）。
+- `AGE_REQUIRE_EXPLICIT_CONFIGURATION`, `AGE_POLICY_CONFIGURED`: 明示設定フェイルクローズ用。
+- 有効設定値は認証不要 `GET /policy/age` で常時公開。秘密情報を含めない。
+
 ### 決済
 
 - `PAYMENT_RECEIVING_ADDRESS`: `0x` + 40 hex。
@@ -164,13 +177,15 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/src/oidc.rs`: OIDC 認証、IDトークン検証、logout。
 - `server/src/payments.rs`: JPYC 注文、署名検証、状態機械、BIP44 派生。
 - `server/src/jwt.rs`: JWT 署名・検証鍵の集約（既定 HS256、`JWT_RSA_PRIVATE_KEY_PEM` 設定時 RS256）。
-- `server/src/lib.rs`: ルーター、`AppState`、既存 API。
-- `server/src/tests.rs`: 統合テストとモック OP / verifier。
+- `server/src/lib.rs`: ルーター、`AppState`、既存 API、`GET /policy/age`、年齢ポリシー読込/検証。
+- `common/src/age.rs`: 年齢/地域ポリシー（DEC-02方針）、公開設定、検証ロジック。
+- `server/src/tests.rs`: 統合テストとモック OP / verifier、年齢ポリシー公開/フェイルクローズ。
 - `server/migrations/002_payment_orders.sql`: 決済注文。
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
 - `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション提案。
+- `docs/AGE_VALIDATION_POLICY.md`: DEC-02方針・実装・制約。
 - `docs/DOCUMENT_STATUS.md`: 本番公開ゲートと状態。
 - `docs/REVIEW_REPORT.md`: レビューと実装記録。
 
@@ -183,11 +198,12 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - JPYC の実RPCプロバイダ契約、HSM/マルチシグの鍵管理、
   返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。
 - ADR-0004（モデレーション手続）の承認と運営主体の決定。
-- DEC-02（年齢・対象地域）の法務判断。
+- DEC-02（年齢・対象地域）の法務/専門家レビューと最終確定（対象地域・必要属性・最終閾値・保持期間・運用責任）。検証済み年齢/居住地属性の提供方式（DEC-01）と接続条件の確定。
 - 本番ホスティング、TLS、本番CORS、バックアップ、監視。
 
 ### 実装可能な残作業
 
+- DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`)のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
 - JPKI: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
   リフレッシュトークンのローテーションと盗用検知、
   `sub` 単位の全セッション失効。
@@ -204,8 +220,9 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 
 - `ALLOW_MOCK_AUTH=1` は開発専用。本番では有効化しない。
 - `PAYMENT_RECEIVING_XPRV`、`OIDC_CLIENT_SECRET`、`JWT_SECRET`、
-  `JWT_RSA_PRIVATE_KEY_PEM` は
-  秘密情報。commit しない。
+  `JWT_RSA_PRIVATE_KEY_PEM`、`PINATA_JWT`、DBトークン等は
+  秘密情報。commit・ログ・公開応答に含めない。年齢/地域ポリシーの有効設定値（`GET /policy/age`）は常時公開の非秘密情報として扱う。
+- DEC-02の既定値 `21` は保守的安全余裕ベースラインであり、法的事実/適合の確定主張ではない。`trusted_attribute_required` は検証済み属性入力が未実装のため現時点でフェイルクローズ。
 - JPYC のコントラクトアドレスと確認数は、実装前に JPYC の一次ソース
   （公式リポジトリ、公式サイト、Explorer）で再確認する。
 - 旧 JPYC Prepaid の `0x431D...` は現行コントラクトではない。

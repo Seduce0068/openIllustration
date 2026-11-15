@@ -50,6 +50,8 @@ pub struct AppState {
     pub oidc: Option<Arc<oidc::OidcState>>,
     /// 失効したセッションID。ログアウト済みの JWT を即時拒否する。
     pub revoked_sessions: Arc<Mutex<HashSet<String>>>,
+    /// DEC-02: 年齢判定の有効ポリシー（非秘密。公開APIで常時参照可能にする）。
+    pub age_policy: common::age::AgePolicy,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -331,6 +333,18 @@ pub async fn run() -> anyhow::Result<()> {
         tracing::info!("TRUSTED_PROXY_CIDRS: not configured");
     }
 
+    let age_policy = common::age::AgePolicy::from_env()
+        .map_err(|e| anyhow::anyhow!("Invalid age policy configuration: {e}"))?;
+    tracing::info!(
+        "Age policy: default_minimum_age={}, country_overrides={}, operator_configured={}, require_explicit_configuration={}, enforcement_mode={}, settings_always_public={}",
+        age_policy.default_minimum_age,
+        age_policy.country_minimums.len(),
+        age_policy.operator_configured,
+        age_policy.require_explicit_configuration,
+        age_policy.enforcement_mode,
+        age_policy.settings_always_public
+    );
+
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::new(),
@@ -345,6 +359,7 @@ pub async fn run() -> anyhow::Result<()> {
         payment_verifier: None,
         oidc,
         revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
+        age_policy,
     });
 
     let app = build_router(shared_state);
@@ -536,6 +551,11 @@ pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_IPFS_TIMEOUT_SECS))
 }
 
+/// DEC-02: 有効な年齢判定ポリシー（非秘密設定値）を常時公開する。
+pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<common::age::AgePolicy> {
+    Json(state.age_policy.public_settings().clone())
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     let allowed_origins_env = std::env::var("ALLOWED_ORIGINS").ok();
     Router::new()
@@ -565,6 +585,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(payments::verify_order),
         )
         .route("/health", get(|| async { "ok" }))
+        .route("/policy/age", get(get_age_policy))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
             CorsLayer::new()
@@ -694,7 +715,7 @@ pub async fn auth_verify(
         .country_code
         .as_deref()
         .ok_or_else(|| AppError::BadRequest("country_code is required".to_string()))?;
-    validate_age(birth_date, country_code)?;
+    validate_age(&state.age_policy, birth_date, country_code)?;
 
     let verified_key = if payload.presentation_token == "mock_token" && state.allow_mock_auth {
         payload.public_key_der.clone()
@@ -1463,18 +1484,31 @@ pub async fn ensure_user_not_banned(db: &Connection, user_hash: &str) -> Result<
     Ok(())
 }
 
-pub fn validate_age(birth_date: &str, country_code: &str) -> Result<(), AppError> {
+pub fn validate_age(
+    policy: &common::age::AgePolicy,
+    birth_date: &str,
+    country_code: &str,
+) -> Result<(), AppError> {
     let today = chrono::Utc::now().date_naive();
-    common::age::is_age_allowed(birth_date, country_code, today).map_err(|e| match e {
-        common::age::AgeValidationError::UnderAge {
-            country,
-            age,
-            threshold,
-        } => AppError::Forbidden(format!(
-            "Age verification failed for {country}: age {age}, required {threshold}"
-        )),
-        common::age::AgeValidationError::InvalidBirthDate(msg) => {
-            AppError::BadRequest(format!("Invalid birth_date: {msg}"))
+    common::age::is_age_allowed_with_policy(policy, birth_date, country_code, today).map_err(|e| {
+        match e {
+            common::age::AgeValidationError::UnderAge {
+                country,
+                age,
+                threshold,
+            } => AppError::Forbidden(format!(
+                "Age verification failed for {country}: age {age}, required {threshold}"
+            )),
+            common::age::AgeValidationError::InvalidBirthDate(msg) => {
+                AppError::BadRequest(format!("Invalid birth_date: {msg}"))
+            }
+            common::age::AgeValidationError::ConfigurationRequired => AppError::Forbidden(
+                "Age policy requires explicit operator configuration".to_string(),
+            ),
+            common::age::AgeValidationError::TrustedAttributeRequired => AppError::Forbidden(
+                "Trusted age attribute verification is required by policy, but no verified attribute input is available"
+                    .to_string(),
+            ),
         }
     })
 }

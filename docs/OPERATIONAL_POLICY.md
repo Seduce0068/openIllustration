@@ -21,6 +21,7 @@ tags: [operations, security, payments]
 - `PINATA_JWT` 未設定時のモック動作は開発用途に限る。本番でモックCIDを保存しない。
 - 本番起動時に必須設定の存在・形式・相互整合性を検査し、不正・不足設定ではfail closedで起動を拒否する。現行の設定確認だけでは本番要件を満たさない。
 - JWT署名鍵、JPKI信頼情報、JPYC運用鍵等の保管者、最小権限、ローテーション、漏えい時失効・再発行手順を定める。秘密をログや監査公開データへ出さない。
+- 年齢/地域ポリシーの有効設定値（`AGE_*`）は非秘密情報として `GET /policy/age` で常時公開する。公開対象に秘密情報（`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`, `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン等）を含めない。ポリシー設定変更は運用者の責任で管理し、適用法令・専門家レビューの根拠を記録する。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
 - 実JPKI/マイナアプリの信頼検証が未完成の現行プロトタイプは、本番利用資格判定に使わない。
 
@@ -73,6 +74,12 @@ tags: [operations, security, payments]
 | `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For` の末尾値をクライアントIPとして採用し、解決できない場合は 403 とする。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。 |
 | `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む http(s) URL であること。空要素、`{cid}` を含まない要素、http(s) 以外の要素は警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
 | `IPFS_TIMEOUT_SECS` | 任意 | `15` | 各ゲートウェイへのリクエストタイムアウト秒（1〜300）。範囲外・不正値は既定値。 |
+| `AGE_DEFAULT_MINIMUM` | 任意（非秘密） | `21` | 年齢判定の一律既定最少年齢。保守的安全余裕ベースライン（法的事実の確定主張ではない）。有効設定値は `GET /policy/age` で常時公開。 |
+| `AGE_COUNTRY_OVERRIDES` | 任意（非秘密） | 空 | 国別しきい値上書き（`CC=NN,...`）。 |
+| `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |
+| `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。 |
+| `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。 |
+| `AGE_POLICY_CONFIGURED` | 任意（非秘密） | `false` | 運用者が設定を確認/確定したことを示すフラグ。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
 | `PAYMENT_RECEIVING_XPRV` | 任意 | 未設定 | BIP44派生用のxprv。設定時は注文ごとの受取アドレスを派生し、`PAYMENT_RECEIVING_ADDRESS` より優先する。秘密管理基盤から注入し、ログへ出さない。 |
 | `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。 |
@@ -92,4 +99,5 @@ tags: [operations, security, payments]
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | `1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。 |
 
 - 真偽値はいずれも `1` または `true`（大文字小文字を問わない）で有効になる。
-- マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する。
+- 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
+- マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।

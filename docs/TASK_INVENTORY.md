@@ -31,7 +31,7 @@ status: current
 | 区分 | 内容 | 状態/根拠 | 次のアクション |
 | --- | --- | --- | --- |
 | DEC-01 JPKI認証連携 | 実サービス接続、`acr`/`amr`、`sub` 単位の全セッション失効、事業者申込・クライアントID/シークレット/リダイレクトURI登録 | ADR-0002 Accepted。OIDCフローはモックOPで検証済みだが実JPKI/実機・失効・保証レベルは未検証（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 事業者申込と認定、実OP接続情報の取得・秘密管理、保証レベル要件の確定 |
-| DEC-02 年齢・対象地域 | 対象地域、必要属性、閾値、属性保持期間の専門家レビューと確定 | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)） | 法務/専門家レビューで要件確定し設計へ反映 |
+| DEC-02 年齢・対象地域 | 対象地域、必要属性、最終閾値、属性保持期間の専門家/法務レビューと確定。検証済み年齢/居住地属性の入力経路（DEC-01連携）と保持・開示方針の確定 | **方針採用・実装進行中（法的確定/専門家レビューは未完）**（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md)）。コード/テストで反映済み: 保守的一律既定 `21`、国別上書き・対象地域・適用モードの構成、明示設定必須のフェイルクローズ、信頼属性必須モードのフェイルクローズ、認証不要 `GET /policy/age` による有効設定値の常時公開（非秘密） | 法務/専門家レビューで対象地域・適用法令・最終閾値・保持期間を確定し、DEC-01の検証済み属性と接続。公開設定に秘密情報が含まれないことを継続確認 |
 | DEC-03 JPYC決済 | 実RPCプロバイダ契約、鍵運用（HSM/マルチシグ）、返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。コントラクトアドレス/確認数は実装前に一次ソースで再確認 | ADR-0003 Accepted。注文作成・署名検証・状態機械・BIP44派生等は実装済み、実チェーン検証/鍵運用は未着手（[HANDOFF.md](HANDOFF.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 契約・法務確認、一次ソース確認、鍵管理方式の決定と秘密管理基盤 |
 | DEC-04 検証可能な監査 | 対象イベント、正規化形式、署名鍵、外部検証方式、公開範囲、削除・訂正との調整 | 未決定。DB内ハッシュ連鎖は第三者検証可能な監査ではない（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 監査要件の定義（外部アンカー/追記専用媒体/独立検証コマンド/鍵管理）と承認 |
 | DEC-05 モデレーション | ADR-0004 の承認、運営主体の決定、投票資格・選出・期限・定足数・同数・異議・BAN・ピン解除/再配布対応 | ADR-0004 Proposed・実装未着手（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [adr/index.md](adr/index.md)） | 運営主体・手続の承認後に実装計画化 |
@@ -129,6 +129,7 @@ status: current
 
 - [対応済み・本変更で反映] [HANDOFF.md](HANDOFF.md) の「6. 主要ファイル」に `server/src/jwt.rs` を追記。
 - [対応済み・本変更で反映] [DETAILED_DESIGN.md](DETAILED_DESIGN.md) のマイグレーション現行記載に `003_payment_order_index.sql` を追記。
+- [対応済み・本変更で反映] DEC-02採用方針（有効設定値の常時公開・`GET /policy/age`・年齢ポリシー設定項目・制約）を [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [HANDOFF.md](HANDOFF.md), [REQUIREMENTS_DEFINITION.md](REQUIREMENTS_DEFINITION.md), [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
 - [低] `docs/index.md` に含まれない文書の扱い整理（必要に応じて索引へ反映）。
 - [低] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) の「更新日」等、定期レビュー時のメタデータ更新。
 

@@ -152,6 +152,7 @@ async fn setup_app_with_options(
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
 
     let router = build_router(shared_state);
@@ -194,6 +195,7 @@ async fn setup_app_with_jwt_keys(
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     (build_router(shared_state), db)
 }
@@ -243,6 +245,7 @@ async fn setup_app_with_payments(
         payment_verifier: Some(verifier),
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
 
     let router = build_router(shared_state);
@@ -275,6 +278,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
 
     (build_router(shared_state), db)
@@ -461,6 +465,7 @@ async fn setup_app_with_oidc() -> (
         payment_verifier: None,
         oidc: Some(oidc.clone()),
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
 
     (build_router(shared_state), oidc, mock, db)
@@ -1362,8 +1367,9 @@ async fn test_upload_duplicate_content_rejected() {
 
 #[test]
 fn test_age_validation_unit() {
-    assert!(validate_age("2000-01-01", "JP").is_ok());
-    assert!(validate_age("2015-01-01", "JP").is_err());
+    let policy = common::age::AgePolicy::default();
+    assert!(validate_age(&policy, "2000-01-01", "JP").is_ok());
+    assert!(validate_age(&policy, "2015-01-01", "JP").is_err());
 }
 
 /// GOV-02: 3票でコンセンサス → Rejected
@@ -1417,6 +1423,7 @@ async fn test_vote_consensus_rejects_content() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
 
@@ -1519,6 +1526,7 @@ async fn test_duplicate_vote_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
 
@@ -1693,6 +1701,7 @@ async fn test_vote_after_conclusion_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
 
@@ -1765,6 +1774,7 @@ async fn test_vote_for_missing_report_returns_404() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
 
@@ -1816,6 +1826,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         payment_verifier: None,
         oidc: None,
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        age_policy: common::age::AgePolicy::default(),
     });
     let app = build_router(shared_state);
 
@@ -3015,4 +3026,52 @@ async fn test_authenticated_request_with_rs256_token() {
         .unwrap();
     // 未認証なら 401。RS256 トークンが受理された場合は 200。
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// DEC-02: 年齢判定の有効設定値は認証不要で常時公開される。
+#[tokio::test]
+async fn test_age_policy_endpoint_is_public() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/policy/age").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["settings_always_public"], true);
+    assert_eq!(json["default_minimum_age"], 21);
+    assert_eq!(
+        json["enforcement_mode"], "self_reported_dob_country",
+        "default enforcement mode must be self-reported"
+    );
+    assert!(json["notes"].is_array());
+}
+
+#[test]
+fn test_age_policy_fail_closed_modes() {
+    let today = chrono::Utc::now().date_naive();
+    // 30年前相当の成人日付を使う（現在日基準で十分成人）
+    let adult_birth = (today - chrono::Duration::days(365 * 30))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let require_config = common::age::AgePolicy {
+        require_explicit_configuration: true,
+        operator_configured: false,
+        ..common::age::AgePolicy::default()
+    };
+    let err = validate_age(&require_config, &adult_birth, "JP").unwrap_err();
+    assert!(matches!(err, AppError::Forbidden(_)));
+
+    let trusted_only = common::age::AgePolicy {
+        enforcement_mode: common::age::AgeEnforcementMode::TrustedAttributeRequired,
+        ..common::age::AgePolicy::default()
+    };
+    let err = validate_age(&trusted_only, &adult_birth, "JP").unwrap_err();
+    assert!(matches!(err, AppError::Forbidden(_)));
 }
