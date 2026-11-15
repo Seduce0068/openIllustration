@@ -43,9 +43,11 @@ else
   exit 1
 fi
 
-# E2E 用 JWT シークレットは実行ごとに生成し、既知の固定値を CI で
-# 使わない（ローカルの固定既定値は e2e/playwright.config.ts を参照）。
+# E2E 用 JWT シークレットと一時 DB は実行ごとに生成し、既知の固定値や
+# リポジトリ内/前回実行の状態を CI で再利用しない（ローカルの固定既定値は
+# e2e/playwright.config.ts を参照）。
 export E2E_JWT_SECRET="$(openssl rand -hex 32)"
+export DATABASE_URL="file:${workdir}/e2e.db"
 
 echo "==> サーバーとクライアントを事前ビルド"
 cargo build -p server --locked
