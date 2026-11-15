@@ -3302,6 +3302,75 @@ async fn test_backchannel_logout_requires_oidc_configuration() {
     );
 }
 
+/// 未知の state でのコールバックは 400
+#[tokio::test]
+async fn test_oidc_callback_rejects_unknown_state() {
+    let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/callback?code=test-code&state=unknown-state")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("invalid or expired state"),
+        "client must receive the state rejection: {text}"
+    );
+}
+
+/// OIDC 未構成の callback は 501
+#[tokio::test]
+async fn test_oidc_callback_requires_oidc_configuration() {
+    let app = setup_app().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/callback?code=test-code&state=some-state")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("OIDC is not configured"),
+        "client must receive the configuration rejection: {text}"
+    );
+}
+
+/// OIDC 未構成の start は 501
+#[tokio::test]
+async fn test_oidc_start_requires_oidc_configuration() {
+    let app = setup_app().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("OIDC is not configured"),
+        "client must receive the configuration rejection: {text}"
+    );
+}
+
 /// 不正な logout token は 401 で拒否される
 #[tokio::test]
 async fn test_backchannel_logout_rejects_invalid_token() {
