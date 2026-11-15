@@ -61,6 +61,7 @@ status: current
 - [中] 取引上限の決定: 注文は `MAX_ORDER_JPY` を持つが、アップロード `price` は 64bit 範囲（`i64::MAX`）のみで取引上限は未実装/未決定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み ad9d2a8] 注文IDの基本入力検証: `GET/POST /payments/orders/{order_id}` 系で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request`（DB参照前に拒否）。有効 UUID の不存在/非所有は従来どおり `404`（`server/src/payments.rs`, 回帰テスト `test_payment_order_rejects_invalid_order_id_format`）。
 - [低] 再編成・二重通知・別コントラクト等の異常系ハンドリング強化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み e87df61] 決済 verify の防御分岐を回帰テストで保護: 金額不一致（`MISMATCH` 遷移）、送金再利用（`"transaction is already used by another order"`）、期限切れ注文（`"order is no longer verifiable"`）、必要確認数未満（`CONFIRMING` 維持）の4ケース（`test_payment_verify_rejects_transfer_mismatch`, `test_payment_verify_rejects_reused_transaction`, `test_payment_verify_rejects_expired_order`, `test_payment_verify_keeps_confirming_until_threshold`）。ハンドラ挙動変更なし。
 
 ### 3.3 モデレーション・コンテンツ
 
@@ -68,6 +69,7 @@ status: current
 - [中] 並行投票・期限・同数・異議申立ての設計/試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。重複投票の一意制約と確定後追加投票拒否は実装済み。
 - [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
 - [対応済み 1dfbbf6] 通報 reason の基本検証: `POST /mod/report` で reason を前後空白除去の上、空/2000バイト超を `400 Bad Request ("Invalid report reason")` で拒否（DB参照前）。保存値と監査ログは除去後の reason を使用。詳細なモデレーション方針（文字数上限の妥当性含む）は ADR-0004 承認待ち。二重通報の `400` 拒否（`test_report_duplicate_rejected`）と reason 検証（`test_report_reason_validated`）の回帰テストを追加。
+- [対応済み 2f0d057] アップロード入力境界の防御分岐を回帰テストで保護: 必須フィールド欠落（file/owner_hash/signature）→ `400`、トークン sub と owner_hash の不一致 → `401 "Token sub mismatch"`、BAN済みユーザー → `403 "User is banned"`（`test_upload_rejects_missing_required_fields`, `test_upload_rejects_owner_mismatch`, `test_upload_rejects_banned_user`）。ハンドラ挙動変更なし。
 - [対応済み fefa49a] 投票入力の基本検証テスト: `POST /mod/vote` で `report_id <= 0` と未知の `result` を `400` で拒否すること、トークン `sub` と `vote.juror_hash` の不一致（署名が正しくても）を `401` で拒否し票を記録しないことを回帰テストで保護（`test_vote_with_invalid_payload_rejected`, `test_vote_with_sub_mismatch_rejected`）。ハンドラ自体の挙動変更はない。
 
 ### 3.4 監査（DEC-04）
