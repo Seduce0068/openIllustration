@@ -59,12 +59,14 @@ status: current
 - [高] **支援APIの置き換え**: `POST /support/*` は 501 無効化中。JPYC送金検証の実装まで支援・有償サービスを提供しない（`server/src/lib.rs`, [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] 受取アドレス未設定時の注文作成 501 の運用設計（`PAYMENT_RECEIVING_ADDRESS` / `PAYMENT_RECEIVING_XPRV`）、鍵の秘密管理。
 - [中] 取引上限の決定: 注文は `MAX_ORDER_JPY` を持つが、アップロード `price` は 64bit 範囲（`i64::MAX`）のみで取引上限は未実装/未決定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み ad9d2a8] 注文IDの基本入力検証: `GET/POST /payments/orders/{order_id}` 系で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request`（DB参照前に拒否）。有効 UUID の不存在/非所有は従来どおり `404`（`server/src/payments.rs`, 回帰テスト `test_payment_order_rejects_invalid_order_id_format`）。
 - [低] 再編成・二重通知・別コントラクト等の異常系ハンドリング強化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.3 モデレーション・コンテンツ
 
 - [高][要判断] **ADR-0004 承認後の実装**: 投票期間・定足数・同数処理・異議申立て・Rejected後/BAN方針・ピン解除/再配布対応・投票資格/選出・オンチェーン記録方針の反映（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
 - [中] 並行投票・期限・同数・異議申立ての設計/試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。重複投票の一意制約と確定後追加投票拒否は実装済み。
+- [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
 
 ### 3.4 監査（DEC-04）
 
