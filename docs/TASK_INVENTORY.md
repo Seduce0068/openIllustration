@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master 1d1735b, 2026-11-15 確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master 0f7c1d5, 2026-11-15 確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -13,13 +13,13 @@ generated:
   at: "2026-11-15T12:22:13+09:00"
 verified:
   by: dsh
-  at: "2026-11-15T12:22:13+09:00"
+  at: "2026-11-15T12:39:43+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-15、ブランチ `master` は `origin/master` と同期（`1d1735b`）、作業ツリー clean。
+- 確認: 2026-11-15、ブランチ `master` は `origin/master` と同期（`0f7c1d5`）、作業ツリー clean。
 - 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。
 - 方針: `ALLOW_MOCK_AUTH=1` は開発専用。未実装機能を本番対応済みと扱わない。模擬支援APIは 501 で無効（JPYC送金検証の実装まで）。DB内ハッシュ連鎖は第三者検証可能な監査ではない。
 - 参照: [HANDOFF.md](HANDOFF.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md), [adr/index.md](adr/index.md)。
