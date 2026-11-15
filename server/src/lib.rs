@@ -992,7 +992,13 @@ pub async fn list_contents(
 /// 支援APIは無効化している。模擬支援記録はチェーン送金の検証を欠き支払証明に
 /// ならないため、JPYC送金検証の実装まで常に 501 を返す。
 /// 認証は維持し、未認証アクセスには従来どおり 401 を返す。
-pub async fn support_creator(_claims: AuthClaims) -> Result<Json<String>, AppError> {
+pub async fn support_creator(
+    _claims: AuthClaims,
+    Path(cid): Path<String>,
+) -> Result<Json<String>, AppError> {
+    if !is_safe_cid(&cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
     Err(AppError::NotImplemented(
         "Support API is disabled until JPYC settlement is implemented".to_string(),
     ))

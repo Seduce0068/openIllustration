@@ -1938,6 +1938,7 @@ async fn test_support_api_disabled_returns_501() {
 
     // 認証済みでも 501 を返し、模擬取引を記録しない
     let response = app
+        .clone()
         .oneshot(with_peer(
             Request::post("/content/QmSupportTest123/support")
                 .header("content-type", "application/json")
@@ -1956,8 +1957,8 @@ async fn test_support_api_disabled_returns_501() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
 
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8_lossy(&body);
+    let response_body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&response_body);
     assert!(
         text.contains("JPYC"),
         "response must point at the missing JPYC settlement: {text}"
@@ -1969,6 +1970,26 @@ async fn test_support_api_disabled_returns_501() {
         .unwrap();
     let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(count, 0, "the disabled API must not record transactions");
+
+    // 認証済みでも不正CIDは 400
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/content/bad-cid/support")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "test_user").await
+                    ),
+                )
+                .body(Body::from("{\"amount\":100}"))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 /// INT-01 / CONTENT-03: IPFS から取得したデータの SHA-256 が
