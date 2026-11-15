@@ -163,6 +163,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 
 - `server/src/oidc.rs`: OIDC 認証、IDトークン検証、logout。
 - `server/src/payments.rs`: JPYC 注文、署名検証、状態機械、BIP44 派生。
+- `server/src/jwt.rs`: JWT 署名・検証鍵の集約（既定 HS256、`JWT_RSA_PRIVATE_KEY_PEM` 設定時 RS256）。
 - `server/src/lib.rs`: ルーター、`AppState`、既存 API。
 - `server/src/tests.rs`: 統合テストとモック OP / verifier。
 - `server/migrations/002_payment_orders.sql`: 決済注文。

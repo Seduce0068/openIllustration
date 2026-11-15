@@ -1,0 +1,139 @@
+---
+type: Reference
+title: "タスク棚卸し（残タスク・未決事項）"
+description: "openIllustration の現状（master 1d1735b, 2026-11-15 確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+tags:
+  - tasks
+  - backlog
+  - release-gates
+  - security
+  - operations
+generated:
+  by: dsh (opencode-go/iceman-contributor-free)
+  at: "2026-11-15T12:22:13+09:00"
+verified:
+  by: dsh
+  at: "2026-11-15T12:22:13+09:00"
+status: current
+---
+
+## 1. 前提（確認時点の事実）
+
+- 確認: 2026-11-15、ブランチ `master` は `origin/master` と同期（`1d1735b`）、作業ツリー clean。
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。
+- 方針: `ALLOW_MOCK_AUTH=1` は開発専用。未実装機能を本番対応済みと扱わない。模擬支援APIは 501 で無効（JPYC送金検証の実装まで）。DB内ハッシュ連鎖は第三者検証可能な監査ではない。
+- 参照: [HANDOFF.md](HANDOFF.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md), [adr/index.md](adr/index.md)。
+
+## 2. 本番公開ゲート・意思決定・外部手続き（ユーザー判断/手続きが必要）
+
+安全第一のため、実装・設定より先に方針・契約・法務・運用体制の確定が必要な項目。
+
+| 区分 | 内容 | 状態/根拠 | 次のアクション |
+| --- | --- | --- | --- |
+| DEC-01 JPKI認証連携 | 実サービス接続、`acr`/`amr`、`sub` 単位の全セッション失効、事業者申込・クライアントID/シークレット/リダイレクトURI登録 | ADR-0002 Accepted。OIDCフローはモックOPで検証済みだが実JPKI/実機・失効・保証レベルは未検証（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 事業者申込と認定、実OP接続情報の取得・秘密管理、保証レベル要件の確定 |
+| DEC-02 年齢・対象地域 | 対象地域、必要属性、閾値、属性保持期間の専門家レビューと確定 | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)） | 法務/専門家レビューで要件確定し設計へ反映 |
+| DEC-03 JPYC決済 | 実RPCプロバイダ契約、鍵運用（HSM/マルチシグ）、返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。コントラクトアドレス/確認数は実装前に一次ソースで再確認 | ADR-0003 Accepted。注文作成・署名検証・状態機械・BIP44派生等は実装済み、実チェーン検証/鍵運用は未着手（[HANDOFF.md](HANDOFF.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 契約・法務確認、一次ソース確認、鍵管理方式の決定と秘密管理基盤 |
+| DEC-04 検証可能な監査 | 対象イベント、正規化形式、署名鍵、外部検証方式、公開範囲、削除・訂正との調整 | 未決定。DB内ハッシュ連鎖は第三者検証可能な監査ではない（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 監査要件の定義（外部アンカー/追記専用媒体/独立検証コマンド/鍵管理）と承認 |
+| DEC-05 モデレーション | ADR-0004 の承認、運営主体の決定、投票資格・選出・期限・定足数・同数・異議・BAN・ピン解除/再配布対応 | ADR-0004 Proposed・実装未着手（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [adr/index.md](adr/index.md)） | 運営主体・手続の承認後に実装計画化 |
+| DEC-06 クロスプラットフォーム | 対応OS/端末/ブラウザ/最小バージョン、JXL/JPKI/ウォレット実機試験範囲、安全なフォールバック | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 対応マトリクスと受入基準の定義 |
+| DEC-07 性能・費用 | 初期表示/API/転送量/Wasmサイズ/運用費/手数料の測定条件と受入値（SLO） | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 計測条件・閾値の合意と計測 |
+| DEC-08 本番ネットワーク・運用 | ホスティング、TLS、プロキシ、CORS、本番オリジン、IPポリシー、復旧手順、鍵ローテーション | 未決定/未整備（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 本番構成・責任分界・Runbook整備 |
+| DEC-09 OSSライセンス運用 | 配布時義務（ライセンス本文・NOTICE等の同梱）の整備 | `AGPL-3.0-or-later` 宣言・依存棚卸し・`cargo-deny` ライセンス検査は導入済み、配布物の同梱は未整備（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)） | 配布形態に応じた同梱/表示手順の実装 |
+
+## 3. 実装可能な残作業（優先度の目安つき）
+
+依存関係・リスクに応じて順序調整が必要。`[要判断]` は外部仕様/承認待ちを含む。
+
+### 3.1 認証・セッション（JPKI/OIDC/JWT）
+
+- [高][要判断] **実JPKI/実OP接続と検証**: 実機・失効確認・`acr`/`amr` の保証レベル検証、`auth_time`/`max_age` 対応（`server/src/oidc.rs`, [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [高] **`sub` 単位の全セッション失効**: 現状 back-channel logout で `sub` のみの場合は 501（`server/src/oidc.rs`）。セッション表/失効方式の設計と実装（DEC-01/ADR-0002 の運用要件と整合させる）。
+- [中] **リフレッシュトークンのローテーションと盗用検知**（[HANDOFF.md](HANDOFF.md)）。
+- [中][運用設計] **RS256 運用強化**: 鍵ローテーション、`kid` による複数鍵併用、HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布方針（現状は PEM 環境変数注入のみ）。`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] 開発用モック経路 `/auth/login`,`/auth/verify` の nonce再利用防止・VP署名検証は未実装（本番は OIDC 経路を使用する前提、[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+
+### 3.2 決済（JPYC）
+
+- [高][要判断] **実チェーンRPC検証** と検証ワーカー: `chain verification is not configured` パスの解消、送金元/受取先/金額/コントラクト/チェーン/最終性/再編成の検証（`server/src/payments.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [高][要判断] **2-of-3 クォーラム**、バックグラウンド確認ワーカー、コントラクト `pause` 監視、再編成の再評価（[HANDOFF.md](HANDOFF.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。
+- [高] **支援APIの置き換え**: `POST /support/*` は 501 無効化中。JPYC送金検証の実装まで支援・有償サービスを提供しない（`server/src/lib.rs`, [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] 受取アドレス未設定時の注文作成 501 の運用設計（`PAYMENT_RECEIVING_ADDRESS` / `PAYMENT_RECEIVING_XPRV`）、鍵の秘密管理。
+- [中] 取引上限の決定: 注文は `MAX_ORDER_JPY` を持つが、アップロード `price` は 64bit 範囲（`i64::MAX`）のみで取引上限は未実装/未決定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [低] 再編成・二重通知・別コントラクト等の異常系ハンドリング強化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+
+### 3.3 モデレーション・コンテンツ
+
+- [高][要判断] **ADR-0004 承認後の実装**: 投票期間・定足数・同数処理・異議申立て・Rejected後/BAN方針・ピン解除/再配布対応・投票資格/選出・オンチェーン記録方針の反映（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
+- [中] 並行投票・期限・同数・異議申立ての設計/試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。重複投票の一意制約と確定後追加投票拒否は実装済み。
+
+### 3.4 監査（DEC-04）
+
+- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、独立検証コマンド、運営主体・訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
+
+### 3.5 DB・移行・信頼性
+
+- [中] **ロールバック方針（down migration）未実装**、既存DB移行試験未実施（`server/migrations/`, `server/src/migration.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [中] **複数インスタンス同時起動時のマイグレーション排他**（DBロック等）または単一ライター運用の決定と実装（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] バックアップ/リストア手順の整備と復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [低] マイグレーション一覧の文書整合: `server/migrations/` には `003_payment_order_index.sql` があるが [DETAILED_DESIGN.md](DETAILED_DESIGN.md) の現行記載は 001,002 のみ（要確認・更新）。
+
+### 3.6 ネットワーク・アップロード・整合性
+
+- [中] 本番CORSオリジンの決定と `ALLOWED_ORIGINS` 運用（ローカル開発オリジンを本番に流用しない）（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] プロキシ/WAF/多段構成下の IP 判定・`TRUSTED_PROXY_CIDRS` 運用の実環境検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] IPFS: 厳密なCID仕様検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [低] アップロード: 完全なJPEG XLデコード検証、画像デコード前検査、安全な保存名、実multipartサイズ境界・署名（実鍵）試験（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+
+### 3.7 運用・可観測性・停止動作
+
+- [中] ログ集約・メトリクス・アラート、障害対応・鍵ローテーション手順（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] liveness/readiness の意味、DB/IPFS/JPKI/チェーン依存障害時の readiness、デプロイ・復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [低] グレースフル停止の drain タイムアウトと readiness 連動の決定（実装は停止待ちあり、方針未確定）（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+
+### 3.8 依存・セキュリティ衛生
+
+- [中] **既知の脆弱性勧告（受容中）**: `libsql 0.10` 由来 10 件（上流/代替の見直し、特にリモートDB利用前）と `paste` 1 件（RUSTSEC-2024-0436, unmaintained・ビルド時マクロ・既知脆弱性なし・パッチなし、Leptos 側の除去待ち）。CI で `cargo deny check advisories` を通過させつつ四半期/更新時に再評価（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
+- [低] 依存更新時のライセンス再監査と配布物への反映（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
+
+### 3.9 将来検討（必要性・方式未決定）
+
+- Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu 等の必要性・方式（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+- Rust優先方針に沿う技術例外記録、性能・軽量性・費用の計測値（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+
+## 4. テスト・検証ギャップ
+
+[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) および設計文書から抽出。
+
+| 領域 | 未実施/不足の例 |
+| --- | --- |
+| 認証 | 実JPKI/OID4VP・失効・期限切れの実機検証、`acr`/`amr`/`auth_time`/`max_age`、`sub`全失効、リフレッシュローテーション/盗用検知 |
+| 決済 | 実チェーンRPC、再編成・二重通知・別コントラクト、クォーラム/ワーカー/pause監視、実送金証明 |
+| モデレーション | 並行投票、同数、期限、異議申立て、実運用手続 |
+| 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— 方式未実装のため未試験 |
+| 互換性/性能 | COMPAT-01/02, PERF-01 の環境・閾値未決定、Wasm/JXL非対応時フォールバック |
+| ネットワーク/運用 | 実プロキシ/多段/WAF、ログ集約・アラート、drain/readiness |
+| DB | ロールバック、並行起動、既存DB移行試験 |
+| IPFS/アップロード | 実ゲートウェイ遅延・切断・Pinata連携、厳密CID検証、完全JXLデコード・デコード前検査、実multipart境界・実鍵署名 |
+| 表示/E2E | Markdown のブラウザ別URL解釈（CONTENT-04）、モデレーション期限・異議のE2E、OIDC/決済/RS256経路のE2E拡張 |
+| テスト基盤 | `server/src/tests.rs` に `std::env::set_var/remove_var` を使う箇所あり（並行実行時の干渉リスクに注意） |
+
+## 5. CI・開発体験の未処理/先送り（REVIEW_REPORT由来）
+
+- [中] E2E失敗時の **artifact 回収**（trace/スクリーンショット/HTMLレポート）と **チェック結果の分離**（独立ジョブ/status check）。現状は `e2e/ci-e2e.sh` のログ/アノテーションで帰属を明示（共通ワークフロー拡張が必要、[REVIEW_REPORT.md](REVIEW_REPORT.md)）。
+- [中] **Chrome/Node のバージョン固定方針**の決定（現状はバージョンをログ出力）。
+- [低] ジョブ全体タイムアウト（30分）のコールドキャッシュ実測に基づく見直し。
+- [低] E2E専用の一時DBの必要性検討。
+
+## 6. ドキュメント・軽微な整合性（確認候補）
+
+- [対応済み・本変更で反映] [HANDOFF.md](HANDOFF.md) の「6. 主要ファイル」に `server/src/jwt.rs` を追記。
+- [対応済み・本変更で反映] [DETAILED_DESIGN.md](DETAILED_DESIGN.md) のマイグレーション現行記載に `003_payment_order_index.sql` を追記。
+- [低] `docs/index.md` に含まれない文書の扱い整理（必要に応じて索引へ反映）。
+- [低] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) の「更新日」等、定期レビュー時のメタデータ更新。
+
+## 7. 実施の原則（安全第一）
+
+- 外部事実（JPYCコントラクト/チェーン/確認数、法令、事業者仕様）は一次ソースで再確認し、出典不明のまま断定しない。
+- 秘密情報（`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`, `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT` 等）を commit・ログ・応答・配布物に含めない。
+- 本番設定で `ALLOW_MOCK_AUTH` / `EXPOSE_INTERNAL_ERRORS` / `ALLOW_IPV4_LOCALHOST` を有効化しない。
+- 依存追加や破壊的変更は事前確認を取り、標準検証ループ（fmt/clippy/test/deny/wasm/E2E）で確認する。
