@@ -2920,6 +2920,51 @@ async fn test_backchannel_logout_revokes_sessions_for_sub() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// back-channel logout: sub 失効後も再認証すれば新しいセッションを利用できる。
+#[tokio::test]
+async fn test_backchannel_logout_for_sub_allows_reauthentication() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let old_token = body["token"].as_str().unwrap().to_string();
+
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        &old_token,
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let logout_token = mock.logout_token_for_sub(&claims.sub);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let new_body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let new_token = new_body["token"].as_str().unwrap().to_string();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {new_token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 /// JPYC: BIP44派生が決定的で、indexごとに異なるアドレスを返す。
 #[test]
 fn test_derive_receiving_address() {
