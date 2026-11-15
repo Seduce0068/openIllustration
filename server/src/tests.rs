@@ -1011,6 +1011,88 @@ async fn test_auth_verify_underage_forbidden() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+/// birth_date 欠落の認証要求は 400
+#[tokio::test]
+async fn test_auth_verify_missing_birth_date_rejected() {
+    let app = setup_app().await;
+    let body = json!({
+        "presentation_token": "mock_token",
+        "public_key_der": null,
+        "country_code": "JP"
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("birth_date is required"),
+        "client must receive the missing-field rejection: {text}"
+    );
+}
+
+/// country_code 欠落の認証要求は 400
+#[tokio::test]
+async fn test_auth_verify_missing_country_code_rejected() {
+    let app = setup_app().await;
+    let body = json!({
+        "presentation_token": "mock_token",
+        "public_key_der": null,
+        "birth_date": "2000-01-01"
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("country_code is required"),
+        "client must receive the missing-field rejection: {text}"
+    );
+}
+
+/// 解析不能な birth_date は署名検証より先に 400 で拒否される
+#[tokio::test]
+async fn test_auth_verify_rejects_malformed_birth_date() {
+    let app = setup_app().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(verify_body("not-a-date", "JP")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("Invalid birth_date"),
+        "client must receive the malformed-date rejection: {text}"
+    );
+}
+
 /// SEC-02: 無効な JPKI 署名でのアクセス拒否
 #[tokio::test]
 async fn test_invalid_jpki_signature_rejected() {
