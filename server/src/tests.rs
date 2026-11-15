@@ -3242,6 +3242,84 @@ async fn test_logout_revokes_session() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// sid を持たないトークンのログアウトは 200 で受け付けるが、失効対象がなくセッションは有効のまま
+#[tokio::test]
+async fn test_logout_without_sid_keeps_session() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a token without sid has nothing to revoke"
+    );
+}
+
+/// OIDC 未構成の back-channel logout は 501
+#[tokio::test]
+async fn test_backchannel_logout_requires_oidc_configuration() {
+    let app = setup_app().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("logout_token=anything"))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("OIDC is not configured"),
+        "client must receive the configuration rejection: {text}"
+    );
+}
+
+/// 不正な logout token は 401 で拒否される
+#[tokio::test]
+async fn test_backchannel_logout_rejects_invalid_token() {
+    let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("logout_token=not-a-jwt"))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// ADR-0002: back-channel logout で sid を失効させる。
 #[tokio::test]
 async fn test_backchannel_logout_revokes_session() {
