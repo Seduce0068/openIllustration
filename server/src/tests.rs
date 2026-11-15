@@ -3052,6 +3052,69 @@ async fn test_age_policy_endpoint_is_public() {
     assert!(json["notes"].is_array());
 }
 
+#[tokio::test]
+async fn test_age_policy_endpoint_exposes_only_non_secret_public_settings() {
+    let app = setup_app().await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/policy/age").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "unexpected response body: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let obj = json
+        .as_object()
+        .expect("age policy response must be object");
+
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        vec![
+            "country_minimums",
+            "default_minimum_age",
+            "enforcement_mode",
+            "notes",
+            "operator_configured",
+            "require_explicit_configuration",
+            "settings_always_public",
+            "target_regions",
+        ],
+        "public age policy endpoint must expose only non-secret policy settings"
+    );
+
+    // Defense-in-depth: ensure known secret/config-sensitive identifiers never appear.
+    let body_text = String::from_utf8(body.to_vec()).unwrap().to_lowercase();
+    for forbidden in [
+        "jwt_secret",
+        "jwt_rsa_private_key_pem",
+        "oidc_client_secret",
+        "payment_receiving_xprv",
+        "pinata_jwt",
+        "database_url",
+        "db_token",
+        "private_key",
+        "client_secret",
+        "xprv",
+    ] {
+        assert!(
+            !body_text.contains(forbidden),
+            "age policy response must not contain secret-like token: {forbidden}"
+        );
+    }
+}
+
 #[test]
 fn test_age_policy_fail_closed_modes() {
     let today = chrono::Utc::now().date_naive();
