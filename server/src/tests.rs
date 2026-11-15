@@ -3646,6 +3646,46 @@ async fn test_content_audit_rejects_invalid_cid() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// 不正な CID でのコンテンツ取得は 400
+#[tokio::test]
+async fn test_get_content_rejects_invalid_cid() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/bad-cid")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// 存在しない有効な CID はゲートウェイへ問い合わせる前に 404
+#[tokio::test]
+async fn test_get_content_missing_cid_returns_404() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmNoSuchContent000000000000000000000000000000")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn test_payment_order_rejects_invalid_order_id_format() {
     let verifier = Arc::new(MockVerifier::default());
