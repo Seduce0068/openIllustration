@@ -3358,3 +3358,24 @@ async fn test_content_audit_rejects_invalid_cid() {
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn test_payment_order_rejects_invalid_order_id_format() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/payments/orders/not-a-uuid")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

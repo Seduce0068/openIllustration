@@ -223,6 +223,10 @@ async fn load_order(
     order_id: &str,
     ppid: &str,
 ) -> Result<PaymentOrder, AppError> {
+    if Uuid::parse_str(order_id).is_err() {
+        return Err(AppError::BadRequest("Invalid order id".to_string()));
+    }
+
     let mut rows = state
         .db
         .query(
