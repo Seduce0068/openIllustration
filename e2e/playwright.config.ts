@@ -1,4 +1,6 @@
 import { defineConfig } from '@playwright/test';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 // ポートは server/src/lib.rs（3000）と client/Trunk.toml（8080）に合わせる。
 // 8080 が他プロセス（例: code-server）に使われている場合は、ローカル実行に
@@ -16,6 +18,13 @@ const e2eJwtSecret =
 // ローカルは既存プロセスと `server/local.db` を再利用する。CI は常に
 // 起動し直し、`E2E_REUSE=0` でローカルでも再利用を無効化できる。
 const reuseExistingServer = process.env.E2E_REUSE !== '0' && !process.env.CI;
+
+// サーバーを新規起動する場合、未指定なら一時DBを使用してローカル状態の
+// 持ち越しを避ける（CIは e2e/ci-e2e.sh が DATABASE_URL を設定）。
+const serverDatabaseUrl = reuseExistingServer
+  ? undefined
+  : (process.env.DATABASE_URL ??
+    `file:${path.join(os.tmpdir(), `openillustration-e2e-${Date.now()}-${process.pid}.db`)}`);
 
 export default defineConfig({
   testDir: './tests',

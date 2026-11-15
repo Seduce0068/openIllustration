@@ -68,7 +68,8 @@ status: current
 
 ### 3.4 監査（DEC-04）
 
-- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、独立検証コマンド、運営主体・訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
+- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、公開範囲、運営主体・訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
+- [中] [一部対応] ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID]` で読み取り専用に検証可能（`common::AuditLogEntry::calculate_hash` と同一計算）。これは計算整合性の確認であり、第三者検証可能な監査方式の代替ではない（AUDIT-01/DEC-04 は未充足）。
 
 ### 3.5 DB・移行・信頼性
 
@@ -109,7 +110,7 @@ status: current
 | 認証 | 実JPKI/OID4VP・失効・期限切れの実機検証、`acr`/`amr`/`auth_time`/`max_age`、`sub`全失効、リフレッシュローテーション/盗用検知 |
 | 決済 | 実チェーンRPC、再編成・二重通知・別コントラクト、クォーラム/ワーカー/pause監視、実送金証明 |
 | モデレーション | 並行投票、同数、期限、異議申立て、実運用手続 |
-| 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— 方式未実装のため未試験 |
+| 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— ローカル検証コマンドは追加済み。第三者検証可能な方式・公開範囲・実運用試験は未実施（DEC-04） |
 | 互換性/性能 | COMPAT-01/02, PERF-01 の環境・閾値未決定、Wasm/JXL非対応時フォールバック |
 | ネットワーク/運用 | 実プロキシ/多段/WAF、ログ集約・アラート、drain/readiness |
 | DB | ロールバック、並行起動、既存DB移行試験 |
@@ -122,7 +123,7 @@ status: current
 - [中] E2E失敗時の **artifact 回収**（trace/スクリーンショット/HTMLレポート）と **チェック結果の分離**（独立ジョブ/status check）。現状は `e2e/ci-e2e.sh` のログ/アノテーションで帰属を明示（共通ワークフロー拡張が必要、[REVIEW_REPORT.md](REVIEW_REPORT.md)）。
 - [中] **Chrome/Node のバージョン固定方針**の決定（現状はバージョンをログ出力）。
 - [低] ジョブ全体タイムアウト（30分）のコールドキャッシュ実測に基づく見直し。
-- [低] [一部対応 b6e63d3] CIスクリプト [e2e/ci-e2e.sh](../e2e/ci-e2e.sh) は一時DBを使用。ローカル再利用時（[e2e/playwright.config.ts](../e2e/playwright.config.ts)）のDB分離方針は必要に応じて検討。
+- [低] [一部対応 b6e63d3] CIスクリプト [e2e/ci-e2e.sh](../e2e/ci-e2e.sh) は一時DBを使用。ローカルでサーバーを新規起動する E2E 実行（`E2E_REUSE=0`、非CI）では [e2e/playwright.config.ts](../e2e/playwright.config.ts) が未指定時に一時DBを既定使用（`DATABASE_URL` 指定時は尊重）。既存プロセス/DBを再利用するローカル実行の分離方針は必要に応じて検討。
 
 ## 6. ドキュメント・軽微な整合性（確認候補）
 
