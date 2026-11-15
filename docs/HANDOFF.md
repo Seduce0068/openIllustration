@@ -119,7 +119,9 @@ cargo run -p server
 
 ### 認証
 
-- `JWT_SECRET`: 必須。32バイト以上。
+- `JWT_SECRET`: 必須。32バイト以上。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない。
+- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。
+  設定時は RS256 で署名する。未設定なら HS256。
 - `ALLOW_MOCK_AUTH`: 開発専用。
 - `OIDC_ISSUER`
 - `OIDC_CLIENT_ID`
@@ -200,7 +202,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 ## 8. 注意事項
 
 - `ALLOW_MOCK_AUTH=1` は開発専用。本番では有効化しない。
-- `PAYMENT_RECEIVING_XPRV`、`OIDC_CLIENT_SECRET`、`JWT_SECRET` は
+- `PAYMENT_RECEIVING_XPRV`、`OIDC_CLIENT_SECRET`、`JWT_SECRET`、
+  `JWT_RSA_PRIVATE_KEY_PEM` は
   秘密情報。commit しない。
 - JPYC のコントラクトアドレスと確認数は、実装前に JPYC の一次ソース
   （公式リポジトリ、公式サイト、Explorer）で再確認する。

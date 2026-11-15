@@ -599,3 +599,20 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   削除できないため、ビルド時のみ・既知の脆弱性なしとして受容した。
 - 検証: `cargo deny check advisories` と `cargo deny check licenses` が
   ローカルで成功。不要な ignore を追加すると失敗することも確認した。
+
+## 実装記録（2026-11-15）: RS256 署名の追加
+
+- `server/src/jwt.rs` を追加し、JWT の署名・検証鍵を `JwtKeys` に集約した。
+- 既定は HS256（`JWT_SECRET`）。`JWT_RSA_PRIVATE_KEY_PEM`（PKCS#8 PEM、
+  2048bit 以上）を設定した場合のみ RS256 を使う。
+- 検証用の公開鍵は秘密鍵から導出し、別途設定させない。
+- 許可アルゴリズムは起動時に確定し、トークンのヘッダの `alg` からは
+  選ばせない（アルゴリズム混同攻撃への対策）。
+- 起動時検証: 短い `JWT_SECRET`、2048bit 未満の RSA 鍵、不正な PEM、
+  鍵がどちらも未設定の場合は起動を拒否する（4 種を実起動で確認）。
+- テスト: RS256 のラウンドトリップ、`alg` 差し替え拒否、1024bit 鍵の拒否、
+  環境変数の優先順位、RS256 トークンでの認証済み API 通過を追加。
+- 検証: `cargo test --workspace` 95 件、`cargo clippy --workspace
+  --all-targets -- -D warnings`、ローカル E2E 9 件が成功。RS256 での
+  実起動ログ（`JWT signing algorithm: RS256`）も確認した。
+- 未実装: 鍵ローテーション、`kid` による複数鍵の併用、HSM 等の外部鍵管理。

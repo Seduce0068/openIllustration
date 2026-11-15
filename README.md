@@ -45,6 +45,9 @@ rustup target add wasm32-unknown-unknown
 ```bash
 # JWT_SECRET に32バイト以上のランダム値を設定して起動（未設定・短すぎる場合は起動しない）
 export JWT_SECRET="$(openssl rand -hex 32)"
+# 任意: RS256 へ切り替える場合は PKCS#8 PEM の RSA 秘密鍵（2048bit以上）を設定する。
+# 設定時は JWT_SECRET より優先され、署名アルゴリズムは起動時に確定する。
+# export JWT_RSA_PRIVATE_KEY_PEM="$(cat jwt-rsa-private.pem)"
 export ALLOW_IPV4_LOCALHOST=1   # ローカル開発のみ
 export ALLOW_MOCK_AUTH=1          # 開発専用: mock JPKI / ゼロ署名。本番では未設定または 0
 # 任意: IPFS ゲートウェイ（`{cid}` を含む URL テンプレート）とタイムアウト
