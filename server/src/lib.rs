@@ -683,6 +683,10 @@ pub async fn get_content_audit(
     _claims: AuthClaims,
     Path(cid): Path<String>,
 ) -> Result<Json<Vec<AuditLogResponse>>, AppError> {
+    if !is_safe_cid(&cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+
     let mut rows = state
         .db
         .query(

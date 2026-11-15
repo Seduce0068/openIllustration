@@ -3318,3 +3318,22 @@ fn test_age_policy_fail_closed_modes() {
     let err = validate_age(&trusted_only, &adult_birth, "JP").unwrap_err();
     assert!(matches!(err, AppError::Forbidden(_)));
 }
+
+#[tokio::test]
+async fn test_content_audit_rejects_invalid_cid() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/bad-cid/audit")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
