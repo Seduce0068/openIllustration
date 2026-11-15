@@ -2,8 +2,8 @@ use crate::{
     AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
     ensure_user_not_banned,
     payments::{PaymentOrder, PaymentVerification, PaymentVerifier},
-    update_content_status, validate_age, validate_jwt_secret, validate_upload_content,
-    validate_upload_content_type,
+    process_report_conclusion, update_content_status, validate_age, validate_jwt_secret,
+    validate_upload_content, validate_upload_content_type,
 };
 use async_trait::async_trait;
 use axum::{
@@ -1879,6 +1879,65 @@ async fn test_vote_consensus_rejects_content() {
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(status, "Rejected");
+}
+
+/// ADR-0004: 同数（Approve 2 / Reject 2）は Rejected に倒れる。
+/// 現行実装の即時確定（3票）では到達しないため、確定ロジックを直接検証する。
+#[tokio::test]
+async fn test_consensus_tie_resolves_to_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    for user in ["owner", "juror1", "juror2", "juror3", "juror4"] {
+        db.execute("INSERT INTO users (user_hash) VALUES (?)", [user])
+            .await
+            .unwrap();
+    }
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmTieTest', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmTieTest', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let tx = db.transaction().await.unwrap();
+    for (voter, result) in [
+        ("juror1", "Approve"),
+        ("juror2", "Approve"),
+        ("juror3", "Reject"),
+        ("juror4", "Reject"),
+    ] {
+        tx.execute(
+            "INSERT INTO votes (report_id, voter_hash, vote_result) VALUES (1, ?, ?)",
+            (voter, result),
+        )
+        .await
+        .unwrap();
+    }
+    process_report_conclusion(&tx, 1).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmTieTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Rejected",
+        "a tie must resolve to Rejected per ADR-0004"
+    );
 }
 
 /// MOD-01: 同一ユーザーの同一通報への再投票は拒否

@@ -1152,7 +1152,8 @@ pub async fn process_report_conclusion(
     // 2. Define threshold (Example: Conclusion after 3 total votes)
     let total_votes = approve_count + reject_count;
     if total_votes >= 3 {
-        let final_status = if reject_count > approve_count {
+        // ADR-0004: 同数は公開継続リスクを避けて Rejected 側に倒す。
+        let final_status = if reject_count >= approve_count {
             "Rejected"
         } else {
             "Approved"

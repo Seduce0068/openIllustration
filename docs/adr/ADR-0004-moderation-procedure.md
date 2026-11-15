@@ -1,13 +1,14 @@
 ---
 type: Architecture Decision Record
-description: 通報・投票・確定・異議・BAN・IPFS削除の手続を提案する。
-tags: [adr, moderation, governance, proposed]
+description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決定する。
+tags: [adr, moderation, governance, accepted]
 ---
 
 # ADR-0004: モデレーション手続
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-02
+- Approved: 2026-11-16（プロジェクトオーナーによる包括委任に基づくエージェント判断）
 - Decision owners: Project owner
 - Scope: 通報の受理から確定、異議、配信停止までの手続
 
@@ -24,7 +25,7 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
 
 ## Decision
 
-以下を提案する。承認後に Status を Accepted へ変更する。
+以下を採用する。実装状況は「実装状況」節に記載する。
 
 1. **投票資格**: 次をすべて満たす利用者に限る。
    - JPKI認証済みである。
@@ -50,6 +51,24 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
    通報者・投票者の識別情報は公開しない。
 10. **監査**: 通報、投票、確定、異議、BAN、ピン解除を監査対象イベントとし、
     主体・時刻・理由・対象を含める。
+
+### 実装状況（2026-11-16）
+
+- **採用済み・実装済み**: 投票資格のうち JPKI 認証・BAN 検査・同一通報の重複投票拒否
+  （API 検査＋DB 一意インデックス）。確定後の追加投票拒否。
+- **採用済み・実装済み（本ADR整合のため変更）**: 同数時は `Rejected`。
+  従来実装は同数時に `Approved` としていたが、本ADRの安全側判断に合わせて
+  `Reject >= Approve` を `Rejected` とする。
+- **採用済み・未実装（本番有効化の前提）**:
+  - `reports.deadline_at` と7日間の投票期間、期限終了時の集計。
+    現行は3票到達時に即時確定する暫定実装であり、本ADRの期限ベース確定に
+    置き換えるまでモデレーションを本番運用しない。
+  - 定足数未達時の通報棄却と `Approved` への復帰。
+  - 異議申立て（確定から30日以内の再通報）。
+  - BAN の根拠・期間の監査記録、ピン解除の監査記録。
+  - 投票資格のうち「投稿者でない」の明示検査。
+- 実装が本ADRに追いつくまで、モデレーション結果を本番の最終判断として
+  扱わない（[DOCUMENT_STATUS.md](../DOCUMENT_STATUS.md) の DEC-05 を参照）。
 
 ## Consequences
 
