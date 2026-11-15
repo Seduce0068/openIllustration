@@ -296,6 +296,8 @@ async fn setup_app() -> Router {
 struct MockOidcServer {
     base_url: String,
     nonce: Arc<std::sync::Mutex<Option<String>>>,
+    /// 設定時は at_hash 検証の異常系テストのために ID トークンへ埋め込む値を差し替える。
+    at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
     state: Arc<MockOidcState>,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -316,10 +318,12 @@ impl MockOidcServer {
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://{addr}");
         let nonce = Arc::new(std::sync::Mutex::new(None));
+        let at_hash_override = Arc::new(std::sync::Mutex::new(None));
         let state = Arc::new(MockOidcState {
             base_url: base_url.clone(),
             client_id: "test-client".to_string(),
             nonce: nonce.clone(),
+            at_hash_override: at_hash_override.clone(),
             encoding_key,
             jwks: json!({
                 "keys": [{
@@ -344,6 +348,7 @@ impl MockOidcServer {
         Self {
             base_url,
             nonce,
+            at_hash_override,
             state,
             handle,
         }
@@ -409,6 +414,7 @@ struct MockOidcState {
     base_url: String,
     client_id: String,
     nonce: Arc<std::sync::Mutex<Option<String>>>,
+    at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
     encoding_key: EncodingKey,
     jwks: serde_json::Value,
 }
@@ -437,7 +443,12 @@ async fn mock_token(
     let now = chrono::Utc::now().timestamp() as usize;
     let access_token = "test_access_token";
     let digest = Sha2Sha256::digest(access_token.as_bytes());
-    let at_hash = URL_SAFE_NO_PAD.encode(&digest[..16]);
+    let at_hash = state
+        .at_hash_override
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(|| URL_SAFE_NO_PAD.encode(&digest[..16]));
     let claims = json!({
         "iss": state.base_url,
         "aud": state.client_id,
@@ -3207,6 +3218,49 @@ async fn test_oidc_rejects_nonce_mismatch() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// at_hash が access_token と一致しない ID トークンは 401 で拒否される
+#[tokio::test]
+async fn test_oidc_rejects_at_hash_mismatch() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    *mock.at_hash_override.lock().unwrap() = Some("wrong-at-hash".to_string());
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    // nonce は正当値を埋め込み、at_hash 検証の拒否だけを観測できるようにする。
+    let nonce = oidc.pending_nonce(&auth_state).unwrap();
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("at_hash mismatch"),
+        "client must receive the at_hash rejection: {text}"
+    );
 }
 
 /// ADR-0002: ログアウトしたセッションJWTは以後のAPIで拒否される。
