@@ -13,9 +13,7 @@ use axum::{
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
-use jsonwebtoken::{
-    Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, decode_header, jwk::JwkSet,
-};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -468,10 +466,12 @@ pub async fn callback(
         exp: expiration,
         sid: Some(Uuid::new_v4().to_string()),
     };
-    let encoding_key = EncodingKey::from_secret(state.jwt_secret.as_ref())
-        .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
-    let session_token = jsonwebtoken::encode(&Header::default(), &session_claims, &encoding_key)
-        .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+    let session_token = jsonwebtoken::encode(
+        &state.jwt_keys.header(),
+        &session_claims,
+        state.jwt_keys.encoding_key(),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
 
     let cookie = format!(
         "session={session_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{}",

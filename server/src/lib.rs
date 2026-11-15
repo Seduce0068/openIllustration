@@ -1,5 +1,6 @@
 // Guild Backend library
 mod jpki;
+mod jwt;
 mod migration;
 mod network;
 mod oidc;
@@ -30,7 +31,8 @@ use uuid::Uuid;
 pub struct AppState {
     pub db: Arc<Connection>,
     pub http_client: Client,
-    pub jwt_secret: String,
+    /// JWT の署名・検証鍵。起動時に確定し、ヘッダからは選ばせない。
+    pub jwt_keys: Arc<jwt::JwtKeys>,
     /// 開発用: mock_token およびゼロ署名を許可
     pub allow_mock_auth: bool,
     /// IPFS ゲートウェイの URL テンプレート。`{cid}` を CID で置換する。
@@ -113,7 +115,7 @@ fn internal_error_body(details: String) -> String {
     }
 }
 
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{decode, encode};
 
 // Newtype wrapper to satisfy Orphan Rules for Axum extractor
 pub struct AuthClaims(pub Claims);
@@ -155,10 +157,14 @@ where
 
         let token = &auth_header[7..];
 
-        let decoding_key = DecodingKey::from_secret(state.jwt_secret.as_ref())
-            .map_err(|_| AppError::Unauthorized("Invalid token".to_string()))?;
-        let token_data = decode::<Claims>(token, &decoding_key, &Validation::default())
-            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+        // 許可アルゴリズムは起動時に確定した 1 つだけ。トークンの
+        // ヘッダにある `alg` を見て検証方式を切り替えない。
+        let token_data = decode::<Claims>(
+            token,
+            state.jwt_keys.decoding_key(),
+            &state.jwt_keys.validation(),
+        )
+        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
 
         if let Some(sid) = &token_data.claims.sid {
             let revoked = state
@@ -269,9 +275,12 @@ pub async fn run() -> anyhow::Result<()> {
     // Detect checksum drift in already-applied migrations
     migration::verify_migrations(&db).await?;
 
-    let jwt_secret = std::env::var("JWT_SECRET")
-        .map_err(|_| anyhow::anyhow!("JWT_SECRET must be set (at least 32 random bytes)"))?;
-    validate_jwt_secret(&jwt_secret).map_err(|e| anyhow::anyhow!(e))?;
+    let jwt_keys = jwt_keys_from_env(
+        std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
+        std::env::var("JWT_SECRET").ok(),
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
 
     let ipfs_gateways_env = std::env::var("IPFS_GATEWAYS").ok();
     let ipfs_gateways = ipfs_gateways(ipfs_gateways_env.as_deref());
@@ -325,7 +334,7 @@ pub async fn run() -> anyhow::Result<()> {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::new(),
-        jwt_secret,
+        jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
@@ -443,13 +452,24 @@ pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
 /// HS256 の鍵はハッシュ出力（32バイト）以上の長さを必須とする（RFC 7518 §3.2）。
 /// 短い鍵は総当たり・辞書攻撃で偽造トークンを作られるため、起動時に拒否する。
 pub fn validate_jwt_secret(secret: &str) -> Result<(), String> {
-    if secret.len() < 32 {
-        Err(format!(
-            "JWT_SECRET must be at least 32 bytes for HS256 (got {} bytes)",
-            secret.len()
-        ))
-    } else {
-        Ok(())
+    jwt::JwtKeys::from_hmac_secret(secret).map(|_| ())
+}
+
+/// 環境変数から JWT の署名鍵を選ぶ。
+///
+/// `JWT_RSA_PRIVATE_KEY_PEM`（PKCS#8 PEM）が設定されていれば RS256、
+/// 未設定なら `JWT_SECRET` による HS256 を使う。どちらも無ければ起動しない。
+pub fn jwt_keys_from_env(
+    rsa_pem: Option<String>,
+    secret: Option<String>,
+) -> Result<jwt::JwtKeys, String> {
+    match (rsa_pem, secret) {
+        (Some(pem), _) => jwt::JwtKeys::from_rsa_private_key_pem(&pem),
+        (None, Some(secret)) => jwt::JwtKeys::from_hmac_secret(&secret),
+        (None, None) => Err(
+            "JWT_SECRET must be set (at least 32 random bytes), or JWT_RSA_PRIVATE_KEY_PEM for RS256"
+                .to_string(),
+        ),
     }
 }
 
@@ -720,10 +740,12 @@ pub async fn auth_verify(
         sid: None,
     };
 
-    let encoding_key = EncodingKey::from_secret(state.jwt_secret.as_ref())
-        .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
-    let token = encode(&Header::default(), &claims, &encoding_key)
-        .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+    let token = encode(
+        &state.jwt_keys.header(),
+        &claims,
+        state.jwt_keys.encoding_key(),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
 
     Ok(Json(VerifyResponse {
         authorized: true,

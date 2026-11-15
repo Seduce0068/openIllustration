@@ -78,6 +78,14 @@ use serde_json::json;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+/// テスト用の HS256 秘密。HS256 の要件どおり 32 バイト以上にする。
+const TEST_JWT_SECRET: &str = "test_secret_for_openillustration_tests";
+
+/// テスト用の HS256 鍵。
+fn test_jwt_keys() -> Arc<crate::jwt::JwtKeys> {
+    Arc::new(crate::jwt::JwtKeys::from_hmac_secret(TEST_JWT_SECRET).expect("test_secret is valid"))
+}
+
 async fn generate_token(secret: &str, sub: &str) -> String {
     let claims = Claims {
         sub: sub.to_string(),
@@ -132,7 +140,7 @@ async fn setup_app_with_options(
     let shared_state = Arc::new(AppState {
         db: db.clone(),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth,
         ipfs_gateways,
         ipfs_timeout,
@@ -145,6 +153,46 @@ async fn setup_app_with_options(
 
     let router = build_router(shared_state);
     (router, db)
+}
+
+/// 指定した JWT 鍵でサーバーを構築する。RS256 経路の検証に使う。
+async fn setup_app_with_jwt_keys(
+    jwt_keys: Arc<crate::jwt::JwtKeys>,
+) -> (Router, Arc<libsql::Connection>) {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmTestCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys,
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+    });
+    (build_router(shared_state), db)
 }
 
 #[derive(Default)]
@@ -183,7 +231,7 @@ async fn setup_app_with_payments(
     let shared_state = Arc::new(AppState {
         db: db.clone(),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -215,7 +263,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
     let shared_state = Arc::new(AppState {
         db: db.clone(),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -401,7 +449,7 @@ async fn setup_app_with_oidc() -> (
     let shared_state = Arc::new(AppState {
         db: db.clone(),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -862,7 +910,7 @@ async fn test_read_routes_require_authentication() {
 #[tokio::test]
 async fn test_authenticated_user_can_list_contents() {
     let app = setup_app().await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let response = app
         .oneshot(with_peer(
             Request::get("/content")
@@ -981,7 +1029,10 @@ async fn test_mod_report_sets_reported_status() {
                 .header("content-type", "application/json")
                 .header(
                     "Authorization",
-                    format!("Bearer {}", generate_token("test_secret", "reporter").await),
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "reporter").await
+                    ),
                 )
                 .body(Body::from(report_body.to_string()))
                 .unwrap(),
@@ -1017,7 +1068,10 @@ async fn test_duplicate_report_rejected() {
                 .header("content-type", "application/json")
                 .header(
                     "Authorization",
-                    format!("Bearer {}", generate_token("test_secret", "reporter").await),
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "reporter").await
+                    ),
                 )
                 .body(Body::from(report_body.to_string()))
                 .unwrap(),
@@ -1035,7 +1089,7 @@ async fn test_duplicate_report_rejected() {
                     "Authorization",
                     format!(
                         "Bearer {}",
-                        generate_token("test_secret", "reporter2").await
+                        generate_token(TEST_JWT_SECRET, "reporter2").await
                     ),
                 )
                 .body(Body::from(report_body.to_string()))
@@ -1078,7 +1132,10 @@ async fn test_report_missing_content_returns_404() {
                 .header("content-type", "application/json")
                 .header(
                     "Authorization",
-                    format!("Bearer {}", generate_token("test_secret", "reporter").await),
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "reporter").await
+                    ),
                 )
                 .body(Body::from(report_body.to_string()))
                 .unwrap(),
@@ -1112,7 +1169,7 @@ fn test_upload_bytes_match_declared_content_kind() {
 #[tokio::test]
 async fn test_upload_rejects_unknown_multipart_fields() {
     let app = setup_app().await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let boundary = "test-boundary";
     let body = format!(
         "--{boundary}\r\nContent-Disposition: form-data; name=\"unexpected\"\r\n\r\nvalue\r\n--{boundary}--\r\n"
@@ -1141,7 +1198,7 @@ async fn test_upload_rejects_unknown_multipart_fields() {
 #[tokio::test]
 async fn test_upload_rejects_invalid_price() {
     let (app, db) = setup_app_with_db().await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
     let invalid_prices = [
         ("-1", "price must not be negative"),
@@ -1178,7 +1235,7 @@ async fn test_upload_rejects_invalid_price() {
 #[tokio::test]
 async fn test_upload_rejects_unsupported_media_type() {
     let (app, db) = setup_app_with_db().await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let boundary = "unsupported-media-type";
     let body = multipart_upload_body_as(
         boundary,
@@ -1216,7 +1273,7 @@ async fn test_upload_accepts_valid_price_boundaries() {
 
     for (index, (price, expected)) in cases.into_iter().enumerate() {
         let (app, db) = setup_app_with_db().await;
-        let token = generate_token("test_secret", "test_user").await;
+        let token = generate_token(TEST_JWT_SECRET, "test_user").await;
         let boundary = format!("valid-price-{index}");
         let body = multipart_upload_body(&boundary, &[0xFF, 0x0A, 0x01, index as u8], price);
         let (status, response_body) = send_upload(&app, &token, &boundary, body).await;
@@ -1243,7 +1300,7 @@ async fn test_upload_accepts_valid_price_boundaries() {
 #[tokio::test]
 async fn test_upload_duplicate_content_rejected() {
     let app = setup_app().await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let boundary = "dup-boundary";
 
     let mut body = Vec::new();
@@ -1346,7 +1403,7 @@ async fn test_vote_consensus_rejects_content() {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -1397,7 +1454,7 @@ async fn test_vote_consensus_rejects_content() {
                         "Authorization",
                         format!(
                             "Bearer {}",
-                            generate_token("test_secret", &juror_hash).await
+                            generate_token(TEST_JWT_SECRET, &juror_hash).await
                         ),
                     )
                     .body(Body::from(vote_body.to_string()))
@@ -1448,7 +1505,7 @@ async fn test_duplicate_vote_rejected() {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -1497,7 +1554,10 @@ async fn test_duplicate_vote_rejected() {
                     .header("content-type", "application/json")
                     .header(
                         "Authorization",
-                        format!("Bearer {}", generate_token("test_secret", &token_sub).await),
+                        format!(
+                            "Bearer {}",
+                            generate_token(TEST_JWT_SECRET, &token_sub).await
+                        ),
                     )
                     .body(Body::from(body))
                     .unwrap(),
@@ -1574,7 +1634,10 @@ async fn send_signed_vote(
                 .header("content-type", "application/json")
                 .header(
                     "Authorization",
-                    format!("Bearer {}", generate_token("test_secret", juror_hash).await),
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, juror_hash).await
+                    ),
                 )
                 .body(Body::from(vote_body.to_string()))
                 .unwrap(),
@@ -1616,7 +1679,7 @@ async fn test_vote_after_conclusion_rejected() {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -1688,7 +1751,7 @@ async fn test_vote_for_missing_report_returns_404() {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -1739,7 +1802,7 @@ async fn test_vote_with_invalid_signature_rejected() {
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
         http_client: reqwest::Client::new(),
-        jwt_secret: "test_secret".to_string(),
+        jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
@@ -1767,7 +1830,7 @@ async fn test_vote_with_invalid_signature_rejected() {
                     "Authorization",
                     format!(
                         "Bearer {}",
-                        generate_token("test_secret", &juror_hash).await
+                        generate_token(TEST_JWT_SECRET, &juror_hash).await
                     ),
                 )
                 .body(Body::from(vote_body.to_string()))
@@ -1822,7 +1885,7 @@ async fn test_support_api_disabled_returns_501() {
                     "Authorization",
                     format!(
                         "Bearer {}",
-                        generate_token("test_secret", "test_user").await
+                        generate_token(TEST_JWT_SECRET, "test_user").await
                     ),
                 )
                 .body(Body::from(body))
@@ -1875,7 +1938,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
             Request::get("/content/QmTampered")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -1929,7 +1992,7 @@ async fn test_get_content_returns_verified_bytes() {
             Request::get("/content/QmValid")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -1971,7 +2034,7 @@ async fn test_get_content_rejects_oversize_body() {
             Request::get("/content/QmOversize")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2020,7 +2083,7 @@ async fn test_get_content_times_out_gateway() {
             Request::get("/content/QmTimeout")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2081,7 +2144,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
             Request::get("/content/QmFallback")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2123,7 +2186,7 @@ async fn test_get_content_accepts_exact_size_limit() {
             Request::get("/content/QmBoundary")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2155,7 +2218,7 @@ async fn test_get_content_without_gateways_returns_500() {
             Request::get("/content/QmNoGateway")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2205,7 +2268,7 @@ async fn test_get_content_all_gateways_fail() {
             Request::get("/content/QmAllFail")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2256,7 +2319,7 @@ async fn test_get_content_novel_returns_markdown_mime() {
             Request::get("/content/QmNovel")
                 .header(
                     "authorization",
-                    format!("Bearer {}", generate_token("test_secret", "tester").await),
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
                 )
                 .body(Body::empty())
                 .unwrap(),
@@ -2297,7 +2360,7 @@ async fn test_mock_token_rejected_when_mock_auth_disabled() {
 async fn test_zero_signature_rejected_when_mock_auth_disabled() {
     let (app, db) = setup_app_with_options(Vec::new(), Duration::from_secs(1), false).await;
     let (owner_hash, _private_key) = insert_juror(&db).await;
-    let token = generate_token("test_secret", &owner_hash).await;
+    let token = generate_token(TEST_JWT_SECRET, &owner_hash).await;
     let boundary = "auth01-zero-signature";
     let body = multipart_upload_body_full(
         boundary,
@@ -2390,7 +2453,7 @@ async fn test_payment_order_lifecycle() {
     let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
     let verifier = Arc::new(MockVerifier::default());
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
     let response = app
         .clone()
@@ -2479,7 +2542,7 @@ async fn test_payment_order_rejects_unsupported_chain() {
     let verifier = Arc::new(MockVerifier::default());
     let (app, _db) =
         setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
     let response = app
         .oneshot(with_peer(
@@ -2511,7 +2574,7 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
     let other_key = SigningKey::from_slice(&[0x22u8; 32]).expect("valid k256 test scalar");
     let verifier = Arc::new(MockVerifier::default());
     let (app, _db) = setup_app_with_payments(receiving, verifier).await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
     let response = app
         .clone()
@@ -2738,7 +2801,7 @@ async fn test_backchannel_logout_revokes_session() {
 
     let claims = jsonwebtoken::decode::<common::Claims>(
         &token,
-        &jsonwebtoken::DecodingKey::from_secret(b"test_secret").unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
         &jsonwebtoken::Validation::default(),
     )
     .unwrap()
@@ -2790,7 +2853,7 @@ fn test_derive_receiving_address() {
 async fn test_payment_orders_derive_unique_addresses() {
     let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
     let (app, _db) = setup_app_with_hd_payments(xprv).await;
-    let token = generate_token("test_secret", "test_user").await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let mut addresses = Vec::new();
 
     for _ in 0..2 {
@@ -2822,4 +2885,129 @@ async fn test_payment_orders_derive_unique_addresses() {
     assert_ne!(addresses[0], addresses[1]);
     assert!(crate::payments::is_valid_eth_address(&addresses[0]));
     assert!(crate::payments::is_valid_eth_address(&addresses[1]));
+}
+
+// ---------------------------------------------------------------------------
+// RS256（RSA 秘密鍵演算）のテスト
+// ---------------------------------------------------------------------------
+
+/// テスト用の RSA 秘密鍵（PKCS#8 PEM）を TestRng で生成する。
+fn test_rsa_private_pem() -> String {
+    use rsa::pkcs8::EncodePrivateKey;
+    let mut rng = TestRng::new();
+    let private_key = PrivateKey::new(&mut rng, 2048).expect("generate test RSA key");
+    private_key
+        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("encode test RSA key")
+        .to_string()
+}
+
+/// RS256: 秘密鍵から鍵一式を構築できる。
+#[test]
+fn test_jwt_keys_from_rsa_private_key() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    assert_eq!(keys.algorithm_name(), "RS256");
+    assert_eq!(keys.header().alg, jsonwebtoken::Algorithm::RS256);
+}
+
+/// RS256: 署名したトークンを同じ鍵で検証できる。
+#[test]
+fn test_jwt_rs256_roundtrip() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+
+    let claims = Claims {
+        sub: "rs256_user".to_string(),
+        exp: 10000000000,
+        sid: Some("rs256_sid".to_string()),
+    };
+    let token = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign with RS256");
+    let data = jsonwebtoken::decode::<Claims>(&token, keys.decoding_key(), &keys.validation())
+        .expect("verify with RS256");
+    assert_eq!(data.claims.sub, "rs256_user");
+    assert_eq!(data.claims.sid.as_deref(), Some("rs256_sid"));
+}
+
+/// RS256: ヘッダの `alg` を HS256 に差し替えたトークンを拒否する。
+/// 許可アルゴリズムは起動時に確定するため、混同攻撃が成立しない。
+#[test]
+fn test_jwt_rejects_algorithm_confusion() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+
+    let claims = Claims {
+        sub: "attacker".to_string(),
+        exp: 10000000000,
+        sid: None,
+    };
+    // RS256 鍵のまま HS256 を宣言したトークンを作る。
+    let mut header = Header::new(jsonwebtoken::Algorithm::HS256);
+    header.kid = None;
+    let forged = encode(&header, &claims, keys.encoding_key());
+    match forged {
+        // 鍵種別が合わないため署名自体が失敗する。
+        Err(_) => {}
+        Ok(token) => {
+            let result =
+                jsonwebtoken::decode::<Claims>(&token, keys.decoding_key(), &keys.validation());
+            assert!(result.is_err(), "alg confusion must be rejected");
+        }
+    }
+}
+
+/// RS256: 1024 bit の鍵は鍵長要件を満たさず拒否する。
+#[test]
+fn test_jwt_rejects_short_rsa_key() {
+    use rsa::pkcs8::EncodePrivateKey;
+    let mut rng = TestRng::new();
+    let weak = PrivateKey::new(&mut rng, 1024).expect("generate weak RSA key");
+    let pem = weak
+        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("encode weak key");
+    assert!(crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).is_err());
+}
+
+/// 環境変数の選択: RSA 秘密鍵があれば RS256、無ければ HS256 を使う。
+#[test]
+fn test_jwt_keys_from_env_prefers_rsa() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt_keys_from_env(Some(pem), Some(TEST_JWT_SECRET.to_string()))
+        .expect("RSA key wins");
+    assert_eq!(keys.algorithm_name(), "RS256");
+
+    let hmac =
+        crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string())).expect("HMAC fallback");
+    assert_eq!(hmac.algorithm_name(), "HS256");
+
+    assert!(crate::jwt_keys_from_env(None, None).is_err());
+}
+
+/// RS256 の鍵で署名したセッショントークンが、認証済み API を通る。
+#[tokio::test]
+async fn test_authenticated_request_with_rs256_token() {
+    let pem = test_rsa_private_pem();
+    let keys =
+        Arc::new(crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key"));
+    let claims = Claims {
+        sub: "rs256_user".to_string(),
+        exp: 10000000000,
+        sid: None,
+    };
+    let token = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign with RS256");
+    let (app, _db) = setup_app_with_jwt_keys(keys).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    // 未認証なら 401。RS256 トークンが受理された場合は 200。
+    assert_eq!(response.status(), StatusCode::OK);
 }
