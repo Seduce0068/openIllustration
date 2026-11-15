@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master b6e63d3, 2026-11-15 確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master 3662145, 2026-11-15 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -19,8 +19,8 @@ status: current
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-15、ブランチ `master` は `origin/master` と同期（`b6e63d3`）、作業ツリー clean。
-- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。
+- 確認: 2026-11-15T16:05:09+09:00、ブランチ `master` は `origin/master` と同期（`3662145`）、作業ツリー clean。
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`: 保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、法的確定/専門家レビューは未完）と公開レスポンスの非秘密性回帰テスト追加（`3662145`）。
 - 方針: `ALLOW_MOCK_AUTH=1` は開発専用。未実装機能を本番対応済みと扱わない。模擬支援APIは 501 で無効（JPYC送金検証の実装まで）。DB内ハッシュ連鎖は第三者検証可能な監査ではない。
 - 参照: [HANDOFF.md](HANDOFF.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md), [adr/index.md](adr/index.md)。
 
@@ -130,6 +130,7 @@ status: current
 - [対応済み・本変更で反映] [HANDOFF.md](HANDOFF.md) の「6. 主要ファイル」に `server/src/jwt.rs` を追記。
 - [対応済み・本変更で反映] [DETAILED_DESIGN.md](DETAILED_DESIGN.md) のマイグレーション現行記載に `003_payment_order_index.sql` を追記。
 - [対応済み・本変更で反映] DEC-02採用方針（有効設定値の常時公開・`GET /policy/age`・年齢ポリシー設定項目・制約）を [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [HANDOFF.md](HANDOFF.md), [REQUIREMENTS_DEFINITION.md](REQUIREMENTS_DEFINITION.md), [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
+- [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
 - [低] `docs/index.md` に含まれない文書の扱い整理（必要に応じて索引へ反映）。
 - [低] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) の「更新日」等、定期レビュー時のメタデータ更新。
 
