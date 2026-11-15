@@ -1947,6 +1947,165 @@ async fn test_vote_with_invalid_signature_rejected() {
     assert_eq!(count, 0, "a failed signature must not record a vote");
 }
 
+/// 不正な投票ペイロード（report_id <= 0、未知の result）は 400 で拒否され、票を記録しない
+#[tokio::test]
+async fn test_vote_with_invalid_payload_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmBadPayload', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmBadPayload', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+    });
+    let app = build_router(shared_state);
+
+    let (juror_hash, key) = insert_juror(&db).await;
+
+    assert_eq!(
+        send_signed_vote(&app, 0, "Approve", &juror_hash, &key).await,
+        StatusCode::BAD_REQUEST,
+        "non-positive report_id must be rejected"
+    );
+    assert_eq!(
+        send_signed_vote(&app, 1, "Maybe", &juror_hash, &key).await,
+        StatusCode::BAD_REQUEST,
+        "unknown result value must be rejected"
+    );
+
+    let mut rows = db.query("SELECT COUNT(*) FROM votes", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "invalid payloads must not record votes");
+}
+
+/// トークンの sub が vote.juror_hash と不一致の投票は 401 で拒否され、票を記録しない
+#[tokio::test]
+async fn test_vote_with_sub_mismatch_rejected() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmSubMismatch', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmSubMismatch', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+    });
+    let app = build_router(shared_state);
+
+    let (juror_hash, key) = insert_juror(&db).await;
+
+    // juror_hash 名義で正しく署名し、トークンの sub のみを別の値にする。
+    // 投票者のなりすまし（他人の名義での投票）は署名が正しくても拒否される。
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let message = json!({"report_id": 1, "result": "Approve"}).to_string();
+    let signing_key = SigningKey::<Sha256>::new(key);
+    let signature = signing_key.sign(message.as_bytes()).to_vec();
+    let vote_body = json!({
+        "report_id": 1,
+        "juror_hash": juror_hash,
+        "result": "Approve",
+        "signature": signature
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/mod/vote")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "attacker_sub").await
+                    ),
+                )
+                .body(Body::from(vote_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("Token sub mismatch"),
+        "client must receive the sub mismatch rejection: {text}"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "a mismatched sub must not record a vote");
+}
+
 /// ECO-02: 模擬支援APIは無効化しており、認証済みでも 501 を返す
 #[tokio::test]
 async fn test_support_api_disabled_returns_501() {
