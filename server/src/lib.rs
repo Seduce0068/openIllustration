@@ -1067,6 +1067,13 @@ pub async fn mod_report(
     if !is_safe_cid(&report.target_cid) {
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
+    // Free-text reason guard: reject empty input and oversized payloads
+    // before touching the DB. The exact moderation policy is pending
+    // ADR-0004; this only enforces basic input hygiene.
+    let reason = report.reason.trim();
+    if reason.is_empty() || reason.len() > 2000 {
+        return Err(AppError::BadRequest("Invalid report reason".to_string()));
+    }
 
     let tx = state
         .db
@@ -1095,7 +1102,7 @@ pub async fn mod_report(
 
     tx.execute(
         "INSERT INTO reports (target_cid, reason) VALUES (?, ?)",
-        [report.target_cid.clone(), report.reason.clone()],
+        [report.target_cid.clone(), reason.to_string()],
     )
     .await
     .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
@@ -1106,7 +1113,7 @@ pub async fn mod_report(
         &report.target_cid,
         "Reported",
         &_claims.sub, // The reporter's hash
-        &format!("User report: {}", report.reason),
+        &format!("User report: {}", reason),
     )
     .await?;
 

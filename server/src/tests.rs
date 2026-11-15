@@ -1226,6 +1226,103 @@ async fn test_report_rejects_invalid_cid() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// 通報リクエストを送信し、レスポンスを返す
+async fn post_report(app: &Router, cid: &str, reason: &str) -> Response {
+    let body = json!({
+        "report_id": 0,
+        "target_cid": cid,
+        "reason": reason,
+        "status": "Pending"
+    });
+    app.clone()
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "reporter").await
+                    ),
+                )
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap()
+}
+
+/// 審査中コンテンツへの二重通報は 400 で拒否され、reports は 1 件のまま
+#[tokio::test]
+async fn test_report_duplicate_rejected() {
+    let (app, db) = setup_app_with_db().await;
+
+    let first = post_report(&app, "QmTestCID", "first report").await;
+    assert_eq!(
+        first.status(),
+        StatusCode::OK,
+        "first report must be accepted"
+    );
+
+    let second = post_report(&app, "QmTestCID", "second report").await;
+    assert_eq!(second.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("already under review"),
+        "client must receive the duplicate-report rejection: {text}"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmTestCID'",
+            (),
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "duplicate report must not create a second row");
+}
+
+/// 空または過大な reason の通報は 400 で拒否され、有効な reason は前後空白を除去して保存する
+#[tokio::test]
+async fn test_report_reason_validated() {
+    let (app, db) = setup_app_with_db().await;
+
+    for reason in ["", "   ", &"x".repeat(2001)] {
+        let response = post_report(&app, "QmTestCID", reason).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "reason {reason:?} must be rejected"
+        );
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            text.contains("Invalid report reason"),
+            "client must receive the reason rejection: {text}"
+        );
+    }
+
+    let accepted = post_report(&app, "QmTestCID", "  legit concern  ").await;
+    assert_eq!(
+        accepted.status(),
+        StatusCode::OK,
+        "valid reason must be accepted"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT reason FROM reports WHERE target_cid = 'QmTestCID'",
+            (),
+        )
+        .await
+        .unwrap();
+    let stored: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(stored, "legit concern", "stored reason must be trimmed");
+}
+
 /// INT-02: zip は拒否
 #[test]
 fn test_reject_zip_content_type() {
