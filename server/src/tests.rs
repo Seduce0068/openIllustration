@@ -1648,6 +1648,117 @@ async fn test_upload_duplicate_content_rejected() {
     );
 }
 
+/// 必須フィールド（file / owner_hash / signature）の欠落は 400 で拒否される
+#[tokio::test]
+async fn test_upload_rejects_missing_required_fields() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let boundary = "missing-required-fields";
+
+    let file_part = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.jxl\"\r\nContent-Type: image/jxl\r\n\r\n\r\n"
+    )
+    .as_bytes()
+    .to_vec();
+    let owner_part = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n"
+    )
+    .as_bytes()
+    .to_vec();
+    let mut signature_part =
+        format!("--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n")
+            .as_bytes()
+            .to_vec();
+    signature_part.extend_from_slice(&[0u8; 16]);
+    signature_part.extend_from_slice(b"\r\n");
+
+    let build = |parts: [&[u8]; 2]| -> Vec<u8> {
+        let mut body = Vec::new();
+        for part in parts {
+            body.extend_from_slice(part);
+        }
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        body
+    };
+
+    let cases = [
+        (
+            build([&owner_part, &signature_part]),
+            "Missing file",
+            "file must be required",
+        ),
+        (
+            build([&file_part, &signature_part]),
+            "Missing owner_hash",
+            "owner_hash must be required",
+        ),
+        (
+            build([&file_part, &owner_part]),
+            "Missing signature",
+            "signature must be required",
+        ),
+    ];
+    for (body, expected, context) in cases {
+        let (status, response_body) = send_upload(&app, &token, boundary, body).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "{context}: {response_body}"
+        );
+        assert!(
+            response_body.contains(expected),
+            "{context}: expected {expected:?} in {response_body}"
+        );
+    }
+}
+
+/// トークンの sub と owner_hash が不一致のアップロードは 401 で拒否される
+#[tokio::test]
+async fn test_upload_rejects_owner_mismatch() {
+    let (app, db) = setup_app_with_db().await;
+    // トークンは別の sub で発行し、owner_hash は test_user のまま送る。
+    let token = generate_token(TEST_JWT_SECRET, "someone_else").await;
+    let boundary = "owner-mismatch";
+    let body = multipart_upload_body(boundary, &[0xFF, 0x0A, 0x01, 0x02], None);
+
+    let (status, response_body) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(
+        response_body.contains("Token sub mismatch"),
+        "client must receive the sub mismatch rejection: {response_body}"
+    );
+
+    let mut rows = db.query("SELECT COUNT(*) FROM contents", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 1,
+        "a mismatched owner must not insert content (only QmTestCID exists)"
+    );
+}
+
+/// BAN 済みユーザーのアップロードは 403 で拒否される
+#[tokio::test]
+async fn test_upload_rejects_banned_user() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    db.execute(
+        "UPDATE users SET is_banned = TRUE WHERE user_hash = 'test_user'",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let boundary = "banned-user";
+    let body = multipart_upload_body(boundary, &[0xFF, 0x0A, 0x01, 0x03], None);
+
+    let (status, response_body) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(
+        response_body.contains("User is banned"),
+        "client must receive the ban rejection: {response_body}"
+    );
+}
+
 #[test]
 fn test_age_validation_unit() {
     let policy = common::age::AgePolicy::default();
