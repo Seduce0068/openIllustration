@@ -1195,6 +1195,37 @@ async fn test_report_missing_content_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// 不正なCIDの通報は 400
+#[tokio::test]
+async fn test_report_rejects_invalid_cid() {
+    let (app, _db) = setup_app_with_db().await;
+    let report_body = json!({
+        "report_id": 0,
+        "target_cid": "bad-cid",
+        "reason": "Invalid CID",
+        "status": "Pending"
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "reporter").await
+                    ),
+                )
+                .body(Body::from(report_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 /// INT-02: zip は拒否
 #[test]
 fn test_reject_zip_content_type() {

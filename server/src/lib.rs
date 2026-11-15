@@ -1064,6 +1064,10 @@ pub async fn mod_report(
     _claims: AuthClaims,
     Json(report): Json<Report>,
 ) -> Result<Json<bool>, AppError> {
+    if !is_safe_cid(&report.target_cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+
     let tx = state
         .db
         .transaction()
