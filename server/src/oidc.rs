@@ -457,7 +457,8 @@ pub async fn callback(
         )
         .await?;
 
-    let expiration = Utc::now()
+    let now = Utc::now();
+    let expiration = now
         .checked_add_signed(Duration::seconds(SESSION_TTL_SECS))
         .expect("valid timestamp")
         .timestamp() as usize;
@@ -465,6 +466,7 @@ pub async fn callback(
         sub: user_hash.clone(),
         exp: expiration,
         sid: Some(Uuid::new_v4().to_string()),
+        iat: Some(now.timestamp() as usize),
     };
     let session_token = jsonwebtoken::encode(
         &state.jwt_keys.header(),

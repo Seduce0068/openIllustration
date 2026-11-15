@@ -94,6 +94,7 @@ async fn generate_token(secret: &str, sub: &str) -> String {
         sub: sub.to_string(),
         exp: 10000000000,
         sid: None,
+        iat: None,
     };
     encode(
         &Header::default(),
@@ -2937,6 +2938,7 @@ fn test_jwt_rs256_roundtrip() {
         sub: "rs256_user".to_string(),
         exp: 10000000000,
         sid: Some("rs256_sid".to_string()),
+        iat: None,
     };
     let token = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign with RS256");
     let data = jsonwebtoken::decode::<Claims>(&token, keys.decoding_key(), &keys.validation())
@@ -2956,6 +2958,7 @@ fn test_jwt_rejects_algorithm_confusion() {
         sub: "attacker".to_string(),
         exp: 10000000000,
         sid: None,
+        iat: None,
     };
     // RS256 鍵のまま HS256 を宣言したトークンを作る。
     let mut header = Header::new(jsonwebtoken::Algorithm::HS256);
@@ -3009,6 +3012,7 @@ async fn test_authenticated_request_with_rs256_token() {
         sub: "rs256_user".to_string(),
         exp: 10000000000,
         sid: None,
+        iat: None,
     };
     let token = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign with RS256");
     let (app, _db) = setup_app_with_jwt_keys(keys).await;

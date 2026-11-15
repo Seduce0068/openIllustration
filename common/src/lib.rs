@@ -12,6 +12,9 @@ pub struct Claims {
     /// セッション識別子。既存トークンとの互換のため省略可能。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sid: Option<String>,
+    /// 発行時刻（Unix秒）。既存トークンとの互換のため省略可能。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub iat: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

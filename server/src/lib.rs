@@ -750,7 +750,8 @@ pub async fn auth_verify(
             .await?;
     }
 
-    let expiration = chrono::Utc::now()
+    let now = chrono::Utc::now();
+    let expiration = now
         .checked_add_signed(chrono::Duration::hours(24))
         .expect("valid timestamp")
         .timestamp() as usize;
@@ -759,6 +760,7 @@ pub async fn auth_verify(
         sub: user_hash.clone(),
         exp: expiration,
         sid: None,
+        iat: Some(now.timestamp() as usize),
     };
 
     let token = encode(
