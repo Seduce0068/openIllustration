@@ -50,7 +50,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。実JPKIの失効・期限切れは未検証 |
-| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` と back-channel logout の `sid` 失効を検証 |
+| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ） | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装 |

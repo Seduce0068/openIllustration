@@ -20,7 +20,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
 | GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
 | POST | `/auth/logout` | Bearer JWT | `sid` を失効させる |
-| POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` を失効させる |
+| POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` はインメモリ失効閾値方式） |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
@@ -77,9 +77,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
    HttpOnly Cookieで返す。JWTは `sid` を含み、`POST /auth/logout` で
    `sid` を失効させると以後のAPIは401を返す。
 6. `POST /auth/backchannel-logout` は logout token の署名・`iss`・`aud`・
-   `events` を検証し、`sid` を失効させる。`sub` のみの logout は未実装で 501。
+   `events` を検証し、`sid` を失効させる。`sub` が含まれる場合は `sub` 単位の失効閾値（インメモリ、`iat` 比較）を記録し既存セッションを拒否する。再認証時は閾値より新しい `iat` を発行して再ログインを許容する（永続化・多プロセス共有・実OP連携は未検証）。
 7. 未実装: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
-   リフレッシュトークン、`sub` 単位の全セッション失効。
+   リフレッシュトークン、`sub` 単位失効の永続化/運用整合。
 8. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
    現行のテストはローカルOPモックでフローと検証項目を確認する。
 
