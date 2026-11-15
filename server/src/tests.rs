@@ -298,6 +298,10 @@ struct MockOidcServer {
     nonce: Arc<std::sync::Mutex<Option<String>>>,
     /// 設定時は at_hash 検証の異常系テストのために ID トークンへ埋め込む値を差し替える。
     at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
+    /// 設定時は ID トークンを JWKS 未登録の鍵で署名する（署名検証の異常系テスト用）。
+    forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    /// 設定時は ID トークンヘッダから kid を省略する（kid 必須検査のテスト用）。
+    omit_kid: Arc<std::sync::Mutex<bool>>,
     state: Arc<MockOidcState>,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -319,11 +323,15 @@ impl MockOidcServer {
         let base_url = format!("http://{addr}");
         let nonce = Arc::new(std::sync::Mutex::new(None));
         let at_hash_override = Arc::new(std::sync::Mutex::new(None));
+        let forged_key_der = Arc::new(std::sync::Mutex::new(None));
+        let omit_kid = Arc::new(std::sync::Mutex::new(false));
         let state = Arc::new(MockOidcState {
             base_url: base_url.clone(),
             client_id: "test-client".to_string(),
             nonce: nonce.clone(),
             at_hash_override: at_hash_override.clone(),
+            forged_key_der: forged_key_der.clone(),
+            omit_kid: omit_kid.clone(),
             encoding_key,
             jwks: json!({
                 "keys": [{
@@ -349,6 +357,8 @@ impl MockOidcServer {
             base_url,
             nonce,
             at_hash_override,
+            forged_key_der,
+            omit_kid,
             state,
             handle,
         }
@@ -415,6 +425,8 @@ struct MockOidcState {
     client_id: String,
     nonce: Arc<std::sync::Mutex<Option<String>>>,
     at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
+    forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
+    omit_kid: Arc<std::sync::Mutex<bool>>,
     encoding_key: EncodingKey,
     jwks: serde_json::Value,
 }
@@ -460,8 +472,19 @@ async fn mock_token(
         "at_hash": at_hash,
     });
     let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some("test-kid".to_string());
-    let id_token = encode(&header, &claims, &state.encoding_key).unwrap();
+    if !*state.omit_kid.lock().unwrap() {
+        header.kid = Some("test-kid".to_string());
+    }
+    let forged_key = state
+        .forged_key_der
+        .lock()
+        .unwrap()
+        .clone()
+        .map(|der| EncodingKey::from_ec_der(&der));
+    let id_token = match &forged_key {
+        Some(key) => encode(&header, &claims, key).unwrap(),
+        None => encode(&header, &claims, &state.encoding_key).unwrap(),
+    };
 
     Json(json!({
         "access_token": access_token,
@@ -3260,6 +3283,93 @@ async fn test_oidc_rejects_at_hash_mismatch() {
     assert!(
         text.contains("at_hash mismatch"),
         "client must receive the at_hash rejection: {text}"
+    );
+}
+
+/// JWKS 未登録の鍵で署名された ID トークンは 401 で拒否される
+#[tokio::test]
+async fn test_oidc_rejects_id_token_signed_by_unknown_key() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    // kid は正規鍵と同じ "test-kid" のまま、署名鍵のみ差し替える。
+    let forged = p256::ecdsa::SigningKey::from_slice(&[0x02u8; 32]).unwrap();
+    *mock.forged_key_der.lock().unwrap() = Some(forged.to_pkcs8_der().unwrap().as_bytes().to_vec());
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).unwrap();
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("ID token validation failed"),
+        "client must receive the signature rejection: {text}"
+    );
+}
+
+/// kid を持たない ID トークンは 401 で拒否される
+#[tokio::test]
+async fn test_oidc_rejects_id_token_without_kid() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    *mock.omit_kid.lock().unwrap() = true;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).unwrap();
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("ID token has no kid"),
+        "client must receive the kid rejection: {text}"
     );
 }
 
