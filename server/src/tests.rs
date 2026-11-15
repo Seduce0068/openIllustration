@@ -75,8 +75,11 @@ use libsql::Builder;
 use rsa::sha2::Sha256;
 use rsa::{PrivateKey, pkcs8::EncodePublicKey};
 use serde_json::json;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tower::ServiceExt;
+
+/// プロセス環境変数を変更するテストの直列化に使う。
+static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 /// テスト用の HS256 秘密。HS256 の要件どおり 32 バイト以上にする。
 const TEST_JWT_SECRET: &str = "test_secret_for_openillustration_tests";
@@ -682,6 +685,7 @@ async fn send_upload(
 /// SEC-01: パブリック IPv4 は 403
 #[tokio::test]
 async fn test_ipv4_public_address_forbidden() {
+    let _env_guard = ENV_LOCK.lock().await;
     unsafe { std::env::remove_var("ALLOW_IPV4_LOCALHOST") };
     let app = setup_app().await;
     let req = with_peer(
@@ -841,6 +845,7 @@ fn test_cid_validation_rejects_path_characters() {
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
+    let _env_guard = ENV_LOCK.lock().await;
     unsafe { std::env::remove_var("EXPOSE_INTERNAL_ERRORS") };
 
     // Default: generic message without internal details
