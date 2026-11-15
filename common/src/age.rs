@@ -358,6 +358,46 @@ mod tests {
     }
 
     #[test]
+    fn birthday_boundary_at_threshold_is_allowed() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        // 閾値 21 歳の誕生日当日は通過し、前日は 20 歳として拒否される
+        assert!(is_age_allowed("2005-06-05", "JP", today).is_ok());
+        let err = is_age_allowed("2005-06-06", "JP", today).unwrap_err();
+        assert!(matches!(err, AgeValidationError::UnderAge { .. }));
+    }
+
+    #[test]
+    fn future_birth_date_is_treated_as_zero_age() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        // 未来の生年月日は年齢 0 として扱われ、既定閾値で拒否される
+        let err = is_age_allowed("2030-01-01", "JP", today).unwrap_err();
+        assert!(matches!(err, AgeValidationError::UnderAge { age: 0, .. }));
+    }
+
+    #[test]
+    fn invalid_birth_dates_are_rejected() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        for birth in ["", "not-a-date", "2000-13-01", "2000-02-30"] {
+            let err = is_age_allowed(birth, "JP", today).unwrap_err();
+            assert!(
+                matches!(err, AgeValidationError::InvalidBirthDate(_)),
+                "birth date {birth:?} must be invalid"
+            );
+        }
+    }
+
+    #[test]
+    fn country_code_matching_is_case_insensitive_and_trimmed() {
+        let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        let mut policy = AgePolicy::default();
+        policy.country_minimums.insert("JP".to_string(), 18);
+        assert!(is_age_allowed_with_policy(&policy, "2007-01-01", "jp", today).is_ok());
+        assert!(is_age_allowed_with_policy(&policy, "2007-01-01", " jp ", today).is_ok());
+        // 正規化後も未指定国は既定の保守的閾値が維持される
+        assert!(is_age_allowed_with_policy(&policy, "2007-01-01", "us", today).is_err());
+    }
+
+    #[test]
     fn parse_country_overrides() {
         let parsed = parse_country_minimums("jp=20, US = 21, de=18").unwrap();
         assert_eq!(parsed.get("JP"), Some(&20));
