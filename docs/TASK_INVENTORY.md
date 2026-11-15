@@ -67,6 +67,8 @@ status: current
 - [高][要判断] **ADR-0004 承認後の実装**: 投票期間・定足数・同数処理・異議申立て・Rejected後/BAN方針・ピン解除/再配布対応・投票資格/選出・オンチェーン記録方針の反映（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
 - [中] 並行投票・期限・同数・異議申立ての設計/試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。重複投票の一意制約と確定後追加投票拒否は実装済み。
 - [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
+- [対応済み 1dfbbf6] 通報 reason の基本検証: `POST /mod/report` で reason を前後空白除去の上、空/2000バイト超を `400 Bad Request ("Invalid report reason")` で拒否（DB参照前）。保存値と監査ログは除去後の reason を使用。詳細なモデレーション方針（文字数上限の妥当性含む）は ADR-0004 承認待ち。二重通報の `400` 拒否（`test_report_duplicate_rejected`）と reason 検証（`test_report_reason_validated`）の回帰テストを追加。
+- [対応済み fefa49a] 投票入力の基本検証テスト: `POST /mod/vote` で `report_id <= 0` と未知の `result` を `400` で拒否すること、トークン `sub` と `vote.juror_hash` の不一致（署名が正しくても）を `401` で拒否し票を記録しないことを回帰テストで保護（`test_vote_with_invalid_payload_rejected`, `test_vote_with_sub_mismatch_rejected`）。ハンドラ自体の挙動変更はない。
 
 ### 3.4 監査（DEC-04）
 
