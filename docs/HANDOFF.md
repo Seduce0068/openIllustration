@@ -8,16 +8,16 @@ tags:
   - open-illustration
 generated:
   by: opencode
-  at: "2026-11-03T03:10:00+09:00"
+  at: "2026-11-15T16:52:50+09:00"
 ---
 
 ## 1. リポジトリ状態
 
 - ブランチ: `master`
-- 基準コミット（本セッション開始時）: `2b6afbf`（`origin/master` と同期）
-- 作業ツリー: **DEC-02 採用方針の実装/ドキュメント更新を含む未コミット変更あり**（`common/src/age.rs`, `server/src/lib.rs`, `server/src/tests.rs`, DEC-02関連ドキュメント）。`client/dist/` は未追跡の生成物。
-- 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。本セッションの変更は未 push / 未CI。
-- 直近のローカル検証（本セッション、touch範囲）: `cargo fmt --all --check`、`cargo clippy -p server -p common --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common --quiet`（11件成功）、`cargo test -p server --quiet`（86件成功）。
+- 参照コミット（2026-11-15 時点）: `00a9176`（`origin/master` と同期）
+- 作業ツリー: clean（未コミット変更なし）。`client/dist/` 等の生成物はコミット対象外として扱う。
+- 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。以降のローカルコミットは未CI（push済みだがCI結果は別途確認）。
+- 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、`cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
 
 PC/別端末で再開する場合は以下を実行する。
 
@@ -76,6 +76,11 @@ cargo test --workspace
 - ADR-0002（JPKI）と ADR-0003（JPYC）を Accepted に昇格。
 - ADR-0004（モデレーション手続）を Proposed として追加。
 - `docs/DOCUMENT_STATUS.md` の DEC-01/03/05 を実装状況に合わせて更新。DEC-02 は方針採用・実装進行中（法的確定/専門家レビュー未完）として更新。
+
+### 入力バリデーションの防御的強化（2026-11-15）
+
+- `ad9d2a8`: `server/src/payments.rs` の `load_order` で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request ("Invalid order id")` を返す（`GET/POST /payments/orders/{order_id}` 系）。回帰テスト `test_payment_order_rejects_invalid_order_id_format` を追加。
+- `00a9176`: `POST /mod/report` で `target_cid` に `is_safe_cid` 検証を追加し、不正 CID を `400 Bad Request ("Invalid CID")` で早期拒否。回帰テスト `test_report_rejects_invalid_cid` を追加（既存の有効 CID・不存在ケース `404` は維持）。
 
 ## 3. 検証コマンド
 
