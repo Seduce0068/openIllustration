@@ -64,6 +64,9 @@ if [[ "$chrome_major" =~ ^[0-9]+$ ]] && ((chrome_major < min_chrome_major)); the
 	exit 1
 fi
 
+# 失敗時の調査用アーカイブの出力先（既定はリポジトリ直下の e2e-artifacts/）。
+artifact_dir="${E2E_ARTIFACT_DIR:-${repo_root}/e2e-artifacts}"
+
 # E2E 用 JWT シークレットと一時 DB は実行ごとに生成し、既知の固定値や
 # リポジトリ内/前回実行の状態を CI で再利用しない（ローカルの固定既定値は
 # e2e/playwright.config.ts を参照）。
@@ -91,5 +94,14 @@ if ! (cd e2e && npm test); then
 	echo "::error::Playwright E2E failed"
 	find e2e/test-results -name 'error-context.md' -print 2>/dev/null || true
 	find e2e/test-results -name 'error-context.md' -exec head -c 20000 {} \; 2>/dev/null || true
+
+	# トレース・スクリーンショット・HTML レポートをタイムスタンプ付きで保存する。
+	mkdir -p "$artifact_dir" || true
+	archive="${artifact_dir}/e2e-failure-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+	if tar -czf "$archive" -C "$repo_root" e2e/test-results e2e/playwright-report 2>/dev/null; then
+		echo "E2E failure artifacts: ${archive}"
+	else
+		echo "warning: failed to archive E2E artifacts" >&2
+	fi
 	exit 1
 fi
