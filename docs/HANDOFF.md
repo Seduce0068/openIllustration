@@ -237,6 +237,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。
 - `server/src/bin/restore_db.rs`: リストア（整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換）。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。`OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
+- `scripts/test-backup-rotate.sh`: 上記の設定分岐（fail-closed 5件・正常系5件）を外部サービスなしで検証する回帰テスト。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。
 - `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。

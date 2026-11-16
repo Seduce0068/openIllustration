@@ -114,6 +114,7 @@ status: current
 - [対応済み] バックアップ暗号化: `BACKUP_GPG_RECIPIENT` 設定時に GPG 暗号化（gpg 不在時は fail-closed）、平文は検証・暗号化成功後に削除。復号→verify_backup まで実確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] オフサイト保存: `OFFSITE_COPY_CMD` + `OFFSITE_DEST` で汎用コピーコマンドを呼び出し（eval 不使用）。設定不整合・コピー失敗は fail-closed。暗号化成果物の送信にも対応（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] バックアップ失敗通知: `ALERT_CMD`（実行ファイルのパス）を `<メッセージ>` 1引数で呼び出し。成功時無通知、通知失敗は元の終了コードを維持、不正パスは fail-closed。実3ケース確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+- [対応済み] `scripts/test-backup-rotate.sh` を追加し、backup-rotate の設定分岐（fail-closed 5件・正常系5件）をダミーコマンドで自動検証（外部サービス不要）。
 - [中] 通知先ラッパーの導入環境への接続と実運用での復旧訓練。
 
 ### 3.6 ネットワーク・アップロード・整合性
