@@ -35,15 +35,32 @@ trunk --version
 node --version
 npm --version
 
+# 最低バージョンを検証する（package.json の engines と整合）。
+min_node_major="${MIN_NODE_MAJOR:-18}"
+node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+if [[ "$node_major" =~ ^[0-9]+$ ]] && ((node_major < min_node_major)); then
+	echo "Node ${node_major} is older than the required major ${min_node_major}." >&2
+	exit 1
+fi
+
 # playwright.config.ts は channel: chrome を使うため、システムの
 # Google Chrome が必要（GitHub Actions の ubuntu イメージには同梱）。
 # Playwright は PATH に加えて /opt/google/chrome/chrome も参照する。
+chrome_bin=""
 if command -v google-chrome >/dev/null 2>&1; then
-	google-chrome --version
+	chrome_bin="google-chrome"
 elif [ -x /opt/google/chrome/chrome ]; then
-	/opt/google/chrome/chrome --version
+	chrome_bin="/opt/google/chrome/chrome"
 else
 	echo "Google Chrome が見つからない。channel: chrome を使う E2E には必須。" >&2
+	exit 1
+fi
+chrome_version="$($chrome_bin --version)"
+echo "$chrome_version"
+min_chrome_major="${MIN_CHROME_MAJOR:-120}"
+chrome_major="$(echo "$chrome_version" | grep -oE '[0-9]+' | head -1)"
+if [[ "$chrome_major" =~ ^[0-9]+$ ]] && ((chrome_major < min_chrome_major)); then
+	echo "Chrome ${chrome_major} is older than the required major ${min_chrome_major}." >&2
 	exit 1
 fi
 
