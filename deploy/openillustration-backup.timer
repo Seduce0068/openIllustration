@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily OpenIllustration database backup
+Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=300
+Unit=openillustration-backup.service
+
+[Install]
+WantedBy=timers.target

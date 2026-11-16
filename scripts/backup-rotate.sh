@@ -10,6 +10,17 @@ backup_dir="${BACKUP_DIR:-${repo_root}/backups}"
 prefix="${BACKUP_PREFIX:-openillustration}"
 retention_days="${RETENTION_DAYS:-30}"
 min_keep="${MIN_KEEP:-3}"
+bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
+
+run_bin() {
+	local name="$1"
+	shift
+	if [[ -x "${bin_dir}/${name}" ]]; then
+		"${bin_dir}/${name}" "$@"
+	else
+		cargo run --quiet -p server --bin "$name" -- "$@"
+	fi
+}
 
 if ! [[ "$retention_days" =~ ^[0-9]+$ && "$min_keep" =~ ^[0-9]+$ ]]; then
 	echo "RETENTION_DAYS and MIN_KEEP must be non-negative integers" >&2
@@ -31,8 +42,8 @@ if [[ -e "$output" ]]; then
 fi
 
 echo "==> backup: ${output}"
-cargo run --quiet -p server --bin backup_db -- --output "$output"
-cargo run --quiet -p server --bin verify_backup -- --input "$output"
+run_bin backup_db --output "$output"
+run_bin verify_backup --input "$output"
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
 # 保持期間を超えていても残す（誤設定で全削除されるのを防ぐ）。

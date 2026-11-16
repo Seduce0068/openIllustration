@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenIllustration database backup with rotation
+Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/openIllustration
+Environment=BACKUP_DIR=/var/backups/openillustration
+Environment=BIN_DIR=/opt/openIllustration/target/release
+Environment=RETENTION_DAYS=30
+Environment=MIN_KEEP=3
+Environment=DATABASE_URL=file:/var/lib/openillustration/local.db
+ExecStart=/opt/openIllustration/scripts/backup-rotate.sh
+User=openillustration
+Group=openillustration
+# 失敗時に syslog/journal へ明確に記録する（アラート連携の手掛かり）。
+SyslogIdentifier=openillustration-backup

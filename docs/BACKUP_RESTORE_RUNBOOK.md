@@ -37,11 +37,23 @@ cargo run -p server --bin backup_db -- \
 古い世代の削除を一行で行う（server 起動中でも実行可）:
 
 ```bash
-# Kubuntu / cron 等から実行
+# Kubuntu / cron 等から実行（BIN_DIR はビルド済みバイナリのディレクトリ）
 BACKUP_DIR=/var/backups/openillustration \
+BIN_DIR=/opt/openIllustration/target/release \
 RETENTION_DAYS=30 MIN_KEEP=3 \
-  /path/to/openIllustration/scripts/backup-rotate.sh
+DATABASE_URL=file:/var/lib/openillustration/local.db \
+  /opt/openIllustration/scripts/backup-rotate.sh
 ```
+
+`BIN_DIR` に `backup_db` / `verify_backup` があればそれを使い、無ければ
+`cargo run` にフォールバックする（開発用）。設定例:
+
+- systemd: `deploy/openillustration-backup.service` と
+  `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`）
+- cron: `deploy/openillustration-backup.cron`（`/etc/cron.d/` に配置）
+
+`MAILTO` / `SyslogIdentifier` を実際の通知先へ変更してアラートを受け取る。
+パス・ユーザー・グループは導入環境に合わせて修正する。
 
 `RETENTION_DAYS`（既定30）を超えた世代数を削除するが、直近 `MIN_KEEP`（既定3、
 最小1）件は保持期間を超えていても残す。ファイル名の UTC タイムスタンプ順に
