@@ -165,9 +165,24 @@ pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChai
 pub struct SignedAuditSnapshot {
     pub version: u32,
     pub entries: Vec<AuditSnapshotEntry>,
+    /// BAN / UNBAN / PIN 解除の運用判断（ADR-0004 §10）。
+    #[serde(default)]
+    pub governance_entries: Vec<GovernanceAuditEntry>,
     pub merkle_root: String,
     /// base64 エンコードした署名（署名対象は `signature_payload()`）。
     pub signature: String,
+}
+
+/// 運用判断の監査イベント。コンテンツ監査とは別テーブルから抽出する。
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct GovernanceAuditEntry {
+    pub log_id: i64,
+    pub action: String,
+    pub target: String,
+    pub actor_hash: String,
+    pub reason: String,
+    pub details: Option<String>,
+    pub created_at: String,
 }
 
 /// スナップショットに含まれる監査エントリ。第三者がハッシュと連鎖を再計算できる。
@@ -208,9 +223,11 @@ impl SignedAuditSnapshot {
     pub fn signature_payload(&self) -> Vec<u8> {
         let entries_json =
             serde_json::to_string(&self.entries).expect("serializing audit entries cannot fail");
+        let governance_json = serde_json::to_string(&self.governance_entries)
+            .expect("serializing governance entries cannot fail");
         format!(
-            "OPENILLUSTRATION_AUDIT_EXPORT_V2\0{}\0{}\0{}",
-            self.version, entries_json, self.merkle_root
+            "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}",
+            self.version, entries_json, governance_json, self.merkle_root
         )
         .into_bytes()
     }
@@ -391,9 +408,19 @@ mod tests {
             entry_hash: entry_hash.clone(),
         };
         let digest = compute_audit_chain_digest(&[(1, entry_hash.clone())]).unwrap();
+        let governance = GovernanceAuditEntry {
+            log_id: 1,
+            action: "BAN".into(),
+            target: "bad_user".into(),
+            actor_hash: "operator".into(),
+            reason: "repeated violations".into(),
+            details: Some("{\"duration_days\":30}".into()),
+            created_at: "2026-11-17T00:00:00Z".into(),
+        };
         let mut snapshot = SignedAuditSnapshot {
-            version: 2,
+            version: 3,
             entries: vec![snapshot_entry.clone()],
+            governance_entries: vec![governance.clone()],
             merkle_root: digest.root_hash,
             signature: String::new(),
         };
@@ -410,6 +437,18 @@ mod tests {
         assert!(
             verify_audit_snapshot(&tampered, &public_der).is_err(),
             "tampering with entry content must be detected"
+        );
+
+        let tampered_governance = SignedAuditSnapshot {
+            governance_entries: vec![GovernanceAuditEntry {
+                reason: "tampered".into(),
+                ..governance
+            }],
+            ..snapshot
+        };
+        assert!(
+            verify_audit_snapshot(&tampered_governance, &public_der).is_err(),
+            "tampering with governance audit must be detected"
         );
     }
 

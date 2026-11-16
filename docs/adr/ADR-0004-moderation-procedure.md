@@ -84,6 +84,8 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
     `POST /mod/operators/{user_hash}/unban`（誤 BAN の回復）、
     `POST /mod/content/{cid}/unpin`（解除判断の記録）を追加。
     BAN/UNBAN/UNPIN は `governance_audit_log` に主体・対象・理由・詳細を記録する。
+    これらは ADR-0005 の署名付き監査スナップショット（version 3）に含まれ、
+    公開鍵を持つ第三者が改ざんを検出できる。
     実 Pinata ピン解除は ADR どおり手動であり、本エンドポイントは判断と理由の記録のみ。
   - 期限到達の自動検知: 起動時にバックグラウンドワーカーを spawn し、
     `MODERATION_FINALIZE_INTERVAL_SECS`（既定 300 秒、30〜3600 秒の範囲）ごとに

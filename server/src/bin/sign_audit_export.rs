@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow};
 use common::{
-    AuditSnapshotEntry, SignedAuditSnapshot, compute_audit_chain_digest, sign_audit_snapshot,
+    AuditSnapshotEntry, GovernanceAuditEntry, SignedAuditSnapshot, compute_audit_chain_digest,
+    sign_audit_snapshot,
 };
 use libsql::Builder;
 
@@ -17,7 +18,7 @@ fn print_help() {
     eprintln!(
         "Usage: sign_audit_export --signing-key PEM_PATH --output PATH [--database-url URL] [--database-token TOKEN]\n\
          \n\
-         Creates a signed snapshot of content_audit_log. The signing key is a\n\
+         Creates a signed snapshot of content_audit_log and governance_audit_log. The signing key is a\n\
          PKCS#8 RSA private key PEM file. Never pass the key itself on the CLI.\n\
          Exit code: 0 on success, 1 on error."
     );
@@ -124,9 +125,36 @@ async fn main() -> anyhow::Result<()> {
     )
     .map_err(anyhow::Error::msg)?;
 
+    // ADR-0004 §10: BAN / UNBAN / ピン解除の運用判断も署名対象に含める。
+    let mut gov_rows = db
+        .query(
+            "SELECT log_id, action, target, actor_hash, reason, details, created_at \
+             FROM governance_audit_log ORDER BY log_id ASC",
+            (),
+        )
+        .await
+        .context("failed to query governance audit log")?;
+    let mut governance_entries = Vec::new();
+    while let Some(row) = gov_rows
+        .next()
+        .await
+        .context("failed to read governance row")?
+    {
+        governance_entries.push(GovernanceAuditEntry {
+            log_id: row.get(0)?,
+            action: row.get(1)?,
+            target: row.get(2)?,
+            actor_hash: row.get(3)?,
+            reason: row.get(4)?,
+            details: row.get(5)?,
+            created_at: row.get(6)?,
+        });
+    }
+
     let mut snapshot = SignedAuditSnapshot {
-        version: 2,
+        version: 3,
         entries,
+        governance_entries,
         merkle_root: digest.root_hash,
         signature: String::new(),
     };
