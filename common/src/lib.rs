@@ -160,6 +160,9 @@ pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChai
     })
 }
 
+/// 現在サポートする監査エクスポート形式のバージョン。
+pub const AUDIT_SNAPSHOT_VERSION: u32 = 3;
+
 /// 署名付き監査スナップショット。第三者は公開鍵だけで検証できる。
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SignedAuditSnapshot {
@@ -294,6 +297,12 @@ pub fn sign_audit_snapshot(
     snapshot: &SignedAuditSnapshot,
     private_key_pem: &str,
 ) -> Result<String, ForensicError> {
+    if snapshot.version != AUDIT_SNAPSHOT_VERSION {
+        return Err(ForensicError::InvalidSignature(format!(
+            "unsupported audit snapshot version: {}",
+            snapshot.version
+        )));
+    }
     let key = PrivateKey::from_pkcs8_pem(private_key_pem)
         .map_err(|e| ForensicError::Crypto(format!("Invalid private key: {e}")))?;
     let signing_key = rsa::pkcs1v15::SigningKey::<RsaSha256>::new(key);
@@ -310,6 +319,13 @@ pub fn verify_audit_snapshot(
     snapshot: &SignedAuditSnapshot,
     public_key_der: &[u8],
 ) -> Result<(), ForensicError> {
+    // 未知の形式は fail-closed で拒否する（署名が正しくても受理しない）。
+    if snapshot.version != AUDIT_SNAPSHOT_VERSION {
+        return Err(ForensicError::InvalidSignature(format!(
+            "unsupported audit snapshot version: {}",
+            snapshot.version
+        )));
+    }
     let signature = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         &snapshot.signature,
@@ -462,6 +478,15 @@ mod tests {
         assert!(
             verify_audit_snapshot(&tampered_governance, &public_der).is_err(),
             "tampering with governance audit must be detected"
+        );
+
+        let unsupported_version = SignedAuditSnapshot {
+            version: 999,
+            ..tampered_governance
+        };
+        assert!(
+            verify_audit_snapshot(&unsupported_version, &public_der).is_err(),
+            "unsupported snapshot versions must be rejected (fail-closed)"
         );
     }
 
