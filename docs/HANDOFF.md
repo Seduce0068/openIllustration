@@ -200,6 +200,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   有効範囲 30〜3600。範囲外・不正値は既定へフォールバック。停止シグナルでワーカーも終了する。
 - `GRACEFUL_DRAIN_TIMEOUT_SECS`: 停止時の drain 上限（秒）。既定 `30`、有効範囲 1〜300。
   超過時は警告ログを出して残接続を切断する。
+- `OIDC_MAX_AUTH_AGE_SECS`: 認証からの最大経過時間。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。
 - `LOG_FORMAT`: `json` 設定時は 1行1 JSON でログ出力（ログ集約向け）。未設定は人間向けテキスト。
 - `GET /metrics`: Prometheus 形式の軽量カウンタ（リクエスト数・4xx/5xx 数）。再起動でゼロに戻る。
 
@@ -258,7 +259,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 ### 実装可能な残作業
 
 - DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`)のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
-- JPKI: `acr`/`amr` 保証レベル検証は実装済み（`OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` 設定時のみ、欠落/不一致は fail-closed）。残るは `auth_time`/`max_age` と実OP運用整合。
+- JPKI: `acr`/`amr` 保証レベル検証と `auth_time`/`max_age` 検証は実装済み（`OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` 設定時のみ、欠落/不一致は fail-closed）。残るは実OP運用整合。
   リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。残るは失効状態の永続化と実OP運用整合。
   `sub` 単位の全セッション失効は `iat` 閾値方式で、`revoked_subs` テーブルへ永続化し起動時にロード（マイグレーション 008）。再認証で新しい `iat` を発行し DB の閾値も削除。複数プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、

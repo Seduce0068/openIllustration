@@ -93,6 +93,9 @@ pub struct OidcConfig {
     pub required_acr: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     /// 要求する認証方法（amr）。未指定なら検証しない（開発用）。
     pub required_amr: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 認証からの最大経過時間（秒）。設定時は認証要求に max_age を付与し、
+    /// ID トークンの auth_time を検証する（未設定なら検証しない）。
+    pub max_auth_age_secs: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
 }
 
 struct PendingAuth {
@@ -150,6 +153,10 @@ impl OidcState {
         let required_amr = std::env::var("OIDC_REQUIRED_AMR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
+        let max_auth_age_secs = std::env::var("OIDC_MAX_AUTH_AGE_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| *seconds > 0);
 
         Some(Arc::new(Self::new(OidcConfig {
             issuer,
@@ -164,6 +171,7 @@ impl OidcState {
             clock_skew_secs,
             required_acr: std::sync::Arc::new(std::sync::Mutex::new(required_acr)),
             required_amr: std::sync::Arc::new(std::sync::Mutex::new(required_amr)),
+            max_auth_age_secs: std::sync::Arc::new(std::sync::Mutex::new(max_auth_age_secs)),
         })))
     }
 
@@ -172,6 +180,12 @@ impl OidcState {
     pub fn set_required_assurance(&self, acr: Vec<String>, amr: Vec<String>) {
         *self.config.required_acr.lock().unwrap() = acr;
         *self.config.required_amr.lock().unwrap() = amr;
+    }
+
+    /// テスト用: 認証からの最大経過時間を設定する（本番は環境変数から読む）。
+    #[cfg(test)]
+    pub fn set_max_auth_age(&self, seconds: Option<u64>) {
+        *self.config.max_auth_age_secs.lock().unwrap() = seconds;
     }
 
     fn take_pending(&self, state: &str) -> Result<PendingAuth, AppError> {
@@ -245,6 +259,7 @@ struct IdTokenClaims {
     at_hash: Option<String>,
     acr: Option<String>,
     amr: Option<Vec<String>>,
+    auth_time: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -452,6 +467,28 @@ async fn verify_id_token(
             ));
         }
     }
+    drop(required_amr);
+
+    // 認証からの経過時間 (max_age) を検証する。要求時に auth_time が
+    // 欠落している場合は本番有効化しない（fail-closed）。
+    let max_age = oidc
+        .config
+        .max_auth_age_secs
+        .lock()
+        .map_err(|_| AppError::Internal("assurance config is poisoned".to_string()))?;
+    if let Some(max_age_secs) = *max_age {
+        let auth_time = claims
+            .auth_time
+            .ok_or_else(|| AppError::Unauthorized("ID token is missing auth_time".to_string()))?;
+        let earliest = now
+            .saturating_sub(max_age_secs as usize)
+            .saturating_sub(oidc.config.clock_skew_secs as usize);
+        if auth_time < earliest || auth_time > now + oidc.config.clock_skew_secs as usize {
+            return Err(AppError::Unauthorized(
+                "ID token auth_time is outside the allowed window".to_string(),
+            ));
+        }
+    }
 
     Ok(claims)
 }
@@ -521,6 +558,16 @@ pub async fn start(State(state): State<Arc<AppState>>) -> Result<Json<StartRespo
 
     let mut url = reqwest::Url::parse(&oidc.config.authorization_endpoint)
         .map_err(|_| AppError::Internal("invalid authorization endpoint".to_string()))?;
+    let max_age = oidc
+        .config
+        .max_auth_age_secs
+        .lock()
+        .map_err(|_| AppError::Internal("assurance config is poisoned".to_string()))?;
+    if let Some(max_age_secs) = *max_age {
+        url.query_pairs_mut()
+            .append_pair("max_age", &max_age_secs.to_string());
+    }
+    drop(max_age);
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &oidc.config.client_id)

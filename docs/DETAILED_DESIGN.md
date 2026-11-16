@@ -85,8 +85,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 7. リフレッシュトークンは `refresh_tokens` テーブルに SHA-256 ハッシュのみ保存し、ログイン時に 30 日間有効なトークンを HttpOnly Cookie で発行する。`POST /auth/refresh` は毎回トークンを回転し、使用済みトークンの再提示を検知した場合はファミリ全体を失効する。ログアウト時もファミリを失効する。
 8. `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` を設定すると ID トークンの
    `acr`（いずれか一致）と `amr`（すべて含有）を検証し、欠落・不一致なら
-   認証を拒否する（fail-closed）。本番では両方の設定を必須とする。
-   未実装: `auth_time`/`max_age`、複数プロセス間の失効状態共有・実OP運用整合
+   認証を拒否する（fail-closed）。`OIDC_MAX_AUTH_AGE_SECS` を設定すると
+   認証要求へ `max_age` を付与し、ID トークンの `auth_time` が
+   `現在時刻 - max_age - clock_skew` 以降であることを要求する（欠落も拒否）。
+   本番ではこれら3設定を必須とする。
+   未実装: 複数プロセス間の失効状態共有・実OP運用整合
    （`sub` 失効の DB 永続化は実装済み）。
 9. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
    現行のテストはローカルOPモックでフローと検証項目を確認する。

@@ -328,6 +328,8 @@ struct MockOidcServer {
     forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     /// 設定時は ID トークンヘッダから kid を省略する（kid 必須検査のテスト用）。
     omit_kid: Arc<std::sync::Mutex<bool>>,
+    /// 設定時は auth_time クレームを発行する（max_age 検証用）。
+    auth_time: AuthTimeOverride,
     state: Arc<MockOidcState>,
     handle: tokio::task::JoinHandle<()>,
 }
@@ -351,6 +353,7 @@ impl MockOidcServer {
         let at_hash_override = Arc::new(std::sync::Mutex::new(None));
         let forged_key_der = Arc::new(std::sync::Mutex::new(None));
         let omit_kid = Arc::new(std::sync::Mutex::new(false));
+        let auth_time = Arc::new(std::sync::Mutex::new(None));
         let state = Arc::new(MockOidcState {
             base_url: base_url.clone(),
             client_id: "test-client".to_string(),
@@ -359,6 +362,7 @@ impl MockOidcServer {
             forged_key_der: forged_key_der.clone(),
             omit_kid: omit_kid.clone(),
             assurance: Arc::new(std::sync::Mutex::new(None)),
+            auth_time: auth_time.clone(),
             encoding_key,
             jwks: json!({
                 "keys": [{
@@ -386,6 +390,7 @@ impl MockOidcServer {
             at_hash_override,
             forged_key_der,
             omit_kid,
+            auth_time,
             state,
             handle,
         }
@@ -448,6 +453,7 @@ impl Drop for MockOidcServer {
 }
 
 type AssuranceOverride = Arc<std::sync::Mutex<Option<(String, Vec<String>)>>>;
+type AuthTimeOverride = Arc<std::sync::Mutex<Option<usize>>>;
 
 struct MockOidcState {
     base_url: String,
@@ -458,6 +464,8 @@ struct MockOidcState {
     omit_kid: Arc<std::sync::Mutex<bool>>,
     /// Some の場合のみ acr/amr クレームを発行する（保証レベル検証用）。
     assurance: AssuranceOverride,
+    /// Some の場合のみ auth_time クレームを発行する（max_age 検証用）。
+    auth_time: AuthTimeOverride,
     encoding_key: EncodingKey,
     jwks: serde_json::Value,
 }
@@ -507,6 +515,9 @@ async fn mock_token(
         claims["acr"] = json!(acr);
         claims["amr"] = json!(amr);
     }
+    if let Some(auth_time) = *state.auth_time.lock().unwrap() {
+        claims["auth_time"] = json!(auth_time);
+    }
     let mut header = Header::new(Algorithm::ES256);
     if !*state.omit_kid.lock().unwrap() {
         header.kid = Some("test-kid".to_string());
@@ -550,6 +561,7 @@ async fn setup_app_with_oidc() -> (
         clock_skew_secs: 60,
         required_acr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         required_amr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        max_auth_age_secs: std::sync::Arc::new(std::sync::Mutex::new(None)),
     };
     let oidc = Arc::new(crate::oidc::OidcState::new(config));
 
@@ -4037,6 +4049,116 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
 }
 
 /// ADR-0002: OIDC start と callback で PPID をセッションJWTへ結合する。
+/// OIDC: max_age 設定時は認証要求に max_age を付与し、auth_time を検証する。
+#[tokio::test]
+async fn test_oidc_max_auth_age() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    oidc.set_max_auth_age(Some(300));
+
+    // 認証開始 URL に max_age が含まれる。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert!(
+        started["authorization_url"]
+            .as_str()
+            .unwrap()
+            .contains("max_age=300")
+    );
+    let auth_state = started["state"].as_str().unwrap().to_string();
+
+    // 新鮮な auth_time は受理される。
+    let now = chrono::Utc::now().timestamp() as usize;
+    *mock.auth_time.lock().unwrap() = Some(now);
+    *mock.nonce.lock().unwrap() = Some(oidc.pending_nonce(&auth_state).unwrap());
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // 古すぎる auth_time は拒否される。
+    let auth_state = {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/auth/oidc/start")
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        let started: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        started["state"].as_str().unwrap().to_string()
+    };
+    *mock.auth_time.lock().unwrap() = Some(now - 3600);
+    *mock.nonce.lock().unwrap() = Some(oidc.pending_nonce(&auth_state).unwrap());
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // auth_time 欠落も拒否される（fail-closed）。
+    let auth_state = {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/auth/oidc/start")
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        let started: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        started["state"].as_str().unwrap().to_string()
+    };
+    *mock.auth_time.lock().unwrap() = None;
+    *mock.nonce.lock().unwrap() = Some(oidc.pending_nonce(&auth_state).unwrap());
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// OIDC: 要求 acr/amr を満たす ID トークンのみ受理する（fail-closed）。
 #[tokio::test]
 async fn test_oidc_required_acr_amr() {
