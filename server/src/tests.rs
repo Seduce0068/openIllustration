@@ -1873,6 +1873,19 @@ async fn test_vote_consensus_rejects_content() {
         assert_eq!(response.status(), StatusCode::OK, "vote should succeed");
     }
 
+    // ADR-0004: 3票でも投票期間中は確定しない（即時確定の廃止）
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmVoteTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Reported",
+        "no early conclusion before the voting deadline"
+    );
+
+    force_conclude(&db, 1).await;
+
     let mut rows = db
         .query("SELECT status FROM contents WHERE cid = 'QmVoteTest'", ())
         .await
@@ -1912,6 +1925,7 @@ async fn test_consensus_tie_resolves_to_rejected() {
     .await
     .unwrap();
 
+    expire_report(&db, 1).await;
     let tx = db.transaction().await.unwrap();
     for (voter, result) in [
         ("juror1", "Approve"),
@@ -2074,6 +2088,24 @@ async fn insert_juror(db: &libsql::Connection) -> (String, PrivateKey) {
     (juror_hash, private_key)
 }
 
+/// 投票期限を過ぎた状態にする（ADR-0004 の期限ベース確定を test で再現）
+async fn expire_report(db: &libsql::Connection, report_id: i64) {
+    db.execute(
+        "UPDATE reports SET deadline_at = datetime('now', '-1 day') WHERE report_id = ?",
+        [report_id],
+    )
+    .await
+    .unwrap();
+}
+
+/// 期限を過ぎた通報を確定処理へ流す（本番では finalize エンドポイント/スケジューラが担う）
+async fn force_conclude(db: &libsql::Connection, report_id: i64) {
+    expire_report(db, report_id).await;
+    let tx = db.transaction().await.unwrap();
+    process_report_conclusion(&tx, report_id).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
 /// 署名付きの投票リクエストを送信し、ステータスコードを返す
 async fn send_signed_vote(
     app: &Router,
@@ -2170,6 +2202,9 @@ async fn test_vote_after_conclusion_rejected() {
             "votes before conclusion should succeed"
         );
     }
+
+    // ADR-0004: 投票期間終了後に確定する（3票到達時点では確定しない）
+    force_conclude(&db, 1).await;
 
     let mut rows = db
         .query(
@@ -4479,4 +4514,333 @@ async fn test_payment_order_rejects_invalid_order_id_format() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+// ---- ADR-0004: 期限ベース確定・定足数・異議・投票資格 ----
+
+/// モデレーション用の最小アプリ（content は Reviewed 中、report 1 が存在）
+async fn setup_mod_app() -> (Router, libsql::Connection) {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmModTest', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmModTest', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+    });
+    (build_router(state), db)
+}
+
+/// 認証済みで finalize エンドポイントを呼ぶ
+async fn send_finalize(app: &Router, report_id: i64) -> StatusCode {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/mod/reports/{report_id}/finalize"))
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "operator").await
+                    ),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    response.status()
+}
+
+/// 認証済みで通報を送る
+async fn send_report(app: &Router, cid: &str, reason: &str, sub: &str) -> StatusCode {
+    let body = json!({
+        "report_id": 0,
+        "target_cid": cid,
+        "reason": reason,
+        "status": "Pending"
+    });
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/mod/report")
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, sub).await),
+                )
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    response.status()
+}
+
+#[tokio::test]
+async fn test_finalize_is_noop_before_deadline() {
+    let (app, db) = setup_mod_app().await;
+    assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Reported",
+        "finalize must not conclude before the deadline"
+    );
+
+    expire_report(&db, 1).await;
+    assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Approved",
+        "zero votes must dismiss the report and restore content"
+    );
+}
+
+#[tokio::test]
+async fn test_quorum_not_met_restores_approved_with_audit_reason() {
+    let (app, db) = setup_mod_app().await;
+    for _ in 0..2 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+    }
+    force_conclude(&db, 1).await;
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Approved",
+        "quorum-not-met reports must restore content"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT reason FROM content_audit_log WHERE cid = 'QmModTest' ORDER BY log_id DESC LIMIT 1",
+            (),
+        )
+        .await
+        .unwrap();
+    let reason: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(
+        reason.contains("quorum not met"),
+        "audit must record the dismissal reason: {reason}"
+    );
+
+    let mut rows = db
+        .query("SELECT concluded_at FROM reports WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let concluded: Option<String> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(concluded.is_some(), "concluded_at must be recorded");
+}
+
+#[tokio::test]
+async fn test_vote_after_deadline_rejected() {
+    let (app, db) = setup_mod_app().await;
+    let (juror, key) = insert_juror(&db).await;
+    assert_eq!(
+        send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+        StatusCode::OK
+    );
+
+    expire_report(&db, 1).await;
+    let (late_juror, late_key) = insert_juror(&db).await;
+    assert_eq!(
+        send_signed_vote(&app, 1, "Reject", &late_juror, &late_key).await,
+        StatusCode::BAD_REQUEST,
+        "votes after the deadline must be rejected"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "the late vote must not be recorded");
+}
+
+#[tokio::test]
+async fn test_content_owner_cannot_vote() {
+    let (app, db) = setup_mod_app().await;
+    let mut rng = TestRng::new();
+    let owner_key = PrivateKey::new(&mut rng, 2048).unwrap();
+    let public_der = owner_key
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .to_vec();
+    db.execute(
+        "UPDATE users SET public_key_der = ? WHERE user_hash = 'owner'",
+        [public_der],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_signed_vote(&app, 1, "Reject", "owner", &owner_key).await,
+        StatusCode::BAD_REQUEST,
+        "the content submitter must not be allowed to vote"
+    );
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "the owner's vote must not be recorded");
+}
+
+#[tokio::test]
+async fn test_banned_juror_cannot_vote() {
+    let (app, db) = setup_mod_app().await;
+    let (juror, key) = insert_juror(&db).await;
+    db.execute(
+        "UPDATE users SET is_banned = TRUE WHERE user_hash = ?",
+        [juror.clone()],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+        StatusCode::FORBIDDEN,
+        "banned users must not be allowed to vote"
+    );
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "the banned juror's vote must not be recorded");
+}
+
+#[tokio::test]
+async fn test_appeal_within_30_days_creates_new_report() {
+    let (app, db) = setup_mod_app().await;
+    for _ in 0..3 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+    }
+    force_conclude(&db, 1).await;
+
+    assert_eq!(
+        send_report(&app, "QmModTest", "Appeal: new evidence", "appellant").await,
+        StatusCode::OK,
+        "a re-report within 30 days must be accepted as an appeal"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT appeal_of, concluded_at FROM reports ORDER BY report_id",
+            (),
+        )
+        .await
+        .unwrap();
+    let first = rows.next().await.unwrap().unwrap();
+    let first_concluded: Option<String> = first.get(1).unwrap();
+    assert!(
+        first_concluded.is_some(),
+        "original conclusion must be preserved"
+    );
+    let second = rows.next().await.unwrap().unwrap();
+    let appeal_of: Option<i64> = second.get(0).unwrap();
+    assert_eq!(
+        appeal_of,
+        Some(1),
+        "the new report must link to the original"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT reason FROM content_audit_log WHERE cid = 'QmModTest' ORDER BY log_id DESC LIMIT 1",
+            (),
+        )
+        .await
+        .unwrap();
+    let reason: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(
+        reason.contains("appeal"),
+        "audit must record the appeal: {reason}"
+    );
+}
+
+#[tokio::test]
+async fn test_report_after_appeal_window_is_not_an_appeal() {
+    let (app, db) = setup_mod_app().await;
+    db.execute(
+        "UPDATE reports SET concluded_at = datetime('now', '-31 days') WHERE report_id = 1",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "UPDATE contents SET status = 'Rejected' WHERE cid = 'QmModTest'",
+        (),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_report(&app, "QmModTest", "Fresh report", "reporter").await,
+        StatusCode::OK
+    );
+    let mut rows = db
+        .query(
+            "SELECT appeal_of FROM reports ORDER BY report_id DESC LIMIT 1",
+            (),
+        )
+        .await
+        .unwrap();
+    let appeal_of: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(appeal_of, None, "re-reports after 30 days are not appeals");
 }

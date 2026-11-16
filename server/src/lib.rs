@@ -585,6 +585,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/transactions", get(list_transactions))
         .route("/mod/report", post(mod_report))
         .route("/mod/reports", get(list_reports))
+        .route("/mod/reports/{report_id}/finalize", post(finalize_report))
         .route("/mod/vote", post(mod_vote))
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
@@ -1100,12 +1101,47 @@ pub async fn mod_report(
         ));
     }
 
-    tx.execute(
-        "INSERT INTO reports (target_cid, reason) VALUES (?, ?)",
-        [report.target_cid.clone(), reason.to_string()],
-    )
-    .await
+    // ADR-0004: 確定から30日以内の再通報は異議として受理する。
+    // 元の確定を上書きせず、新しい通報行を appeal_of で関連付ける。
+    let mut prior_rows = tx
+        .query(
+            "SELECT report_id FROM reports
+             WHERE target_cid = ? AND concluded_at IS NOT NULL
+               AND datetime('now') <= datetime(concluded_at, '+30 days')
+             ORDER BY concluded_at DESC, report_id DESC LIMIT 1",
+            [report.target_cid.clone()],
+        )
+        .await?;
+    let appeal_of: Option<i64> = match prior_rows.next().await? {
+        Some(row) => Some(row.get(0)?),
+        None => None,
+    };
+
+    match appeal_of {
+        Some(prior_id) => {
+            tx.execute(
+                "INSERT INTO reports (target_cid, reason, deadline_at, appeal_of)
+                 VALUES (?, ?, datetime('now', '+7 days'), ?)",
+                (report.target_cid.clone(), reason.to_string(), prior_id),
+            )
+            .await
+        }
+        None => {
+            tx.execute(
+                "INSERT INTO reports (target_cid, reason, deadline_at)
+                 VALUES (?, ?, datetime('now', '+7 days'))",
+                (report.target_cid.clone(), reason.to_string()),
+            )
+            .await
+        }
+    }
     .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
+
+    let audit_reason = if appeal_of.is_some() {
+        format!("ADR-0004 appeal filed: {}", reason)
+    } else {
+        format!("User report: {}", reason)
+    };
 
     // Use forensic helper to update status and log it
     update_content_status(
@@ -1113,7 +1149,7 @@ pub async fn mod_report(
         &report.target_cid,
         "Reported",
         &_claims.sub, // The reporter's hash
-        &format!("User report: {}", reason),
+        &audit_reason,
     )
     .await?;
 
@@ -1124,10 +1160,44 @@ pub async fn mod_report(
     Ok(Json(true))
 }
 
+/// ADR-0004: 期限到達済みの通報を集計して確定する。
+///
+/// - 投票期間（7日。`deadline_at` 未設定時は `created_at + 7 days`）が終わる前は
+///   何もしない。3票到達による即時確定は行わない。
+/// - 定足数（3票）未達なら通報を棄却し、コンテンツを `Approved` に戻す。
+/// - 同数は公開継続リスクを避けて `Rejected` とする。
+/// - 確定済み・レビュー対象外の通報は冪等に無視する。
 pub async fn process_report_conclusion(
     tx: &libsql::Transaction,
     report_id: i64,
 ) -> Result<(), AppError> {
+    let mut report_rows = tx
+        .query(
+            "SELECT r.target_cid, c.status, r.concluded_at,
+                    CASE WHEN datetime('now') >= COALESCE(r.deadline_at, datetime(r.created_at, '+7 days'))
+                         THEN 1 ELSE 0 END AS due
+             FROM reports r
+             JOIN contents c ON r.target_cid = c.cid
+             WHERE r.report_id = ?",
+            [report_id],
+        )
+        .await?;
+
+    let (cid, content_status, concluded_at, due) = match report_rows.next().await? {
+        Some(row) => {
+            let cid: String = row.get(0)?;
+            let content_status: String = row.get(1)?;
+            let concluded_at: Option<String> = row.get(2)?;
+            let due: i64 = row.get(3)?;
+            (cid, content_status, concluded_at, due)
+        }
+        None => return Ok(()),
+    };
+
+    if due == 0 || content_status != "Reported" || concluded_at.is_some() {
+        return Ok(());
+    }
+
     // 1. Tally votes
     let mut rows = tx
         .query(
@@ -1136,8 +1206,8 @@ pub async fn process_report_conclusion(
         )
         .await?;
 
-    let mut approve_count = 0;
-    let mut reject_count = 0;
+    let mut approve_count: i64 = 0;
+    let mut reject_count: i64 = 0;
 
     while let Some(row) = rows.next().await? {
         let result: String = row.get(0)?;
@@ -1149,40 +1219,67 @@ pub async fn process_report_conclusion(
         }
     }
 
-    // 2. Define threshold (Example: Conclusion after 3 total votes)
     let total_votes = approve_count + reject_count;
-    if total_votes >= 3 {
+    let (final_status, reason) = if total_votes >= 3 {
         // ADR-0004: 同数は公開継続リスクを避けて Rejected 側に倒す。
-        let final_status = if reject_count >= approve_count {
+        let status = if reject_count >= approve_count {
             "Rejected"
         } else {
             "Approved"
         };
+        (
+            status,
+            format!(
+                "ADR-0004 conclusion: {} Approve, {} Reject",
+                approve_count, reject_count
+            ),
+        )
+    } else {
+        (
+            "Approved",
+            format!(
+                "ADR-0004 quorum not met: {} votes (need 3); report dismissed",
+                total_votes
+            ),
+        )
+    };
 
-        // Get target CID
-        let mut report_rows = tx
-            .query(
-                "SELECT target_cid FROM reports WHERE report_id = ?",
-                [report_id],
-            )
-            .await?;
-        if let Some(row) = report_rows.next().await? {
-            let cid: String = row.get(0)?;
-            update_content_status(
-                tx,
-                &cid,
-                final_status,
-                "SYSTEM_GOVERNANCE",
-                &format!(
-                    "Consensus reached: {} Approve, {} Reject",
-                    approve_count, reject_count
-                ),
-            )
-            .await?;
-        }
-    }
+    update_content_status(tx, &cid, final_status, "SYSTEM_GOVERNANCE", &reason).await?;
+    tx.execute(
+        "UPDATE reports SET concluded_at = datetime('now') WHERE report_id = ?",
+        [report_id],
+    )
+    .await?;
 
     Ok(())
+}
+
+/// ADR-0004: 期限到達済みの通報を明示的に確定する（運用/スケジューラからの呼び出し用）。
+/// 期限内に呼ばれても早期確定は行わず、何も変更しない。冪等。
+pub async fn finalize_report(
+    State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
+    Path(report_id): Path<i64>,
+) -> Result<Json<bool>, AppError> {
+    if report_id <= 0 {
+        return Err(AppError::BadRequest("Invalid report id".to_string()));
+    }
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let mut rows = tx
+        .query("SELECT 1 FROM reports WHERE report_id = ?", [report_id])
+        .await?;
+    if rows.next().await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    process_report_conclusion(&tx, report_id).await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    Ok(Json(true))
 }
 
 pub async fn mod_vote(
@@ -1197,6 +1294,8 @@ pub async fn mod_vote(
     if claims.sub != vote.juror_hash {
         return Err(AppError::Unauthorized("Token sub mismatch".to_string()));
     }
+    // ADR-0004: BAN 済み利用者は投票資格を持たない。
+    ensure_user_not_banned(&state.db, &claims.sub).await?;
 
     // 1. Verify Signature (Auditability)
     let message = json!( {
@@ -1227,24 +1326,41 @@ pub async fn mod_vote(
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
 
-    // Report must exist and its target content must still be under review.
-    // Votes on concluded reports are rejected so that re-tallying can never
-    // flip an already-decided status.
+    // Report must exist, still be under review, and be inside its voting
+    // window. Votes on concluded or expired reports are rejected so that a
+    // re-tally can never flip an already-decided status.
     let mut report_rows = tx
         .query(
-            "SELECT c.status FROM reports r
+            "SELECT c.status, c.owner_hash,
+                    CASE WHEN datetime('now') >= COALESCE(r.deadline_at, datetime(r.created_at, '+7 days'))
+                         THEN 1 ELSE 0 END AS expired
+             FROM reports r
              JOIN contents c ON r.target_cid = c.cid
              WHERE r.report_id = ?",
             [vote.report_id],
         )
         .await?;
-    let target_status: String = match report_rows.next().await? {
-        Some(row) => row.get(0)?,
+    let (target_status, owner_hash, expired) = match report_rows.next().await? {
+        Some(row) => {
+            let status: String = row.get(0)?;
+            let owner_hash: Option<String> = row.get(1)?;
+            let expired: i64 = row.get(2)?;
+            (status, owner_hash, expired)
+        }
         None => return Err(AppError::NotFound),
     };
     if target_status != "Reported" {
         return Err(AppError::BadRequest(
             "Report is already concluded".to_string(),
+        ));
+    }
+    if expired == 1 {
+        return Err(AppError::BadRequest("Voting period has ended".to_string()));
+    }
+    // ADR-0004: 対象コンテンツの投稿者は投票できない。
+    if owner_hash.as_deref() == Some(vote.juror_hash.as_str()) {
+        return Err(AppError::BadRequest(
+            "Content owner cannot vote".to_string(),
         ));
     }
 

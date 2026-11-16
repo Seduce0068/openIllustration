@@ -108,14 +108,12 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ## 4. モデレーション
 
-- 通報は `/mod/report` に `target_cid` と `reason` を送る。通報者のJWT主体を監査ログの `changed_by` に用いる。存在しないコンテンツは404、レビュー中（`Reported`）の重複通報は400で拒否する。
+- 通報は `/mod/report` に `target_cid` と `reason` を送る。通報者のJWT主体を監査ログの `changed_by` に用いる。存在しないコンテンツは404、レビュー中（`Reported`）の重複通報は400で拒否する。`reports.deadline_at` に受理から7日を記録する。確定から30日以内の再通報は `appeal_of` に元通報を記録する異議として受理し、元の確定を上書きしない。
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
-  JWT主体と `juror_hash` の一致、結果値、重複投票を検査する。存在しない
-  `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合は400で拒否する。
-- 現行実装は3票以上で多数決し、RejectがApprove以上の場合に `Rejected`、それ以外を `Approved` とする。同数は `Rejected` となる（ADR-0004 採用）。
-- 確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
-- **未決定**: 投票期間、投票資格・選出方法、同数時の再審査、通報者制限、結果への異議申立て、Rejected後のBAN方針。
-- **未実装**: オンチェーン記録、ランダム陪審員選出、BANテーブル移行。モデレーション結果を法的判断とみなさない。
+  JWT主体と `juror_hash` の一致、結果値、重複投票、期限切れ、対象投稿者（除外）を検査する。存在しない `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合・期限切れ・投稿者の場合は400で拒否する。
+- 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
+- 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
+- **未実装**: BAN/ピン解除の監査記録、期限到達の自動検知（明示 finalize が必要）、投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、BANテーブル移行。モデレーション結果を法的判断とみなさない。
 
 ## 5. データモデル（現行起動時DDLの要約）
 
@@ -123,7 +121,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |---|---|---|
 |`users`|`user_hash`, `public_key_der`, `is_banned`, `banned_at`|利用者識別・公開鍵・BAN状態|
 |`contents`|`cid`, `type`, `owner_hash`, `checksum`, `status`, `price`, `created_at`|CIDを主キーとするコンテンツメタデータ|
-|`reports`|`report_id`, `target_cid`, `reason`, `created_at`|通報記録|
+|`reports`|`report_id`, `target_cid`, `reason`, `created_at`, `deadline_at`, `concluded_at`, `appeal_of`|通報記録（7日期限・確定時刻・異議の連鎖）|
 |`votes`|`vote_id`, `report_id`, `voter_hash`, `vote_result`, `voted_at`|投票記録。現行DDLに複合一意制約なし|
 |`signatures`|`target_id`, `signer_hash`, `signature_blob`, `algorithm`|投稿・投票署名の保存|
 |`content_audit_log`|状態、主体、理由、連鎖ハッシュ、時刻|DB内状態遷移記録|

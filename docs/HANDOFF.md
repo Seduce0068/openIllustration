@@ -14,7 +14,7 @@ generated:
 ## 1. リポジトリ状態
 
 - ブランチ: `master`
-- 参照コミット（2026-11-15 時点）: `00a9176`（`origin/master` と同期）
+- 参照コミット: 作業開始時点は `745810e`。以降の変更は `git log` を参照。
 - 作業ツリー: clean（未コミット変更なし）。`client/dist/` 等の生成物はコミット対象外として扱う。
 - 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。以降のローカルコミットは未CI（push済みだがCI結果は別途確認）。
 - 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、`cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
@@ -92,6 +92,16 @@ cargo deny check licenses
 cargo deny check advisories
 cargo build -p client --target wasm32-unknown-unknown --locked
 ```
+
+CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
+（annotation: `recent account payments have failed or your spending limit needs to be increased`）。
+解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-16 の
+ローカル実行では fmt / clippy / test(workspace) / deny(licenses, advisories) /
+wasm build / E2E(9件) がすべて成功した。
+
+`server` クレートは `verify_audit_log` bin も auto-discover されるため、
+`cargo run` が曖昧にならないよう Cargo.toml に `default-run = "server"` を設定済み。
+E2E の起動失敗はこれで解消している。
 
 E2E は Google Chrome、trunk 0.21.14、Node 18 以上が必要。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
@@ -189,7 +199,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
-- `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション提案。
+- `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション手続（Accepted）。
 - `docs/AGE_VALIDATION_POLICY.md`: DEC-02方針・実装・制約。
 - `docs/DOCUMENT_STATUS.md`: 本番公開ゲートと状態。
 - `docs/REVIEW_REPORT.md`: レビューと実装記録。
@@ -202,7 +212,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   リダイレクトURI登録、民間事業者向け申込と認定。
 - JPYC の実RPCプロバイダ契約、HSM/マルチシグの鍵管理、
   返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。
-- ADR-0004（モデレーション手続）の承認と運営主体の決定。
+- モデレーションの運営主体の決定（ADR-0004 は承認済み）。
 - DEC-02（年齢・対象地域）の法務/専門家レビューと最終確定（対象地域・必要属性・最終閾値・保持期間・運用責任）。検証済み年齢/居住地属性の提供方式（DEC-01）と接続条件の確定。
 - 本番ホスティング、TLS、本番CORS、バックアップ、監視。
 
@@ -214,7 +224,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   `sub` 単位の全セッション失効はインメモリ閾値方式（`iat` 比較、再認証で新しい `iat` を発行）を実装済み。永続化・多プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。
-- モデレーション: ADR-0004（Accepted, 2026-11-16）に基づく投票期間（7日）・定足数未達復帰・異議申立て・投稿者除外検査の実装。同数処理は実装済み（同数→`Rejected`）。
+- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。残るは BAN/ピン解除監査、期限到達の自動検知、投票者選出・Sybil耐性、運営主体の決定。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
 - 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
   到達可能性と更新案は
