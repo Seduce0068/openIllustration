@@ -90,7 +90,6 @@ status: current
 - [中] **複数インスタンス同時起動時のマイグレーション排他**（DBロック等）または単一ライター運用の決定と実装（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] バックアップ/リストア手順: `backup_db`（VACUUM INTO・上書き拒否）と `verify_backup`（構造検証）を追加。実 DB で作成・検証・データ保持・監査連動を確認し、[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に手順化。
 - [中] 自動バックアップスケジュール・オフサイト保存・暗号化と実運用での復旧訓練。
-- [低] マイグレーション一覧の文書整合: `server/migrations/` には `003_payment_order_index.sql` があるが [DETAILED_DESIGN.md](DETAILED_DESIGN.md) の現行記載は 001,002 のみ（要確認・更新）。
 
 ### 3.6 ネットワーク・アップロード・整合性
 
