@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 172件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 173件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -192,6 +192,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   セルフホストごとに異なる運用者を置けるため、プロジェクト側の固定値はない。
 - `MODERATION_FINALIZE_INTERVAL_SECS`: 自動確定ワーカーの走査周期（秒）。既定 `300`、
   有効範囲 30〜3600。範囲外・不正値は既定へフォールバック。停止シグナルでワーカーも終了する。
+- `GRACEFUL_DRAIN_TIMEOUT_SECS`: 停止時の drain 上限（秒）。既定 `30`、有効範囲 1〜300。
+  超過時は警告ログを出して残接続を切断する。
 
 ### ネットワーク
 

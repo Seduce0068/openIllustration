@@ -436,7 +436,9 @@ pub async fn run() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     println!("Guild Backend listening on {}", addr);
-    axum::serve(
+    let drain_timeout_secs = std::env::var("GRACEFUL_DRAIN_TIMEOUT_SECS").ok();
+    let drain_timeout = graceful_drain_timeout(drain_timeout_secs.as_deref());
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
@@ -444,8 +446,17 @@ pub async fn run() -> anyhow::Result<()> {
         shutdown_signal().await;
         shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
         let _ = shutdown_tx.send(());
-    })
-    .await?;
+    });
+
+    match tokio::time::timeout(drain_timeout, server).await {
+        Ok(result) => result?,
+        Err(_) => {
+            warn!(
+                "Graceful shutdown drain timed out after {:?}; closing remaining connections",
+                drain_timeout
+            );
+        }
+    }
     let _ = finalizer.await;
     Ok(())
 }
@@ -655,6 +666,18 @@ pub fn moderation_operators(env_value: Option<&str>) -> HashSet<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+/// グレースフル停止の drain タイムアウト（秒）。範囲外・不正値は既定 30 秒へフォールバック。
+pub fn graceful_drain_timeout(env_value: Option<&str>) -> Duration {
+    const DEFAULT_SECS: u64 = 30;
+    const MIN_SECS: u64 = 1;
+    const MAX_SECS: u64 = 300;
+    env_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
 
 /// ADR-0004: 自動確定ワーカーの周期（秒）。範囲外・不正値は既定 300 秒へフォールバック。

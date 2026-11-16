@@ -5241,6 +5241,30 @@ fn test_moderation_finalize_interval_defaults_and_bounds() {
     );
 }
 
+#[test]
+fn test_graceful_drain_timeout_defaults_and_bounds() {
+    use std::time::Duration;
+    assert_eq!(crate::graceful_drain_timeout(None), Duration::from_secs(30));
+    assert_eq!(
+        crate::graceful_drain_timeout(Some("5")),
+        Duration::from_secs(5)
+    );
+    assert_eq!(
+        crate::graceful_drain_timeout(Some("0")),
+        Duration::from_secs(30),
+        "zero must fall back"
+    );
+    assert_eq!(
+        crate::graceful_drain_timeout(Some("301")),
+        Duration::from_secs(30),
+        "over the maximum must fall back"
+    );
+    assert_eq!(
+        crate::graceful_drain_timeout(Some("bad")),
+        Duration::from_secs(30)
+    );
+}
+
 #[tokio::test]
 async fn test_finalize_due_reports_skips_before_deadline() {
     let (_app, db) = setup_mod_app().await;
