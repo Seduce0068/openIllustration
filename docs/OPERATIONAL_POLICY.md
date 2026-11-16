@@ -57,7 +57,8 @@ tags: [operations, security, payments]
 - IPv6のみの制御をプロキシ経由で使う場合、`TRUSTED_PROXY_CIDRS` に信頼済みプロキシの範囲のみを設定し、プロキシは `X-Forwarded-For` を上書きまたは追記する。信頼済みピアで解決できない場合は 403 となる。ネットワーク層でも許可方針を実装する。
 - ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現在のエラー応答・観測性は本番要件を満たすか別途検証する。
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。drain は `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）を上限とし、超過時は警告を出して残接続を切断する。
-- liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503 を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。IPFS/JPKI/チェーン依存障害時の readiness への反映は本番構成確定時に判断する。
+- liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503 を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。
+- readiness の意味は「このインスタンスが API リクエストを受けられるか」に限定する。IPFS / JPKI / チェーンなどの外部依存が壊れても、影響を受けるエンドポイントは個別にエラーを返し、他機能は継続できるため readiness は 200 を維持する（意図的な設計判断）。外部依存の障害検知は `GET /metrics` のエラーカウンタと WARN ログ（IPFS チェックサム不整合等）で行い、アラート通知先へ接続して監視する。外部依存を丸ごと停止させる運用が必要になった場合は、ロードバランサー側のヘルスチェックではなく専用の依存チェックを別途設計する。
 - ログ集約向けに `LOG_FORMAT=json` を設定すると 1行1 JSON（timestamp / level / fields / target）で出力する。実サーバーで全行が JSON としてパースできることを確認済み。アラート通知先と集約基盤の選定は導入環境に委ねる。
 - `GET /metrics` が Prometheus 形式の `openillustration_http_requests_total` と `openillustration_http_errors_total`（4xx/5xx）を公開する。カウンタはプロセス内（単一ライター前提）で、再起動時にゼロへ戻る。個人情報・リクエストパス・クエリは含めない。
 
