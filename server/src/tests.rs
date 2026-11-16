@@ -1652,6 +1652,94 @@ async fn test_upload_rejects_unknown_multipart_fields() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// CONTENT-01: 実 RSA 鍵で署名したアップロードが受理され、改ざんが拒否される。
+#[tokio::test]
+async fn test_upload_accepts_real_rsa_signature() {
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let private_pem = test_rsa_private_pem();
+    let private_key = PrivateKey::from_pkcs8_pem(&private_pem).unwrap();
+    let public_der = private_key
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .to_vec();
+
+    let (app, db) = setup_app_with_db().await;
+    db.execute(
+        "UPDATE users SET public_key_der = ? WHERE user_hash = 'test_user'",
+        [public_der],
+    )
+    .await
+    .unwrap();
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let file_bytes = vec![0xFF, 0x0A, 0x01, 0x42];
+    let signing_key = SigningKey::<Sha256>::new(private_key);
+    let signature = signing_key.sign(&file_bytes).to_bytes().to_vec();
+
+    let boundary = "real-rsa-signature";
+    let body = multipart_upload_body_full(
+        boundary,
+        "upload.jxl",
+        "image/jxl",
+        &file_bytes,
+        Some("0"),
+        "test_user",
+        &signature,
+    );
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "a valid real signature must pass"
+    );
+
+    // 同じ署名を別バイト列で使い回すと拒否される。
+    let tampered_bytes = vec![0xFF, 0x0A, 0x01, 0x43];
+    let boundary = "reused-signature";
+    let body = multipart_upload_body_full(
+        boundary,
+        "upload.jxl",
+        "image/jxl",
+        &tampered_bytes,
+        Some("0"),
+        "test_user",
+        &signature,
+    );
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// CONTENT-01: 同一フィールドの重複は ambiguous な解釈を避けるため 400 で拒否する。
 #[tokio::test]
 async fn test_upload_rejects_duplicate_fields() {
