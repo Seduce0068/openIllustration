@@ -55,7 +55,8 @@ status: current
 - [対応済み] リフレッシュトークンのローテーションと盗用検知: マイグレーション 006 でハッシュのみ保存。ログイン時に 30 日トークンを HttpOnly Cookie 発行、`POST /auth/refresh` で毎回回転。再利用検知時はファミリ全体を失効。ログアウト時もファミリ失効。回帰テスト5件（[HANDOFF.md](HANDOFF.md)）。
 - [対応済み] 期限切れリフレッシュトークンの自動回収: 起動時と finalizer 周期で `expires_at <= now` を削除。単体テストと実プロセス（2件→起動→1件、purge ログ）で確認。
 - [対応済み] **JWT 設定の fail-closed 化**: 不正な `JWT_RSA_PRIVATE_KEY_PEM` は有効な `JWT_SECRET` があってもフォールバックせず起動拒否。短い `JWT_SECRET` が RS256 選択で隠れる場合は警告。
-- [一部対応] **RS256 の `kid` 複数鍵検証**: 署名ヘッダへ `kid` を付与し、`JWT_RSA_VERIFICATION_KEYS` で旧公開鍵を登録可能にした。未知 `kid` 拒否・`kid` 無し旧トークン互換・重複 kid 拒否を回帰テストで確認。
+- [対応済み] **RS256 の `kid` 複数鍵検証**: 署名ヘッダへ `kid` を付与し、`JWT_RSA_VERIFICATION_KEYS` で旧公開鍵を登録可能にした。未知 `kid` 拒否・`kid` 無し旧トークン互換・重複 kid 拒否を回帰テストで確認。
+- [対応済み] `JWT_REQUIRE_KID`: 本番向けに `kid` 無しレガシートークンを拒否するオプションを追加。HS256 併用は起動拒否（fail-closed）。単体テスト2件と実プロセスで確認。
 - [中][運用設計] **RS256 運用強化の残項目**: HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布・ローテーション手順（`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続）（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] 開発用モック認証の nonce: `/auth/login` が発行した nonce を `/auth/verify` で必須化し、5分 TTL の単回消費でリプレイを拒否。クライアントも login→verify のフローへ更新（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [中] 開発用モックの VP 署名検証は未実装（本番は OIDC 経路を使用する前提）。

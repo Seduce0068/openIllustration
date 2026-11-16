@@ -5003,6 +5003,43 @@ fn test_jwt_rs256_accepts_legacy_token_without_kid() {
     assert_eq!(decoded.sub, "legacy");
 }
 
+/// RS256: JWT_REQUIRE_KID 有効時は kid 無しトークンを拒否する（fail-closed）。
+#[test]
+fn test_jwt_require_kid_rejects_legacy_token() {
+    let pem = test_rsa_private_pem();
+    let mut keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    keys.set_require_kid(true);
+    let claims = Claims {
+        sub: "user".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = None;
+    let legacy = encode(&header, &claims, keys.encoding_key()).expect("sign without kid");
+    assert!(
+        keys.decode::<Claims>(&legacy).is_err(),
+        "kid-less tokens must be rejected when require_kid is enabled"
+    );
+
+    let with_kid = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign with kid");
+    let decoded: Claims = keys
+        .decode(&with_kid)
+        .expect("kid-bearing token must verify")
+        .claims;
+    assert_eq!(decoded.sub, "user");
+}
+
+#[test]
+fn test_jwt_require_kid_rejects_hmac_configuration() {
+    assert!(
+        crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string()), None, true).is_err(),
+        "HS256 issues no kid; requiring kid must be rejected at startup"
+    );
+}
+
 /// RS256: 追加した旧公開鍵で署名されたトークンを検証できる。
 #[test]
 fn test_jwt_rs256_additional_verification_key() {
@@ -5104,15 +5141,15 @@ fn test_jwt_rejects_short_rsa_key() {
 #[test]
 fn test_jwt_keys_from_env_prefers_rsa() {
     let pem = test_rsa_private_pem();
-    let keys = crate::jwt_keys_from_env(Some(pem), Some(TEST_JWT_SECRET.to_string()), None)
+    let keys = crate::jwt_keys_from_env(Some(pem), Some(TEST_JWT_SECRET.to_string()), None, false)
         .expect("RSA key wins");
     assert_eq!(keys.algorithm_name(), "RS256");
 
-    let hmac = crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string()), None)
+    let hmac = crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string()), None, false)
         .expect("HMAC fallback");
     assert_eq!(hmac.algorithm_name(), "HS256");
 
-    assert!(crate::jwt_keys_from_env(None, None, None).is_err());
+    assert!(crate::jwt_keys_from_env(None, None, None, false).is_err());
 
     // 不正な RSA PEM は、有効な JWT_SECRET があっても黙ってフォールバックしない。
     assert!(
@@ -5120,6 +5157,7 @@ fn test_jwt_keys_from_env_prefers_rsa() {
             Some("not a pem".to_string()),
             Some(TEST_JWT_SECRET.to_string()),
             None,
+            false,
         )
         .is_err(),
         "invalid RSA key must not be silently ignored when JWT_SECRET is present"

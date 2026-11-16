@@ -21,6 +21,8 @@ pub struct JwtKeys {
     decoding_key: DecodingKey,
     kid: Option<String>,
     verification_keys: HashMap<String, DecodingKey>,
+    /// true のときは `kid` 付きトークンのみ受理する（レガシー互換を無効化）。
+    require_kid: bool,
 }
 
 impl JwtKeys {
@@ -43,6 +45,7 @@ impl JwtKeys {
             decoding_key,
             kid: None,
             verification_keys: HashMap::new(),
+            require_kid: false,
         })
     }
 
@@ -81,6 +84,7 @@ impl JwtKeys {
             decoding_key,
             kid: Some(kid),
             verification_keys,
+            require_kid: false,
         })
     }
 
@@ -123,6 +127,9 @@ impl JwtKeys {
         if header.alg != self.algorithm {
             return Err(format!("unexpected JWT algorithm: {:?}", header.alg));
         }
+        if self.require_kid && header.kid.is_none() {
+            return Err("JWT kid is required".to_string());
+        }
         let key = match (self.algorithm, header.kid.as_deref()) {
             (Algorithm::RS256, Some(kid)) => self
                 .verification_keys
@@ -133,6 +140,11 @@ impl JwtKeys {
         };
         jsonwebtoken::decode::<T>(token, key, &self.validation())
             .map_err(|e| format!("invalid token: {e}"))
+    }
+
+    /// `kid` 無しトークン（レガシー）を拒否するかを設定する。
+    pub fn set_require_kid(&mut self, required: bool) {
+        self.require_kid = required;
     }
 
     /// 署名に使う JWT ヘッダ。許可アルゴリズムと kid はここで固定される。

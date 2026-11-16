@@ -467,10 +467,14 @@ pub async fn run() -> anyhow::Result<()> {
     migration::verify_migrations(&db).await?;
 
     let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
+    let require_kid = std::env::var("JWT_REQUIRE_KID")
+        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+        .unwrap_or(false);
     let jwt_keys = jwt_keys_from_env(
         std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
         std::env::var("JWT_SECRET").ok(),
         verification_keys_env.as_deref(),
+        require_kid,
     )
     .map_err(|e| anyhow::anyhow!(e))?;
     tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
@@ -745,6 +749,7 @@ pub fn jwt_keys_from_env(
     rsa_pem: Option<String>,
     secret: Option<String>,
     verification_keys_json: Option<&str>,
+    require_kid: bool,
 ) -> Result<jwt::JwtKeys, String> {
     let mut keys = match (rsa_pem, secret) {
         (Some(pem), Some(secret)) => {
@@ -781,6 +786,12 @@ pub fn jwt_keys_from_env(
             keys.add_verification_key(&kid, &pem)
                 .map_err(|e| format!("JWT_RSA_VERIFICATION_KEYS[{kid}]: {e}"))?;
         }
+    }
+    if require_kid {
+        if keys.algorithm_name() != "RS256" {
+            return Err("JWT_REQUIRE_KID is only valid with RS256".to_string());
+        }
+        keys.set_require_kid(true);
     }
     Ok(keys)
 }
