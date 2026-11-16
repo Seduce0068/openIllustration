@@ -31,7 +31,9 @@ cargo run -p server --bin backup_db -- \
 ```
 
 `VACUUM INTO` により一貫性のあるスナップショットを作成する。
-成功時は `backup_ok: output=... tables=...` を出力する。
+成功時は `backup_ok: output=... tables=... migrations=...` を出力する。
+取得直後にテーブル数と `_migrations` 台帳の存在を検証し、欠けていれば失敗する
+（`verify_backup` はさらに `PRAGMA integrity_check` も実施する二段構え）。
 
 定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
 古い世代の削除を一行で行う（server 起動中でも実行可）:

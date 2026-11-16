@@ -15,7 +15,8 @@ fn print_help() {
         "Usage: backup_db --output PATH [--database-url URL] [--database-token TOKEN]\n\
          \n\
          Creates a consistent SQLite snapshot of a local libSQL database using\n\
-         VACUUM INTO. The output file must not already exist (no overwrite).\n\
+         VACUUM INTO, then verifies tables and the migration ledger.\n\
+         The output file must not already exist (no overwrite).\n\
          Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
          Exit code: 0 on success, 1 on error."
     );
@@ -134,6 +135,22 @@ async fn main() -> anyhow::Result<()> {
     if tables == 0 {
         return Err(anyhow!("backup has no tables"));
     }
-    println!("backup_ok: output={output} tables={tables}");
+
+    // マイグレーション台帳がスナップショットへ含まれていることを確認する
+    // （コメント/ヘルプの「ledger is intact」を実際に保証する）。
+    let mut rows = snapshot
+        .query("SELECT COUNT(*) FROM _migrations", ())
+        .await
+        .context("migration ledger missing in backup")?;
+    let migrations: i64 = rows
+        .next()
+        .await
+        .context("failed to read migration ledger")?
+        .context("no migration ledger row")?
+        .get(0)?;
+    if migrations == 0 {
+        return Err(anyhow!("backup has no applied migrations"));
+    }
+    println!("backup_ok: output={output} tables={tables} migrations={migrations}");
     Ok(())
 }
