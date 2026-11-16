@@ -221,6 +221,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
 - `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
+- `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
@@ -248,7 +249,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`)のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
 - JPKI: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
   リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。残るは失効状態の永続化と実OP運用整合。
-  `sub` 単位の全セッション失効はインメモリ閾値方式（`iat` 比較、再認証で新しい `iat` を発行）を実装済み。永続化・多プロセス共有・実OP連携/実機検証は残タスク。
+  `sub` 単位の全セッション失効は `iat` 閾値方式で、`revoked_subs` テーブルへ永続化し起動時にロード（マイグレーション 008）。再認証で新しい `iat` を発行し DB の閾値も削除。複数プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。
 - モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（`MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。

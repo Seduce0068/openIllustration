@@ -61,10 +61,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     
-    // 最初は PENDING が表示されるはず
-    await expect(page.locator('text=○ PENDING').first()).toBeVisible({ timeout: 15000 });
-    
-    // ダッシュボードで「VERIFIED」が表示されることを確認
+    // 検証は非同期で即完了し得るため、中間状態の PENDING は待たない。
+    // ダッシュボードで最終的な「VERIFIED」が表示されることを確認する。
     const verifiedBadge = page.locator('span', { hasText: '● VERIFIED' });
     await expect(verifiedBadge).toBeVisible({ timeout: 30000 });
   });
@@ -119,9 +117,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     
-    // 最初は PENDING が表示されるはず
-    await expect(page.locator('text=○ PENDING').first()).toBeVisible({ timeout: 15000 });
-
+    // 検証は非同期で即完了し得るため、中間状態の PENDING は待たない。
     // 「COMPROMISED」が表示されることを確認
     const compromisedBadge = page.locator('span', { hasText: '× COMPROMISED' });
     await expect(compromisedBadge).toBeVisible({ timeout: 30000 });

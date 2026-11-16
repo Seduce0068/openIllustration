@@ -4285,7 +4285,7 @@ async fn test_backchannel_logout_revokes_sessions_for_sub() {
 /// back-channel logout: sub 失効後も再認証すれば新しいセッションを利用できる。
 #[tokio::test]
 async fn test_backchannel_logout_for_sub_allows_reauthentication() {
-    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
     let body = oidc_login(&app, oidc.as_ref(), &mock).await;
     let old_token = body["token"].as_str().unwrap().to_string();
 
@@ -4311,6 +4311,17 @@ async fn test_backchannel_logout_for_sub_allows_reauthentication() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
 
+    // 失効閾値は DB にも永続化される。
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM revoked_subs WHERE sub = ?",
+            [claims.sub.clone()],
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "revocation must be persisted");
+
     let new_body = oidc_login(&app, oidc.as_ref(), &mock).await;
     let new_token = new_body["token"].as_str().unwrap().to_string();
 
@@ -4325,6 +4336,19 @@ async fn test_backchannel_logout_for_sub_allows_reauthentication() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM revoked_subs WHERE sub = ?",
+            [claims.sub.clone()],
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 0,
+        "re-authentication must clear the persisted threshold"
+    );
 }
 
 /// back-channel logout: sid と sub の両方が指定された場合も既存セッションを失効させる。

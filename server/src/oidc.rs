@@ -526,6 +526,14 @@ pub async fn callback(
         revoked_subs.remove(&user_hash);
         issued_at
     };
+    // 再認証で旧セッション拒否の役割を終えた閾値を DB からも削除する。
+    state
+        .db
+        .execute(
+            "DELETE FROM revoked_subs WHERE sub = ?",
+            [user_hash.clone()],
+        )
+        .await?;
     let session_claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
@@ -702,7 +710,17 @@ pub async fn backchannel_logout(
             .revoked_subs_before
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sub, revoked_at);
+            .insert(sub.clone(), revoked_at);
+        // プロセス再起動後も失効を維持するため DB にも記録する。
+        state
+            .db
+            .execute(
+                "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+                 ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
+                     updated_at = CURRENT_TIMESTAMP",
+                (sub, revoked_at as i64),
+            )
+            .await?;
     }
 
     Ok(StatusCode::OK)

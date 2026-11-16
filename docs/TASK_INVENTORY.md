@@ -47,7 +47,8 @@ status: current
 ### 3.1 認証・セッション（JPKI/OIDC/JWT）
 
 - [高][要判断] **実JPKI/実OP接続と検証**: 実機・失効確認・`acr`/`amr` の保証レベル検証、`auth_time`/`max_age` 対応（`server/src/oidc.rs`, [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [中] **`sub` 単位の全セッション失効（インメモリ）**: back-channel logout で `sid`/`sub` を失効対象として受け付け、`sub` 指定時は失効閾値（`iat` 比較）で既存セッションを拒否する実装を追加（`server/src/oidc.rs`, `server/src/lib.rs`）。再認証時は閾値より新しい `iat` を発行して再ログインを許容。永続化・多プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
+- [対応済み] **`sub` 単位の全セッション失効と永続化**: back-channel logout で `sid`/`sub` を失効対象とし、`iat` 閾値で既存セッションを拒否。マイグレーション 008 の `revoked_subs` に閾値を保存し起動時にロード、再認証時に削除（マイグレーション 008）。再認証で新セッション発行可。
+- [中] 複数プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
 - [対応済み] リフレッシュトークンのローテーションと盗用検知: マイグレーション 006 でハッシュのみ保存。ログイン時に 30 日トークンを HttpOnly Cookie 発行、`POST /auth/refresh` で毎回回転。再利用検知時はファミリ全体を失効。ログアウト時もファミリ失効。回帰テスト5件（[HANDOFF.md](HANDOFF.md)）。
 - [対応済み] **JWT 設定の fail-closed 化**: 不正な `JWT_RSA_PRIVATE_KEY_PEM` は有効な `JWT_SECRET` があってもフォールバックせず起動拒否。短い `JWT_SECRET` が RS256 選択で隠れる場合は警告。
 - [一部対応] **RS256 の `kid` 複数鍵検証**: 署名ヘッダへ `kid` を付与し、`JWT_RSA_VERIFICATION_KEYS` で旧公開鍵を登録可能にした。未知 `kid` 拒否・`kid` 無し旧トークン互換・重複 kid 拒否を回帰テストで確認。

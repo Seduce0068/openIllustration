@@ -397,6 +397,20 @@ pub async fn run() -> anyhow::Result<()> {
         age_policy.settings_always_public
     );
 
+    // 永続化済みの sub 失効閾値を起動時にロードする。
+    let revoked_subs_before = {
+        let mut rows = db
+            .query("SELECT sub, revoked_at FROM revoked_subs", ())
+            .await?;
+        let mut map = HashMap::new();
+        while let Some(row) = rows.next().await? {
+            let sub: String = row.get(0)?;
+            let revoked_at: i64 = row.get(1)?;
+            map.insert(sub, revoked_at as usize);
+        }
+        Arc::new(Mutex::new(map))
+    };
+
     let moderation_operators_env = std::env::var("MODERATION_OPERATOR_HASHES").ok();
     let moderation_operators = Arc::new(moderation_operators(moderation_operators_env.as_deref()));
     if moderation_operators.is_empty() {
@@ -417,7 +431,7 @@ pub async fn run() -> anyhow::Result<()> {
         payment_verifier: None,
         oidc,
         revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
-        revoked_subs_before: Arc::new(Mutex::new(HashMap::new())),
+        revoked_subs_before,
         age_policy,
         moderation_operators,
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
