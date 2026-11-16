@@ -11,6 +11,8 @@ prefix="${BACKUP_PREFIX:-openillustration}"
 retention_days="${RETENTION_DAYS:-30}"
 min_keep="${MIN_KEEP:-3}"
 bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
+gpg_recipient="${BACKUP_GPG_RECIPIENT:-}"
+gpg_bin="${GPG_BIN:-gpg}"
 
 run_bin() {
 	local name="$1"
@@ -30,6 +32,10 @@ if ((min_keep < 1)); then
 	echo "MIN_KEEP must be at least 1" >&2
 	exit 1
 fi
+if [[ -n "$gpg_recipient" ]] && ! command -v "$gpg_bin" >/dev/null 2>&1; then
+	echo "BACKUP_GPG_RECIPIENT is set but ${gpg_bin} is not available" >&2
+	exit 1
+fi
 
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir" || echo "warning: failed to restrict permissions on ${backup_dir}" >&2
@@ -44,6 +50,15 @@ fi
 echo "==> backup: ${output}"
 run_bin backup_db --output "$output"
 run_bin verify_backup --input "$output"
+
+if [[ -n "$gpg_recipient" ]]; then
+	echo "==> encrypting backup for ${gpg_recipient}"
+	"$gpg_bin" --batch --yes --encrypt --recipient "$gpg_recipient" \
+		--output "${output}.gpg" "$output"
+	# 暗号化が成功した場合のみ平文を削除（失敗時は平文を残して復旧可能にする）。
+	rm -f "$output"
+	echo "==> plaintext removed: ${output}"
+fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
 # 保持期間を超えていても残す（誤設定で全削除されるのを防ぐ）。
@@ -61,6 +76,7 @@ while IFS= read -r -d '' file; do
 		pruned=$((pruned + 1))
 		echo "pruned: ${file}"
 	fi
-done < <(find "$backup_dir" -maxdepth 1 -type f -name "${prefix}-*.db" -print0 | sort -zr)
+done < <(find "$backup_dir" -maxdepth 1 -type f \
+	\( -name "${prefix}-*.db" -o -name "${prefix}-*.db.gpg" \) -print0 | sort -zr)
 
 echo "==> complete: kept=${kept} pruned=${pruned} retention_days=${retention_days}"

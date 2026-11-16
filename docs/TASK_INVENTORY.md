@@ -98,7 +98,8 @@ status: current
 - [対応済み] リストア CLI: `restore_db` が整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換・置換後再検証を実施（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] バックアップの自動ローテーション: `scripts/backup-rotate.sh` が取得・検証・保持期間（既定30日）超過分の削除を実施。直近 `MIN_KEEP`（既定3）件は保護。静的検証と実 DB で動作確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] スケジューラ設定例: `deploy/openillustration-backup.{service,timer,cron}` を追加。`backup-rotate.sh` は `BIN_DIR` のビルド済みバイナリを優先し、実リリースバイナリで取得・検証・ローテーションを確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
-- [中] アラート通知先の設定、オフサイト保存・暗号化と実運用での復旧訓練。
+- [対応済み] バックアップ暗号化: `BACKUP_GPG_RECIPIENT` 設定時に GPG 暗号化（gpg 不在時は fail-closed）、平文は検証・暗号化成功後に削除。復号→verify_backup まで実確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+- [中] アラート通知先の設定、オフサイト保存と実運用での復旧訓練。
 
 ### 3.6 ネットワーク・アップロード・整合性
 

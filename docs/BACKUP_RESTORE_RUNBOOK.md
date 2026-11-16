@@ -58,6 +58,13 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 `RETENTION_DAYS`（既定30）を超えた世代数を削除するが、直近 `MIN_KEEP`（既定3、
 最小1）件は保持期間を超えていても残す。ファイル名の UTC タイムスタンプ順に
 新しいものから判定し、作成したばかりのバックアップは削除しない。
+
+暗号化は `BACKUP_GPG_RECIPIENT` を設定した場合のみ行う（未設定なら平文のまま）。
+設定時に `gpg`（または `GPG_BIN`）が無ければ失敗する（fail-closed）。平文は
+`verify_backup` 成功後かつ暗号化成功後にのみ削除し、暗号化失敗時は平文を残す。
+成果物は `<timestamp>.db.gpg` となる。ローテーション対象は `.db` と `.db.gpg` の両方。
+復元時は `gpg --decrypt` で平文に戻してから `restore_db` を使う。
+実 DB で暗号化→平文削除→復号→`verify_backup` 成功を確認済み。
 `bash -n` / `shellcheck` / `shfmt -d` に加え、実 DB で古い世代3件が削除され
 新しい世代が保持されることを確認済み。
 
@@ -76,6 +83,13 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 ## リストア（復旧訓練）
 
 1. 対象サーバーを停止する（SIGTERM）。readiness `/ready` が 503 になることを確認する。
+   暗号化バックアップ（`.db.gpg`）の場合は、先に復号して平文の `.db` を用意する:
+
+```bash
+gpg --decrypt --output /path/to/restored.db /path/to/backups/openillustration-YYYYMMDD-HHMMSS.db.gpg
+cargo run -p server --bin verify_backup -- --input /path/to/restored.db
+```
+
 2. リストアを実行する（WAL/SHM サイドカーが残っている場合は拒否される）:
 
 ```bash
