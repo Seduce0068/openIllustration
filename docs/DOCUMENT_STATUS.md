@@ -35,7 +35,7 @@ tags: [documentation, decisions, release-gates]
 | DEC-06 | クロスプラットフォーム | 対応OS・端末・ブラウザ・最小バージョンとJXL/JPKI/ウォレットの実機試験範囲を確定する | 未決定 |
 | DEC-07 | 性能・費用 | 測定条件、初期表示・API・転送量・Wasmサイズ・運用費・手数料の受入値を合意する | 未決定 |
 | DEC-08 | 本番ネットワーク・運用 | ホスティング、TLS、プロキシ、CORS、IPポリシー、復旧手順を確定する | 未決定 |
-| DEC-09 | OSSライセンス | 依存ライセンスを確認し、適用範囲を明示する | `AGPL-3.0-or-later` 確定、Cargoへ宣言済み。実行時依存は棚卸し済み（[依存ライセンス監査](DEPENDENCY_LICENSES.md)）。`cargo-deny` によるCI検査を追加済み。配布物同梱スクリプト（`scripts/prepare-distribution.sh`）を実装し、LICENSE/NOTICE/依存一覧/依存ライセンス本文（451件）を生成可能。配布チャネル確定時の同梱手順は未整備 |
+| DEC-09 | OSSライセンス | 依存ライセンスを確認し、適用範囲を明示する | `AGPL-3.0-or-later` 確定、Cargoへ宣言済み。実行時依存は棚卸し済み（[依存ライセンス監査](DEPENDENCY_LICENSES.md)）。`cargo-deny` によるCI検査を追加済み。配布物同梱スクリプト（`scripts/prepare-distribution.sh`）を実装し、LICENSE/NOTICE/依存一覧/依存ライセンス本文（452件）を生成可能（`cargo deny check licenses` を事前実施）。配布チャネル確定時の同梱手順は未整備 |
 
 これらは本番公開のゲートであり、試作開発や文書レビューの継続を妨げるものではない。
 選択肢・根拠・承認者が定まった判断は個別ADRへ記録し、本書の状態を更新する。

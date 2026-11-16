@@ -19,6 +19,10 @@ for tool in jq cargo; do
 	fi
 done
 
+# 配布前にライセンス許容性を検証する（不整合ならここで失敗し、古い成果物を更新しない）。
+echo "==> cargo deny check licenses"
+cargo deny check licenses
+
 mkdir -p "$out_dir"
 
 echo "==> ライセンス本文を配置"
@@ -33,9 +37,14 @@ cargo deny list --format json |
       | [$license, .] | @tsv
     ' >"${out_dir}/DEPENDENCIES.tsv"
 
+dependency_count="$(wc -l <"${out_dir}/DEPENDENCIES.tsv")"
+echo "==> 依存ライセンスエントリ: ${dependency_count}"
+
 echo "==> NOTICE を生成"
 {
 	echo "openIllustration / Digital Guild"
+	echo "Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	echo "License entries: ${dependency_count}"
 	echo "Copyright (c) 2026 koppe"
 	echo ""
 	echo "This distribution is licensed under AGPL-3.0-or-later."
