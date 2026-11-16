@@ -35,7 +35,7 @@ tags: [operations, security, payments]
 ## 3. 監査・モデレーション
 
 - MVPではDBを正本とする。投票期間は通報から7日とし、期限到達後に集計する。定足数3票未達なら通報を棄却して `Approved` に復帰し、3票以上なら多数決（同数は `Rejected`、ADR-0004、公開継続リスクを避ける安全側判断）で確定する。期限前の即時確定は行わない。
-- 確定は `POST /mod/reports/{report_id}/finalize` を認証済みで呼び出して実行する。期限到達の自動検知は未実装のため、呼び出し漏れを防ぐ運用ルールを定める。
+- 期限到達はバックグラウンドワーカーが自動検知して確定する（周期は `MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、範囲30〜3600秒）。手動の `POST /mod/reports/{report_id}/finalize` も可能で、両者は冪等。複数インスタンス運用時は同じDBに対する simultaneous finalize を避けるため、現状は単一ライター運用を前提とする。
 - 運用者はプロジェクト側で固定せず、各デプロイの所有者（個人・企業いずれでも可）が `MODERATION_OPERATOR_HASHES` に JPKI 由来の user_hash を設定する。未設定なら BAN/UNBAN/UNPIN はすべて拒否される。本番では実 JPKI 由来の hash のみ設定し、`ALLOW_MOCK_AUTH=1` と併用しない。
 - BAN は根拠と期間を必須とし、UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。これは運用ログであり第三者検証可能な監査ではない。投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。

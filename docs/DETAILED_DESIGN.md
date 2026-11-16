@@ -114,7 +114,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
 - 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
 - 運用者はプロジェクト側で固定せず、各デプロイが `MODERATION_OPERATOR_HASHES` で設定する。未設定・未登録・BAN済みの主体は BAN/UNBAN/UNPIN を拒否する。BAN は根拠と期間（日数）を必須とし、UNPIN は判断と理由のみを記録する（実 Pinata ピン解除は手動）。これらは `governance_audit_log` に保存するが、DEC-04 の第三者検証可能な監査ではない。
-- **未実装**: 期限到達の自動検知（明示 finalize が必要）、投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、第三者検証可能な監査。モデレーション結果を法的判断とみなさない。
+- 期限到達は起動時のバックグラウンドワーカーが自動検知し、`MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒、30〜3600秒）ごとに `finalize_due_reports` を実行する。停止シグナルでワーカーも終了する。手動の `POST /mod/reports/{report_id}/finalize` も残しており、両者は冪等。
+- **未実装**: 投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、第三者検証可能な監査。モデレーション結果を法的判断とみなさない。
 
 ## 5. データモデル（現行起動時DDLの要約）
 

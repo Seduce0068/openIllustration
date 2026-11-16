@@ -387,7 +387,17 @@ pub async fn run() -> anyhow::Result<()> {
         moderation_operators,
     });
 
+    let worker_db = Arc::clone(&shared_state.db);
     let app = build_router(shared_state);
+
+    let finalize_interval_secs = std::env::var("MODERATION_FINALIZE_INTERVAL_SECS").ok();
+    let finalize_interval = moderation_finalize_interval(finalize_interval_secs.as_deref());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let finalizer = tokio::spawn(run_moderation_finalizer(
+        worker_db,
+        finalize_interval,
+        shutdown_rx,
+    ));
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -396,8 +406,12 @@ pub async fn run() -> anyhow::Result<()> {
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .with_graceful_shutdown(shutdown_signal())
+    .with_graceful_shutdown(async move {
+        shutdown_signal().await;
+        let _ = shutdown_tx.send(());
+    })
     .await?;
+    let _ = finalizer.await;
     Ok(())
 }
 
@@ -586,6 +600,72 @@ pub fn moderation_operators(env_value: Option<&str>) -> HashSet<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
+}
+
+/// ADR-0004: 自動確定ワーカーの周期（秒）。範囲外・不正値は既定 300 秒へフォールバック。
+pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
+    const DEFAULT_SECS: u64 = 300;
+    const MIN_SECS: u64 = 30;
+    const MAX_SECS: u64 = 3600;
+    env_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_SECS))
+}
+
+/// 期限到達済みの未確定通報をまとめて確定する。自動ワーカーと手動操作の共通処理。
+pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
+    let mut rows = db
+        .query(
+            "SELECT r.report_id FROM reports r
+             JOIN contents c ON r.target_cid = c.cid
+             WHERE c.status = 'Reported'
+               AND r.concluded_at IS NULL
+               AND datetime('now') >= COALESCE(r.deadline_at, datetime(r.created_at, '+7 days'))",
+            (),
+        )
+        .await?;
+    let mut report_ids = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let report_id: i64 = row.get(0)?;
+        report_ids.push(report_id);
+    }
+
+    let mut finalized = 0;
+    for report_id in report_ids {
+        let tx = db.transaction().await?;
+        process_report_conclusion(&tx, report_id).await?;
+        tx.commit().await?;
+        finalized += 1;
+    }
+    Ok(finalized)
+}
+
+/// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
+async fn run_moderation_finalizer(
+    db: Arc<Connection>,
+    interval: Duration,
+    mut shutdown: tokio::sync::watch::Receiver<()>,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker.tick().await; // 起動直後の即時 tick は消費する
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                match finalize_due_reports(db.as_ref()).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!("Auto-finalized {} moderation report(s)", count),
+                    Err(error) => tracing::warn!("Moderation finalization failed: {}", error),
+                }
+            }
+            _ = shutdown.changed() => {
+                tracing::info!("Moderation finalizer stopped");
+                break;
+            }
+        }
+    }
 }
 
 /// DEC-02: 有効な年齢判定ポリシー（非秘密設定値）を常時公開する。

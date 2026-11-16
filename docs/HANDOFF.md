@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 154件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 158件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -182,6 +182,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   未設定・空要素は無視され、該当しない主体の BAN/UNBAN/UNPIN は `403` で拒否される。
   本番では実 JPKI 由来の hash のみを設定し、`ALLOW_MOCK_AUTH=1` と併用しない。
   セルフホストごとに異なる運用者を置けるため、プロジェクト側の固定値はない。
+- `MODERATION_FINALIZE_INTERVAL_SECS`: 自動確定ワーカーの走査周期（秒）。既定 `300`、
+  有効範囲 30〜3600。範囲外・不正値は既定へフォールバック。停止シグナルでワーカーも終了する。
 
 ### ネットワーク
 
@@ -233,7 +235,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   `sub` 単位の全セッション失効はインメモリ閾値方式（`iat` 比較、再認証で新しい `iat` を発行）を実装済み。永続化・多プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。
-- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。残るは期限到達の自動検知、投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
+- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（`MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
 - 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
   到達可能性と更新案は

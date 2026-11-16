@@ -5172,3 +5172,98 @@ async fn test_unpin_records_decision_with_audit() {
     assert_eq!(actor, "operator");
     assert_eq!(reason, "concluded illegal content");
 }
+
+// ---- ADR-0004: 期限到達の自動検知（ワーカー共通処理） ----
+
+#[test]
+fn test_moderation_finalize_interval_defaults_and_bounds() {
+    use std::time::Duration;
+    assert_eq!(
+        crate::moderation_finalize_interval(None),
+        Duration::from_secs(300)
+    );
+    assert_eq!(
+        crate::moderation_finalize_interval(Some("60")),
+        Duration::from_secs(60)
+    );
+    assert_eq!(
+        crate::moderation_finalize_interval(Some("29")),
+        Duration::from_secs(300),
+        "too short must fall back"
+    );
+    assert_eq!(
+        crate::moderation_finalize_interval(Some("3601")),
+        Duration::from_secs(300),
+        "too long must fall back"
+    );
+    assert_eq!(
+        crate::moderation_finalize_interval(Some("abc")),
+        Duration::from_secs(300)
+    );
+}
+
+#[tokio::test]
+async fn test_finalize_due_reports_skips_before_deadline() {
+    let (_app, db) = setup_mod_app().await;
+    let count = crate::finalize_due_reports(&db).await.unwrap();
+    assert_eq!(count, 0, "a fresh report must not be auto-finalized");
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, "Reported");
+}
+
+#[tokio::test]
+async fn test_finalize_due_reports_concludes_expired_report() {
+    let (_app, db) = setup_mod_app().await;
+    expire_report(&db, 1).await;
+
+    let count = crate::finalize_due_reports(&db).await.unwrap();
+    assert_eq!(count, 1, "the expired report must be auto-finalized");
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Approved",
+        "zero votes means quorum-not-met dismissal"
+    );
+
+    let mut rows = db
+        .query("SELECT concluded_at FROM reports WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let concluded: Option<String> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(concluded.is_some(), "conclusion time must be recorded");
+
+    let again = crate::finalize_due_reports(&db).await.unwrap();
+    assert_eq!(again, 0, "finalization must be idempotent");
+}
+
+#[tokio::test]
+async fn test_finalize_due_reports_handles_multiple_reports() {
+    let (_app, db) = setup_mod_app().await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmSecond', 'Novel', 'owner', 'def', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
+             VALUES (2, 'QmSecond', 'second', datetime('now', '-1 day'))",
+        (),
+    )
+    .await
+    .unwrap();
+    expire_report(&db, 1).await;
+
+    let count = crate::finalize_due_reports(&db).await.unwrap();
+    assert_eq!(count, 2, "all expired reports must be finalized");
+}
