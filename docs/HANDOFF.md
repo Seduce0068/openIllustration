@@ -226,6 +226,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
+- 起動時は `<DB path>.instance.lock` で単一ライターを強制（第二インスタンスは拒否、停止時に削除）。同じ DB を複数プロセスで起動しないこと。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。
 - `server/src/bin/restore_db.rs`: リストア（整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換）。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。

@@ -5786,6 +5786,49 @@ async fn concurrent_begin_without_lock_is_rejected() {
     assert_eq!(failed, 1, "a second concurrent BEGIN should fail");
 }
 
+/// 単一ライター検出: 生存 PID のロックがある場合は取得を拒否する。
+#[test]
+fn test_instance_lock_rejects_live_pid() {
+    let dir = std::env::temp_dir().join(format!(
+        "openillustration_instance_lock_test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = dir.join("instance.db.instance.lock");
+
+    // 自分自身の PID を書き込むと生存と判定され、2回目の取得は拒否される。
+    std::fs::write(&lock, format!("{}\n", std::process::id())).unwrap();
+    assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_err());
+
+    // ロックファイルを削除すれば再取得できる。
+    std::fs::remove_file(&lock).unwrap();
+    assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok());
+    let contents = std::fs::read_to_string(&lock).unwrap();
+    assert_eq!(contents.trim().parse::<u32>().unwrap(), std::process::id());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 死んだ PID のロックは stale として回収できる。
+#[test]
+fn test_instance_lock_recovers_stale_lock() {
+    let dir = std::env::temp_dir().join(format!(
+        "openillustration_stale_lock_test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = dir.join("instance.db.instance.lock");
+    std::fs::write(&lock, "99999999\n").unwrap();
+
+    assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok());
+    let contents = std::fs::read_to_string(&lock).unwrap();
+    assert_eq!(contents.trim().parse::<u32>().unwrap(), std::process::id());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---- liveness / readiness ----
 
 #[tokio::test]

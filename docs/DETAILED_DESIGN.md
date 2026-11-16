@@ -46,6 +46,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
 - ログは `tracing` + `tracing-subscriber` で標準出力へ出し、`RUST_LOG` でレベルを制御する（未設定時は INFO、タイムスタンプは RFC 3339 UTC）。JWT・認証ヘッダ・投稿本文など機微情報はログへ出さない。
 - 停止時は SIGTERM/SIGINT を捕捉し、処理中リクエストの完了を待って終了する（graceful shutdown）。待ち時間は `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、範囲 1〜300）で上限を設け、超過時は警告ログを出して残接続を切断する。停止シグナルで readiness は 503 へ切り替わる。
+- 起動時はローカル DB の `<DB path>.instance.lock` を原子的に作成し、単一ライターを強制する。生存 PID のロックがある場合は第二インスタンスの起動を拒否（fail-closed）。クラッシュ後の stale ロックは自動回収し、正常停止時に削除する。リモート DB はこの排他が使えず警告のみ。
 
 ## 2. 認証・認可（必須要件 / 現行実装との差分）
 

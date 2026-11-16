@@ -306,20 +306,83 @@ fn init_tracing() {
         .init();
 }
 
+/// ロックファイルに記録された PID が生存しているか（Linux の /proc を使用）。
+/// /proc が無い環境では stale と判断せず、安全側に倒して拒否する。
+fn pid_alive(pid: u32) -> bool {
+    let proc_path = format!("/proc/{pid}");
+    std::path::Path::new(&proc_path).exists()
+}
+
+/// 単一ライター用のロックファイルを原子的に取得する。
+fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)
+    {
+        Ok(mut file) => {
+            writeln!(file, "{}", std::process::id())?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let contents = std::fs::read_to_string(lock_path).unwrap_or_default();
+            let stale_pid = contents.trim().parse::<u32>().ok();
+            if stale_pid.is_some_and(pid_alive) {
+                anyhow::bail!(
+                    "another server instance appears to be running (lock: {lock_path}, pid: {})",
+                    stale_pid.unwrap()
+                );
+            }
+            // クラッシュ後の残骸。原子的に削除して再取得を試みる。
+            std::fs::remove_file(lock_path)?;
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(lock_path)?;
+            writeln!(file, "{}", std::process::id())?;
+            file.sync_all()?;
+            Ok(())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
 
-    let db = if db_url.starts_with("file:") || !db_url.contains("://") {
-        let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
+    let local_path = if db_url.starts_with("file:") || !db_url.contains("://") {
+        Some(db_url.strip_prefix("file:").unwrap_or(&db_url).to_string())
+    } else {
+        None
+    };
+
+    let db = if let Some(path) = &local_path {
         Builder::new_local(path).build().await?.connect()?
     } else {
         Builder::new_remote(db_url, db_token)
             .build()
             .await?
             .connect()?
+    };
+
+    // 単一ライター運用を起動時に強制する。ロックファイルを原子的に作成し、
+    // 第二インスタンスの起動を fail-closed で拒否する。
+    // リモート DB はこの排他が使えないため警告に留める。
+    let instance_lock = if let Some(path) = &local_path {
+        let lock_path = format!("{path}.instance.lock");
+        acquire_instance_lock(&lock_path)?;
+        tracing::info!("single-writer lock acquired: {lock_path}");
+        Some(lock_path)
+    } else {
+        warn!("remote DB configured: single-writer lock is not enforced; ensure only one writer");
+        None
     };
 
     // Run database migrations
@@ -475,6 +538,10 @@ pub async fn run() -> anyhow::Result<()> {
         }
     }
     let _ = finalizer.await;
+    // ロックファイルを削除して次の起動を許可する。
+    if let Some(path) = instance_lock {
+        let _ = std::fs::remove_file(&path);
+    }
     Ok(())
 }
 
