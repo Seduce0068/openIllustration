@@ -112,7 +112,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
   JWT主体と `juror_hash` の一致、結果値、重複投票を検査する。存在しない
   `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合は400で拒否する。
-- 現行実装は3票以上で多数決し、RejectがApproveを上回る場合に `Rejected`、それ以外を `Approved` とする。同数はApprovedとなる。
+- 現行実装は3票以上で多数決し、RejectがApprove以上の場合に `Rejected`、それ以外を `Approved` とする。同数は `Rejected` となる（ADR-0004 採用）。
 - 確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
 - **未決定**: 投票期間、投票資格・選出方法、同数時の再審査、通報者制限、結果への異議申立て、Rejected後のBAN方針。
 - **未実装**: オンチェーン記録、ランダム陪審員選出、BANテーブル移行。モデレーション結果を法的判断とみなさない。
