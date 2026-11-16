@@ -89,6 +89,10 @@ pub struct OidcConfig {
     pub scopes: String,
     pub cookie_secure: bool,
     pub clock_skew_secs: u64,
+    /// 要求する保証レベル（acr）。未指定なら検証しない（開発用）。
+    pub required_acr: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    /// 要求する認証方法（amr）。未指定なら検証しない（開発用）。
+    pub required_amr: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 struct PendingAuth {
@@ -112,6 +116,16 @@ impl OidcState {
         }
     }
 
+    /// カンマ区切りの設定値を空要素を除いて分割する。
+    fn split_config_list(value: &str) -> Vec<String> {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
     /// 必須の環境変数が揃っている場合だけ有効化する。
     /// 不完全な設定で中途半端に起動しないよう fail-closed にする。
     pub fn from_env() -> Option<Arc<Self>> {
@@ -130,6 +144,12 @@ impl OidcState {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(60);
+        let required_acr = std::env::var("OIDC_REQUIRED_ACR")
+            .map(|value| Self::split_config_list(&value))
+            .unwrap_or_default();
+        let required_amr = std::env::var("OIDC_REQUIRED_AMR")
+            .map(|value| Self::split_config_list(&value))
+            .unwrap_or_default();
 
         Some(Arc::new(Self::new(OidcConfig {
             issuer,
@@ -142,7 +162,16 @@ impl OidcState {
             scopes,
             cookie_secure,
             clock_skew_secs,
+            required_acr: std::sync::Arc::new(std::sync::Mutex::new(required_acr)),
+            required_amr: std::sync::Arc::new(std::sync::Mutex::new(required_amr)),
         })))
+    }
+
+    /// テスト用: 要求する保証レベルを設定する（本番は環境変数から読む）。
+    #[cfg(test)]
+    pub fn set_required_assurance(&self, acr: Vec<String>, amr: Vec<String>) {
+        *self.config.required_acr.lock().unwrap() = acr;
+        *self.config.required_amr.lock().unwrap() = amr;
     }
 
     fn take_pending(&self, state: &str) -> Result<PendingAuth, AppError> {
@@ -214,6 +243,8 @@ struct IdTokenClaims {
     sub: String,
     nonce: Option<String>,
     at_hash: Option<String>,
+    acr: Option<String>,
+    amr: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -384,6 +415,42 @@ async fn verify_id_token(
         return Err(AppError::Unauthorized(
             "ID token issuer mismatch".to_string(),
         ));
+    }
+
+    // 保証レベル (acr) と認証方法 (amr) は設定時のみ検証する。
+    // 要求値があるのにクレームが欠ける場合は本番有効化しない（fail-closed）。
+    let required_acr = oidc
+        .config
+        .required_acr
+        .lock()
+        .map_err(|_| AppError::Internal("assurance config is poisoned".to_string()))?;
+    if !required_acr.is_empty() {
+        let actual = claims.acr.as_deref();
+        if !required_acr
+            .iter()
+            .any(|required| actual == Some(required.as_str()))
+        {
+            return Err(AppError::Unauthorized(
+                "ID token acr does not satisfy the required assurance level".to_string(),
+            ));
+        }
+    }
+    drop(required_acr);
+    let required_amr = oidc
+        .config
+        .required_amr
+        .lock()
+        .map_err(|_| AppError::Internal("assurance config is poisoned".to_string()))?;
+    if !required_amr.is_empty() {
+        let actual = claims.amr.as_deref().unwrap_or_default();
+        if !required_amr
+            .iter()
+            .all(|required| actual.iter().any(|value| value == required))
+        {
+            return Err(AppError::Unauthorized(
+                "ID token amr does not satisfy the required authentication methods".to_string(),
+            ));
+        }
     }
 
     Ok(claims)

@@ -358,6 +358,7 @@ impl MockOidcServer {
             at_hash_override: at_hash_override.clone(),
             forged_key_der: forged_key_der.clone(),
             omit_kid: omit_kid.clone(),
+            assurance: Arc::new(std::sync::Mutex::new(None)),
             encoding_key,
             jwks: json!({
                 "keys": [{
@@ -446,6 +447,8 @@ impl Drop for MockOidcServer {
     }
 }
 
+type AssuranceOverride = Arc<std::sync::Mutex<Option<(String, Vec<String>)>>>;
+
 struct MockOidcState {
     base_url: String,
     client_id: String,
@@ -453,6 +456,8 @@ struct MockOidcState {
     at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
     forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     omit_kid: Arc<std::sync::Mutex<bool>>,
+    /// Some の場合のみ acr/amr クレームを発行する（保証レベル検証用）。
+    assurance: AssuranceOverride,
     encoding_key: EncodingKey,
     jwks: serde_json::Value,
 }
@@ -497,6 +502,11 @@ async fn mock_token(
         "nonce": nonce,
         "at_hash": at_hash,
     });
+    let mut claims = claims;
+    if let Some((acr, amr)) = state.assurance.lock().unwrap().clone() {
+        claims["acr"] = json!(acr);
+        claims["amr"] = json!(amr);
+    }
     let mut header = Header::new(Algorithm::ES256);
     if !*state.omit_kid.lock().unwrap() {
         header.kid = Some("test-kid".to_string());
@@ -538,6 +548,8 @@ async fn setup_app_with_oidc() -> (
         scopes: "openid".to_string(),
         cookie_secure: false,
         clock_skew_secs: 60,
+        required_acr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        required_amr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let oidc = Arc::new(crate::oidc::OidcState::new(config));
 
@@ -4025,6 +4037,56 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
 }
 
 /// ADR-0002: OIDC start と callback で PPID をセッションJWTへ結合する。
+/// OIDC: 要求 acr/amr を満たす ID トークンのみ受理する（fail-closed）。
+#[tokio::test]
+async fn test_oidc_required_acr_amr() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    *mock.state.assurance.lock().unwrap() = Some((
+        "urn:example:loa:2".to_string(),
+        vec!["pwd".into(), "otp".into()],
+    ));
+    oidc.set_required_assurance(
+        vec!["urn:example:loa:2".to_string()],
+        vec!["pwd".to_string(), "otp".to_string()],
+    );
+
+    // 満たす場合は既存フローどおり成功する。
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    assert_eq!(body["authorized"], true);
+
+    // 要求 amr を増やすと不足で拒否される。
+    oidc.set_required_assurance(
+        vec!["urn:example:loa:2".to_string()],
+        vec!["pwd".to_string(), "otp".to_string(), "hwk".to_string()],
+    );
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    *mock.nonce.lock().unwrap() = Some(oidc.pending_nonce(&auth_state).unwrap());
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 #[tokio::test]
 async fn test_oidc_start_and_callback() {
     let (app, oidc, mock, _db) = setup_app_with_oidc().await;

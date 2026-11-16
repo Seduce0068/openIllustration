@@ -83,8 +83,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 6. `POST /auth/backchannel-logout` は logout token の署名・`iss`・`aud`・
    `events` を検証し、`sid` を失効させる。`sub` が含まれる場合は `sub` 単位の失効閾値（`iat` 比較）を記録し既存セッションを拒否する。閾値は `revoked_subs` テーブルへも保存し、起動時にログインへロードして再起動後も失効を維持する。再認証時は閾値より新しい `iat` を発行して再ログインを許容し、DB の閾値も削除する（多プロセス共有・実OP連携は未検証）。
 7. リフレッシュトークンは `refresh_tokens` テーブルに SHA-256 ハッシュのみ保存し、ログイン時に 30 日間有効なトークンを HttpOnly Cookie で発行する。`POST /auth/refresh` は毎回トークンを回転し、使用済みトークンの再提示を検知した場合はファミリ全体を失効する。ログアウト時もファミリを失効する。
-8. 未実装: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
-   複数プロセス間の失効状態共有・実OP運用整合（`sub` 失効の DB 永続化は実装済み）。
+8. `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` を設定すると ID トークンの
+   `acr`（いずれか一致）と `amr`（すべて含有）を検証し、欠落・不一致なら
+   認証を拒否する（fail-closed）。本番では両方の設定を必須とする。
+   未実装: `auth_time`/`max_age`、複数プロセス間の失効状態共有・実OP運用整合
+   （`sub` 失効の DB 永続化は実装済み）。
 9. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
    現行のテストはローカルOPモックでフローと検証項目を確認する。
 
