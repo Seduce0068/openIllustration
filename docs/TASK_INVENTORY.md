@@ -82,7 +82,8 @@ status: current
 
 ### 3.5 DB・移行・信頼性
 
-- [中] **ロールバック方針（down migration）未実装**、既存DB移行試験未実施（`server/migrations/`, `server/src/migration.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] **既存DBの段階的アップグレード試験**: 001→003 適用済みDBに 004 を追加して新カラムの backfill と既存データ保持を確認。`verify_migrations` は適用済みだがファイルが無いバージョンを検出し起動を拒否（古いデプロイイメージ誤用の防止）。
+- [中] **ロールバック方針（down migration）未実装**、複数インスタンス同時起動の排他未実装（`server/migrations/`, `server/src/migration.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [中] **複数インスタンス同時起動時のマイグレーション排他**（DBロック等）または単一ライター運用の決定と実装（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] バックアップ/リストア手順の整備と復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [低] マイグレーション一覧の文書整合: `server/migrations/` には `003_payment_order_index.sql` があるが [DETAILED_DESIGN.md](DETAILED_DESIGN.md) の現行記載は 001,002 のみ（要確認・更新）。
@@ -122,7 +123,7 @@ status: current
 | 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— ローカル検証コマンドに連番・Merkle root・`--expect-root` を追加済み（欠落/切詰め検出は実測済み）。署名・外部アンカー・公開範囲・実運用試験は未実施（DEC-04） |
 | 互換性/性能 | COMPAT-01/02, PERF-01 の環境・閾値未決定、Wasm/JXL非対応時フォールバック |
 | ネットワーク/運用 | 実プロキシ/多段/WAF、ログ集約・アラート、drain/readiness |
-| DB | ロールバック、並行起動、既存DB移行試験 |
+| DB | ロールバック、並行起動（段階的アップグレードと欠落マイグレーション検出は検証済み） |
 | IPFS/アップロード | 実ゲートウェイ遅延・切断・Pinata連携、厳密CID検証、完全JXLデコード・デコード前検査、実multipart境界・実鍵署名 |
 | 表示/E2E | Markdown のブラウザ別URL解釈（CONTENT-04）、モデレーション期限・異議のE2E、OIDC/決済/RS256経路のE2E拡張 |
 | テスト基盤 | [対応済み 22dc270] `server/src/tests.rs` の環境変数変更テストを async mutex で直列化（`unsafe` env操作自体は std API 上必要） |

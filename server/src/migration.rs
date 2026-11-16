@@ -254,6 +254,27 @@ pub async fn verify_migrations_from(
 
     entries.sort_by_key(|e| e.file_name());
 
+    let file_versions: std::collections::HashSet<String> = entries
+        .iter()
+        .filter_map(|entry| {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            let version = filename.split('_').next().unwrap_or("").to_string();
+            (!version.is_empty()).then_some(version)
+        })
+        .collect();
+
+    // 適用済みだがファイルが無いバージョンは、古いバイナリ/誤った migrations ディレクトリ。
+    // 想定より新しいスキーマに対して起動すると後続の SQL が失敗するため早期に拒否する。
+    let applied = get_applied_versions(db).await?;
+    if let Some(unknown) = applied
+        .iter()
+        .find(|version| !file_versions.contains(*version))
+    {
+        return Err(AppError::Internal(format!(
+            "Applied migration {unknown} has no matching file; refusing to start with an older or mismatched migration set"
+        )));
+    }
+
     for entry in entries {
         let filename = entry.file_name().to_string_lossy().to_string();
         let version = filename.split('_').next().unwrap_or("").to_string();
@@ -369,6 +390,99 @@ mod tests {
         .await
         .unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 既存DBの段階的アップグレード（001→003 適用後に 004 を追加）を再現する。
+    #[tokio::test]
+    async fn upgrades_existing_database_with_new_migration() {
+        let dir = temp_migrations_dir("upgrade");
+        fs::write(
+            dir.join("001_initial.sql"),
+            "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("002_index.sql"),
+            "CREATE INDEX idx_items_name ON items(name);",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("003_column.sql"),
+            "ALTER TABLE items ADD COLUMN note TEXT;",
+        )
+        .unwrap();
+
+        let db = Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap();
+        run_migrations_from(&db, &dir).await.unwrap();
+        db.execute("INSERT INTO items (id, name) VALUES (1, 'old')", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            get_applied_versions(&db).await.unwrap(),
+            vec!["001".to_string(), "002".to_string(), "003".to_string()]
+        );
+
+        // 新しいマイグレーションを追加して再起動相当の処理を実行
+        fs::write(
+            dir.join("004_deadline.sql"),
+            "ALTER TABLE items ADD COLUMN deadline_at DATETIME;\nUPDATE items SET deadline_at = datetime('now', '+7 days') WHERE deadline_at IS NULL;",
+        )
+        .unwrap();
+        run_migrations_from(&db, &dir).await.unwrap();
+        verify_migrations_from(&db, &dir).await.unwrap();
+
+        let mut rows = db
+            .query("SELECT name, note, deadline_at FROM items WHERE id = 1", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let name: String = row.get(0).unwrap();
+        let note: Option<String> = row.get(1).unwrap();
+        let deadline: Option<String> = row.get(2).unwrap();
+        assert_eq!(name, "old", "existing data must survive the upgrade");
+        assert!(note.is_none());
+        assert!(deadline.is_some(), "backfill must populate the new column");
+        assert_eq!(get_applied_versions(&db).await.unwrap().len(), 4);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn verify_migrations_rejects_missing_applied_version() {
+        let dir = temp_migrations_dir("missing");
+        fs::write(
+            dir.join("001_initial.sql"),
+            "CREATE TABLE v1_table (id INTEGER PRIMARY KEY);",
+        )
+        .unwrap();
+        fs::write(
+            dir.join("002_later.sql"),
+            "ALTER TABLE v1_table ADD COLUMN later TEXT;",
+        )
+        .unwrap();
+
+        let db = Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap();
+        run_migrations_from(&db, &dir).await.unwrap();
+
+        // 002 のファイルを失った状態（古いデプロイイメージ等）を再現
+        fs::remove_file(dir.join("002_later.sql")).unwrap();
+        let err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("no matching file"),
+            "unexpected error: {err}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
