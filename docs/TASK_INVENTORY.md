@@ -112,6 +112,7 @@ status: current
 - [対応済み] IPFS ストリーム切断: 宣言 Content-Length を実際より大きくしたローカルモックで不完全データを返さないことを検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [中] IPFS: 厳密なCID仕様検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実 multipart サイズ境界: `Content-Length` 検査ミドルウェアを追加し、10 MiB 超を 413 で拒否（単体テストと実サーバーで確認）。虚偽/欠落時は axum の本文制限が多層防御（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] アップロード重複フィールド: 同一 `price` の二重送信が 400（Duplicate price field）で拒否される回帰テストを追加（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [低] アップロード: 完全なJPEG XLデコード検証、画像デコード前検査、安全な保存名、実鍵署名試験（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.7 運用・可観測性・停止動作

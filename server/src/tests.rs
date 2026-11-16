@@ -1652,6 +1652,66 @@ async fn test_upload_rejects_unknown_multipart_fields() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// CONTENT-01: 同一フィールドの重複は ambiguous な解釈を避けるため 400 で拒否する。
+#[tokio::test]
+async fn test_upload_rejects_duplicate_fields() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // price を2回送る（片方だけなら正常な本文）。
+    let duplicate_price = |boundary: &str| -> Vec<u8> {
+        let mut body = Vec::new();
+        for price in ["0", "100"] {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"price\"\r\n\r\n{price}\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.jxl\"\r\nContent-Type: image/jxl\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(&[0xFF, 0x0A, 0x00, 0x01]);
+        body.extend_from_slice(
+            format!(
+                "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"owner_hash\"\r\n\r\ntest_user\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(&[0u8; 16]);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        body
+    };
+
+    let boundary = "duplicate-price";
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(duplicate_price(boundary)))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("Duplicate price field"),
+        "rejection must name the duplicated field: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
 /// CONTENT-01: 負価格・非整数・64bit範囲外の価格は保存前に400で拒否する。
 /// 価格以外は正常な multipart 本文で送信し、400 が価格検証そのものに
 /// 由来することを保証する（価格検証を外すと200で保存される）。
