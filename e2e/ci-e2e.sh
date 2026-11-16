@@ -20,8 +20,8 @@ trap 'rm -rf "$workdir"' EXIT
 
 echo "==> trunk ${trunk_version} を導入"
 curl -sSfL --connect-timeout 10 --retry 3 --retry-delay 2 \
-  -o "${workdir}/${trunk_tarball}" \
-  "https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
+	-o "${workdir}/${trunk_tarball}" \
+	"https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
 echo "${trunk_sha256}  ${workdir}/${trunk_tarball}" | sha256sum -c -
 tar -xzf "${workdir}/${trunk_tarball}" -C "${workdir}" trunk
 export PATH="${workdir}:${PATH}"
@@ -39,18 +39,19 @@ npm --version
 # Google Chrome が必要（GitHub Actions の ubuntu イメージには同梱）。
 # Playwright は PATH に加えて /opt/google/chrome/chrome も参照する。
 if command -v google-chrome >/dev/null 2>&1; then
-  google-chrome --version
+	google-chrome --version
 elif [ -x /opt/google/chrome/chrome ]; then
-  /opt/google/chrome/chrome --version
+	/opt/google/chrome/chrome --version
 else
-  echo "Google Chrome が見つからない。channel: chrome を使う E2E には必須。" >&2
-  exit 1
+	echo "Google Chrome が見つからない。channel: chrome を使う E2E には必須。" >&2
+	exit 1
 fi
 
 # E2E 用 JWT シークレットと一時 DB は実行ごとに生成し、既知の固定値や
 # リポジトリ内/前回実行の状態を CI で再利用しない（ローカルの固定既定値は
 # e2e/playwright.config.ts を参照）。
-export E2E_JWT_SECRET="$(openssl rand -hex 32)"
+E2E_JWT_SECRET="$(openssl rand -hex 32)"
+export E2E_JWT_SECRET
 export DATABASE_URL="file:${workdir}/e2e.db"
 # ローカルで 8080 が code-server 等に占有されている場合でも実行できるよう、
 # 未指定時は代替ポートを使う（CI では環境変数で上書き可能）。
@@ -68,10 +69,10 @@ echo "==> 型チェック"
 
 echo "==> Playwright テスト"
 if ! (cd e2e && npm test); then
-  # extra_gates では artifact を回収できないため、失敗時は Playwright が
-  # 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
-  echo "::error::Playwright E2E failed"
-  find e2e/test-results -name 'error-context.md' -print 2>/dev/null || true
-  find e2e/test-results -name 'error-context.md' -exec head -c 20000 {} \; 2>/dev/null || true
-  exit 1
+	# extra_gates では artifact を回収できないため、失敗時は Playwright が
+	# 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
+	echo "::error::Playwright E2E failed"
+	find e2e/test-results -name 'error-context.md' -print 2>/dev/null || true
+	find e2e/test-results -name 'error-context.md' -exec head -c 20000 {} \; 2>/dev/null || true
+	exit 1
 fi

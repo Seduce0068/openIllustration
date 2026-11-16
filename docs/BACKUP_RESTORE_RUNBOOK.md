@@ -33,6 +33,22 @@ cargo run -p server --bin backup_db -- \
 `VACUUM INTO` により一貫性のあるスナップショットを作成する。
 成功時は `backup_ok: output=... tables=...` を出力する。
 
+定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
+古い世代の削除を一行で行う（server 起動中でも実行可）:
+
+```bash
+# Kubuntu / cron 等から実行
+BACKUP_DIR=/var/backups/openillustration \
+RETENTION_DAYS=30 MIN_KEEP=3 \
+  /path/to/openIllustration/scripts/backup-rotate.sh
+```
+
+`RETENTION_DAYS`（既定30）を超えた世代数を削除するが、直近 `MIN_KEEP`（既定3、
+最小1）件は保持期間を超えていても残す。ファイル名の UTC タイムスタンプ順に
+新しいものから判定し、作成したばかりのバックアップは削除しない。
+`bash -n` / `shellcheck` / `shfmt -d` に加え、実 DB で古い世代3件が削除され
+新しい世代が保持されることを確認済み。
+
 ## バックアップ検証
 
 ```bash
@@ -82,5 +98,6 @@ cargo run -p server --bin restore_db -- \
 
 - 複数インスタンス運用時の排他（現状は単一ライター前提）。
 - 暗号化、オフサイト保存、保持期間、削除方針。
-- 自動バックアップスケジュールとアラート。
+- スケジューラへの登録（cron / systemd timer）と失敗時のアラート。
+- バックアップの暗号化とオフサイト保存。
 - アプリケーションレベルの完全なリストア試験（アップロード済み IPFS コンテンツの再取得を含む）。

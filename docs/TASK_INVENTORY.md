@@ -94,7 +94,8 @@ status: current
 - [対応済み] 複数インスタンス起動方針: **単一ライター運用**を初期運用の前提として決定・文書化。プロセス内書き込みは接続ごとロックで直列化し、プロセス間排他はアーキテクチャ側で回避（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] バックアップ/リストア手順: `backup_db`（VACUUM INTO・上書き拒否）と `verify_backup`（構造検証）を追加。実 DB で作成・検証・データ保持・監査連動を確認し、[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に手順化。
 - [対応済み] リストア CLI: `restore_db` が整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換・置換後再検証を実施（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
-- [中] 自動バックアップスケジュール・オフサイト保存・暗号化と実運用での復旧訓練。
+- [対応済み] バックアップの自動ローテーション: `scripts/backup-rotate.sh` が取得・検証・保持期間（既定30日）超過分の削除を実施。直近 `MIN_KEEP`（既定3）件は保護。静的検証と実 DB で動作確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+- [中] スケジューラ登録・アラート、オフサイト保存・暗号化と実運用での復旧訓練。
 
 ### 3.6 ネットワーク・アップロード・整合性
 
