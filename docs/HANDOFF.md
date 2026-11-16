@@ -99,6 +99,8 @@ CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジ�
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
+配布物のライセンス同梱は `bash scripts/prepare-distribution.sh <出力先>` で生成（LICENSE / NOTICE / DEPENDENCIES.tsv / THIRD_PARTY_LICENSES/）。
+
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
 `cargo run` が曖昧にならないよう Cargo.toml に `default-run = "server"` を設定済み。
 E2E の起動失敗はこれで解消している。

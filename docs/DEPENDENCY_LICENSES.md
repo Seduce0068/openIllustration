@@ -69,10 +69,19 @@ SPDX フィールドを持たないクレートは自リポジトリの 3 クレ
 以前の監査で挙げた `self_cell` と `r-efi` は現行グラフから外れた。
 `cargo deny check licenses` は現行グラフで成功している。
 
-## 5. 残作業
+## 5. 配布物の同梱
 
-- 配布形態ごとにライセンス本文・NOTICE の同梱方法を決める
-  （Apache-2.0 依存の帰属表示と、AGPL のソース提供義務の履行手段）。
+`bash scripts/prepare-distribution.sh <出力ディレクトリ>` で以下を生成する
+（新規依存なし、`cargo deny` と `cargo metadata` を利用）:
+
+- `LICENSE`: プロジェクトの AGPL-3.0-or-later 本文
+- `NOTICE`: 帰属表示と配布物のライセンス方針
+- `DEPENDENCIES.tsv`: ライセンス式 → クレート名/バージョン/出典の一覧
+- `THIRD_PARTY_LICENSES/`: ローカル cargo レジストリから取得できた依存ライセンス本文（2026-11-17 時点で 451 件）
+
+配布形態（バイナリ / コンテナ / ソース）ごとに、これらを同梱する手順を
+リリースプロセスへ組み込む。AGPL のソース提供義務（対応ソースの提示手段）は
+配布チャネル確定時に別途定める。
 - `cargo-deny` 0.20.2 を CI に導入した。`deny.toml` の許可リストで
   `cargo deny check licenses` を実行し、違反時は CI を失敗させる。
 - 依存更新のたびに本監査を再実行する（現状は手動。手順は §2）。
