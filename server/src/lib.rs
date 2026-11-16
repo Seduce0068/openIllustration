@@ -300,10 +300,23 @@ pub struct Vote {
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
-        .init();
+    let use_json = std::env::var("LOG_FORMAT")
+        .map(|value| value.eq_ignore_ascii_case("json"))
+        .unwrap_or(false);
+    if use_json {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(filter)
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+            .with_current_span(false)
+            .with_span_list(false)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
+            .init();
+    }
 }
 
 /// ロックファイルに記録された PID が生存しているか（Linux の /proc を使用）。
@@ -515,7 +528,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    println!("Guild Backend listening on {}", addr);
+    tracing::info!("Guild Backend listening on {}", addr);
     let drain_timeout_secs = std::env::var("GRACEFUL_DRAIN_TIMEOUT_SECS").ok();
     let drain_timeout = graceful_drain_timeout(drain_timeout_secs.as_deref());
     let server = axum::serve(

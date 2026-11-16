@@ -44,7 +44,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。`ALLOW_MOCK_AUTH=1` の開発時のみ、未設定ならローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]` の8080）へフォールバックする。モック認証が無効な本番相当で未設定なら全オリジンを拒否（fail-closed、警告ログ付き）。空エントリと `http(s)://` 形式以外（`null` を除く）は無視する。末尾スラッシュは除去し、ワイルドカードは指定できない。本番配信オリジンの決定と値の運用は未決定。
 - リクエスト本文は最大10 MiB。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10 MiB。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
-- ログは `tracing` + `tracing-subscriber` で標準出力へ出し、`RUST_LOG` でレベルを制御する（未設定時は INFO、タイムスタンプは RFC 3339 UTC）。JWT・認証ヘッダ・投稿本文など機微情報はログへ出さない。
+- ログは `tracing` + `tracing-subscriber` で標準出力へ出し、`RUST_LOG` でレベルを制御する（未設定時は INFO、タイムスタンプは RFC 3339 UTC）。`LOG_FORMAT=json` 設定時は 1行1 JSON（timestamp / level / fields / target）で出力しログ集約基盤へ取り込める。起動メッセージも tracing 経由に統一し、JSON モードでパース失敗する行を作らない。JWT・認証ヘッダ・投稿本文など機微情報はログへ出さない。
 - 停止時は SIGTERM/SIGINT を捕捉し、処理中リクエストの完了を待って終了する（graceful shutdown）。待ち時間は `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、範囲 1〜300）で上限を設け、超過時は警告ログを出して残接続を切断する。停止シグナルで readiness は 503 へ切り替わる。
 - 起動時はローカル DB の `<DB path>.instance.lock` を原子的に作成し、単一ライターを強制する。生存 PID のロックがある場合は第二インスタンスの起動を拒否（fail-closed）。クラッシュ後の stale ロックは自動回収し、正常停止時に削除する。リモート DB はこの排他が使えず警告のみ。
 

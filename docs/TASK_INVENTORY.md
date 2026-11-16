@@ -109,7 +109,8 @@ status: current
 
 ### 3.7 運用・可観測性・停止動作
 
-- [中] ログ集約・メトリクス・アラート、障害対応・鍵ローテーション手順（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み] 構造化ログ: `LOG_FORMAT=json` で 1行1 JSON 出力（tracing-serde は tracing-subscriber の公式依存）。起動メッセージも tracing 統一。実サーバーで全行パース成功（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] ログ集約基盤・メトリクス・アラート通知先の選定、障害対応・鍵ローテーション手順（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] liveness `/health` と readiness `/ready` を分離。readiness は DB `SELECT 1` と停止フラグを検査し、停止時は 503。IP ゲートはバイパスしない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] IPFS/JPKI/チェーン依存障害時の readiness 反映とデプロイ・復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を 503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
