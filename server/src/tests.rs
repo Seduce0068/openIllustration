@@ -6300,6 +6300,50 @@ fn test_instance_lock_recovers_stale_lock() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// ---- refresh token cleanup ----
+
+#[tokio::test]
+async fn test_purge_expired_refresh_tokens() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    // 有効なトークンと期限切れトークンを挿入する。
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES ('valid', 'u', 'f', '2099-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES ('expired', 'u', 'f', '2000-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let purged = crate::purge_expired_refresh_tokens(&db).await.unwrap();
+    assert_eq!(purged, 1, "only the expired token must be purged");
+
+    let mut rows = db
+        .query("SELECT token_hash FROM refresh_tokens", ())
+        .await
+        .unwrap();
+    let mut remaining = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        remaining.push(row.get::<String>(0).unwrap());
+    }
+    assert_eq!(remaining, vec!["valid"]);
+}
+
 // ---- liveness / readiness ----
 
 #[tokio::test]

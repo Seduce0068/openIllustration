@@ -53,6 +53,7 @@ status: current
 - [対応済み] **`sid` 単位の失効永続化**: マイグレーション 009 の `revoked_sessions` にログアウト済み sid を保存し起動時にロード。`/auth/logout` と back-channel logout の両方を修正。実プロセスで「ログアウト→再起動→401 維持」を確認（[HANDOFF.md](HANDOFF.md)）。
 - [中] 複数プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
 - [対応済み] リフレッシュトークンのローテーションと盗用検知: マイグレーション 006 でハッシュのみ保存。ログイン時に 30 日トークンを HttpOnly Cookie 発行、`POST /auth/refresh` で毎回回転。再利用検知時はファミリ全体を失効。ログアウト時もファミリ失効。回帰テスト5件（[HANDOFF.md](HANDOFF.md)）。
+- [対応済み] 期限切れリフレッシュトークンの自動回収: 起動時と finalizer 周期で `expires_at <= now` を削除。単体テストと実プロセス（2件→起動→1件、purge ログ）で確認。
 - [対応済み] **JWT 設定の fail-closed 化**: 不正な `JWT_RSA_PRIVATE_KEY_PEM` は有効な `JWT_SECRET` があってもフォールバックせず起動拒否。短い `JWT_SECRET` が RS256 選択で隠れる場合は警告。
 - [一部対応] **RS256 の `kid` 複数鍵検証**: 署名ヘッダへ `kid` を付与し、`JWT_RSA_VERIFICATION_KEYS` で旧公開鍵を登録可能にした。未知 `kid` 拒否・`kid` 無し旧トークン互換・重複 kid 拒否を回帰テストで確認。
 - [中][運用設計] **RS256 運用強化の残項目**: HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布・ローテーション手順（`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続）（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。

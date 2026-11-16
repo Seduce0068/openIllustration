@@ -227,7 +227,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `server/migrations/004_moderation_deadlines.sql`: 投票期限・確定時刻・異議の連鎖。
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
-- `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。
+- `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。期限切れレコードは起動時と finalizer の周期で自動回収（`Purged N expired refresh token(s)` ログ）。
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
 - `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。

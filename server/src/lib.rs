@@ -924,6 +924,15 @@ pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
 }
 
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
+/// 期限切れリフレッシュトークンを削除する。期限切れレコードは認証に使えず、
+/// 保持しても盗用検知の意味がないため、定期的に回収してDBの増大を防ぐ。
+async fn purge_expired_refresh_tokens(db: &Connection) -> Result<u64, libsql::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    db.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", [now])
+        .await
+        .map(|_| db.changes())
+}
+
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     interval: Duration,
@@ -932,9 +941,22 @@ async fn run_moderation_finalizer(
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker.tick().await; // 起動直後の即時 tick は消費する
+
+    // 起動時に一度、期限切れリフレッシュトークンを回収する。
+    match purge_expired_refresh_tokens(db.as_ref()).await {
+        Ok(0) => {}
+        Ok(count) => tracing::info!("Purged {} expired refresh token(s) on startup", count),
+        Err(error) => tracing::warn!("Refresh token purge failed on startup: {}", error),
+    }
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                match purge_expired_refresh_tokens(db.as_ref()).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!("Purged {} expired refresh token(s)", count),
+                    Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
+                }
                 match finalize_due_reports(db.as_ref()).await {
                     Ok(0) => {}
                     Ok(count) => tracing::info!("Auto-finalized {} moderation report(s)", count),
