@@ -5,18 +5,22 @@
 //! ヘッダから選ばせない（アルゴリズム混同攻撃への対策）。
 
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
-use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey, LineEnding};
 use rsa::traits::PublicKeyParts;
+use std::collections::HashMap;
 
 /// RS256 で要求する最小鍵長（ビット）。NIST SP 800-57 の 112 bit
 /// セキュリティ強度は 2048 bit 以上で満たす。
 const RSA_MIN_KEY_BITS: usize = 2048;
 
 /// 署名鍵一式。起動時に一度だけ構築し、リクエストごとに再利用する。
+/// RS256 では `kid` 付きヘッダを発行し、複数公開鍵で検証できるようにする。
 pub struct JwtKeys {
     algorithm: Algorithm,
     encoding_key: EncodingKey,
     decoding_key: DecodingKey,
+    kid: Option<String>,
+    verification_keys: HashMap<String, DecodingKey>,
 }
 
 impl JwtKeys {
@@ -37,6 +41,8 @@ impl JwtKeys {
             algorithm: Algorithm::HS256,
             encoding_key,
             decoding_key,
+            kid: None,
+            verification_keys: HashMap::new(),
         })
     }
 
@@ -65,17 +71,75 @@ impl JwtKeys {
             .map_err(|e| format!("JWT_RSA_PRIVATE_KEY_PEM is not usable for RS256: {e}"))?;
         let decoding_key = DecodingKey::from_rsa_pem(public_pem.as_bytes())
             .map_err(|e| format!("failed to load the derived RSA public key: {e}"))?;
+        let kid = Self::kid_from_public_pem(&public_pem)?;
+        let mut verification_keys = HashMap::new();
+        verification_keys.insert(kid.clone(), decoding_key.clone());
 
         Ok(Self {
             algorithm: Algorithm::RS256,
             encoding_key,
             decoding_key,
+            kid: Some(kid),
+            verification_keys,
         })
     }
 
-    /// 署名に使う JWT ヘッダ。許可アルゴリズムはここで固定される。
+    /// 公開鍵 PEM から短い kid を導出する（SPKI DER の SHA-256 先頭16バイト）。
+    fn kid_from_public_pem(public_pem: &str) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let key = rsa::PublicKey::from_public_key_pem(public_pem)
+            .map_err(|e| format!("invalid RSA public key PEM: {e}"))?;
+        let der = key
+            .to_public_key_der()
+            .map_err(|e| format!("public key DER encoding failed: {e}"))?;
+        let digest = Sha256::digest(der.as_ref());
+        Ok(hex::encode(&digest[..16]))
+    }
+
+    /// 鍵ローテーション用に、旧公開鍵を kid 付きで検証鍵へ追加する。
+    pub fn add_verification_key(&mut self, kid: &str, public_pem: &str) -> Result<(), String> {
+        if kid.is_empty() || kid.len() > 128 {
+            return Err("kid must be 1..=128 characters".to_string());
+        }
+        // 署名鍵と同じ kid は上書きを許さない（誤設定の防止）。
+        if self.verification_keys.contains_key(kid) {
+            return Err(format!("duplicate verification key kid: {kid}"));
+        }
+        Self::kid_from_public_pem(public_pem)?;
+        let key = DecodingKey::from_rsa_pem(public_pem.as_bytes())
+            .map_err(|e| format!("invalid RSA verification key: {e}"))?;
+        self.verification_keys.insert(kid.to_string(), key);
+        Ok(())
+    }
+
+    /// トークンを検証する。`kid` がある場合は対応する公開鍵のみを使う。
+    /// 未知の `kid` はフェイルクローズで拒否する。
+    pub fn decode<T: serde::de::DeserializeOwned>(
+        &self,
+        token: &str,
+    ) -> Result<jsonwebtoken::TokenData<T>, String> {
+        let header =
+            jsonwebtoken::decode_header(token).map_err(|e| format!("invalid JWT header: {e}"))?;
+        if header.alg != self.algorithm {
+            return Err(format!("unexpected JWT algorithm: {:?}", header.alg));
+        }
+        let key = match (self.algorithm, header.kid.as_deref()) {
+            (Algorithm::RS256, Some(kid)) => self
+                .verification_keys
+                .get(kid)
+                .ok_or_else(|| format!("unknown JWT kid: {kid}"))?,
+            // kid なしは旧トークン（ローテーション前に発行）として署名鍵で検証する。
+            _ => &self.decoding_key,
+        };
+        jsonwebtoken::decode::<T>(token, key, &self.validation())
+            .map_err(|e| format!("invalid token: {e}"))
+    }
+
+    /// 署名に使う JWT ヘッダ。許可アルゴリズムと kid はここで固定される。
     pub fn header(&self) -> Header {
-        Header::new(self.algorithm)
+        let mut header = Header::new(self.algorithm);
+        header.kid = self.kid.clone();
+        header
     }
 
     /// 検証設定。許可アルゴリズムを起動時の値に限定する。

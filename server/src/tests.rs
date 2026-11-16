@@ -4369,6 +4369,103 @@ fn test_rsa_private_pem() -> String {
         .to_string()
 }
 
+/// 秘密鍵 PEM から対応する公開鍵 PEM を導出する（テスト用）。
+fn test_rsa_public_pem(private_pem: &str) -> String {
+    use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+    let key = PrivateKey::from_pkcs8_pem(private_pem).expect("valid private key");
+    key.to_public_key()
+        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("public key PEM")
+        .to_string()
+}
+
+/// RS256: 署名ヘッダに kid が入り、未知 kid のトークンは拒否される。
+#[test]
+fn test_jwt_rs256_kid_verification() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    let kid = keys
+        .header()
+        .kid
+        .clone()
+        .expect("RS256 header must carry kid");
+    assert_eq!(kid.len(), 32, "kid is a 128-bit hex digest");
+
+    let claims = Claims {
+        sub: "kid_user".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+    let token = encode(&keys.header(), &claims, keys.encoding_key()).expect("sign");
+    let decoded: Claims = keys
+        .decode(&token)
+        .expect("verify with matching kid")
+        .claims;
+    assert_eq!(decoded.sub, "kid_user");
+
+    let forged = crate::jwt::JwtKeys::from_rsa_private_key_pem(&test_rsa_private_pem())
+        .expect("another RSA key");
+    let mut header = forged.header();
+    header.kid = Some("unknown-kid".to_string());
+    let unknown = encode(&header, &claims, forged.encoding_key()).expect("sign with unknown kid");
+    let result: Result<jsonwebtoken::TokenData<Claims>, String> = keys.decode(&unknown);
+    assert!(
+        result.is_err(),
+        "unknown kid must be rejected (fail-closed)"
+    );
+}
+
+/// RS256: ローテーション前に発行された kid 無しトークンも検証できる。
+#[test]
+fn test_jwt_rs256_accepts_legacy_token_without_kid() {
+    let pem = test_rsa_private_pem();
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    let claims = Claims {
+        sub: "legacy".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = None;
+    let token = encode(&header, &claims, keys.encoding_key()).expect("sign without kid");
+    let decoded: Claims = keys
+        .decode(&token)
+        .expect("legacy token must verify")
+        .claims;
+    assert_eq!(decoded.sub, "legacy");
+}
+
+/// RS256: 追加した旧公開鍵で署名されたトークンを検証できる。
+#[test]
+fn test_jwt_rs256_additional_verification_key() {
+    let new_pem = test_rsa_private_pem();
+    let old_pem = test_rsa_private_pem();
+    let old_public = test_rsa_public_pem(&old_pem);
+    let mut keys =
+        crate::jwt::JwtKeys::from_rsa_private_key_pem(&new_pem).expect("new signing key");
+    keys.add_verification_key("rotated-old", &old_public)
+        .expect("register old public key");
+
+    let old_keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&old_pem).expect("old key");
+    let claims = Claims {
+        sub: "during_rotation".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+    let mut header = old_keys.header();
+    header.kid = Some("rotated-old".to_string());
+    let token = encode(&header, &claims, old_keys.encoding_key()).expect("sign with old key");
+    let decoded: Claims = keys.decode(&token).expect("old key must verify").claims;
+    assert_eq!(decoded.sub, "during_rotation");
+
+    // 署名鍵と同じ kid は登録できない。
+    let duplicate = keys.header().kid.clone().unwrap();
+    assert!(keys.add_verification_key(&duplicate, &old_public).is_err());
+}
+
 /// RS256: 秘密鍵から鍵一式を構築できる。
 #[test]
 fn test_jwt_keys_from_rsa_private_key() {
@@ -4441,21 +4538,22 @@ fn test_jwt_rejects_short_rsa_key() {
 #[test]
 fn test_jwt_keys_from_env_prefers_rsa() {
     let pem = test_rsa_private_pem();
-    let keys = crate::jwt_keys_from_env(Some(pem), Some(TEST_JWT_SECRET.to_string()))
+    let keys = crate::jwt_keys_from_env(Some(pem), Some(TEST_JWT_SECRET.to_string()), None)
         .expect("RSA key wins");
     assert_eq!(keys.algorithm_name(), "RS256");
 
-    let hmac =
-        crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string())).expect("HMAC fallback");
+    let hmac = crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string()), None)
+        .expect("HMAC fallback");
     assert_eq!(hmac.algorithm_name(), "HS256");
 
-    assert!(crate::jwt_keys_from_env(None, None).is_err());
+    assert!(crate::jwt_keys_from_env(None, None, None).is_err());
 
     // 不正な RSA PEM は、有効な JWT_SECRET があっても黙ってフォールバックしない。
     assert!(
         crate::jwt_keys_from_env(
             Some("not a pem".to_string()),
-            Some(TEST_JWT_SECRET.to_string())
+            Some(TEST_JWT_SECRET.to_string()),
+            None,
         )
         .is_err(),
         "invalid RSA key must not be silently ignored when JWT_SECRET is present"

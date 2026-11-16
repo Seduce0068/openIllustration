@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 182件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 185件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -147,7 +147,8 @@ cargo run -p server
 ### 認証
 
 - `JWT_SECRET`: 必須。32バイト以上。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない（短い値が残っている場合は警告）。
-- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。不正な PEM は `JWT_SECRET` が有効でも起動を拒否する。
+- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。不正な PEM は `JWT_SECRET` が有効でも起動を拒否する。RS256 の署名ヘッダには公開鍵 DER の SHA-256 先頭16バイトを `kid` として付与する。
+- `JWT_RSA_VERIFICATION_KEYS`: 任意。RS256 のみ有効。`{"kid":"PKCS#8 公開鍵 PEM", ...}` 形式の JSON。鍵ローテーション時に旧公開鍵を検証用として登録する。未知の `kid` は拒否。署名鍵と同じ `kid` は登録不可。`kid` 無しの旧トークンは署名鍵で検証する。
   設定時は RS256 で署名する。未設定なら HS256。
 - `ALLOW_MOCK_AUTH`: 開発専用。
 - `OIDC_ISSUER`

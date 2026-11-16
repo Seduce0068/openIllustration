@@ -155,7 +155,7 @@ fn internal_error_body(details: String) -> String {
     }
 }
 
-use jsonwebtoken::{decode, encode};
+use jsonwebtoken::encode;
 
 // Newtype wrapper to satisfy Orphan Rules for Axum extractor
 pub struct AuthClaims(pub Claims);
@@ -199,12 +199,10 @@ where
 
         // 許可アルゴリズムは起動時に確定した 1 つだけ。トークンの
         // ヘッダにある `alg` を見て検証方式を切り替えない。
-        let token_data = decode::<Claims>(
-            token,
-            state.jwt_keys.decoding_key(),
-            &state.jwt_keys.validation(),
-        )
-        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
+        let token_data = state
+            .jwt_keys
+            .decode::<Claims>(token)
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
 
         if let Some(sid) = &token_data.claims.sid {
             let revoked = state
@@ -326,9 +324,11 @@ pub async fn run() -> anyhow::Result<()> {
     // Detect checksum drift in already-applied migrations
     migration::verify_migrations(&db).await?;
 
+    let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
     let jwt_keys = jwt_keys_from_env(
         std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
         std::env::var("JWT_SECRET").ok(),
+        verification_keys_env.as_deref(),
     )
     .map_err(|e| anyhow::anyhow!(e))?;
     tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
@@ -570,27 +570,45 @@ pub fn validate_jwt_secret(secret: &str) -> Result<(), String> {
 pub fn jwt_keys_from_env(
     rsa_pem: Option<String>,
     secret: Option<String>,
+    verification_keys_json: Option<&str>,
 ) -> Result<jwt::JwtKeys, String> {
-    match (rsa_pem, secret) {
+    let mut keys = match (rsa_pem, secret) {
         (Some(pem), Some(secret)) => {
             // RS256 が選択されるため秘密は使われないが、短い値が残っている
             // 設定ミスは警告する（将来 RSA を外したときに弱鍵が露出する）。
             if jwt::JwtKeys::from_hmac_secret(&secret).is_err() {
-                warn!("JWT_SECRET is set but shorter than 32 bytes; it is ignored while JWT_RSA_PRIVATE_KEY_PEM is configured");
+                warn!(
+                    "JWT_SECRET is set but shorter than 32 bytes; it is ignored while JWT_RSA_PRIVATE_KEY_PEM is configured"
+                );
             }
             jwt::JwtKeys::from_rsa_private_key_pem(&pem).map_err(|error| {
                 format!("JWT_RSA_PRIVATE_KEY_PEM is invalid: {error}; refusing to fall back to JWT_SECRET")
-            })
+            })?
         }
-        (Some(pem), None) => jwt::JwtKeys::from_rsa_private_key_pem(&pem).map_err(|error| {
-            format!("JWT_RSA_PRIVATE_KEY_PEM is invalid: {error}")
-        }),
-        (None, Some(secret)) => jwt::JwtKeys::from_hmac_secret(&secret),
-        (None, None) => Err(
+        (Some(pem), None) => jwt::JwtKeys::from_rsa_private_key_pem(&pem)
+            .map_err(|error| format!("JWT_RSA_PRIVATE_KEY_PEM is invalid: {error}"))?,
+        (None, Some(secret)) => jwt::JwtKeys::from_hmac_secret(&secret)?,
+        (None, None) => {
+            return Err(
             "JWT_SECRET must be set (at least 32 random bytes), or JWT_RSA_PRIVATE_KEY_PEM for RS256"
                 .to_string(),
-        ),
+        );
+        }
+    };
+
+    if let Some(json) = verification_keys_json {
+        if keys.algorithm_name() != "RS256" {
+            return Err("JWT_RSA_VERIFICATION_KEYS is only valid with RS256".to_string());
+        }
+        let map: HashMap<String, String> = serde_json::from_str(json).map_err(|e| {
+            format!("JWT_RSA_VERIFICATION_KEYS must be a kid->PEM JSON object: {e}")
+        })?;
+        for (kid, pem) in map {
+            keys.add_verification_key(&kid, &pem)
+                .map_err(|e| format!("JWT_RSA_VERIFICATION_KEYS[{kid}]: {e}"))?;
+        }
     }
+    Ok(keys)
 }
 
 /// 既定の IPFS ゲートウェイ。`{cid}` が CID に置換される。

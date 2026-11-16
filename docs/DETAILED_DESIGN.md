@@ -19,6 +19,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/auth/verify` | 不要 | 開発用モックまたは証明書入力を処理しJWTを発行 |
 | GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
 | GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
+| POST | `/auth/refresh` | Cookie | リフレッシュトークンを回転し新セッションJWTを発行。再利用検知時はファミリ失効 |
 | POST | `/auth/logout` | Bearer JWT | `sid` を失効させる |
 | POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` はインメモリ失効閾値方式） |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
@@ -39,7 +40,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ### API横断規則
 
-- JWTはHS256既定検証を用い、有効期限を確認する。起動時に32バイト未満の `JWT_SECRET` を拒否する。鍵のローテーション・発行者/audience検証は別途要件化する。
+- JWTはHS256既定検証を用い、有効期限を確認する。起動時に32バイト未満の `JWT_SECRET` を拒否する。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は RS256 となり、署名ヘッダに公開鍵由来の `kid` を付与する。検証は `JWT_RSA_VERIFICATION_KEYS` に登録した `kid` → 公開鍵で行い、未知 `kid` は拒否する（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。発行者/audience検証は別途要件化する。
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。`ALLOW_MOCK_AUTH=1` の開発時のみ、未設定ならローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]` の8080）へフォールバックする。モック認証が無効な本番相当で未設定なら全オリジンを拒否（fail-closed、警告ログ付き）。空エントリと `http(s)://` 形式以外（`null` を除く）は無視する。末尾スラッシュは除去し、ワイルドカードは指定できない。本番配信オリジンの決定と値の運用は未決定。
 - リクエスト本文は最大10 MiB。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10 MiB。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
