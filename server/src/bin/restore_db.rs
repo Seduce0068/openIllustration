@@ -15,7 +15,7 @@ fn print_help() {
         "Usage: restore_db --backup PATH --target PATH [--force]\n\
          \n\
          Restores a backup produced by backup_db. The server must be stopped\n\
-         (WAL/SHM sidecars cause an immediate refusal). By default an existing\n\
+         (WAL/SHM/journal sidecars cause an immediate refusal). By default an existing\n\
          target is never overwritten; --force keeps a timestamped safety copy.\n\
          Exit code: 0 on success, 1 on error."
     );
@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
     if !backup.exists() {
         return Err(anyhow!("backup file does not exist: {}", backup.display()));
     }
-    for suffix in ["-wal", "-shm"] {
+    for suffix in ["-wal", "-shm", "-journal"] {
         let sidecar = sidecar_of(&target, suffix);
         if sidecar.exists() {
             return Err(anyhow!(
@@ -192,6 +192,10 @@ mod tests {
         assert_eq!(
             sidecar_of(path, "-shm"),
             PathBuf::from("/tmp/example.db-shm")
+        );
+        assert_eq!(
+            sidecar_of(path, "-journal"),
+            PathBuf::from("/tmp/example.db-journal")
         );
     }
 
