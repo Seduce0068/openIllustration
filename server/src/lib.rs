@@ -1148,7 +1148,7 @@ pub async fn update_content_status(
         reason: reason.to_string(),
         previous_log_hash: previous_log_hash.clone(),
     };
-    let entry_hash = entry.calculate_hash();
+    let entry_hash = entry.calculate_hash_v2();
 
     // 2. Perform updates
     tx.execute(

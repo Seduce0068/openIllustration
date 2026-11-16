@@ -15,7 +15,8 @@ fn print_help() {
     eprintln!(
         "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]\n\
          \n\
-         Verifies content_audit_log hash-chain integrity (read-only).\n\
+         Verifies content_audit_log hash-chain integrity (read-only).
+         Accepts v2 (length-prefixed) and legacy v1 entry hashes.\n\
          Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
          --expect-root compares the root against a previously recorded value to detect\n\
          truncation or omission (the root must have been published out of band).\n\
@@ -130,14 +131,15 @@ async fn main() -> anyhow::Result<()> {
             reason: reason.clone(),
             previous_log_hash: previous_log_hash.clone(),
         };
-        let computed = entry.calculate_hash();
-
-        let hash_ok = computed == entry_hash;
+        let computed_v1 = entry.calculate_hash();
+        let computed_v2 = entry.calculate_hash_v2();
+        let hash_ok = computed_v2 == entry_hash;
+        let legacy_v1 = computed_v1 == entry_hash;
         let chain_ok = previous_log_hash == expected_prev;
 
-        if !hash_ok {
+        if !hash_ok && !legacy_v1 {
             errors.push(format!(
-                "log_id={log_id} cid={cid}: entry_hash mismatch (stored={entry_hash}, computed={computed})"
+                "log_id={log_id} cid={cid}: entry_hash mismatch (stored={entry_hash}, v2={computed_v2}, v1={computed_v1})"
             ));
         }
         if !chain_ok {
@@ -150,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
         if include {
             shown += 1;
             println!(
-                "log_id={log_id} cid={cid} {old_status}->{new_status} by={changed_by} reason={reason} hash_ok={hash_ok} chain_ok={chain_ok} entry_hash={entry_hash}"
+                "log_id={log_id} cid={cid} {old_status}->{new_status} by={changed_by} reason={reason} hash_ok={hash_ok} legacy_v1={legacy_v1} chain_ok={chain_ok} entry_hash={entry_hash}"
             );
         }
 

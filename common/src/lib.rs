@@ -70,6 +70,8 @@ pub struct AuditLogEntry {
 }
 
 impl AuditLogEntry {
+    /// v1（既存互換）。フィールドを単純連結するため、値の境界が曖昧になる。
+    /// 既存DBの検証にのみ使用し、新規エントリの生成には使わない。
     pub fn calculate_hash(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.cid.as_bytes());
@@ -78,6 +80,25 @@ impl AuditLogEntry {
         hasher.update(self.changed_by.as_bytes());
         hasher.update(self.reason.as_bytes());
         hasher.update(self.previous_log_hash.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// v2: フィールドに長さプレフィックスを付け、値の境界を一意にする。
+    /// 例: cid="ab", old="c" と cid="a", old="bc" は異なるハッシュになる。
+    pub fn calculate_hash_v2(&self) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(b"OPENILLUSTRATION_AUDIT_V2\0");
+        for field in [
+            self.cid.as_bytes(),
+            self.old_status.as_bytes(),
+            self.new_status.as_bytes(),
+            self.changed_by.as_bytes(),
+            self.reason.as_bytes(),
+            self.previous_log_hash.as_bytes(),
+        ] {
+            hasher.update((field.len() as u64).to_le_bytes());
+            hasher.update(field);
+        }
         hex::encode(hasher.finalize())
     }
 }
@@ -168,6 +189,35 @@ mod tests {
         (1..=4)
             .map(|id| (id, "a".repeat(63) + &format!("{id:x}")))
             .collect()
+    }
+
+    #[test]
+    fn audit_hash_v2_separates_ambiguous_field_boundaries() {
+        let base = AuditLogEntry {
+            log_id: None,
+            cid: "ab".into(),
+            old_status: "c".into(),
+            new_status: "Approved".into(),
+            changed_by: "user".into(),
+            reason: "r".into(),
+            previous_log_hash: "GENESIS_HASH".into(),
+        };
+        let shifted = AuditLogEntry {
+            cid: "a".into(),
+            old_status: "bc".into(),
+            ..base.clone()
+        };
+        assert_eq!(
+            base.calculate_hash(),
+            shifted.calculate_hash(),
+            "v1 must remain reproducible for existing databases"
+        );
+        assert_ne!(
+            base.calculate_hash_v2(),
+            shifted.calculate_hash_v2(),
+            "v2 must disambiguate field boundaries"
+        );
+        assert_eq!(base.calculate_hash_v2(), base.calculate_hash_v2());
     }
 
     #[test]

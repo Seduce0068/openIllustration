@@ -135,7 +135,7 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 
 ## 6. 監査ハッシュ
 
-- `AuditLogEntry::calculate_hash` はCID、状態、主体、理由、前エントリーハッシュをSHA-256で結合する。
+- 新規エントリは `AuditLogEntry::calculate_hash_v2` で生成する。CID、状態、主体、理由、前エントリーハッシュに長さプレフィックスを付け、ドメイン分離ラベルを付与した上でSHA-256化するため、フィールド境界の曖昧さによる衝突を排除する。既存DB向けに旧 `calculate_hash`（v1）も残し、`verify_audit_log` は v1/v2 の両方を検証する。
 - `compute_audit_chain_digest` は `log_id` の連続性と entry_hash 列の Merkle root を計算する。`verify_audit_log --expect-root` で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
 - 一意で曖昧さのない正規化シリアライズ、署名鍵、DB外アンカー、信用できる第三者による独立検証は未実装。
 - 目的はDB内の連鎖整合性チェック補助に限定し、改ざん不能・否認防止を主張しない。root の外部保存先は各デプロイの運用者が決める。
