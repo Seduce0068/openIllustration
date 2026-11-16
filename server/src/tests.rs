@@ -156,6 +156,7 @@ async fn setup_app_with_options(
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let router = build_router(shared_state);
@@ -201,6 +202,7 @@ async fn setup_app_with_jwt_keys(
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     (build_router(shared_state), db)
 }
@@ -253,6 +255,7 @@ async fn setup_app_with_payments(
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let router = build_router(shared_state);
@@ -288,6 +291,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     (build_router(shared_state), db)
@@ -544,6 +548,7 @@ async fn setup_app_with_oidc() -> (
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     (build_router(shared_state), oidc, mock, db)
@@ -1825,6 +1830,7 @@ async fn test_vote_consensus_rejects_content() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2003,6 +2009,7 @@ async fn test_duplicate_vote_rejected() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2198,6 +2205,7 @@ async fn test_vote_after_conclusion_rejected() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2276,6 +2284,7 @@ async fn test_vote_for_missing_report_returns_404() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2330,6 +2339,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2418,6 +2428,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -2482,6 +2493,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let app = build_router(shared_state);
 
@@ -4581,6 +4593,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
                 .map(|value| value.to_string())
                 .collect::<std::collections::HashSet<_>>(),
         ),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     (build_router(state), db)
 }
@@ -5410,4 +5423,89 @@ async fn concurrent_begin_without_lock_is_rejected() {
     let failed = results.iter().filter(|r| r.is_err()).count();
     assert_eq!(ok, 1, "exactly one BEGIN should succeed");
     assert_eq!(failed, 1, "a second concurrent BEGIN should fail");
+}
+
+// ---- liveness / readiness ----
+
+#[tokio::test]
+async fn test_readiness_ok_and_shutting_down() {
+    let (app, _db) = setup_app_with_db().await;
+
+    let live = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/health").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(live.status(), StatusCode::OK);
+
+    let ready = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/ready").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(ready.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_readiness_returns_503_while_shutting_down() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down,
+    });
+    let app = build_router(state);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/ready").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_readiness_requires_ipv6_peer() {
+    let (app, _db) = setup_app_with_db().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/ready").body(Body::empty()).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::FORBIDDEN,
+        "readiness must not bypass the IP gate"
+    );
 }

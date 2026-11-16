@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 167件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 170件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、

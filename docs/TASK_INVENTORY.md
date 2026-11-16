@@ -98,7 +98,8 @@ status: current
 ### 3.7 運用・可観測性・停止動作
 
 - [中] ログ集約・メトリクス・アラート、障害対応・鍵ローテーション手順（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- [中] liveness/readiness の意味、DB/IPFS/JPKI/チェーン依存障害時の readiness、デプロイ・復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み] liveness `/health` と readiness `/ready` を分離。readiness は DB `SELECT 1` と停止フラグを検査し、停止時は 503。IP ゲートはバイパスしない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] IPFS/JPKI/チェーン依存障害時の readiness 反映とデプロイ・復旧訓練（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [低] グレースフル停止の drain タイムアウトと readiness 連動の決定（実装は停止待ちあり、方針未確定）（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.8 依存・セキュリティ衛生

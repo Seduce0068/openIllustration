@@ -58,6 +58,8 @@ pub struct AppState {
     /// ADR-0004: このデプロイの運用者（JPKI 由来の user_hash）。
     /// セルフホストごとに異なるため環境変数で設定し、空なら特権操作を拒否する。
     pub moderation_operators: Arc<HashSet<String>>,
+    /// グレースフル停止中フラグ。readiness が 503 を返すために使う。
+    pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
@@ -415,9 +417,11 @@ pub async fn run() -> anyhow::Result<()> {
         revoked_subs_before: Arc::new(Mutex::new(HashMap::new())),
         age_policy,
         moderation_operators,
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     let worker_db = Arc::clone(&shared_state.db);
+    let shutdown_flag = Arc::clone(&shared_state.shutting_down);
     let app = build_router(shared_state);
 
     let finalize_interval_secs = std::env::var("MODERATION_FINALIZE_INTERVAL_SECS").ok();
@@ -438,6 +442,7 @@ pub async fn run() -> anyhow::Result<()> {
     )
     .with_graceful_shutdown(async move {
         shutdown_signal().await;
+        shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
         let _ = shutdown_tx.send(());
     })
     .await?;
@@ -698,6 +703,47 @@ async fn run_moderation_finalizer(
     }
 }
 
+/// readiness: DB が応答し、停止処理中でなければ 200。それ以外は 503。
+/// liveness は `/health` のまま（プロセス生存のみ）。
+pub async fn readiness(State(state): State<Arc<AppState>>) -> Response {
+    if state
+        .shutting_down
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"status": "shutting_down"})),
+        )
+            .into_response();
+    }
+    match state.db.query("SELECT 1", ()).await {
+        Ok(mut rows) => match rows.next().await {
+            Ok(Some(_)) => (StatusCode::OK, Json(json!({"status": "ready"}))).into_response(),
+            Ok(None) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "db_unavailable"})),
+            )
+                .into_response(),
+            Err(error) => {
+                warn!("Readiness DB query failed: {error}");
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"status": "db_unavailable"})),
+                )
+                    .into_response()
+            }
+        },
+        Err(error) => {
+            warn!("Readiness DB query failed: {error}");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "db_unavailable"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// DEC-02: 有効な年齢判定ポリシー（非秘密設定値）を常時公開する。
 pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<common::age::AgePolicy> {
     Json(state.age_policy.public_settings().clone())
@@ -736,6 +782,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(payments::verify_order),
         )
         .route("/health", get(|| async { "ok" }))
+        .route("/ready", get(readiness))
         .route("/policy/age", get(get_age_policy))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(

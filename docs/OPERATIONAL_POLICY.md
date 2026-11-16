@@ -56,7 +56,7 @@ tags: [operations, security, payments]
 - IPv6のみの制御をプロキシ経由で使う場合、`TRUSTED_PROXY_CIDRS` に信頼済みプロキシの範囲のみを設定し、プロキシは `X-Forwarded-For` を上書きまたは追記する。信頼済みピアで解決できない場合は 403 となる。ネットワーク層でも許可方針を実装する。
 - ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現在のエラー応答・観測性は本番要件を満たすか別途検証する。
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。
-- 本番配置前にliveness/readinessの意味、DB/IPFS/JPKI/チェーン依存障害時のreadinessを定義し、デプロイ・復旧訓練で確認する。
+- liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503 を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。IPFS/JPKI/チェーン依存障害時の readiness への反映は本番構成確定時に判断する。
 
 ## 6. 本番移行ゲート
 
