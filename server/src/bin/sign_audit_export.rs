@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow};
 use common::{
     AuditSnapshotEntry, GovernanceAuditEntry, SignedAuditSnapshot, compute_audit_chain_digest,
-    sign_audit_snapshot,
+    mask_reason, sign_audit_snapshot,
 };
 use libsql::Builder;
 
@@ -11,15 +11,17 @@ struct Args {
     database_token: Option<String>,
     signing_key: Option<String>,
     output: Option<String>,
+    include_reasons: bool,
     help: bool,
 }
 
 fn print_help() {
     eprintln!(
-        "Usage: sign_audit_export --signing-key PEM_PATH --output PATH [--database-url URL] [--database-token TOKEN]\n\
+        "Usage: sign_audit_export --signing-key PEM_PATH --output PATH [--database-url URL] [--database-token TOKEN] [--include-reasons]\n\
          \n\
          Creates a signed snapshot of content_audit_log and governance_audit_log. The signing key is a\n\
          PKCS#8 RSA private key PEM file. Never pass the key itself on the CLI.\n\
+         Reasons/details are redacted by default; --include-reasons exposes them (opt-in).\n\
          Exit code: 0 on success, 1 on error."
     );
 }
@@ -54,6 +56,7 @@ fn parse_args() -> anyhow::Result<Args> {
                         .ok_or_else(|| anyhow!("--output requires a value"))?,
                 );
             }
+            "--include-reasons" => args.include_reasons = true,
             other => return Err(anyhow!("unknown argument: {other}")),
         }
     }
@@ -112,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
             old_status: row.get(2)?,
             new_status: row.get(3)?,
             changed_by: row.get(4)?,
-            reason: row.get(5)?,
+            reason: mask_reason(&row.get::<String>(5)?, args.include_reasons),
             previous_log_hash: row.get(6)?,
             entry_hash: row.get(7)?,
         });
@@ -145,8 +148,10 @@ async fn main() -> anyhow::Result<()> {
             action: row.get(1)?,
             target: row.get(2)?,
             actor_hash: row.get(3)?,
-            reason: row.get(4)?,
-            details: row.get(5)?,
+            reason: mask_reason(&row.get::<String>(4)?, args.include_reasons),
+            details: row
+                .get::<Option<String>>(5)?
+                .map(|details| mask_reason(&details, args.include_reasons)),
             created_at: row.get(6)?,
         });
     }

@@ -173,6 +173,19 @@ pub struct SignedAuditSnapshot {
     pub signature: String,
 }
 
+/// 公開用に理由テキストをマスクする。空でなければ別文字列であることを示す。
+/// 本文は露出させず、長さと有無だけを残す（公開範囲の既定値）。
+pub fn mask_reason(reason: &str, include: bool) -> String {
+    if include {
+        return reason.to_string();
+    }
+    if reason.is_empty() {
+        String::new()
+    } else {
+        format!("[redacted:{} bytes]", reason.len())
+    }
+}
+
 /// 運用判断の監査イベント。コンテンツ監査とは別テーブルから抽出する。
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct GovernanceAuditEntry {
@@ -450,6 +463,13 @@ mod tests {
             verify_audit_snapshot(&tampered_governance, &public_der).is_err(),
             "tampering with governance audit must be detected"
         );
+    }
+
+    #[test]
+    fn mask_reason_hides_content_by_default() {
+        assert_eq!(mask_reason("secret details", false), "[redacted:14 bytes]");
+        assert_eq!(mask_reason("", false), "");
+        assert_eq!(mask_reason("secret details", true), "secret details");
     }
 
     #[test]
