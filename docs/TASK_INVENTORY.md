@@ -143,6 +143,7 @@ status: current
 - [外部要因] 2026-11-16 時点で GitHub Actions のジョブが請求/上限により開始されない。CI 再開までローカル検証ループ（fmt/clippy/test/deny/wasm/E2E）を代替ゲートとする。
 
 - [中] E2E失敗時の **artifact 回収**（trace/スクリーンショット/HTMLレポート）と **チェック結果の分離**（独立ジョブ/status check）。現状は `e2e/ci-e2e.sh` のログ/アノテーションで帰属を明示（共通ワークフロー拡張が必要、[REVIEW_REPORT.md](REVIEW_REPORT.md)）。
+- [対応済み] CI E2E スクリプトのローカル再現: trunk 0.21.14 固定版の `NO_COLOR=1` 解釈エラーを `unset NO_COLOR` で回避。8080 占有時に備え `E2E_CLIENT_PORT` 既定値 18080 を設定。`bash e2e/ci-e2e.sh` が9件成功（CI と同一ゲート）。
 - [中] **Chrome/Node のバージョン固定方針**の決定（現状はバージョンをログ出力）。
 - [低] ジョブ全体タイムアウト（30分）のコールドキャッシュ実測に基づく見直し。
 - [低] [一部対応 b6e63d3] CIスクリプト [e2e/ci-e2e.sh](../e2e/ci-e2e.sh) は一時DBを使用。ローカルでサーバーを新規起動する E2E 実行（`E2E_REUSE=0`、非CI）では [e2e/playwright.config.ts](../e2e/playwright.config.ts) が未指定時に一時DBを既定使用（`DATABASE_URL` 指定時は尊重）。既存プロセス/DBを再利用するローカル実行の分離方針は必要に応じて検討。

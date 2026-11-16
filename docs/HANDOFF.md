@@ -111,6 +111,8 @@ cargo run -p server --bin verify_audit_log -- \
   --database-url file:local.db --expect-root <保存した Root>
 ```
 
+CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる（2026-11-17 に9件成功）。固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color` 解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。8080 が他プロセスに占拠されても動くよう `E2E_CLIENT_PORT` の既定値は 18080。
+
 E2E は Google Chrome、trunk 0.21.14、Node 18 以上が必要。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。

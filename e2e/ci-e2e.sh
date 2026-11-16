@@ -26,6 +26,10 @@ echo "${trunk_sha256}  ${workdir}/${trunk_tarball}" | sha256sum -c -
 tar -xzf "${workdir}/${trunk_tarball}" -C "${workdir}" trunk
 export PATH="${workdir}:${PATH}"
 
+# trunk 0.21.14 は NO_COLOR=1 を --no-color として解釈し、
+# 値が true/false でない場合にエラーになる。固定版では明示的に解除する。
+unset NO_COLOR
+
 # 失敗時の切り分け用に、リポジトリ外の依存バージョンを記録する。
 trunk --version
 node --version
@@ -48,6 +52,9 @@ fi
 # e2e/playwright.config.ts を参照）。
 export E2E_JWT_SECRET="$(openssl rand -hex 32)"
 export DATABASE_URL="file:${workdir}/e2e.db"
+# ローカルで 8080 が code-server 等に占有されている場合でも実行できるよう、
+# 未指定時は代替ポートを使う（CI では環境変数で上書き可能）。
+export E2E_CLIENT_PORT="${E2E_CLIENT_PORT:-18080}"
 
 echo "==> サーバーとクライアントを事前ビルド"
 cargo build -p server --locked
