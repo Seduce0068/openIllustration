@@ -82,6 +82,60 @@ impl AuditLogEntry {
     }
 }
 
+/// AUDIT-01: 監査ログの欠落・順序入替・末尾切り詰めを検出するための補助情報。
+/// これは改ざん不能性を保証するものではなく、ローカルDBの連鎖整合性チェックの範囲である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditChainDigest {
+    pub count: usize,
+    pub first_log_id: Option<i64>,
+    pub last_log_id: Option<i64>,
+    pub root_hash: String,
+}
+
+/// 連鎖エントリ（log_id, entry_hash）の連番と Merkle root を計算する。
+/// log_id は 1 から連続していることを要求する（欠落・挿入の検出）。
+pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChainDigest, String> {
+    for (expected_id, (log_id, hash)) in (1_i64..).zip(entries.iter()) {
+        if *log_id != expected_id {
+            return Err(format!(
+                "non-contiguous log_id: expected {expected_id}, got {log_id}"
+            ));
+        }
+        if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("invalid entry_hash at log_id={log_id}"));
+        }
+    }
+
+    let root_hash = if entries.is_empty() {
+        hex::encode(Sha256::digest(b"AUDIT_CHAIN_EMPTY"))
+    } else {
+        let mut level: Vec<Vec<u8>> = entries
+            .iter()
+            .map(|(_, hash)| hex::decode(hash).expect("validated hex"))
+            .collect();
+        while level.len() > 1 {
+            let mut next = Vec::with_capacity(level.len().div_ceil(2));
+            for pair in level.chunks(2) {
+                let mut hasher = Sha256::new();
+                hasher.update(&pair[0]);
+                if let Some(right) = pair.get(1) {
+                    hasher.update(right);
+                }
+                next.push(hasher.finalize().to_vec());
+            }
+            level = next;
+        }
+        hex::encode(&level[0])
+    };
+
+    Ok(AuditChainDigest {
+        count: entries.len(),
+        first_log_id: entries.first().map(|(id, _)| *id),
+        last_log_id: entries.last().map(|(id, _)| *id),
+        root_hash,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +162,50 @@ mod tests {
             previous_log_hash: "GENESIS_HASH".into(),
         };
         assert_eq!(entry.calculate_hash(), entry.calculate_hash());
+    }
+
+    fn sample_hashes() -> Vec<(i64, String)> {
+        (1..=4)
+            .map(|id| (id, "a".repeat(63) + &format!("{id:x}")))
+            .collect()
+    }
+
+    #[test]
+    fn audit_chain_digest_is_stable_and_ordered() {
+        let entries = sample_hashes();
+        let first = compute_audit_chain_digest(&entries).unwrap();
+        let second = compute_audit_chain_digest(&entries).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(first.count, 4);
+        assert_eq!(first.first_log_id, Some(1));
+        assert_eq!(first.last_log_id, Some(4));
+        assert_eq!(first.root_hash.len(), 64);
+
+        let mut reversed = entries;
+        reversed.reverse();
+        assert!(compute_audit_chain_digest(&reversed).is_err());
+    }
+
+    #[test]
+    fn audit_chain_digest_detects_gaps_and_truncation() {
+        let entries = sample_hashes();
+        let full = compute_audit_chain_digest(&entries).unwrap();
+        let truncated = compute_audit_chain_digest(&entries[..3]).unwrap();
+        assert_ne!(full.root_hash, truncated.root_hash);
+
+        let mut with_gap = entries;
+        with_gap.remove(1);
+        assert!(compute_audit_chain_digest(&with_gap).is_err());
+    }
+
+    #[test]
+    fn audit_chain_digest_rejects_invalid_hash() {
+        let mut entries = sample_hashes();
+        entries[0].1 = "not-a-hash".to_string();
+        assert!(compute_audit_chain_digest(&entries).is_err());
+        let empty = compute_audit_chain_digest(&[]).unwrap();
+        assert_eq!(empty.count, 0);
+        assert_eq!(empty.first_log_id, None);
+        assert_eq!(empty.last_log_id, None);
     }
 }

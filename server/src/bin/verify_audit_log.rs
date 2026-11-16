@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow};
-use common::AuditLogEntry;
+use common::{AuditLogEntry, compute_audit_chain_digest};
 use libsql::Builder;
 
 #[derive(Debug, Default)]
@@ -7,14 +7,18 @@ struct Args {
     database_url: Option<String>,
     database_token: Option<String>,
     cid: Option<String>,
+    expect_root: Option<String>,
     help: bool,
 }
 
 fn print_help() {
     eprintln!(
-        "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID]\n\
+        "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]\n\
          \n\
          Verifies content_audit_log hash-chain integrity (read-only).\n\
+         Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
+         --expect-root compares the root against a previously recorded value to detect\n\
+         truncation or omission (the root must have been published out of band).\n\
          Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
          Exit code: 0 if valid, 1 if invalid or on error."
     );
@@ -40,6 +44,12 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--cid" => {
                 args.cid = Some(it.next().ok_or_else(|| anyhow!("--cid requires a value"))?);
+            }
+            "--expect-root" => {
+                args.expect_root = Some(
+                    it.next()
+                        .ok_or_else(|| anyhow!("--expect-root requires a value"))?,
+                );
             }
             other => return Err(anyhow!("unknown argument: {other}")),
         }
@@ -97,6 +107,7 @@ async fn main() -> anyhow::Result<()> {
     let mut total: usize = 0;
     let mut shown: usize = 0;
     let mut errors: Vec<String> = Vec::new();
+    let mut chain_entries: Vec<(i64, String)> = Vec::new();
 
     while let Some(row) = rows.next().await.context("failed to read audit log row")? {
         let log_id: i64 = row.get(0).context("log_id")?;
@@ -143,13 +154,34 @@ async fn main() -> anyhow::Result<()> {
             );
         }
 
-        expected_prev = entry_hash;
+        expected_prev = entry_hash.clone();
+        chain_entries.push((log_id, entry_hash));
     }
 
     if args.cid.is_some() {
         println!("shown={shown} total={total}");
     } else {
         println!("total={total}");
+    }
+
+    match compute_audit_chain_digest(&chain_entries) {
+        Ok(digest) => {
+            println!(
+                "audit_chain_digest: count={} first={:?} last={:?} root={}",
+                digest.count, digest.first_log_id, digest.last_log_id, digest.root_hash
+            );
+            if let Some(expected) = args.expect_root.as_ref() {
+                if expected.eq_ignore_ascii_case(&digest.root_hash) {
+                    println!("audit_root_verification: OK");
+                } else {
+                    errors.push(format!(
+                        "audit root mismatch: expected={expected}, computed={}",
+                        digest.root_hash
+                    ));
+                }
+            }
+        }
+        Err(error) => errors.push(format!("audit chain digest error: {error}")),
     }
 
     if errors.is_empty() {

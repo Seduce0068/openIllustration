@@ -96,12 +96,20 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 158件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 161件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
 `cargo run` が曖昧にならないよう Cargo.toml に `default-run = "server"` を設定済み。
 E2E の起動失敗はこれで解消している。
+
+監査ログの連鎖・連番・Merkle root は次で検証できる。root を別経路で保存し、
+`--expect-root` に渡すと欠落・末尾切り詰めを検出できる（実DBで確認済み）。
+
+```bash
+cargo run -p server --bin verify_audit_log -- \
+  --database-url file:local.db --expect-root <保存した Root>
+```
 
 E2E は Google Chrome、trunk 0.21.14、Node 18 以上が必要。
 クライアントの待受ポートは既定 8080。8080 が他プロセス

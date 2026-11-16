@@ -39,7 +39,7 @@ tags: [operations, security, payments]
 - 運用者はプロジェクト側で固定せず、各デプロイの所有者（個人・企業いずれでも可）が `MODERATION_OPERATOR_HASHES` に JPKI 由来の user_hash を設定する。未設定なら BAN/UNBAN/UNPIN はすべて拒否される。本番では実 JPKI 由来の hash のみ設定し、`ALLOW_MOCK_AUTH=1` と併用しない。
 - BAN は根拠と期間を必須とし、UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。これは運用ログであり第三者検証可能な監査ではない。投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
-- ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID]` で読み取り専用に検証できる。これは計算整合性の確認であり、第三者検証可能な監査方式・公開範囲・運用の代替ではない。
+- ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]` で読み取り専用に検証できる。連鎖に加え `log_id` の連続性と entry_hash 列の Merkle root を出力し、別経路で保存した root を `--expect-root` に渡すと末尾切り詰め・欠落を検出できる（実測で検出確認済み）。これは計算整合性の確認であり、第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
 - 本番前に署名鍵管理、監査対象・公開範囲、外部検証手段、個人情報保護、障害時運用を定めて試験する。
 
 ## 4. 支援・決済
