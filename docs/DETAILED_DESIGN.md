@@ -81,7 +81,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
    HttpOnly Cookieで返す。JWTは `sid` を含み、`POST /auth/logout` で
    `sid` を失効させると以後のAPIは401を返す。
 6. `POST /auth/backchannel-logout` は logout token の署名・`iss`・`aud`・
-   `events` を検証し、`sid` を失効させる。`sub` が含まれる場合は `sub` 単位の失効閾値（`iat` 比較）を記録し既存セッションを拒否する。閾値は `revoked_subs` テーブルへも保存し、起動時にログインへロードして再起動後も失効を維持する。再認証時は閾値より新しい `iat` を発行して再ログインを許容し、DB の閾値も削除する（多プロセス共有・実OP連携は未検証）。
+   `events` を検証し、`sid` を失効させる。`sid` はマイグレーション 009 の
+   `revoked_sessions` テーブルへも保存し、起動時に in-memory セットへロードして
+   再起動後も失効を維持する（`/auth/logout` も同じ経路）。`sub` が含まれる場合は
+   `sub` 単位の失効閾値（`iat` 比較）を記録し既存セッションを拒否する。閾値は
+   `revoked_subs` テーブルへも保存し、起動時にログインへロードして再起動後も失効を維持する。再認証時は閾値より新しい `iat` を発行して再ログインを許容し、DB の閾値も削除する（多プロセス共有・実OP連携は未検証）。
 7. リフレッシュトークンは `refresh_tokens` テーブルに SHA-256 ハッシュのみ保存し、ログイン時に 30 日間有効なトークンを HttpOnly Cookie で発行する。`POST /auth/refresh` は毎回トークンを回転し、使用済みトークンの再提示を検知した場合はファミリ全体を失効する。ログアウト時もファミリを失効する。
 8. `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` を設定すると ID トークンの
    `acr`（いずれか一致）と `amr`（すべて含有）を検証し、欠落・不一致なら
@@ -143,7 +147,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql`、`002_payment_orders.sql`、`003_payment_order_index.sql`、`004_moderation_deadlines.sql`、`005_governance_audit.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `009_revoked_sessions.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ
 

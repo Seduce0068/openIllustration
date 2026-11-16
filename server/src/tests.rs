@@ -4476,7 +4476,7 @@ async fn test_oidc_rejects_id_token_without_kid() {
 /// ADR-0002: ログアウトしたセッションJWTは以後のAPIで拒否される。
 #[tokio::test]
 async fn test_logout_revokes_session() {
-    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
     let body = oidc_login(&app, oidc.as_ref(), &mock).await;
     let token = body["token"].as_str().unwrap().to_string();
 
@@ -4492,6 +4492,13 @@ async fn test_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    // 失効 sid が DB へ永続化される（再起動後も失効が維持される）。
+    let mut rows = db
+        .query("SELECT sid FROM revoked_sessions", ())
+        .await
+        .unwrap();
+    assert!(rows.next().await.unwrap().is_some());
 
     let response = app
         .oneshot(with_peer(
@@ -4656,7 +4663,7 @@ async fn test_backchannel_logout_rejects_invalid_token() {
 /// ADR-0002: back-channel logout で sid を失効させる。
 #[tokio::test]
 async fn test_backchannel_logout_revokes_session() {
-    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
     let body = oidc_login(&app, oidc.as_ref(), &mock).await;
     let token = body["token"].as_str().unwrap().to_string();
 
@@ -4682,6 +4689,13 @@ async fn test_backchannel_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    // back-channel logout も DB へ永続化する。
+    let mut rows = db
+        .query("SELECT sid FROM revoked_sessions WHERE sid = ?", [sid])
+        .await
+        .unwrap();
+    assert!(rows.next().await.unwrap().is_some());
 
     let response = app
         .oneshot(with_peer(

@@ -811,11 +811,7 @@ pub async fn backchannel_logout(
     let claims = verify_logout_token(&state.http_client, oidc, &payload.logout_token).await?;
 
     if let Some(sid) = claims.sid {
-        state
-            .revoked_sessions
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sid);
+        crate::revoke_session(&state, &sid).await?;
     }
 
     if let Some(sub) = claims.sub {

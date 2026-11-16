@@ -552,6 +552,17 @@ pub async fn run() -> anyhow::Result<()> {
         Arc::new(Mutex::new(map))
     };
 
+    // 永続化済みの失効 sid を起動時にロードする（再起動でログアウトが無効化されない）。
+    let revoked_sessions = {
+        let mut rows = db.query("SELECT sid FROM revoked_sessions", ()).await?;
+        let mut set = HashSet::new();
+        while let Some(row) = rows.next().await? {
+            let sid: String = row.get(0)?;
+            set.insert(sid);
+        }
+        Arc::new(Mutex::new(set))
+    };
+
     let moderation_operators_env = std::env::var("MODERATION_OPERATOR_HASHES").ok();
     let moderation_operators = Arc::new(moderation_operators(moderation_operators_env.as_deref()));
     if moderation_operators.is_empty() {
@@ -572,7 +583,7 @@ pub async fn run() -> anyhow::Result<()> {
         payment_receiving_xprv,
         payment_verifier: None,
         oidc,
-        revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
+        revoked_sessions,
         revoked_subs_before,
         age_policy,
         moderation_operators,
@@ -1277,6 +1288,23 @@ pub async fn auth_verify(
     }))
 }
 
+/// セッション ID を失効させ、DB と in-memory の両方へ記録する。
+pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(), AppError> {
+    state
+        .db
+        .execute(
+            "INSERT OR IGNORE INTO revoked_sessions (sid) VALUES (?)",
+            [sid.to_string()],
+        )
+        .await?;
+    state
+        .revoked_sessions
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .insert(sid.to_string());
+    Ok(())
+}
+
 /// セッションを失効させる。以後、同じ `sid` の JWT は拒否される。
 pub async fn logout(
     State(state): State<Arc<AppState>>,
@@ -1284,11 +1312,7 @@ pub async fn logout(
     headers: axum::http::HeaderMap,
 ) -> Result<Json<bool>, AppError> {
     if let Some(sid) = &claims.sid {
-        state
-            .revoked_sessions
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sid.clone());
+        revoke_session(&state, sid).await?;
     }
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
     if let Some(token) = headers
