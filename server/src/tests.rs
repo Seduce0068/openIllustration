@@ -1,7 +1,7 @@
 use crate::{
     AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
     ensure_user_not_banned,
-    payments::{PaymentOrder, PaymentVerification, PaymentVerifier},
+    payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
     process_report_conclusion, update_content_status, validate_age, validate_jwt_secret,
     validate_upload_content, validate_upload_content_type,
 };
@@ -1524,6 +1524,9 @@ async fn test_upload_rejects_invalid_price() {
         ("9223372036854775808", "price must be an integer"),
         ("-9223372036854775809", "price must be an integer"),
         ("-9223372036854775808", "price must not be negative"),
+        // 注文上限超过は注文不可能な価格として拒否する。
+        ("1000001", "price must not exceed 1000000"),
+        ("9223372036854775807", "price must not exceed 1000000"),
     ];
     for (index, (price, expected_error)) in invalid_prices.into_iter().enumerate() {
         let boundary = format!("invalid-price-{index}");
@@ -1577,14 +1580,14 @@ async fn test_upload_rejects_unsupported_media_type() {
     assert_eq!(count, 1, "rejected uploads must not be persisted");
 }
 
-/// CONTENT-01: 正常な価格境界（未指定=既定値、明示的な下限0、64bit上限）は
+/// CONTENT-01: 正常な価格境界（未指定=既定値、明示的な下限0、注文上限）は
 /// 受理され、指定した値がそのまま保存される。
 #[tokio::test]
 async fn test_upload_accepts_valid_price_boundaries() {
     let cases: [(Option<&str>, i64); 3] = [
         (None, 0),
         (Some("0"), 0),
-        (Some("9223372036854775807"), i64::MAX),
+        (Some("1000000"), MAX_ORDER_JPY as i64),
     ];
 
     for (index, (price, expected)) in cases.into_iter().enumerate() {

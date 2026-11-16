@@ -59,7 +59,8 @@ status: current
 - [高][要判断] **2-of-3 クォーラム**、バックグラウンド確認ワーカー、コントラクト `pause` 監視、再編成の再評価（[HANDOFF.md](HANDOFF.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。
 - [高] **支援APIの置き換え**: `POST /support/*` は 501 無効化中。JPYC送金検証の実装まで支援・有償サービスを提供しない（`server/src/lib.rs`, [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] 受取アドレス未設定時の注文作成 501 の運用設計（`PAYMENT_RECEIVING_ADDRESS` / `PAYMENT_RECEIVING_XPRV`）、鍵の秘密管理。
-- [中] 取引上限の決定: 注文は `MAX_ORDER_JPY` を持つが、アップロード `price` は 64bit 範囲（`i64::MAX`）のみで取引上限は未実装/未決定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] 価格上限の整合: アップロード `price` を注文と同じ `MAX_ORDER_JPY`（1,000,000）以下に制限し、境界・上限超過を API 回帰テストで確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+- [中] 注文をコンテンツ CID と紐づけ、提示価格と支払額を照合する API 設計（現行 `CreateOrderRequest` は `cid` を持たない）。
 - [対応済み ad9d2a8] 注文IDの基本入力検証: `GET/POST /payments/orders/{order_id}` 系で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request`（DB参照前に拒否）。有効 UUID の不存在/非所有は従来どおり `404`（`server/src/payments.rs`, 回帰テスト `test_payment_order_rejects_invalid_order_id_format`）。
 - [低] 再編成・二重通知・別コントラクト等の異常系ハンドリング強化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み e87df61] 決済 verify の防御分岐を回帰テストで保護: 金額不一致（`MISMATCH` 遷移）、送金再利用（`"transaction is already used by another order"`）、期限切れ注文（`"order is no longer verifiable"`）、必要確認数未満（`CONFIRMING` 維持）の4ケース（`test_payment_verify_rejects_transfer_mismatch`, `test_payment_verify_rejects_reused_transaction`, `test_payment_verify_rejects_expired_order`, `test_payment_verify_keeps_confirming_until_threshold`）。ハンドラ挙動変更なし。

@@ -90,7 +90,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 入力: `multipart/form-data` の `file`、`owner_hash`、`signature`、任意の `price`。
 - JWT主体と `owner_hash` の一致を確認する。
 - Content-Typeを検査し、IllustrationまたはNovelに分類する。
-- `price` は64bit整数かつ0以上。上限は表現範囲（`i64::MAX`）のみで、取引上限は未実装（後述）。ファイル全体のHTTP本文上限は10 MiB。
+- `price` は64bit整数で `0..=MAX_ORDER_JPY`（1,000,000）。注文側 `jpy_to_wei` と同じ上限をアップロード時にも適用し、注文不可能な価格の登録を拒否する。ファイル全体のHTTP本文上限は10 MiB。
 - 署名対象はファイルのバイト列。開発モックでは全ゼロ署名を許容する。
 - Pinataへのアップロード後、CID・SHA-256チェックサム等をDBへ登録する。Pinataへ送るファイル名はコンテンツ種別に応じた固定名（`upload.jxl` / `upload.md`）とし、ユーザー入力名は使わない。
 - 同一バイト列を再投稿すると同一CIDとなるため、既存CIDとの衝突は400で拒否する（主キー衝突による500を返さない）。

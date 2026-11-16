@@ -1913,6 +1913,13 @@ pub async fn upload_content(
                         "price must not be negative".to_string(),
                     ));
                 }
+                // 注文側の上限（MAX_ORDER_JPY）と揃え、注文不可能な価格の登録を防ぐ。
+                if price > payments::MAX_ORDER_JPY as i64 {
+                    return Err(AppError::BadRequest(format!(
+                        "price must not exceed {}",
+                        payments::MAX_ORDER_JPY
+                    )));
+                }
             }
             _ => {}
         }
