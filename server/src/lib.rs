@@ -62,6 +62,30 @@ pub struct AppState {
     pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// `Content-Length` が 10 MiB を超えるリクエストを 413 で拒否する。
+/// axum の Multipart extractor はストリームを先に解析し 400 を返すため、
+/// その前にヘッダーで拒否して適切なステータスを返す（多層防御の1段目）。
+async fn reject_oversized_body(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    const MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
+    if let Some(length) = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        && length > MAX_BODY_BYTES
+    {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({"error": "request body exceeds 10 MiB"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
+}
+
 /// プロセス全体の軽量メトリクス。単一ライター運用（1プロセス）を前提とする。
 static METRIC_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static METRIC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -992,6 +1016,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
         .layer(from_fn(observe_metrics))
+        .layer(from_fn(reject_oversized_body))
         .layer(from_fn(network::ipv6_only_middleware))
         .with_state(state)
 }
