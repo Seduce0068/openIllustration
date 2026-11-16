@@ -164,20 +164,98 @@ pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChai
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SignedAuditSnapshot {
     pub version: u32,
-    pub entry_count: usize,
+    pub entries: Vec<AuditSnapshotEntry>,
     pub merkle_root: String,
     /// base64 エンコードした署名（署名対象は `signature_payload()`）。
     pub signature: String,
 }
 
+/// スナップショットに含まれる監査エントリ。第三者がハッシュと連鎖を再計算できる。
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct AuditSnapshotEntry {
+    pub log_id: i64,
+    pub cid: String,
+    pub old_status: String,
+    pub new_status: String,
+    pub changed_by: String,
+    pub reason: String,
+    pub previous_log_hash: String,
+    pub entry_hash: String,
+}
+
+impl AuditSnapshotEntry {
+    /// v2 ハッシュを再計算し、保存された entry_hash と一致するか確認する。
+    pub fn verify_hash(&self) -> bool {
+        let entry = AuditLogEntry {
+            log_id: Some(self.log_id),
+            cid: self.cid.clone(),
+            old_status: self.old_status.clone(),
+            new_status: self.new_status.clone(),
+            changed_by: self.changed_by.clone(),
+            reason: self.reason.clone(),
+            previous_log_hash: self.previous_log_hash.clone(),
+        };
+        entry.calculate_hash_v2() == self.entry_hash
+    }
+}
+
 impl SignedAuditSnapshot {
+    pub fn entry_count(&self) -> usize {
+        self.entries.len()
+    }
+
     /// 署名対象の正規化バイト列。JSON のフィールド順に依存しない。
     pub fn signature_payload(&self) -> Vec<u8> {
+        let entries_json =
+            serde_json::to_string(&self.entries).expect("serializing audit entries cannot fail");
         format!(
-            "OPENILLUSTRATION_AUDIT_EXPORT_V1\0{}\0{}\0{}",
-            self.version, self.entry_count, self.merkle_root
+            "OPENILLUSTRATION_AUDIT_EXPORT_V2\0{}\0{}\0{}",
+            self.version, entries_json, self.merkle_root
         )
         .into_bytes()
+    }
+
+    /// エントリ列のハッシュ連鎖・連番・Merkle root を再計算して検証する。
+    pub fn verify_chain(&self) -> Result<(), ForensicError> {
+        let mut expected_prev = "GENESIS_HASH".to_string();
+        let mut hashes = Vec::with_capacity(self.entries.len());
+        for (index, entry) in self.entries.iter().enumerate() {
+            let expected_id = index as i64 + 1;
+            if entry.log_id != expected_id {
+                return Err(ForensicError::InvalidSignature(format!(
+                    "non-contiguous log_id: expected {expected_id}, got {}",
+                    entry.log_id
+                )));
+            }
+            if !entry.verify_hash() {
+                return Err(ForensicError::InvalidSignature(format!(
+                    "entry_hash mismatch at log_id={}",
+                    entry.log_id
+                )));
+            }
+            if entry.previous_log_hash != expected_prev {
+                return Err(ForensicError::InvalidSignature(format!(
+                    "chain mismatch at log_id={}",
+                    entry.log_id
+                )));
+            }
+            expected_prev = entry.entry_hash.clone();
+            hashes.push(entry.entry_hash.clone());
+        }
+        let digest = compute_audit_chain_digest(
+            &self
+                .entries
+                .iter()
+                .map(|entry| (entry.log_id, entry.entry_hash.clone()))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(ForensicError::InvalidSignature)?;
+        if digest.root_hash != self.merkle_root {
+            return Err(ForensicError::InvalidSignature(
+                "Merkle root mismatch".to_string(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -207,7 +285,8 @@ pub fn verify_audit_snapshot(
         &snapshot.signature,
     )
     .map_err(|e| ForensicError::InvalidSignature(format!("Invalid base64: {e}")))?;
-    verify_rsa_signature(public_key_der, &snapshot.signature_payload(), &signature)
+    verify_rsa_signature(public_key_der, &snapshot.signature_payload(), &signature)?;
+    snapshot.verify_chain()
 }
 
 /// PEM 秘密鍵から公開鍵 DER を導出する（配布用）。
@@ -291,20 +370,47 @@ mod tests {
             .to_string();
         let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
 
+        let entry = AuditLogEntry {
+            log_id: Some(1),
+            cid: "QmTest".into(),
+            old_status: "Approved".into(),
+            new_status: "Reported".into(),
+            changed_by: "reporter".into(),
+            reason: "illegal".into(),
+            previous_log_hash: "GENESIS_HASH".into(),
+        };
+        let entry_hash = entry.calculate_hash_v2();
+        let snapshot_entry = AuditSnapshotEntry {
+            log_id: 1,
+            cid: entry.cid.clone(),
+            old_status: entry.old_status.clone(),
+            new_status: entry.new_status.clone(),
+            changed_by: entry.changed_by.clone(),
+            reason: entry.reason.clone(),
+            previous_log_hash: entry.previous_log_hash.clone(),
+            entry_hash: entry_hash.clone(),
+        };
+        let digest = compute_audit_chain_digest(&[(1, entry_hash.clone())]).unwrap();
         let mut snapshot = SignedAuditSnapshot {
-            version: 1,
-            entry_count: 3,
-            merkle_root: "ab".repeat(32),
+            version: 2,
+            entries: vec![snapshot_entry.clone()],
+            merkle_root: digest.root_hash,
             signature: String::new(),
         };
         snapshot.signature = sign_audit_snapshot(&snapshot, &private_pem).unwrap();
         assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
 
         let tampered = SignedAuditSnapshot {
-            merkle_root: "cd".repeat(32),
+            entries: vec![AuditSnapshotEntry {
+                reason: "tampered".into(),
+                ..snapshot_entry
+            }],
             ..snapshot.clone()
         };
-        assert!(verify_audit_snapshot(&tampered, &public_der).is_err());
+        assert!(
+            verify_audit_snapshot(&tampered, &public_der).is_err(),
+            "tampering with entry content must be detected"
+        );
     }
 
     #[test]

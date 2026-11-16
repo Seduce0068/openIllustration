@@ -42,7 +42,8 @@ cargo run -p server --bin sign_audit_export -- \
   --output /path/to/audit-snapshot-YYYYMMDD.json
 ```
 
-出力には `version`, `entry_count`, `merkle_root`, `signature` が含まれる。
+出力には `version`, `entries`（全監査エントリ）, `merkle_root`, `signature` が含まれる。
+第三者は `entries` から v2 ハッシュ・連鎖・Merkle root を再計算し、署名と突き合わせる。
 
 ## 第三者検証
 
@@ -60,8 +61,8 @@ cargo run -p server --bin verify_audit_export -- \
 
 実 DB と OpenSSL 生成鍵で以下を確認済み:
 
-- 署名付きスナップショットを作成し、公開鍵で検証成功。
-- `entry_count` を改ざんしたスナップショットが検証失敗（終了コード 1）。
+- 署名付きスナップショットを作成し、公開鍵で検証成功（version 2、全エントリ含有）。
+- エントリの `reason` を改ざんしたスナップショットが検証失敗（終了コード 1）。
 - common の単体テストで署名・検証・改ざん検出を確認。
 
 ## 未解決事項

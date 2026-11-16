@@ -1,5 +1,7 @@
 use anyhow::{Context, anyhow};
-use common::{SignedAuditSnapshot, compute_audit_chain_digest, sign_audit_snapshot};
+use common::{
+    AuditSnapshotEntry, SignedAuditSnapshot, compute_audit_chain_digest, sign_audit_snapshot,
+};
 use libsql::Builder;
 
 #[derive(Debug, Default)]
@@ -95,22 +97,36 @@ async fn main() -> anyhow::Result<()> {
 
     let mut rows = db
         .query(
-            "SELECT log_id, entry_hash FROM content_audit_log ORDER BY log_id ASC",
+            "SELECT log_id, cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash \
+             FROM content_audit_log ORDER BY log_id ASC",
             (),
         )
         .await
         .context("failed to query audit log")?;
     let mut entries = Vec::new();
     while let Some(row) = rows.next().await.context("failed to read audit row")? {
-        let log_id: i64 = row.get(0)?;
-        let hash: String = row.get(1)?;
-        entries.push((log_id, hash));
+        entries.push(AuditSnapshotEntry {
+            log_id: row.get(0)?,
+            cid: row.get(1)?,
+            old_status: row.get(2)?,
+            new_status: row.get(3)?,
+            changed_by: row.get(4)?,
+            reason: row.get(5)?,
+            previous_log_hash: row.get(6)?,
+            entry_hash: row.get(7)?,
+        });
     }
-    let digest = compute_audit_chain_digest(&entries).map_err(anyhow::Error::msg)?;
+    let digest = compute_audit_chain_digest(
+        &entries
+            .iter()
+            .map(|entry| (entry.log_id, entry.entry_hash.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(anyhow::Error::msg)?;
 
     let mut snapshot = SignedAuditSnapshot {
-        version: 1,
-        entry_count: digest.count,
+        version: 2,
+        entries,
         merkle_root: digest.root_hash,
         signature: String::new(),
     };
@@ -120,7 +136,7 @@ async fn main() -> anyhow::Result<()> {
     std::fs::write(&output, json).context("failed to write snapshot")?;
     println!(
         "audit_export_signed: output={output} entries={}",
-        snapshot.entry_count
+        snapshot.entry_count()
     );
     Ok(())
 }

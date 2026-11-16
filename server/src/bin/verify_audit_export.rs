@@ -62,7 +62,9 @@ fn main() -> anyhow::Result<()> {
     verify_audit_snapshot(&snapshot, &public_key).map_err(|error| anyhow!("{error}"))?;
     println!(
         "audit_export_verification: OK version={} entries={} root={}",
-        snapshot.version, snapshot.entry_count, snapshot.merkle_root
+        snapshot.version,
+        snapshot.entry_count(),
+        snapshot.merkle_root
     );
     Ok(())
 }
