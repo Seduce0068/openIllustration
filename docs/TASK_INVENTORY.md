@@ -87,7 +87,7 @@ status: current
 
 - [対応済み] **既存DBの段階的アップグレード試験**: 001→003 適用済みDBに 004 を追加して新カラムの backfill と既存データ保持を確認。`verify_migrations` は適用済みだがファイルが無いバージョンを検出し起動を拒否（古いデプロイイメージ誤用の防止）。
 - [中] **ロールバック方針（down migration）未実装**、複数インスタンス同時起動の排他未実装（`server/migrations/`, `server/src/migration.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [中] **複数インスタンス同時起動時のマイグレーション排他**（DBロック等）または単一ライター運用の決定と実装（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み] 複数インスタンス起動方針: **単一ライター運用**を初期運用の前提として決定・文書化。プロセス内書き込みは接続ごとロックで直列化し、プロセス間排他はアーキテクチャ側で回避（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] バックアップ/リストア手順: `backup_db`（VACUUM INTO・上書き拒否）と `verify_backup`（構造検証）を追加。実 DB で作成・検証・データ保持・監査連動を確認し、[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に手順化。
 - [中] 自動バックアップスケジュール・オフサイト保存・暗号化と実運用での復旧訓練。
 
@@ -149,8 +149,8 @@ status: current
 - [対応済み・本変更で反映] [DETAILED_DESIGN.md](DETAILED_DESIGN.md) のマイグレーション現行記載に `003_payment_order_index.sql` を追記。
 - [対応済み・本変更で反映] DEC-02採用方針（有効設定値の常時公開・`GET /policy/age`・年齢ポリシー設定項目・制約）を [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [HANDOFF.md](HANDOFF.md), [REQUIREMENTS_DEFINITION.md](REQUIREMENTS_DEFINITION.md), [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
 - [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
-- [低] `docs/index.md` に含まれない文書の扱い整理（必要に応じて索引へ反映）。
-- [低] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) の「更新日」等、定期レビュー時のメタデータ更新。
+- [対応済み] `docs/index.md` の索引を全文書（Runbook 含む）へ反映。
+- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17）。
 
 ## 7. 実施の原則（安全第一）
 
