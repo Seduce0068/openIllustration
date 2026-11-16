@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
-const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
+pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 /// リフレッシュトークンの有効期間（30日）。
 const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// リフレッシュトークンの SHA-256 ハッシュ。DB にはハッシュのみ保存する。

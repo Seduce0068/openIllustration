@@ -231,7 +231,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。期限切れレコードは起動時と finalizer の周期で自動回収（`Purged N expired refresh token(s)` ログ）。
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
-- `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。
+- `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。セッション有効期限(24h)+60s より古いレコードは起動時/ワーカー周期で回収。
 - 起動時は `<DB path>.instance.lock` で単一ライターを強制（第二インスタンスは拒否、停止時に削除）。同じ DB を複数プロセスで起動しないこと。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。

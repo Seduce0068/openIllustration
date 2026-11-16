@@ -944,6 +944,19 @@ async fn purge_expired_refresh_tokens(db: &Connection) -> Result<u64, libsql::Er
         .map(|_| db.changes())
 }
 
+/// 古い失効 sid を回収する。失効sid を持つ JWT は最大 SESSION_TTL_SECS で
+/// 期限切れになるため、それより古いレコードを削除しても失効は復活しない。
+/// リフレッシュ時は常に新しい sid が発行されるため再利用の心配もない。
+async fn purge_stale_revoked_sessions(db: &Connection) -> Result<u64, libsql::Error> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(oidc::SESSION_TTL_SECS + 60);
+    db.execute(
+        "DELETE FROM revoked_sessions WHERE revoked_at <= ?",
+        [cutoff.format("%Y-%m-%d %H:%M:%S").to_string()],
+    )
+    .await
+    .map(|_| db.changes())
+}
+
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     interval: Duration,
@@ -959,6 +972,11 @@ async fn run_moderation_finalizer(
         Ok(count) => tracing::info!("Purged {} expired refresh token(s) on startup", count),
         Err(error) => tracing::warn!("Refresh token purge failed on startup: {}", error),
     }
+    match purge_stale_revoked_sessions(db.as_ref()).await {
+        Ok(0) => {}
+        Ok(count) => tracing::info!("Purged {} stale revoked session(s) on startup", count),
+        Err(error) => tracing::warn!("Revoked session purge failed on startup: {}", error),
+    }
 
     loop {
         tokio::select! {
@@ -967,6 +985,11 @@ async fn run_moderation_finalizer(
                     Ok(0) => {}
                     Ok(count) => tracing::info!("Purged {} expired refresh token(s)", count),
                     Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
+                }
+                match purge_stale_revoked_sessions(db.as_ref()).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!("Purged {} stale revoked session(s)", count),
+                    Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
                 }
                 match finalize_due_reports(db.as_ref()).await {
                     Ok(0) => {}

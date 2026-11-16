@@ -51,6 +51,7 @@ status: current
 - [高][要判断] **実JPKI/実OP接続と検証**: 実機・失効確認（`server/src/oidc.rs`, [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] **`sub` 単位の全セッション失効と永続化**: back-channel logout で `sid`/`sub` を失効対象とし、`iat` 閾値で既存セッションを拒否。マイグレーション 008 の `revoked_subs` に閾値を保存し起動時にロード、再認証時に削除。再認証で新セッション発行可。
 - [対応済み] **`sid` 単位の失効永続化**: マイグレーション 009 の `revoked_sessions` にログアウト済み sid を保存し起動時にロード。`/auth/logout` と back-channel logout の両方を修正。実プロセスで「ログアウト→再起動→401 維持」を確認（[HANDOFF.md](HANDOFF.md)）。
+- [対応済み] 古い失効 sid の自動回収: セッション有効期限(24h)+60s 超のレコードを起動時/ワーカー周期で削除（リフレッシュは常に新 sid を発行するため再利用なし）。実プロセスで 2件→起動→1件を確認。
 - [中] 複数プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
 - [対応済み] リフレッシュトークンのローテーションと盗用検知: マイグレーション 006 でハッシュのみ保存。ログイン時に 30 日トークンを HttpOnly Cookie 発行、`POST /auth/refresh` で毎回回転。再利用検知時はファミリ全体を失効。ログアウト時もファミリ失効。回帰テスト5件（[HANDOFF.md](HANDOFF.md)）。
 - [対応済み] 期限切れリフレッシュトークンの自動回収: 起動時と finalizer 周期で `expires_at <= now` を削除。単体テストと実プロセス（2件→起動→1件、purge ログ）で確認。

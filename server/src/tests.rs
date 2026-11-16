@@ -6475,6 +6475,45 @@ async fn test_purge_expired_refresh_tokens() {
     assert_eq!(remaining, vec!["valid"]);
 }
 
+#[tokio::test]
+async fn test_purge_stale_revoked_sessions() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    db.execute(
+        "INSERT INTO revoked_sessions (sid, revoked_at) VALUES ('old', '2000-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_sessions (sid, revoked_at) VALUES ('recent', datetime('now'))",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let purged = crate::purge_stale_revoked_sessions(&db).await.unwrap();
+    assert_eq!(purged, 1, "only the stale revocation must be purged");
+
+    let mut rows = db
+        .query("SELECT sid FROM revoked_sessions", ())
+        .await
+        .unwrap();
+    let mut remaining = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        remaining.push(row.get::<String>(0).unwrap());
+    }
+    assert_eq!(remaining, vec!["recent"]);
+}
+
 // ---- liveness / readiness ----
 
 #[tokio::test]
