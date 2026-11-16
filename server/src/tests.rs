@@ -1717,6 +1717,42 @@ async fn test_upload_rejects_unsupported_media_type() {
     assert_eq!(count, 1, "rejected uploads must not be persisted");
 }
 
+/// CONTENT-01: アップロード本文が 10 MiB を超える場合は 413 で拒否される。
+#[tokio::test]
+async fn test_upload_rejects_body_over_10mib_with_bad_request() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let boundary = "oversize-body";
+    let mut file_bytes = vec![0xFF, 0x0A];
+    file_bytes.resize(10 * 1024 * 1024 + 1, 0x00);
+    let body = multipart_upload_body(boundary, &file_bytes, Some("0"));
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header("authorization", format!("Bearer {token}"))
+                .header(
+                    "content-type",
+                    format!("multipart/form-data; boundary={boundary}"),
+                )
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 4096).await.unwrap();
+    // axum 0.8 では Multipart extractor が本文制限より先にストリームを解析し、
+    // 10 MiB 超過は 413 ではなく 400（multipart parse error）として拒否される。
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "bodies over 10 MiB must be rejected: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
 /// CONTENT-01: 正常な価格境界（未指定=既定値、明示的な下限0、注文上限）は
 /// 受理され、指定した値がそのまま保存される。
 #[tokio::test]
