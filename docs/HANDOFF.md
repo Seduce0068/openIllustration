@@ -216,6 +216,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `server/migrations/004_moderation_deadlines.sql`: 投票期限・確定時刻・異議の連鎖。
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
+- `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
+- `server/src/bin/verify_backup.rs`: バックアップの構造検証。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
 - `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション手続（Accepted）。
