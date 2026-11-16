@@ -99,6 +99,7 @@ status: current
 
 - [対応済み] **既存DBの段階的アップグレード試験**: 001→003 適用済みDBに 004 を追加して新カラムの backfill と既存データ保持を確認。`verify_migrations` は適用済みだがファイルが無いバージョンを検出し起動を拒否（古いデプロイイメージ誤用の防止）。
 - [対応済み] 単一ライター起動の強制: ローカル DB 起動時に `<DB path>.instance.lock` を原子的作成し、生存 PID のロックでは第二インスタンスを拒否。stale ロックは自動回収、停止時に削除（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。リモート DB は警告のみ。
+- [対応済み] 投票署名メッセージの共有化: `moderation_vote_message(report_id, result)` を導入し、生成側と検証側の整合を一箇所で保証。report_id/result の両方への束縛を回帰テスト化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。※署名プロトコル自体のドメイン分離は破壊的変更のため未実施。
 - [対応済み] ロールバック判断手順: 前方のみ（down migration なし）の方針を明示し、適用前バックアップ＋旧バイナリへの復帰手順、失われるデータと監査ログの範囲を [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に記載。
 - [対応済み] マイグレーション検証の fail-closed 強化: ディレクトリ欠落時に `verify_migrations` が `Ok(())` を返し「適用済みファイル欠落」検査をすり抜けていた問題を修正。単体テストで拒否を確認。
 - [低] down migration 自体の実装（現状は未採用、必要になった時点で設計）。

@@ -2030,6 +2030,13 @@ pub async fn record_unpin(
     Ok(Json(true))
 }
 
+/// モデレーション投票の署名対象メッセージを生成する。
+/// 現行形式（互換性のため変更しない）を一箇所に集約し、将来のドメイン分離を
+/// この関数だけで行えるようにする。
+pub fn moderation_vote_message(report_id: i64, result: &str) -> String {
+    json!({"report_id": report_id, "result": result}).to_string()
+}
+
 pub async fn mod_vote(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -2046,11 +2053,7 @@ pub async fn mod_vote(
     ensure_user_not_banned(&state.db, &claims.sub).await?;
 
     // 1. Verify Signature (Auditability)
-    let message = json!( {
-        "report_id": vote.report_id,
-        "result": vote.result
-    })
-    .to_string();
+    let message = moderation_vote_message(vote.report_id, &vote.result);
 
     let mock_sig = state.allow_mock_auth && vote.signature.iter().all(|&b| b == 0);
 

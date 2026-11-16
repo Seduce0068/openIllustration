@@ -2516,7 +2516,7 @@ async fn send_signed_vote(
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
 
-    let message = json!({"report_id": report_id, "result": result}).to_string();
+    let message = crate::moderation_vote_message(report_id, result);
     let signing_key = SigningKey::<Sha256>::new(private_key.clone());
     let signature = signing_key.sign(message.as_bytes()).to_vec();
     let vote_body = json!({
@@ -2681,6 +2681,15 @@ async fn test_vote_for_missing_report_returns_404() {
         StatusCode::NOT_FOUND,
         "unknown report must return 404"
     );
+}
+
+/// 投票署名メッセージは report_id と result の両方に依存する（転用防止の基盤）。
+#[test]
+fn test_moderation_vote_message_binds_report_and_result() {
+    let a = crate::moderation_vote_message(1, "Approve");
+    assert_ne!(a, crate::moderation_vote_message(2, "Approve"));
+    assert_ne!(a, crate::moderation_vote_message(1, "Reject"));
+    assert_eq!(a, crate::moderation_vote_message(1, "Approve"));
 }
 
 /// 無効署名の投票は 401 で拒否し、票を記録しない
