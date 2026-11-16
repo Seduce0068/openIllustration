@@ -62,7 +62,7 @@ status: current
 - [対応済み] 価格上限の整合: アップロード `price` を注文と同じ `MAX_ORDER_JPY`（1,000,000）以下に制限し、境界・上限超過を API 回帰テストで確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] 注文と価格の照合: `CreateOrderRequest` に `cid` を追加し、マイグレーション 007 で注文へ CID を記録。存在しない・レビュー中・価格不一致・不正 CID の注文を拒否（回帰テスト4件）。
 - [対応済み ad9d2a8] 注文IDの基本入力検証: `GET/POST /payments/orders/{order_id}` 系で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request`（DB参照前に拒否）。有効 UUID の不存在/非所有は従来どおり `404`（`server/src/payments.rs`, 回帰テスト `test_payment_order_rejects_invalid_order_id_format`）。
-- [低] 再編成・二重通知・別コントラクト等の異常系ハンドリング強化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [一部対応] 決済異常系: モックで同一送金の再 verify・確認数進展→`FINALIZED`・確定後不変を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実チェーン上の再編成・二重通知・別コントラクト検知は RPC 実装時に検討。
 - [対応済み e87df61] 決済 verify の防御分岐を回帰テストで保護: 金額不一致（`MISMATCH` 遷移）、送金再利用（`"transaction is already used by another order"`）、期限切れ注文（`"order is no longer verifiable"`）、必要確認数未満（`CONFIRMING` 維持）の4ケース（`test_payment_verify_rejects_transfer_mismatch`, `test_payment_verify_rejects_reused_transaction`, `test_payment_verify_rejects_expired_order`, `test_payment_verify_keeps_confirming_until_threshold`）。ハンドラ挙動変更なし。
 
 ### 3.3 モデレーション・コンテンツ

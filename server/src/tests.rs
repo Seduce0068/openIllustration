@@ -3619,7 +3619,7 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
         confirmations: 255,
         from: wallet.clone(),
         to: receiving.to_string(),
-        amount_wei,
+        amount_wei: amount_wei.clone(),
     });
 
     let response = verify_payment_order(&app, &token, &order_id).await;
@@ -3631,6 +3631,53 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
         "order below the confirmation threshold must stay CONFIRMING"
     );
     assert_eq!(order["confirmations"], 255);
+
+    // 2回目: 同じ送金で確認数が進展した場合は再 verify でき、FINALIZED へ進む。
+    // 同一注文内の tx_hash 再利用は UNIQUE 制約で拒否されない（別注文との衝突のみ拒否）。
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 105,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: amount_wei.clone(),
+    });
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "re-verifying the same transaction as confirmations progress must succeed"
+    );
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(order["status"], "FINALIZED");
+    assert_eq!(order["confirmations"], 256);
+
+    // 確定済み注文は再 verify しても状態が変わらない（再編成で確定を戻さない）。
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 110,
+        confirmations: 1,
+        from: wallet,
+        to: receiving.to_string(),
+        amount_wei,
+    });
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        order["status"], "FINALIZED",
+        "finalized orders must stay final"
+    );
+    assert_eq!(
+        order["confirmations"], 256,
+        "confirmations must not regress"
+    );
 }
 
 /// ADR-0002: OIDC start と callback で PPID をセッションJWTへ結合する。
