@@ -503,10 +503,12 @@ fn is_origin_shape(origin: &str) -> bool {
 }
 
 /// Parse the `ALLOWED_ORIGINS` environment value (comma-separated) into
-/// header values. Falls back to the local development origins when unset;
-/// invalid entries are ignored, and an empty result rejects all origins.
-/// Trailing slashes are removed because browsers never send them in `Origin`.
-pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
+/// header values. Falls back to the local development origins only when
+/// `allow_dev_defaults` is true (development mock auth); otherwise unset
+/// config rejects all origins (fail-closed). Invalid entries are ignored,
+/// and an empty result rejects all origins. Trailing slashes are removed
+/// because browsers never send them in `Origin`.
+pub fn allowed_origins(env_value: Option<&str>, allow_dev_defaults: bool) -> Vec<HeaderValue> {
     match env_value {
         Some(value) => value
             .split(',')
@@ -531,10 +533,16 @@ pub fn allowed_origins(env_value: Option<&str>) -> Vec<HeaderValue> {
                 }
             })
             .collect(),
-        None => DEV_ALLOWED_ORIGINS
+        None if allow_dev_defaults => DEV_ALLOWED_ORIGINS
             .iter()
             .map(|origin| origin.parse().expect("valid dev origin"))
             .collect(),
+        None => {
+            warn!(
+                "ALLOWED_ORIGINS is not set and mock auth is disabled: all CORS origins are rejected"
+            );
+            Vec::new()
+        }
     }
 }
 
@@ -787,7 +795,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
             CorsLayer::new()
-                .allow_origin(allowed_origins(allowed_origins_env.as_deref()))
+                .allow_origin(allowed_origins(
+                    allowed_origins_env.as_deref(),
+                    state.allow_mock_auth,
+                ))
                 .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )

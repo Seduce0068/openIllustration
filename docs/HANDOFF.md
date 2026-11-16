@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 171件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 172件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -195,7 +195,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 
 ### ネットワーク
 
-- `ALLOWED_ORIGINS`
+- `ALLOWED_ORIGINS`: 本番では必須。`ALLOW_MOCK_AUTH=1` の開発時のみ未設定で localhost 系 8080 を許可し、それ以外で未設定なら全オリジン拒否（fail-closed）。
 - `TRUSTED_PROXY_CIDRS`
 - `ALLOW_IPV4_LOCALHOST`
 

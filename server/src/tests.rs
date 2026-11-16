@@ -825,14 +825,24 @@ async fn test_ipv6_address_allowed() {
 /// SEC-03: ALLOWED_ORIGINS 未設定時は開発用オリジンのみ許可
 #[test]
 fn test_allowed_origins_defaults_to_dev_origins() {
-    let origins = allowed_origins(None);
+    let origins = allowed_origins(None, true);
     assert_eq!(origins.len(), 3);
+}
+
+/// SEC-03: 本番相当（mock 無効）で未設定なら全オリジン拒否（fail-closed）
+#[test]
+fn test_allowed_origins_without_mock_or_config_rejects_all() {
+    let origins = allowed_origins(None, false);
+    assert!(
+        origins.is_empty(),
+        "unset ALLOWED_ORIGINS with mock auth disabled must reject every origin"
+    );
 }
 
 /// SEC-03: ALLOWED_ORIGINS がカンマ区切りで反映される
 #[test]
 fn test_allowed_origins_parses_env_value() {
-    let origins = allowed_origins(Some("https://example.com, https://app.example.com"));
+    let origins = allowed_origins(Some("https://example.com, https://app.example.com"), true);
     assert_eq!(origins.len(), 2);
     assert!(origins.iter().any(|o| o == "https://app.example.com"));
 }
@@ -840,7 +850,7 @@ fn test_allowed_origins_parses_env_value() {
 /// SEC-03: 不正なエントリは無視する（制御文字はヘッダ値にできない）
 #[test]
 fn test_allowed_origins_ignores_invalid_entries() {
-    let origins = allowed_origins(Some("bad\norigin, https://ok.example.com"));
+    let origins = allowed_origins(Some("bad\norigin, https://ok.example.com"), true);
     assert_eq!(origins.len(), 1);
     assert_eq!(origins[0], "https://ok.example.com");
 }
@@ -848,7 +858,7 @@ fn test_allowed_origins_ignores_invalid_entries() {
 /// SEC-03: scheme のないエントリは無視する（ブラウザの Origin と一致しないため）
 #[test]
 fn test_allowed_origins_requires_scheme() {
-    let origins = allowed_origins(Some("localhost:8080, https://ok.example.com, null"));
+    let origins = allowed_origins(Some("localhost:8080, https://ok.example.com, null"), true);
     assert_eq!(origins.len(), 2);
     assert_eq!(origins[0], "https://ok.example.com");
     assert_eq!(origins[1], "null");
@@ -857,7 +867,10 @@ fn test_allowed_origins_requires_scheme() {
 /// SEC-03: 末尾スラッシュはブラウザが送らないため除去する
 #[test]
 fn test_allowed_origins_trims_trailing_slash() {
-    let origins = allowed_origins(Some("https://ok.example.com/, http://localhost:3000//"));
+    let origins = allowed_origins(
+        Some("https://ok.example.com/, http://localhost:3000//"),
+        true,
+    );
     assert_eq!(origins.len(), 2);
     assert_eq!(origins[0], "https://ok.example.com");
     assert_eq!(origins[1], "http://localhost:3000");

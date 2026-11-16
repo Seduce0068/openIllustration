@@ -92,7 +92,8 @@ status: current
 
 ### 3.6 ネットワーク・アップロード・整合性
 
-- [中] 本番CORSオリジンの決定と `ALLOWED_ORIGINS` 運用（ローカル開発オリジンを本番に流用しない）（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み] CORS の fail-closed 化: `ALLOW_MOCK_AUTH=1` の開発時のみ未設定で開発オリジンへフォールバックし、本番相当（mock 無効）で未設定なら全オリジン拒否。実サーバーで ACAO ヘッダの有無を確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] 本番配信オリジンの具体値の決定と設定（ローカル開発オリジンを本番に流用しない）。
 - [中] プロキシ/WAF/多段構成下の IP 判定・`TRUSTED_PROXY_CIDRS` 運用の実環境検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] IPFS: 厳密なCID仕様検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [低] アップロード: 完全なJPEG XLデコード検証、画像デコード前検査、安全な保存名、実multipartサイズ境界・署名（実鍵）試験（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
