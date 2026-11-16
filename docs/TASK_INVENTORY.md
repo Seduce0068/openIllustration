@@ -79,7 +79,7 @@ status: current
 
 - [対応済み] **ADR-0004 の期限・定足数・異議・投票資格**: マイグレーション004で `deadline_at`/`concluded_at`/`appeal_of` を追加。3票即時確定を廃止し期限後確定、定足数未達時 `Approved` 復帰、30日以内の異議、投稿者除外、期限切れ投票拒否を実装。回帰テスト7件を追加、既存3件を適応。
 - [対応済み] **ADR-0004 の運用者とBAN/ピン解除監査**: `MODERATION_OPERATOR_HASHES` でセルフホストごとに運用者を設定（未設定なら特権操作を全拒否）。BAN（根拠・期間必須）/UNBAN/UNPIN を `governance_audit_log` に記録。
-- [対応済み] **期限到達の自動検知**: 起動時のバックグラウンドワーカーが `MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒・30〜3600秒）ごとに期限超過通報を走査して確定。停止シグナルで終了し、手動 finalize と冪等。
+- [対応済み] **期限到達の自動検知**: 起動時のバックグラウンドワーカーが `MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒・30〜3600秒）ごとに期限超過通報を走査して確定。停止シグナルで終了し、手動 finalize と冪等。手動 finalize の権限設計（認証済みなら誰でも可、投票結果は改変不可）を設計書へ明記。
 - [高][要判断] **ADR-0004 の残項目**: 投票者選出・Sybil耐性・オンチェーン記録方針、`governance_audit_log` の第三者検証可能な監査への昇格（DEC-04 と連携）（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
 - [対応済み] 並行投票の競合対策: libSQL ローカル接続は同時に1つの `BEGIN` しか保持できないため、接続ごとの書き込みロックでトランザクションをプロセス内直列化。競合の再現・ロック有効性・並行投票と確定の同時実行を回帰テストで確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
