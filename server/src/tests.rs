@@ -239,6 +239,13 @@ async fn setup_app_with_payments(
     db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
         .await
         .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
@@ -275,6 +282,13 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
     db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
         .await
         .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
@@ -3245,6 +3259,7 @@ async fn test_payment_order_lifecycle() {
                     json!({
                         "chain_id": 137,
                         "wallet_address": wallet,
+                        "cid": "QmPayTest",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -3333,6 +3348,7 @@ async fn test_payment_order_rejects_unsupported_chain() {
                     json!({
                         "chain_id": 999,
                         "wallet_address": "0x1111111111111111111111111111111111111111",
+                        "cid": "QmPayTest",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -3366,6 +3382,7 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
                     json!({
                         "chain_id": 137,
                         "wallet_address": wallet,
+                        "cid": "QmPayTest",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -3422,6 +3439,7 @@ async fn create_payment_order(
                     json!({
                         "chain_id": chain_id,
                         "wallet_address": wallet,
+                        "cid": "QmPayTest",
                         "amount_jpy": amount_jpy,
                     })
                     .to_string(),
@@ -4268,7 +4286,8 @@ async fn test_payment_orders_derive_unique_addresses() {
                         json!({
                             "chain_id": 137,
                             "wallet_address": "0x1111111111111111111111111111111111111111",
-                            "amount_jpy": 1000,
+                            "cid": "QmPayTest",
+                        "amount_jpy": 1000,
                         })
                         .to_string(),
                     ))
@@ -5755,4 +5774,149 @@ async fn test_refresh_rejects_missing_cookie() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---- 注文とコンテンツ価格の照合 ----
+
+async fn post_order_json(app: &Router, token: &str, body: serde_json::Value) -> StatusCode {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    response.status()
+}
+
+#[tokio::test]
+async fn test_order_requires_matching_content_price() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    for amount in [999u64, 1001, 1] {
+        let status = post_order_json(
+            &app,
+            &token,
+            json!({
+                "chain_id": 137,
+                "wallet_address": "0x1111111111111111111111111111111111111111",
+                "cid": "QmPayTest",
+                "amount_jpy": amount,
+            }),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "amount {amount} must be rejected"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_order_rejects_unknown_or_non_approved_content() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmReported', 'Novel', 'test_user', 'abc', 'Reported', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let base = json!({
+        "chain_id": 137,
+        "wallet_address": "0x1111111111111111111111111111111111111111",
+        "amount_jpy": 1000,
+    });
+    let mut unknown = base.clone();
+    unknown["cid"] = json!("QmUnknownContent");
+    assert_eq!(
+        post_order_json(&app, &token, unknown).await,
+        StatusCode::NOT_FOUND
+    );
+
+    let mut reported = base;
+    reported["cid"] = json!("QmReported");
+    assert_eq!(
+        post_order_json(&app, &token, reported).await,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn test_order_rejects_invalid_cid_before_price_lookup() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let status = post_order_json(
+        &app,
+        &token,
+        json!({
+            "chain_id": 137,
+            "wallet_address": "0x1111111111111111111111111111111111111111",
+            "cid": "not/a/cid",
+            "amount_jpy": 1000,
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn test_order_records_content_cid() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": 137,
+                        "wallet_address": "0x1111111111111111111111111111111111111111",
+                        "cid": "QmPayTest",
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let order_id = body["order_id"].as_str().unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/payments/orders/{order_id}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(order["cid"], "QmPayTest");
 }

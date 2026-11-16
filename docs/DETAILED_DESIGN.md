@@ -28,7 +28,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |
 | POST | `/content/upload` | Bearer JWT | コンテンツ投稿 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
-| POST | `/payments/orders` | Bearer JWT | JPYC注文を作成する。受取アドレス未設定時は501 |
+| POST | `/payments/orders` | Bearer JWT | `cid`・`chain_id`・`wallet_address`・`amount_jpy` を受け取り、コンテンツの提示価格と `amount_jpy` を照合して JPYC注文を作成する。不正CID・不存在/レビュー中コンテンツ・価格不一致は拒否。受取アドレス未設定時は501 |
 | GET | `/payments/orders/:order_id` | Bearer JWT | 本人の注文状態を返す |
 | POST | `/payments/orders/:order_id/bind` | Bearer JWT | 注文IDへのウォレット署名を検証する |
 | POST | `/payments/orders/:order_id/verify` | Bearer JWT | 送金を検証する。RPC検証未設定時は501 |
@@ -130,7 +130,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`content_audit_log`|状態、主体、理由、連鎖ハッシュ、時刻|DB内状態遷移記録|
 |`governance_audit_log`|`action`（BAN/UNBAN/UNPIN）、対象、運用者、根拠、詳細、時刻|運用判断の記録。連鎖・署名なし（DEC-04 未達）|
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
-|`payment_orders`|注文ID、PPID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
+|`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
 DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql`、`002_payment_orders.sql`、`003_payment_order_index.sql`、`004_moderation_deadlines.sql`、`005_governance_audit.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 

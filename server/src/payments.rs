@@ -1,6 +1,6 @@
 //! JPYC payment orders and settlement verification (ADR-0003).
 
-use crate::{AppError, AppState, AuthClaims};
+use crate::{AppError, AppState, AuthClaims, is_safe_cid};
 use async_trait::async_trait;
 use axum::{
     Json,
@@ -41,6 +41,7 @@ pub const ALLOWED_CHAINS: [(i64, &str); 4] = [
 pub struct PaymentOrder {
     pub order_id: String,
     pub ppid: String,
+    pub cid: Option<String>,
     pub chain_id: i64,
     pub wallet_address: String,
     pub recipient_address: String,
@@ -56,6 +57,8 @@ pub struct PaymentOrder {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateOrderRequest {
+    /// 購入対象のコンテンツ CID。提示価格と amount_jpy を照合する。
+    pub cid: String,
     pub chain_id: i64,
     pub wallet_address: String,
     /// 日本円建ての金額。1〜1,000,000。
@@ -204,17 +207,18 @@ fn order_from_row(row: &libsql::Row) -> Result<PaymentOrder, AppError> {
     Ok(PaymentOrder {
         order_id: row.get(0)?,
         ppid: row.get(1)?,
-        chain_id: row.get(2)?,
-        wallet_address: row.get(3)?,
-        recipient_address: row.get(4)?,
-        amount_wei: row.get(5)?,
-        status: row.get(6)?,
-        tx_hash: row.get(7)?,
-        log_index: row.get(8)?,
-        block_number: row.get(9)?,
-        confirmations: row.get(10)?,
-        expires_at: row.get(11)?,
-        created_at: row.get(12)?,
+        cid: row.get(2)?,
+        chain_id: row.get(3)?,
+        wallet_address: row.get(4)?,
+        recipient_address: row.get(5)?,
+        amount_wei: row.get(6)?,
+        status: row.get(7)?,
+        tx_hash: row.get(8)?,
+        log_index: row.get(9)?,
+        block_number: row.get(10)?,
+        confirmations: row.get(11)?,
+        expires_at: row.get(12)?,
+        created_at: row.get(13)?,
     })
 }
 
@@ -230,7 +234,7 @@ async fn load_order(
     let mut rows = state
         .db
         .query(
-            "SELECT order_id, ppid, chain_id, wallet_address, recipient_address,
+            "SELECT order_id, ppid, cid, chain_id, wallet_address, recipient_address,
                     amount_wei, status, tx_hash, log_index, block_number,
                     confirmations, expires_at, created_at
              FROM payment_orders WHERE order_id = ? AND ppid = ?",
@@ -249,6 +253,32 @@ pub async fn create_order(
     claims: AuthClaims,
     Json(payload): Json<CreateOrderRequest>,
 ) -> Result<Json<CreateOrderResponse>, AppError> {
+    if !is_safe_cid(&payload.cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+    // 提示価格と支払額を照合する。存在しない/レビュー中のコンテンツは注文できない。
+    let mut content_rows = state
+        .db
+        .query(
+            "SELECT price, status FROM contents WHERE cid = ?",
+            [payload.cid.clone()],
+        )
+        .await?;
+    let (content_price, content_status): (i64, String) = match content_rows.next().await? {
+        Some(row) => (row.get(0)?, row.get(1)?),
+        None => return Err(AppError::NotFound),
+    };
+    if content_status != "Approved" {
+        return Err(AppError::BadRequest(
+            "Content is not available for purchase".to_string(),
+        ));
+    }
+    if content_price <= 0 || content_price as u64 != payload.amount_jpy {
+        return Err(AppError::BadRequest(
+            "amount_jpy must match the content price".to_string(),
+        ));
+    }
+
     let (recipient_address, derivation_index) = if let Some(xprv) = &state.payment_receiving_xprv {
         let mut rows = state
             .db
@@ -288,12 +318,13 @@ pub async fn create_order(
         .db
         .execute(
             "INSERT INTO payment_orders
-                (order_id, ppid, chain_id, wallet_address, recipient_address,
+                (order_id, ppid, cid, chain_id, wallet_address, recipient_address,
                  amount_wei, status, expires_at, derivation_index)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 order_id.clone(),
                 claims.sub.clone(),
+                payload.cid.clone(),
                 payload.chain_id,
                 wallet_address,
                 recipient_address.clone(),
