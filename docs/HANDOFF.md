@@ -95,8 +95,8 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
-解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-16 の
-ローカル実行では fmt / clippy / test(workspace) / deny(licenses, advisories) /
+解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
+ローカル実行では fmt / clippy / test(workspace: 154件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -176,6 +176,13 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `PAYMENT_RECEIVING_XPRV`: BIP44 派生用。設定時はアドレスより優先。
   秘密管理基盤から注入し、ログへ出さない。
 
+### モデレーション運用者（ADR-0004）
+
+- `MODERATION_OPERATOR_HASHES`: カンマ区切りの運用者 user_hash（JPKI 由来）。
+  未設定・空要素は無視され、該当しない主体の BAN/UNBAN/UNPIN は `403` で拒否される。
+  本番では実 JPKI 由来の hash のみを設定し、`ALLOW_MOCK_AUTH=1` と併用しない。
+  セルフホストごとに異なる運用者を置けるため、プロジェクト側の固定値はない。
+
 ### ネットワーク
 
 - `ALLOWED_ORIGINS`
@@ -197,6 +204,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/src/tests.rs`: 統合テストとモック OP / verifier、年齢ポリシー公開/フェイルクローズ。
 - `server/migrations/002_payment_orders.sql`: 決済注文。
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
+- `server/migrations/004_moderation_deadlines.sql`: 投票期限・確定時刻・異議の連鎖。
+- `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
 - `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション手続（Accepted）。
@@ -212,7 +221,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   リダイレクトURI登録、民間事業者向け申込と認定。
 - JPYC の実RPCプロバイダ契約、HSM/マルチシグの鍵管理、
   返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。
-- モデレーションの運営主体の決定（ADR-0004 は承認済み）。
+- モデレーション: このインスタンスの運用者 user_hash を `MODERATION_OPERATOR_HASHES` に設定する。プロジェクト側で固定された運営主体は存在せず、セルフホストする個人・企業がそれぞれ設定する（未設定なら特権操作は全拒否）。
 - DEC-02（年齢・対象地域）の法務/専門家レビューと最終確定（対象地域・必要属性・最終閾値・保持期間・運用責任）。検証済み年齢/居住地属性の提供方式（DEC-01）と接続条件の確定。
 - 本番ホスティング、TLS、本番CORS、バックアップ、監視。
 
@@ -224,7 +233,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   `sub` 単位の全セッション失効はインメモリ閾値方式（`iat` 比較、再認証で新しい `iat` を発行）を実装済み。永続化・多プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。
-- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。残るは BAN/ピン解除監査、期限到達の自動検知、投票者選出・Sybil耐性、運営主体の決定。
+- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。残るは期限到達の自動検知、投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
 - 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
   到達可能性と更新案は

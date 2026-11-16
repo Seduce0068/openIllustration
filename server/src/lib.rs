@@ -55,6 +55,9 @@ pub struct AppState {
     pub revoked_subs_before: Arc<Mutex<HashMap<String, usize>>>,
     /// DEC-02: 年齢判定の有効ポリシー（非秘密。公開APIで常時参照可能にする）。
     pub age_policy: common::age::AgePolicy,
+    /// ADR-0004: このデプロイの運用者（JPKI 由来の user_hash）。
+    /// セルフホストごとに異なるため環境変数で設定し、空なら特権操作を拒否する。
+    pub moderation_operators: Arc<HashSet<String>>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -359,6 +362,12 @@ pub async fn run() -> anyhow::Result<()> {
         age_policy.settings_always_public
     );
 
+    let moderation_operators_env = std::env::var("MODERATION_OPERATOR_HASHES").ok();
+    let moderation_operators = Arc::new(moderation_operators(moderation_operators_env.as_deref()));
+    if moderation_operators.is_empty() {
+        warn!("MODERATION_OPERATOR_HASHES is not set: BAN/unban/unpin endpoints are disabled");
+    }
+
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::new(),
@@ -375,6 +384,7 @@ pub async fn run() -> anyhow::Result<()> {
         revoked_sessions: Arc::new(Mutex::new(HashSet::new())),
         revoked_subs_before: Arc::new(Mutex::new(HashMap::new())),
         age_policy,
+        moderation_operators,
     });
 
     let app = build_router(shared_state);
@@ -566,6 +576,18 @@ pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_IPFS_TIMEOUT_SECS))
 }
 
+/// ADR-0004: カンマ区切りの運用者 user_hash を読み込む。
+/// 空要素・重複は除去する。未設定時は空集合とし、特権操作をフェイルクローズする。
+pub fn moderation_operators(env_value: Option<&str>) -> HashSet<String> {
+    env_value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
 /// DEC-02: 有効な年齢判定ポリシー（非秘密設定値）を常時公開する。
 pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<common::age::AgePolicy> {
     Json(state.age_policy.public_settings().clone())
@@ -586,6 +608,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/mod/report", post(mod_report))
         .route("/mod/reports", get(list_reports))
         .route("/mod/reports/{report_id}/finalize", post(finalize_report))
+        .route("/mod/operators/{user_hash}/ban", post(ban_user))
+        .route("/mod/operators/{user_hash}/unban", post(unban_user))
+        .route("/mod/content/{cid}/unpin", post(record_unpin))
         .route("/mod/vote", post(mod_vote))
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
@@ -1276,6 +1301,178 @@ pub async fn finalize_report(
         return Err(AppError::NotFound);
     }
     process_report_conclusion(&tx, report_id).await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    Ok(Json(true))
+}
+
+#[derive(Deserialize)]
+pub struct BanRequest {
+    pub reason: String,
+    pub duration_days: Option<i64>,
+}
+
+#[derive(Deserialize)]
+pub struct ModerationActionRequest {
+    pub reason: String,
+}
+
+/// 運用理由の基本検証。前後空白を除去し、空・過大な入力を拒否する。
+fn validated_moderation_reason(reason: &str) -> Result<&str, AppError> {
+    let trimmed = reason.trim();
+    if trimmed.is_empty() || trimmed.len() > 2000 {
+        return Err(AppError::BadRequest(
+            "Invalid moderation reason".to_string(),
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// ADR-0004: 特権操作はこのデプロイで設定された運用者だけが実行できる。
+/// 未設定・BAN済みの主体は拒否する（フェイルクローズ）。
+async fn require_moderation_operator(state: &AppState, actor: &str) -> Result<(), AppError> {
+    if !state.moderation_operators.contains(actor) {
+        return Err(AppError::Forbidden(
+            "Moderation operator is not configured for this account".to_string(),
+        ));
+    }
+    ensure_user_not_banned(state.db.as_ref(), actor).await?;
+    Ok(())
+}
+
+/// 運用判断の記録。DEC-04 の第三者検証可能な監査ではなく、運用ログである。
+async fn record_governance_action(
+    db: &Connection,
+    action: &str,
+    target: &str,
+    actor: &str,
+    reason: &str,
+    details: Option<String>,
+) -> Result<(), AppError> {
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, details)
+         VALUES (?, ?, ?, ?, ?)",
+        (action, target, actor, reason, details),
+    )
+    .await?;
+    Ok(())
+}
+
+/// ADR-0004: 自動BANは行わない。運用者が証跡を確認して判断し、根拠と期間を記録する。
+pub async fn ban_user(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(user_hash): Path<String>,
+    Json(body): Json<BanRequest>,
+) -> Result<Json<bool>, AppError> {
+    require_moderation_operator(&state, &claims.sub).await?;
+    let reason = validated_moderation_reason(&body.reason)?;
+    let user_hash = user_hash.trim();
+    if user_hash.is_empty() {
+        return Err(AppError::BadRequest("Invalid user hash".to_string()));
+    }
+    if let Some(days) = body.duration_days
+        && !(1..=3650).contains(&days)
+    {
+        return Err(AppError::BadRequest("Invalid ban duration".to_string()));
+    }
+    if user_hash == claims.sub {
+        return Err(AppError::BadRequest(
+            "Operators cannot ban themselves".to_string(),
+        ));
+    }
+
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let mut rows = tx
+        .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
+        .await?;
+    if rows.next().await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    tx.execute(
+        "UPDATE users SET is_banned = TRUE, banned_at = datetime('now') WHERE user_hash = ?",
+        [user_hash],
+    )
+    .await?;
+    let details = match body.duration_days {
+        Some(days) => Some(format!("{{\"duration_days\":{days}}}")),
+        None => Some("{\"indefinite\":true}".to_string()),
+    };
+    record_governance_action(&tx, "BAN", user_hash, &claims.sub, reason, details).await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    Ok(Json(true))
+}
+
+/// 誤BANの回復。異議申立て後の運用判断として記録する。
+pub async fn unban_user(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(user_hash): Path<String>,
+    Json(body): Json<ModerationActionRequest>,
+) -> Result<Json<bool>, AppError> {
+    require_moderation_operator(&state, &claims.sub).await?;
+    let reason = validated_moderation_reason(&body.reason)?;
+    let user_hash = user_hash.trim();
+    if user_hash.is_empty() {
+        return Err(AppError::BadRequest("Invalid user hash".to_string()));
+    }
+
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let mut rows = tx
+        .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
+        .await?;
+    if rows.next().await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    tx.execute(
+        "UPDATE users SET is_banned = FALSE, banned_at = NULL WHERE user_hash = ?",
+        [user_hash],
+    )
+    .await?;
+    record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    Ok(Json(true))
+}
+
+/// ADR-0004 §8: 実際の Pinata ピン解除は手動で行う。ここでは解除判断と理由を記録する。
+/// オンチェーン・他ゲートウェイからの削除は保証しない。
+pub async fn record_unpin(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(cid): Path<String>,
+    Json(body): Json<ModerationActionRequest>,
+) -> Result<Json<bool>, AppError> {
+    require_moderation_operator(&state, &claims.sub).await?;
+    let reason = validated_moderation_reason(&body.reason)?;
+    if !is_safe_cid(&cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+
+    let tx = state
+        .db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let mut rows = tx
+        .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
+        .await?;
+    if rows.next().await?.is_none() {
+        return Err(AppError::NotFound);
+    }
+    record_governance_action(&tx, "UNPIN", &cid, &claims.sub, reason, None).await?;
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;

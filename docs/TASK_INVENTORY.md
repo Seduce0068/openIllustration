@@ -34,7 +34,7 @@ status: current
 | DEC-02 年齢・対象地域 | 対象地域、必要属性、最終閾値、属性保持期間の専門家/法務レビューと確定。検証済み年齢/居住地属性の入力経路（DEC-01連携）と保持・開示方針の確定 | **方針採用・実装進行中（法的確定/専門家レビューは未完）**（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md)）。コード/テストで反映済み: 保守的一律既定 `21`、国別上書き・対象地域・適用モードの構成、明示設定必須のフェイルクローズ、信頼属性必須モードのフェイルクローズ、認証不要 `GET /policy/age` による有効設定値の常時公開（非秘密） | 法務/専門家レビューで対象地域・適用法令・最終閾値・保持期間を確定し、DEC-01の検証済み属性と接続。公開設定に秘密情報が含まれないことを継続確認 |
 | DEC-03 JPYC決済 | 実RPCプロバイダ契約、鍵運用（HSM/マルチシグ）、返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。コントラクトアドレス/確認数は実装前に一次ソースで再確認 | ADR-0003 Accepted。注文作成・署名検証・状態機械・BIP44派生等は実装済み、実チェーン検証/鍵運用は未着手（[HANDOFF.md](HANDOFF.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 契約・法務確認、一次ソース確認、鍵管理方式の決定と秘密管理基盤 |
 | DEC-04 検証可能な監査 | 対象イベント、正規化形式、署名鍵、外部検証方式、公開範囲、削除・訂正との調整 | 未決定。DB内ハッシュ連鎖は第三者検証可能な監査ではない（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 監査要件の定義（外部アンカー/追記専用媒体/独立検証コマンド/鍵管理）と承認 |
-| DEC-05 モデレーション | 運営主体の決定、BAN/ピン解除監査、期限到達の自動検知、投票者選出・Sybil耐性 | **ADR-0004 Accepted（2026-11-16）**。期限ベース確定（`deadline_at`/`concluded_at`、3票即時確定廃止）、定足数未達復帰、30日以内の異議（`appeal_of`）、投稿者投票除外、期限切れ投票拒否、同数 `Rejected` は実装済み（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md)）。BAN/ピン解除監査・自動検知は未実装 | 運営主体の決定と未実装項目の実装 |
+| DEC-05 モデレーション | 期限到達の自動検知、投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04） | **ADR-0004 Accepted（2026-11-16）**。期限ベース確定（`deadline_at`/`concluded_at`、3票即時確定廃止）、定足数未達復帰、30日以内の異議（`appeal_of`）、投稿者投票除外、期限切れ投票拒否、同数 `Rejected` は実装済み（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md)）。BAN/UNBAN/UNPIN の監査付き運用操作も実装済み（`MODERATION_OPERATOR_HASHES`、未設定時は全拒否）。運用者は各デプロイが設定し、プロジェクト側の決定不要 | 未実装項目の設計・実装 |
 | DEC-06 クロスプラットフォーム | 対応OS/端末/ブラウザ/最小バージョン、JXL/JPKI/ウォレット実機試験範囲、安全なフォールバック | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 対応マトリクスと受入基準の定義 |
 | DEC-07 性能・費用 | 初期表示/API/転送量/Wasmサイズ/運用費/手数料の測定条件と受入値（SLO） | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 計測条件・閾値の合意と計測 |
 | DEC-08 本番ネットワーク・運用 | ホスティング、TLS、プロキシ、CORS、本番オリジン、IPポリシー、復旧手順、鍵ローテーション | 未決定/未整備（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 本番構成・責任分界・Runbook整備 |
@@ -66,7 +66,8 @@ status: current
 ### 3.3 モデレーション・コンテンツ
 
 - [対応済み] **ADR-0004 の期限・定足数・異議・投票資格**: マイグレーション004で `deadline_at`/`concluded_at`/`appeal_of` を追加。3票即時確定を廃止し期限後確定、定足数未達時 `Approved` 復帰、30日以内の異議、投稿者除外、期限切れ投票拒否を実装。回帰テスト7件を追加、既存3件を適応。
-- [高][要判断] **ADR-0004 の残項目**: BAN根拠/期間とピン解除の監査記録（操作者ロール設計が必要）、期限到達の自動検知（現状は明示 finalize が必要）、投票者選出・Sybil耐性・オンチェーン記録方針、運営主体の決定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
+- [対応済み] **ADR-0004 の運用者とBAN/ピン解除監査**: `MODERATION_OPERATOR_HASHES` でセルフホストごとに運用者を設定（未設定なら特権操作を全拒否）。BAN（根拠・期間必須）/UNBAN/UNPIN を `governance_audit_log` に記録。
+- [高][要判断] **ADR-0004 の残項目**: 期限到達の自動検知（現状は明示 finalize が必要）、投票者選出・Sybil耐性・オンチェーン記録方針、`governance_audit_log` の第三者検証可能な監査への昇格（DEC-04 と連携）（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
 - [中] 並行投票の試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。期限・定足数・異議・投稿者除外・期限切れ投票は回帰テスト追加済み。重複投票の一意制約と確定後追加投票拒否も実装済み。
 - [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
 - [対応済み 1dfbbf6] 通報 reason の基本検証: `POST /mod/report` で reason を前後空白除去の上、空/2000バイト超を `400 Bad Request ("Invalid report reason")` で拒否（DB参照前）。保存値と監査ログは除去後の reason を使用。詳細なモデレーション方針（文字数上限の妥当性含む）は ADR-0004 承認待ち。二重通報の `400` 拒否（`test_report_duplicate_rejected`）と reason 検証（`test_report_reason_validated`）の回帰テストを追加。
@@ -75,7 +76,7 @@ status: current
 
 ### 3.4 監査（DEC-04）
 
-- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、公開範囲、運営主体・訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
+- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、公開範囲、訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。運用者は各デプロイが設定する。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
 - [中] [一部対応] ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID]` で読み取り専用に検証可能（`common::AuditLogEntry::calculate_hash` と同一計算）。これは計算整合性の確認であり、第三者検証可能な監査方式の代替ではない（AUDIT-01/DEC-04 は未充足）。
 
 ### 3.5 DB・移行・信頼性

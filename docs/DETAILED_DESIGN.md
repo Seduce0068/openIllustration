@@ -113,7 +113,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   JWT主体と `juror_hash` の一致、結果値、重複投票、期限切れ、対象投稿者（除外）を検査する。存在しない `report_id` は404、対象コンテンツが `Reported` でない（確定済み）場合・期限切れ・投稿者の場合は400で拒否する。
 - 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
 - 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
-- **未実装**: BAN/ピン解除の監査記録、期限到達の自動検知（明示 finalize が必要）、投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、BANテーブル移行。モデレーション結果を法的判断とみなさない。
+- 運用者はプロジェクト側で固定せず、各デプロイが `MODERATION_OPERATOR_HASHES` で設定する。未設定・未登録・BAN済みの主体は BAN/UNBAN/UNPIN を拒否する。BAN は根拠と期間（日数）を必須とし、UNPIN は判断と理由のみを記録する（実 Pinata ピン解除は手動）。これらは `governance_audit_log` に保存するが、DEC-04 の第三者検証可能な監査ではない。
+- **未実装**: 期限到達の自動検知（明示 finalize が必要）、投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、第三者検証可能な監査。モデレーション結果を法的判断とみなさない。
 
 ## 5. データモデル（現行起動時DDLの要約）
 
@@ -125,10 +126,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`votes`|`vote_id`, `report_id`, `voter_hash`, `vote_result`, `voted_at`|投票記録。現行DDLに複合一意制約なし|
 |`signatures`|`target_id`, `signer_hash`, `signature_blob`, `algorithm`|投稿・投票署名の保存|
 |`content_audit_log`|状態、主体、理由、連鎖ハッシュ、時刻|DB内状態遷移記録|
+|`governance_audit_log`|`action`（BAN/UNBAN/UNPIN）、対象、運用者、根拠、詳細、時刻|運用判断の記録。連鎖・署名なし（DEC-04 未達）|
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql`、`002_payment_orders.sql`、`003_payment_order_index.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql`、`002_payment_orders.sql`、`003_payment_order_index.sql`、`004_moderation_deadlines.sql`、`005_governance_audit.sql`）としてバージョン管理され、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ
 
@@ -156,7 +158,7 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 
 ### 検証可能な監査
 
-重要イベントを正規化した形式で記録し、署名鍵・連鎖・第三者が検証可能な外部アンカー/追記専用媒体を組み合わせる。個人情報・認証秘密・不要なコンテンツ本文は公開台帳に記録しない。具体方式、運営主体、訂正・削除との調整は未決定。
+重要イベントを正規化した形式で記録し、署名鍵・連鎖・第三者が検証可能な外部アンカー/追記専用媒体を組み合わせる。個人情報・認証秘密・不要なコンテンツ本文は公開台帳に記録しない。具体方式、訂正・削除との調整は未決定。運用者は各デプロイが設定する（`MODERATION_OPERATOR_HASHES`）。
 
 ## 8. 既知の未実装・設計保留
 

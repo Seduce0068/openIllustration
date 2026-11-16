@@ -155,6 +155,7 @@ async fn setup_app_with_options(
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
 
     let router = build_router(shared_state);
@@ -199,6 +200,7 @@ async fn setup_app_with_jwt_keys(
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     (build_router(shared_state), db)
 }
@@ -250,6 +252,7 @@ async fn setup_app_with_payments(
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
 
     let router = build_router(shared_state);
@@ -284,6 +287,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
 
     (build_router(shared_state), db)
@@ -539,6 +543,7 @@ async fn setup_app_with_oidc() -> (
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
 
     (build_router(shared_state), oidc, mock, db)
@@ -1819,6 +1824,7 @@ async fn test_vote_consensus_rejects_content() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -1996,6 +2002,7 @@ async fn test_duplicate_vote_rejected() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -2190,6 +2197,7 @@ async fn test_vote_after_conclusion_rejected() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -2267,6 +2275,7 @@ async fn test_vote_for_missing_report_returns_404() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -2320,6 +2329,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -2407,6 +2417,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -2470,6 +2481,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
     });
     let app = build_router(shared_state);
 
@@ -4520,6 +4532,11 @@ async fn test_payment_order_rejects_invalid_order_id_format() {
 
 /// モデレーション用の最小アプリ（content は Reviewed 中、report 1 が存在）
 async fn setup_mod_app() -> (Router, libsql::Connection) {
+    setup_mod_app_with_operators(&[]).await
+}
+
+/// 運用者（セルフホストの所有者）を設定したモデレーション用アプリ
+async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Connection) {
     let db = Builder::new_local(":memory:")
         .build()
         .await
@@ -4558,6 +4575,12 @@ async fn setup_mod_app() -> (Router, libsql::Connection) {
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(
+            operators
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<std::collections::HashSet<_>>(),
+        ),
     });
     (build_router(state), db)
 }
@@ -4843,4 +4866,309 @@ async fn test_report_after_appeal_window_is_not_an_appeal() {
         .unwrap();
     let appeal_of: Option<i64> = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(appeal_of, None, "re-reports after 30 days are not appeals");
+}
+
+// ---- ADR-0004: デプロイごとの運用者と監査 ----
+
+#[test]
+fn test_moderation_operators_parser() {
+    let parsed = crate::moderation_operators(Some(" alice , bob ,, alice , "));
+    assert_eq!(parsed.len(), 2);
+    assert!(parsed.contains("alice"));
+    assert!(parsed.contains("bob"));
+    assert!(crate::moderation_operators(None).is_empty());
+    assert!(crate::moderation_operators(Some(" , , ")).is_empty());
+}
+
+/// 認証済みで運用操作を呼ぶ
+async fn send_mod_action(
+    app: &Router,
+    path: &str,
+    sub: &str,
+    body: serde_json::Value,
+) -> StatusCode {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(path)
+                .header("content-type", "application/json")
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, sub).await),
+                )
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    response.status()
+}
+
+#[tokio::test]
+async fn test_ban_requires_configured_operator() {
+    let (app, db) = setup_mod_app().await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    let status = send_mod_action(
+        &app,
+        "/mod/operators/target/ban",
+        "operator",
+        json!({"reason": "illegal content", "duration_days": 30}),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "unconfigured operators must be denied"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM governance_audit_log", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 0,
+        "denied operations must not be recorded as actions"
+    );
+}
+
+#[tokio::test]
+async fn test_configured_operator_can_ban_with_audit() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    let status = send_mod_action(
+        &app,
+        "/mod/operators/target/ban",
+        "operator",
+        json!({"reason": "  repeated violations  ", "duration_days": 30}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let mut rows = db
+        .query(
+            "SELECT is_banned, banned_at FROM users WHERE user_hash = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let banned: bool = row.get(0).unwrap();
+    let banned_at: Option<String> = row.get(1).unwrap();
+    assert!(banned);
+    assert!(banned_at.is_some());
+
+    let mut rows = db
+        .query(
+            "SELECT action, target, actor_hash, reason, details FROM governance_audit_log",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let action: String = row.get(0).unwrap();
+    let target: String = row.get(1).unwrap();
+    let actor: String = row.get(2).unwrap();
+    let reason: String = row.get(3).unwrap();
+    let details: Option<String> = row.get(4).unwrap();
+    assert_eq!(action, "BAN");
+    assert_eq!(target, "target");
+    assert_eq!(actor, "operator");
+    assert_eq!(reason, "repeated violations", "reason must be trimmed");
+    assert!(details.unwrap().contains("30"));
+}
+
+#[tokio::test]
+async fn test_ban_rejects_self_and_invalid_input() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/operator/ban",
+            "operator",
+            json!({"reason": "self", "duration_days": null}),
+        )
+        .await,
+        StatusCode::BAD_REQUEST,
+        "self-ban must be rejected"
+    );
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "bad duration", "duration_days": 0}),
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "   ", "duration_days": 1}),
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/missing/ban",
+            "operator",
+            json!({"reason": "missing", "duration_days": null}),
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM governance_audit_log", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "rejected operations must not be recorded");
+}
+
+#[tokio::test]
+async fn test_banned_operator_cannot_ban() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute(
+        "INSERT INTO users (user_hash, is_banned) VALUES ('operator', TRUE), ('target', FALSE)",
+        (),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "illegal", "duration_days": null}),
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn test_unban_restores_user_with_audit() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute(
+        "INSERT INTO users (user_hash, is_banned, banned_at) VALUES ('target', TRUE, datetime('now'))",
+        (),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/unban",
+            "operator",
+            json!({"reason": "appeal accepted"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT is_banned, banned_at FROM users WHERE user_hash = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let banned: bool = row.get(0).unwrap();
+    let banned_at: Option<String> = row.get(1).unwrap();
+    assert!(!banned);
+    assert!(banned_at.is_none());
+
+    let mut rows = db
+        .query("SELECT action, reason FROM governance_audit_log", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let action: String = row.get(0).unwrap();
+    let reason: String = row.get(1).unwrap();
+    assert_eq!(action, "UNBAN");
+    assert_eq!(reason, "appeal accepted");
+}
+
+#[tokio::test]
+async fn test_unpin_records_decision_with_audit() {
+    let (app_no_op, _) = setup_mod_app().await;
+    assert_eq!(
+        send_mod_action(
+            &app_no_op,
+            "/mod/content/QmModTest/unpin",
+            "operator",
+            json!({"reason": "concluded illegal content"}),
+        )
+        .await,
+        StatusCode::FORBIDDEN
+    );
+
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/content/QmModTest/unpin",
+            "operator",
+            json!({"reason": "concluded illegal content"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/content/not-a-cid/unpin",
+            "operator",
+            json!({"reason": "bad cid"}),
+        )
+        .await,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/content/QmUnknown/unpin",
+            "operator",
+            json!({"reason": "missing"}),
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT action, target, actor_hash, reason FROM governance_audit_log",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let action: String = row.get(0).unwrap();
+    let target: String = row.get(1).unwrap();
+    let actor: String = row.get(2).unwrap();
+    let reason: String = row.get(3).unwrap();
+    assert_eq!(action, "UNPIN");
+    assert_eq!(target, "QmModTest");
+    assert_eq!(actor, "operator");
+    assert_eq!(reason, "concluded illegal content");
 }
