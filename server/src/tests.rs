@@ -5267,3 +5267,147 @@ async fn test_finalize_due_reports_handles_multiple_reports() {
     let count = crate::finalize_due_reports(&db).await.unwrap();
     assert_eq!(count, 2, "all expired reports must be finalized");
 }
+
+// ---- 同一コネクション上のトランザクション競合 ----
+
+#[tokio::test]
+async fn concurrent_transactions_on_shared_connection_are_serialized() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+
+    let gate = Arc::new(tokio::sync::Barrier::new(2));
+    let tasks: Vec<_> = (0..2)
+        .map(|index| {
+            let db = Arc::clone(&db);
+            let gate = Arc::clone(&gate);
+            tokio::spawn(async move {
+                gate.wait().await;
+                let lock = crate::write_lock(&db);
+                let _guard = lock.lock().await;
+                let tx = db.transaction().await.unwrap();
+                tx.execute(
+                    "INSERT INTO users (user_hash) VALUES (?)",
+                    [format!("concurrent_{index}")],
+                )
+                .await
+                .unwrap();
+                tx.commit().await.unwrap();
+            })
+        })
+        .collect();
+
+    for task in tasks {
+        task.await.unwrap();
+    }
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM users WHERE user_hash LIKE 'concurrent_%'",
+            (),
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 2, "both transactions must succeed without DB errors");
+}
+
+#[tokio::test]
+async fn concurrent_votes_do_not_conflict_with_finalization() {
+    use std::sync::Arc as StdArc;
+
+    let (app, db) = setup_mod_app().await;
+    // 投票は期限内に通しつつ、finalize 用には期限切れの別通報を作る。
+    // これにより同一 Connection 上で投票トランザクションと確定トランザクションが競合する。
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmConcurrent', 'Novel', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
+             VALUES (2, 'QmConcurrent', 'due', datetime('now', '-1 day'))",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let app = StdArc::new(app);
+    let mut jurors = Vec::new();
+    for _ in 0..4 {
+        jurors.push(insert_juror(&db).await);
+    }
+
+    let barrier = StdArc::new(tokio::sync::Barrier::new(5));
+    let mut tasks = Vec::new();
+    for (juror, key) in jurors {
+        let app = StdArc::clone(&app);
+        let barrier = StdArc::clone(&barrier);
+        tasks.push(tokio::spawn(async move {
+            barrier.wait().await;
+            send_signed_vote(app.as_ref(), 1, "Reject", &juror, &key).await
+        }));
+    }
+    let db_for_finalize = StdArc::new(db);
+    let finalize_db = StdArc::clone(&db_for_finalize);
+    let finalize_barrier = StdArc::clone(&barrier);
+    tasks.push(tokio::spawn(async move {
+        finalize_barrier.wait().await;
+        let _ = crate::finalize_due_reports(finalize_db.as_ref())
+            .await
+            .unwrap();
+        StatusCode::OK
+    }));
+
+    let mut statuses = Vec::new();
+    for task in tasks {
+        statuses.push(task.await.unwrap());
+    }
+    assert!(
+        statuses.iter().all(|status| *status == StatusCode::OK),
+        "all concurrent operations must succeed: {statuses:?}"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_begin_without_lock_is_rejected() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let tasks: Vec<_> = (0..2)
+        .map(|_| {
+            let db = Arc::clone(&db);
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                db.transaction().await
+            })
+        })
+        .collect();
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    let ok = results.iter().filter(|r| r.is_ok()).count();
+    let failed = results.iter().filter(|r| r.is_err()).count();
+    assert_eq!(ok, 1, "exactly one BEGIN should succeed");
+    assert_eq!(failed, 1, "a second concurrent BEGIN should fail");
+}

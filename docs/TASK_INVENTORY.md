@@ -69,7 +69,7 @@ status: current
 - [対応済み] **ADR-0004 の運用者とBAN/ピン解除監査**: `MODERATION_OPERATOR_HASHES` でセルフホストごとに運用者を設定（未設定なら特権操作を全拒否）。BAN（根拠・期間必須）/UNBAN/UNPIN を `governance_audit_log` に記録。
 - [対応済み] **期限到達の自動検知**: 起動時のバックグラウンドワーカーが `MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒・30〜3600秒）ごとに期限超過通報を走査して確定。停止シグナルで終了し、手動 finalize と冪等。
 - [高][要判断] **ADR-0004 の残項目**: 投票者選出・Sybil耐性・オンチェーン記録方針、`governance_audit_log` の第三者検証可能な監査への昇格（DEC-04 と連携）（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
-- [中] 並行投票の試験不足（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。期限・定足数・異議・投稿者除外・期限切れ投票は回帰テスト追加済み。重複投票の一意制約と確定後追加投票拒否も実装済み。
+- [対応済み] 並行投票の競合対策: libSQL ローカル接続は同時に1つの `BEGIN` しか保持できないため、接続ごとの書き込みロックでトランザクションをプロセス内直列化。競合の再現・ロック有効性・並行投票と確定の同時実行を回帰テストで確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み 00a9176] 通報入力の基本検証: `POST /mod/report` で `target_cid` に `is_safe_cid` を適用し、不正 CID を `400 Bad Request` で早期拒否（DB参照前）。有効 CID で対象コンテンツ不存在時の `404` は維持（`server/src/lib.rs`, 回帰テスト `test_report_rejects_invalid_cid`）。厳密な CID 仕様検証（3.6）は別課題。
 - [対応済み 1dfbbf6] 通報 reason の基本検証: `POST /mod/report` で reason を前後空白除去の上、空/2000バイト超を `400 Bad Request ("Invalid report reason")` で拒否（DB参照前）。保存値と監査ログは除去後の reason を使用。詳細なモデレーション方針（文字数上限の妥当性含む）は ADR-0004 承認待ち。二重通報の `400` 拒否（`test_report_duplicate_rejected`）と reason 検証（`test_report_reason_validated`）の回帰テストを追加。
 - [対応済み 2f0d057] アップロード入力境界の防御分岐を回帰テストで保護: 必須フィールド欠落（file/owner_hash/signature）→ `400`、トークン sub と owner_hash の不一致 → `401 "Token sub mismatch"`、BAN済みユーザー → `403 "User is banned"`（`test_upload_rejects_missing_required_fields`, `test_upload_rejects_owner_mismatch`, `test_upload_rejects_banned_user`）。ハンドラ挙動変更なし。
@@ -119,7 +119,7 @@ status: current
 | --- | --- |
 | 認証 | 実JPKI/OID4VP・失効・期限切れの実機検証、`acr`/`amr`/`auth_time`/`max_age`、`sub`全失効の永続化/多プロセス/実OP連携検証、リフレッシュローテーション/盗用検知 |
 | 決済 | 実チェーンRPC、再編成・二重通知・別コントラクト、クォーラム/ワーカー/pause監視、実送金証明 |
-| モデレーション | 並行投票、実運用手続（BAN/ピン解除の監査・権限）、ワーカー停止/再起動時の挙動 |
+| モデレーション | 実運用手続（BAN/ピン解除の監査・権限）、ワーカー停止/再起動時の挙動（並行投票の競合は検証済み） |
 | 監査 | AUDIT-01（改変・欠落・順序入替の独立検証）— ローカル検証コマンドに連番・Merkle root・`--expect-root` を追加済み（欠落/切詰め検出は実測済み）。署名・外部アンカー・公開範囲・実運用試験は未実施（DEC-04） |
 | 互換性/性能 | COMPAT-01/02, PERF-01 の環境・閾値未決定、Wasm/JXL非対応時フォールバック |
 | ネットワーク/運用 | 実プロキシ/多段/WAF、ログ集約・アラート、drain/readiness |

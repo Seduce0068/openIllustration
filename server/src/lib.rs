@@ -60,6 +60,36 @@ pub struct AppState {
     pub moderation_operators: Arc<HashSet<String>>,
 }
 
+/// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
+/// Arc<Connection> の実体アドレスをキーにしたプロセス内ロックで書き込みを直列化する。
+static DB_WRITE_LOCKS: std::sync::LazyLock<
+    std::sync::Mutex<HashMap<usize, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// 指定接続に対応する書き込みロックを返す。
+pub fn write_lock(db: &Connection) -> Arc<tokio::sync::Mutex<()>> {
+    let key = db as *const Connection as usize;
+    let mut locks = DB_WRITE_LOCKS.lock().expect("write lock table poisoned");
+    Arc::clone(
+        locks
+            .entry(key)
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+    )
+}
+
+/// ロックを保持したままトランザクションを開始する。
+/// ガードは戻り値に保持させ、コミット後にドロップする。
+async fn begin_write_tx(
+    db: &Connection,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
+    let guard = write_lock(db).lock_owned().await;
+    let tx = db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    Ok((guard, tx))
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum AppError {
     #[error("Database error: {0}")]
@@ -634,7 +664,7 @@ pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
 
     let mut finalized = 0;
     for report_id in report_ids {
-        let tx = db.transaction().await?;
+        let (_write_guard, tx) = begin_write_tx(db).await?;
         process_report_conclusion(&tx, report_id).await?;
         tx.commit().await?;
         finalized += 1;
@@ -1181,11 +1211,7 @@ pub async fn mod_report(
         return Err(AppError::BadRequest("Invalid report reason".to_string()));
     }
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
     // The target must exist and must not already be under review. Duplicate
     // reports while a review is pending would create parallel report rows
@@ -1369,11 +1395,7 @@ pub async fn finalize_report(
     if report_id <= 0 {
         return Err(AppError::BadRequest("Invalid report id".to_string()));
     }
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     let mut rows = tx
         .query("SELECT 1 FROM reports WHERE report_id = ?", [report_id])
         .await?;
@@ -1463,11 +1485,7 @@ pub async fn ban_user(
         ));
     }
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     let mut rows = tx
         .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
         .await?;
@@ -1504,11 +1522,7 @@ pub async fn unban_user(
         return Err(AppError::BadRequest("Invalid user hash".to_string()));
     }
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     let mut rows = tx
         .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
         .await?;
@@ -1541,11 +1555,7 @@ pub async fn record_unpin(
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     let mut rows = tx
         .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
         .await?;
@@ -1597,11 +1607,7 @@ pub async fn mod_vote(
         ));
     }
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
     // Report must exist, still be under review, and be inside its voting
     // window. Votes on concluded or expired reports are rejected so that a
@@ -1874,11 +1880,7 @@ pub async fn upload_content(
     };
     let cid = pin_to_ipfs(&state, data.to_vec(), filename).await?;
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
     // The same bytes resolve to the same CID and contents is keyed by CID,
     // so a re-upload would otherwise surface as a primary-key 500.
