@@ -176,6 +176,6 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 - JPYC送金・チェーン確認・手数料表示と、無効化済み模擬支援API（501）の決済APIへの置き換え。
 - 第三者検証可能な監査と運用鍵管理。
 - 投票資格・選出・投票期間を含むモデレーション状態機械の完成（重複投票の一意制約と確定後の追加投票拒否は実装済み）。
-- 本番CORSオリジンの決定、ロールバック手順を含むDBマイグレーション運用、ログ集約・アラート。
+- 本番CORSオリジンの決定、ログ集約・アラート。DB マイグレーションのロールバック判断手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に記載済み（down migration は未採用）。
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。
