@@ -13,6 +13,9 @@ min_keep="${MIN_KEEP:-3}"
 bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
 gpg_recipient="${BACKUP_GPG_RECIPIENT:-}"
 gpg_bin="${GPG_BIN:-gpg}"
+# オフサイト保存: 実行ファイルのパスと宛先を指定する（eval は使わない）。
+offsitecopy="${OFFSITE_COPY_CMD:-}"
+offsitedest="${OFFSITE_DEST:-}"
 
 run_bin() {
 	local name="$1"
@@ -34,6 +37,14 @@ if ((min_keep < 1)); then
 fi
 if [[ -n "$gpg_recipient" ]] && ! command -v "$gpg_bin" >/dev/null 2>&1; then
 	echo "BACKUP_GPG_RECIPIENT is set but ${gpg_bin} is not available" >&2
+	exit 1
+fi
+if [[ -n "$offsitecopy" && -z "$offsitedest" ]] || [[ -z "$offsitecopy" && -n "$offsitedest" ]]; then
+	echo "OFFSITE_COPY_CMD and OFFSITE_DEST must be set together" >&2
+	exit 1
+fi
+if [[ -n "$offsitecopy" && ! -x "$offsitecopy" ]]; then
+	echo "OFFSITE_COPY_CMD is not executable: ${offsitecopy}" >&2
 	exit 1
 fi
 
@@ -58,6 +69,15 @@ if [[ -n "$gpg_recipient" ]]; then
 	# 暗号化が成功した場合のみ平文を削除（失敗時は平文を残して復旧可能にする）。
 	rm -f "$output"
 	echo "==> plaintext removed: ${output}"
+fi
+
+if [[ -n "$offsitecopy" ]]; then
+	artifact="$output"
+	if [[ -n "$gpg_recipient" ]]; then
+		artifact="${output}.gpg"
+	fi
+	echo "==> offsite copy: ${artifact} -> ${offsitedest}"
+	"$offsitecopy" "$artifact" "$offsitedest"
 fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は

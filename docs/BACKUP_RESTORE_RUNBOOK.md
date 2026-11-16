@@ -65,6 +65,13 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 成果物は `<timestamp>.db.gpg` となる。ローテーション対象は `.db` と `.db.gpg` の両方。
 復元時は `gpg --decrypt` で平文に戻してから `restore_db` を使う。
 実 DB で暗号化→平文削除→復号→`verify_backup` 成功を確認済み。
+
+オフサイト保存は `OFFSITE_COPY_CMD`（実行ファイルのパス）と `OFFSITE_DEST`（宛先）
+の両方を設定した場合のみ行う。`eval` は使わず、コピーコマンドは
+`<成果物> <宛先>` の2引数で呼び出す（`rsync` / `scp` / `rclone` 等のラッパーを
+用意して指定する）。片方だけの設定は起動前に拒否し、コピー失敗時は
+スクリプト全体を失敗させる（fail-closed）。暗号化併用時は `.db.gpg` を送る。
+設定不整合・成功・コピー失敗（exit 7）の3ケースを実確認済み。
 `bash -n` / `shellcheck` / `shfmt -d` に加え、実 DB で古い世代3件が削除され
 新しい世代が保持されることを確認済み。
 
