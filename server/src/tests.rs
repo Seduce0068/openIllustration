@@ -3928,7 +3928,57 @@ async fn test_payment_verify_rejects_reused_transaction() {
     );
 }
 
-/// JPYC: 期限切れ注文の verify は 400 で拒否される。
+/// 決済: status が PENDING のまま expires_at を過ぎた注文を拒否し EXPIRED へ更新する。
+#[tokio::test]
+async fn test_payment_verify_rejects_elapsed_expiry() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei,
+    });
+
+    // status は PENDING のまま、expires_at だけを過去にする。
+    db.execute(
+        "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
+        ("2000-01-01T00:00:00+00:00".to_string(), order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("order has expired"),
+        "rejection must come from elapsed expiry"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let status: String = row.get(0).unwrap();
+    assert_eq!(status, crate::payments::STATUS_EXPIRED);
+}
+
+/// 決済: status が EXPIRED の注文は拒否される。
 #[tokio::test]
 async fn test_payment_verify_rejects_expired_order() {
     let receiving = "0x1111111111111111111111111111111111111111";

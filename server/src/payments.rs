@@ -391,6 +391,18 @@ pub async fn verify_order(
             "order is no longer verifiable".to_string(),
         ));
     }
+    // status が PENDING のまま expires_at を過ぎた注文も期限切れとして扱う。
+    // 状態を永続化してから拒否し、再試行でも同じ結果になるようにする。
+    if order.expires_at <= chrono::Utc::now().to_rfc3339() {
+        state
+            .db
+            .execute(
+                "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
+                (STATUS_EXPIRED, order_id, STATUS_FINALIZED, STATUS_EXPIRED),
+            )
+            .await?;
+        return Err(AppError::BadRequest("order has expired".to_string()));
+    }
 
     let verifier = state.payment_verifier.clone().ok_or_else(|| {
         AppError::NotImplemented("chain verification is not configured".to_string())
