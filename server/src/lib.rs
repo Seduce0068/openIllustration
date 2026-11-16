@@ -240,6 +240,9 @@ pub struct Oid4vpRequest {
 #[derive(Serialize, Deserialize)]
 pub struct VerifyRequest {
     pub presentation_token: String,
+    /// 開発用モック認証で `/auth/login` が発行した nonce。単回消費。
+    #[serde(default)]
+    pub nonce: Option<String>,
     pub public_key_der: Option<Vec<u8>>,
     /// VC から取得した生年月日 (YYYY-MM-DD)
     pub birth_date: Option<String>,
@@ -959,15 +962,38 @@ pub async fn get_content_audit(
     }
     Ok(Json(logs))
 }
-pub async fn auth_login() -> Json<Oid4vpRequest> {
+/// 開発用モック認証の nonce を発行から5分間、単回消費で保持する。
+/// 本番は OIDC 経路 (`state`/`nonce`) を使うため、ここは開発専用。
+static MOCK_NONCES: std::sync::LazyLock<Mutex<HashMap<String, std::time::Instant>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+const MOCK_NONCE_TTL: Duration = Duration::from_secs(300);
+
+/// テスト用: モック nonce を直接発行してストアへ登録する。
+#[cfg(test)]
+pub fn issue_mock_nonce_for_test() -> String {
     let nonce = Uuid::new_v4().to_string();
+    let mut nonces = MOCK_NONCES.lock().expect("nonce store");
+    nonces.insert(nonce.clone(), std::time::Instant::now());
+    nonce
+}
+
+pub async fn auth_login() -> Result<Json<Oid4vpRequest>, AppError> {
+    let nonce = Uuid::new_v4().to_string();
+    {
+        let mut nonces = MOCK_NONCES
+            .lock()
+            .map_err(|_| AppError::Internal("nonce store is poisoned".to_string()))?;
+        let now = std::time::Instant::now();
+        nonces.retain(|_, issued| now.duration_since(*issued) <= MOCK_NONCE_TTL);
+        nonces.insert(nonce.clone(), now);
+    }
     let presentation_definition_uri =
         "https://guild.example.com/api/presentation-definition".to_string();
 
-    Json(Oid4vpRequest {
+    Ok(Json(Oid4vpRequest {
         nonce,
         presentation_definition_uri,
-    })
+    }))
 }
 
 pub async fn auth_verify(
@@ -985,6 +1011,24 @@ pub async fn auth_verify(
     validate_age(&state.age_policy, birth_date, country_code)?;
 
     let verified_key = if payload.presentation_token == "mock_token" && state.allow_mock_auth {
+        // 開発用モックでも nonce を必須化し、リプレイを防ぐ。
+        let nonce = payload
+            .nonce
+            .as_deref()
+            .ok_or_else(|| AppError::BadRequest("nonce is required".to_string()))?;
+        {
+            let mut nonces = MOCK_NONCES
+                .lock()
+                .map_err(|_| AppError::Internal("nonce store is poisoned".to_string()))?;
+            let now = std::time::Instant::now();
+            nonces.retain(|_, issued| now.duration_since(*issued) <= MOCK_NONCE_TTL);
+            match nonces.remove(nonce) {
+                Some(_) => {}
+                None => {
+                    return Err(AppError::BadRequest("invalid or reused nonce".to_string()));
+                }
+            }
+        }
         payload.public_key_der.clone()
     } else {
         Some(jpki::verify_presentation(

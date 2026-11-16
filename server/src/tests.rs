@@ -725,6 +725,7 @@ async fn mock_gateway_handler(
 fn verify_body(birth_date: &str, country: &str) -> String {
     serde_json::to_string(&VerifyRequest {
         presentation_token: "mock_token".to_string(),
+        nonce: Some(crate::issue_mock_nonce_for_test()),
         public_key_der: None,
         birth_date: Some(birth_date.to_string()),
         country_code: Some(country.to_string()),
@@ -1114,6 +1115,77 @@ async fn test_auth_verify_authorized_with_token() {
     let body: VerifyResponse = serde_json::from_slice(&body_bytes).unwrap();
     assert!(body.authorized);
     assert!(body.token.is_some());
+}
+
+/// 開発用モック認証では nonce が必須で、再利用は拒否される。
+#[tokio::test]
+async fn test_mock_auth_nonce_is_single_use() {
+    let app = setup_app().await;
+
+    // /auth/login が発行した nonce を取得する。
+    let login = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/login").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(login.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(login.into_body(), 4096).await.unwrap()).unwrap();
+    let nonce = started["nonce"].as_str().unwrap().to_string();
+
+    let body = serde_json::to_string(&VerifyRequest {
+        presentation_token: "mock_token".to_string(),
+        nonce: Some(nonce.clone()),
+        public_key_der: None,
+        birth_date: Some("2000-01-01".to_string()),
+        country_code: Some("JP".to_string()),
+    })
+    .unwrap();
+    let send = |body: String| {
+        let app = app.clone();
+        async move {
+            app.oneshot(with_peer(
+                Request::post("/auth/verify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+            .status()
+        }
+    };
+
+    // 1回目は成功（mock_token + public_key_der 無しは nonce 経由で通る）。
+    assert_eq!(send(body.clone()).await, StatusCode::OK);
+    // 同じ nonce の再利用は 400。
+    assert_eq!(send(body).await, StatusCode::BAD_REQUEST);
+}
+
+/// nonce 欠落のリクエストは 400。
+#[tokio::test]
+async fn test_mock_auth_requires_nonce() {
+    let app = setup_app().await;
+    let body = json!({
+        "presentation_token": "mock_token",
+        "birth_date": "2000-01-01",
+        "country_code": "JP",
+    });
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 /// SEC-03: 18歳未満は 403

@@ -60,7 +60,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - `/health`、`GET /policy/age`、およびJPKI認証開始・静的ログイン画面は認証前アクセスを許容できるが、コンテンツや利用者データを返さない。`GET /policy/age` は有効な年齢/地域ポリシー設定値（非秘密）のみを返し、常時公開する。
 - 開発用モックは `ALLOW_MOCK_AUTH=1` の場合のみ許可する。未設定時は無効。
 - 認証が必要な読み取りルートは `AuthClaims` によりJWTを検証する。未認証アクセスを拒否するが、本人確認の真正性を確立するものではない。
-- `/auth/login` と `/auth/verify` は開発用モック経路であり、nonce再利用防止やVP署名検証は未実装。本番では OIDC 経路を使用する。
+- `/auth/login` と `/auth/verify` は開発用モック経路。`ALLOW_MOCK_AUTH=1` の場合のみ有効で、login が発行する nonce を verify で必須化し、5分 TTL の単回消費（リプレイ拒否）とする。VP 署名検証は未実装であり、本番では OIDC 経路を使用する。
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、モック環境を含め本人確認済み属性として信頼しない。詳細は [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) を参照。
 

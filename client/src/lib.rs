@@ -86,6 +86,13 @@ pub struct VerifyResponse {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct Oid4vpRequest {
+    nonce: String,
+    #[allow(dead_code)]
+    presentation_definition_uri: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContentMeta {
     pub cid: String,
     pub checksum: String,
@@ -195,9 +202,18 @@ where
         set_loading.set(true);
         let on_success = on_success.clone();
         spawn_local(async move {
+            // 開発用モック認証でも nonce を取得して単回消費のフローを通す。
+            let nonce = match Request::post(&format!("{}/auth/login", API_BASE))
+                .send()
+                .await
+            {
+                Ok(response) => response.json::<Oid4vpRequest>().await.ok().map(|s| s.nonce),
+                Err(_) => None,
+            };
             let res = Request::post(&format!("{}/auth/verify", API_BASE))
                 .json(&serde_json::json!({
                     "presentation_token": "mock_token",
+                    "nonce": nonce,
                     "birth_date": "2000-01-01",
                     "country_code": "JP"
                 }))
