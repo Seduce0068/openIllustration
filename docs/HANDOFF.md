@@ -146,8 +146,8 @@ cargo run -p server
 
 ### 認証
 
-- `JWT_SECRET`: 必須。32バイト以上。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない。
-- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。
+- `JWT_SECRET`: 必須。32バイト以上。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない（短い値が残っている場合は警告）。
+- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。不正な PEM は `JWT_SECRET` が有効でも起動を拒否する。
   設定時は RS256 で署名する。未設定なら HS256。
 - `ALLOW_MOCK_AUTH`: 開発専用。
 - `OIDC_ISSUER`

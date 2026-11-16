@@ -561,7 +561,19 @@ pub fn jwt_keys_from_env(
     secret: Option<String>,
 ) -> Result<jwt::JwtKeys, String> {
     match (rsa_pem, secret) {
-        (Some(pem), _) => jwt::JwtKeys::from_rsa_private_key_pem(&pem),
+        (Some(pem), Some(secret)) => {
+            // RS256 が選択されるため秘密は使われないが、短い値が残っている
+            // 設定ミスは警告する（将来 RSA を外したときに弱鍵が露出する）。
+            if jwt::JwtKeys::from_hmac_secret(&secret).is_err() {
+                warn!("JWT_SECRET is set but shorter than 32 bytes; it is ignored while JWT_RSA_PRIVATE_KEY_PEM is configured");
+            }
+            jwt::JwtKeys::from_rsa_private_key_pem(&pem).map_err(|error| {
+                format!("JWT_RSA_PRIVATE_KEY_PEM is invalid: {error}; refusing to fall back to JWT_SECRET")
+            })
+        }
+        (Some(pem), None) => jwt::JwtKeys::from_rsa_private_key_pem(&pem).map_err(|error| {
+            format!("JWT_RSA_PRIVATE_KEY_PEM is invalid: {error}")
+        }),
         (None, Some(secret)) => jwt::JwtKeys::from_hmac_secret(&secret),
         (None, None) => Err(
             "JWT_SECRET must be set (at least 32 random bytes), or JWT_RSA_PRIVATE_KEY_PEM for RS256"

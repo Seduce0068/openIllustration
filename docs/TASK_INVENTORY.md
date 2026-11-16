@@ -49,6 +49,7 @@ status: current
 - [高][要判断] **実JPKI/実OP接続と検証**: 実機・失効確認・`acr`/`amr` の保証レベル検証、`auth_time`/`max_age` 対応（`server/src/oidc.rs`, [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [HANDOFF.md](HANDOFF.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [中] **`sub` 単位の全セッション失効（インメモリ）**: back-channel logout で `sid`/`sub` を失効対象として受け付け、`sub` 指定時は失効閾値（`iat` 比較）で既存セッションを拒否する実装を追加（`server/src/oidc.rs`, `server/src/lib.rs`）。再認証時は閾値より新しい `iat` を発行して再ログインを許容。永続化・多プロセス共有セッション表・実OP/運用要件との完全整合、実機検証は継続課題（DEC-01/ADR-0002）。
 - [中] **リフレッシュトークンのローテーションと盗用検知**（[HANDOFF.md](HANDOFF.md)）。
+- [対応済み] **JWT 設定の fail-closed 化**: 不正な `JWT_RSA_PRIVATE_KEY_PEM` は有効な `JWT_SECRET` があってもフォールバックせず起動拒否。短い `JWT_SECRET` が RS256 選択で隠れる場合は警告。
 - [中][運用設計] **RS256 運用強化**: 鍵ローテーション、`kid` による複数鍵併用、HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布方針（現状は PEM 環境変数注入のみ）。`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] 開発用モック経路 `/auth/login`,`/auth/verify` の nonce再利用防止・VP署名検証は未実装（本番は OIDC 経路を使用する前提、[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 

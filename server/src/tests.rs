@@ -4330,6 +4330,16 @@ fn test_jwt_keys_from_env_prefers_rsa() {
     assert_eq!(hmac.algorithm_name(), "HS256");
 
     assert!(crate::jwt_keys_from_env(None, None).is_err());
+
+    // 不正な RSA PEM は、有効な JWT_SECRET があっても黙ってフォールバックしない。
+    assert!(
+        crate::jwt_keys_from_env(
+            Some("not a pem".to_string()),
+            Some(TEST_JWT_SECRET.to_string())
+        )
+        .is_err(),
+        "invalid RSA key must not be silently ignored when JWT_SECRET is present"
+    );
 }
 
 /// RS256 の鍵で署名したセッショントークンが、認証済み API を通る。
