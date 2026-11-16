@@ -59,6 +59,7 @@ tags: [operations, security, payments]
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。drain は `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）を上限とし、超過時は警告を出して残接続を切断する。
 - liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503 を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。IPFS/JPKI/チェーン依存障害時の readiness への反映は本番構成確定時に判断する。
 - ログ集約向けに `LOG_FORMAT=json` を設定すると 1行1 JSON（timestamp / level / fields / target）で出力する。実サーバーで全行が JSON としてパースできることを確認済み。アラート通知先と集約基盤の選定は導入環境に委ねる。
+- `GET /metrics` が Prometheus 形式の `openillustration_http_requests_total` と `openillustration_http_errors_total`（4xx/5xx）を公開する。カウンタはプロセス内（単一ライター前提）で、再起動時にゼロへ戻る。個人情報・リクエストパス・クエリは含めない。
 
 ## 6. 本番移行ゲート
 

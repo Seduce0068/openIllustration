@@ -24,6 +24,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` はインメモリ失効閾値方式） |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
+| GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ（全リクエスト数・4xx/5xx 応答数）。外部クレートなし。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |

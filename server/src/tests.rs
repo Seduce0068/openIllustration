@@ -6204,3 +6204,62 @@ async fn test_order_records_content_cid() {
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
     assert_eq!(order["cid"], "QmPayTest");
 }
+
+// ---- メトリクス ----
+
+fn read_metric(body: &str, name: &str) -> u64 {
+    body.lines()
+        .find_map(|line| line.strip_prefix(name).map(str::trim))
+        .unwrap_or_else(|| panic!("metric {name} not found"))
+        .parse()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_metrics_expose_prometheus_counters() {
+    let app = setup_app().await;
+
+    let before = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(before.status(), StatusCode::OK);
+    let content_type = before.headers()[header::CONTENT_TYPE].to_str().unwrap();
+    assert!(content_type.starts_with("text/plain"));
+    let before_body =
+        String::from_utf8(to_bytes(before.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    let requests_before = read_metric(&before_body, "openillustration_http_requests_total");
+    assert!(read_metric(&before_body, "openillustration_http_errors_total") <= requests_before);
+
+    // 404 を発生させ、エラーカウンタが進むことを確認する。
+    let missing = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let after = app
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let after_body =
+        String::from_utf8(to_bytes(after.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    let requests_after = read_metric(&after_body, "openillustration_http_requests_total");
+    let errors_after = read_metric(&after_body, "openillustration_http_errors_total");
+    assert!(
+        requests_after >= requests_before + 2,
+        "requests must be counted"
+    );
+    assert!(errors_after >= 1, "4xx responses must be counted");
+}

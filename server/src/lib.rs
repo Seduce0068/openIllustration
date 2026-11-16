@@ -62,6 +62,43 @@ pub struct AppState {
     pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// プロセス全体の軽量メトリクス。単一ライター運用（1プロセス）を前提とする。
+static METRIC_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static METRIC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// リクエスト数と 4xx/5xx 応答数を記録するミドルウェア。
+async fn observe_metrics(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    METRIC_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let response = next.run(request).await;
+    if response.status().is_client_error() || response.status().is_server_error() {
+        METRIC_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    response
+}
+
+/// Prometheus 形式の最小化されたメトリクス（外部クレートなし）。
+pub async fn metrics() -> Response {
+    let body = format!(
+        "# HELP openillustration_http_requests_total Total HTTP requests.\n\
+         # TYPE openillustration_http_requests_total counter\n\
+         openillustration_http_requests_total {}\n\
+         # HELP openillustration_http_errors_total Total 4xx/5xx HTTP responses.\n\
+         # TYPE openillustration_http_errors_total counter\n\
+         openillustration_http_errors_total {}\n",
+        METRIC_REQUESTS.load(std::sync::atomic::Ordering::Relaxed),
+        METRIC_ERRORS.load(std::sync::atomic::Ordering::Relaxed),
+    );
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        body,
+    )
+        .into_response()
+}
+
 /// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
 /// Arc<Connection> の実体アドレスをキーにしたプロセス内ロックで書き込みを直列化する。
 static DB_WRITE_LOCKS: std::sync::LazyLock<
@@ -942,6 +979,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/health", get(|| async { "ok" }))
         .route("/ready", get(readiness))
+        .route("/metrics", get(metrics))
         .route("/policy/age", get(get_age_policy))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(
@@ -953,6 +991,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
+        .layer(from_fn(observe_metrics))
         .layer(from_fn(network::ipv6_only_middleware))
         .with_state(state)
 }
