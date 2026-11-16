@@ -148,6 +148,7 @@ async fn setup_app_with_options(
         allow_mock_auth,
         ipfs_gateways,
         ipfs_timeout,
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -194,6 +195,7 @@ async fn setup_app_with_jwt_keys(
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -254,6 +256,7 @@ async fn setup_app_with_payments(
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: Some(receiving_address.to_string()),
         payment_receiving_xprv: None,
         payment_verifier: Some(verifier),
@@ -297,6 +300,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: Some(xprv.to_string()),
         payment_verifier: None,
@@ -554,6 +558,7 @@ async fn setup_app_with_oidc() -> (
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -985,6 +990,16 @@ fn test_ipfs_timeout_configuration() {
     assert_eq!(crate::ipfs_timeout(Some("bad")), Duration::from_secs(15));
     assert_eq!(crate::ipfs_timeout(Some("301")), Duration::from_secs(15));
     assert_eq!(crate::ipfs_timeout(Some("300")), Duration::from_secs(300));
+}
+
+#[test]
+fn test_ipfs_max_attempts_configuration() {
+    assert_eq!(crate::ipfs_max_attempts(None), 1);
+    assert_eq!(crate::ipfs_max_attempts(Some("3")), 3);
+    assert_eq!(crate::ipfs_max_attempts(Some("0")), 1);
+    assert_eq!(crate::ipfs_max_attempts(Some("6")), 1);
+    assert_eq!(crate::ipfs_max_attempts(Some("bad")), 1);
+    assert_eq!(crate::ipfs_max_attempts(Some("5")), 5);
 }
 
 /// ログ用 URL から userinfo と query を除去する。
@@ -2166,6 +2181,7 @@ async fn test_vote_consensus_rejects_content() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2345,6 +2361,7 @@ async fn test_duplicate_vote_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2541,6 +2558,7 @@ async fn test_vote_after_conclusion_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2620,6 +2638,7 @@ async fn test_vote_for_missing_report_returns_404() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2675,6 +2694,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2764,6 +2784,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -2829,6 +2850,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -5167,6 +5189,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,
@@ -6125,6 +6148,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
         ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
         payment_receiving_address: None,
         payment_receiving_xprv: None,
         payment_verifier: None,

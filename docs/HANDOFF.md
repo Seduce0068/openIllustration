@@ -172,6 +172,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 
 - `IPFS_GATEWAYS`: `{cid}` を含む http(s) URL テンプレート。
 - `IPFS_TIMEOUT_SECS`: 1〜300。既定 15。
+- `IPFS_MAX_ATTEMPTS`: ネットワークエラー時の再試行回数。既定 1、有効範囲 1〜5。
 - `PINATA_JWT`: 未設定時は模擬動作。
 
 ### 年齢/地域ポリシー（DEC-02、非秘密・常時公開）

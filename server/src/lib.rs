@@ -40,6 +40,8 @@ pub struct AppState {
     pub ipfs_gateways: Vec<String>,
     /// 各 IPFS ゲートウェイへのリクエストタイムアウト。
     pub ipfs_timeout: Duration,
+    /// ネットワークエラー時に各ゲートウェイを再試行する最大回数（1〜5）。
+    pub ipfs_max_attempts: usize,
     /// JPYC 注文の受取アドレス。未設定時は注文作成を 501 で拒否する。
     pub payment_receiving_address: Option<String>,
     /// BIP44 派生用の xprv。設定時は注文ごとの受取アドレスを派生する。
@@ -485,6 +487,8 @@ pub async fn run() -> anyhow::Result<()> {
     }
     let ipfs_timeout_env = std::env::var("IPFS_TIMEOUT_SECS").ok();
     let ipfs_timeout = ipfs_timeout(ipfs_timeout_env.as_deref());
+    let ipfs_attempts_env = std::env::var("IPFS_MAX_ATTEMPTS").ok();
+    let ipfs_max_attempts = ipfs_max_attempts(ipfs_attempts_env.as_deref());
 
     let payment_receiving_address = std::env::var("PAYMENT_RECEIVING_ADDRESS")
         .ok()
@@ -563,6 +567,7 @@ pub async fn run() -> anyhow::Result<()> {
             .unwrap_or(false),
         ipfs_gateways,
         ipfs_timeout,
+        ipfs_max_attempts,
         payment_receiving_address,
         payment_receiving_xprv,
         payment_verifier: None,
@@ -830,6 +835,17 @@ pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
         .filter(|secs| (1..=MAX_IPFS_TIMEOUT_SECS).contains(secs))
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_IPFS_TIMEOUT_SECS))
+}
+
+/// `IPFS_MAX_ATTEMPTS` を解析する。未設定・不正値・範囲外は既定の 1 回。
+/// 上限は、設定ミスで1リクエストが長時間ハングするのを防ぐ。
+pub fn ipfs_max_attempts(env_value: Option<&str>) -> usize {
+    const DEFAULT: usize = 1;
+    const MAX: usize = 5;
+    env_value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|attempts| (1..=MAX).contains(attempts))
+        .unwrap_or(DEFAULT)
 }
 
 /// ADR-0004: カンマ区切りの運用者 user_hash を読み込む。
@@ -1374,8 +1390,10 @@ pub async fn get_content(
         "image/jxl"
     };
 
-    // ゲートウェイは設定順に試す。すべて失敗した場合は 500 を返し、
-    // 部分的なデータを完全なコンテンツとして返さない。
+    // ゲートウェイは設定順に試す。ネットワークエラー（接続失敗・タイムアウト）に
+    // 限り各ゲートウェイを最大 ipfs_max_attempts 回まで再試行する。
+    // HTTP エラー・サイズ超過・チェックサム不一致は再試行せず即拒否する。
+    // すべて失敗した場合は 500 を返し、部分的なデータを完全なコンテンツとして返さない。
     let mut last_error = String::new();
 
     if state.ipfs_gateways.is_empty() {
@@ -1384,65 +1402,76 @@ pub async fn get_content(
 
     for gateway_template in &state.ipfs_gateways {
         let gateway_url = gateway_template.replace("{cid}", &cid);
-        match state
-            .http_client
-            .get(&gateway_url)
-            .timeout(state.ipfs_timeout)
-            .send()
-            .await
-        {
-            Ok(mut response) if response.status().is_success() => {
-                const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
-                if response
-                    .content_length()
-                    .is_some_and(|length| length > MAX_CONTENT_BYTES as u64)
-                {
+        let mut response = None;
+        for attempt in 1..=state.ipfs_max_attempts {
+            match state
+                .http_client
+                .get(&gateway_url)
+                .timeout(state.ipfs_timeout)
+                .send()
+                .await
+            {
+                Ok(res) => {
+                    response = Some(res);
+                    break;
+                }
+                Err(error) => {
+                    last_error = format!(
+                        "{}: {} (attempt {}/{})",
+                        redact_url(&gateway_url),
+                        describe_reqwest_error(&error),
+                        attempt,
+                        state.ipfs_max_attempts
+                    );
+                }
+            }
+        }
+        let Some(mut response) = response else {
+            continue;
+        };
+        if response.status().is_success() {
+            const MAX_CONTENT_BYTES: usize = 10 * 1024 * 1024;
+            if response
+                .content_length()
+                .is_some_and(|length| length > MAX_CONTENT_BYTES as u64)
+            {
+                return Err(AppError::BadRequest(
+                    "IPFS content exceeds size limit".to_string(),
+                ));
+            }
+            let mut bytes = Vec::new();
+            while let Some(chunk) = response
+                .chunk()
+                .await
+                .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?
+            {
+                if bytes.len().saturating_add(chunk.len()) > MAX_CONTENT_BYTES {
                     return Err(AppError::BadRequest(
                         "IPFS content exceeds size limit".to_string(),
                     ));
                 }
-                let mut bytes = Vec::new();
-                while let Some(chunk) = response
-                    .chunk()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?
-                {
-                    if bytes.len().saturating_add(chunk.len()) > MAX_CONTENT_BYTES {
-                        return Err(AppError::BadRequest(
-                            "IPFS content exceeds size limit".to_string(),
-                        ));
-                    }
-                    bytes.extend_from_slice(&chunk);
-                }
-
-                let actual_checksum = sha256::digest(&bytes[..]);
-                if actual_checksum != expected_checksum {
-                    // 本文・チェックサム値は出さず、どの CID / ゲートウェイで
-                    // 不整合が起きたかだけを記録する（運用監視用）。
-                    warn!(
-                        "IPFS integrity mismatch: cid={} gateway={}",
-                        cid,
-                        redact_url(&gateway_url)
-                    );
-                    return Err(AppError::Unauthorized("Integrity check failed".to_string()));
-                }
-
-                return Response::builder()
-                    .header(header::CONTENT_TYPE, response_content_type)
-                    .header("X-Forensic-Checksum", expected_checksum)
-                    .body(Body::from(bytes))
-                    .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));
+                bytes.extend_from_slice(&chunk);
             }
-            Ok(response) => {
-                last_error = format!("{}: HTTP {}", redact_url(&gateway_url), response.status());
-            }
-            Err(e) => {
-                last_error = format!(
-                    "{}: {}",
-                    redact_url(&gateway_url),
-                    describe_reqwest_error(&e)
+
+            let actual_checksum = sha256::digest(&bytes[..]);
+            if actual_checksum != expected_checksum {
+                // 本文・チェックサム値は出さず、どの CID / ゲートウェイで
+                // 不整合が起きたかだけを記録する（運用監視用）。
+                warn!(
+                    "IPFS integrity mismatch: cid={} gateway={}",
+                    cid,
+                    redact_url(&gateway_url)
                 );
+                return Err(AppError::Unauthorized("Integrity check failed".to_string()));
             }
+
+            return Response::builder()
+                .header(header::CONTENT_TYPE, response_content_type)
+                .header("X-Forensic-Checksum", expected_checksum)
+                .body(Body::from(bytes))
+                .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));
+        } else {
+            last_error = format!("{}: HTTP {}", redact_url(&gateway_url), response.status());
         }
     }
 

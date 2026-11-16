@@ -110,7 +110,8 @@ status: current
 - [中] プロキシ/WAF/多段構成下の IP 判定・`TRUSTED_PROXY_CIDRS` 運用の実環境検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] IPFS 完全性監視: チェックサム不一致時に CID と redact 済みゲートウェイ URL のみを WARN ログへ記録（本文/チェックサム値は出さない）。実サーバーで確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] IPFS ストリーム切断: 宣言 Content-Length を実際より大きくしたローカルモックで不完全データを返さないことを検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [中] IPFS: 厳密なCID仕様検証、リトライ/キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] IPFS リトライ方針: `IPFS_MAX_ATTEMPTS`（既定1、最大5）でネットワークエラーのみ再試行。HTTP エラー/不正データは即拒否。パーサ回帰テストと実起動確認（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [中] IPFS: 厳密なCID仕様検証、キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実 multipart サイズ境界: `Content-Length` 検査ミドルウェアを追加し、10 MiB 超を 413 で拒否（単体テストと実サーバーで確認）。虚偽/欠落時は axum の本文制限が多層防御（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] アップロード重複フィールド: 同一 `price` の二重送信が 400（Duplicate price field）で拒否される回帰テストを追加（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実鍵署名試験: 実 RSA 秘密鍵で署名したアップロードの受理と、署名を別バイト列へ使い回した場合の 401 拒否を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
