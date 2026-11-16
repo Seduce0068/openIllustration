@@ -691,7 +691,7 @@ impl Drop for MockGateway {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct MockResponse {
     status: StatusCode,
     body: Vec<u8>,
@@ -699,6 +699,10 @@ struct MockResponse {
     /// 要求パスがこの CID と一致しない場合は 404 を返す。
     /// `{cid}` 置換の欠落をテストで検出するために使う。
     expected_cid: Option<String>,
+    /// Some の場合、実際のボディより大きな Content-Length を宣言して
+    /// ストリーム途中の切断を再現する（CONTENT-02）。
+    #[allow(dead_code)]
+    inflated_content_length: Option<u64>,
 }
 
 async fn mock_gateway_handler(
@@ -716,8 +720,11 @@ async fn mock_gateway_handler(
     if !response.delay.is_zero() {
         tokio::time::sleep(response.delay).await;
     }
-    Response::builder()
-        .status(response.status)
+    let mut builder = Response::builder().status(response.status);
+    if let Some(length) = response.inflated_content_length {
+        builder = builder.header(header::CONTENT_LENGTH, length.to_string());
+    }
+    builder
         .body(Body::from(response.body.clone()))
         .expect("mock response")
 }
@@ -2822,6 +2829,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
         body: b"tampered content".to_vec(),
         delay: Duration::ZERO,
         expected_cid: Some("QmTampered".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) =
@@ -2866,6 +2874,55 @@ async fn test_content_checksum_verification_fails_on_tamper() {
     );
 }
 
+/// CONTENT-02: ストリーム途中で切断された応答は不完全なデータとして返さない。
+#[tokio::test]
+async fn test_get_content_rejects_truncated_stream() {
+    let body = b"partial content".to_vec();
+    let checksum = sha256::digest(&body);
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmTruncated".to_string()),
+        inflated_content_length: Some(body.len() as u64 + 100),
+    })
+    .await;
+    let (app, db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmTruncated', 'Novel', 'test_user', ?, 'Approved');",
+        [checksum.clone()],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmTruncated")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_server_error() || response.status().is_client_error(),
+        "a truncated stream must not be returned as valid content: {}",
+        response.status()
+    );
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        !text.contains("partial content"),
+        "partial body must not leak: {text}"
+    );
+}
+
 /// CONTENT-03: checksum が一致する場合だけ、完全なデータを返す。
 #[tokio::test]
 async fn test_get_content_returns_verified_bytes() {
@@ -2876,6 +2933,7 @@ async fn test_get_content_returns_verified_bytes() {
         body: body.clone(),
         delay: Duration::ZERO,
         expected_cid: Some("QmValid".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) =
@@ -2918,6 +2976,7 @@ async fn test_get_content_rejects_oversize_body() {
         body: vec![0u8; 10 * 1024 * 1024 + 1],
         delay: Duration::ZERO,
         expected_cid: Some("QmOversize".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) =
@@ -2963,6 +3022,7 @@ async fn test_get_content_times_out_gateway() {
         body: b"late".to_vec(),
         delay: Duration::from_secs(5),
         expected_cid: Some("QmTimeout".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) = setup_app_with_options(
@@ -3015,6 +3075,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
         body: Vec::new(),
         delay: Duration::ZERO,
         expected_cid: Some("QmFallback".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let body = b"fallback content".to_vec();
@@ -3024,6 +3085,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
         body: body.clone(),
         delay: Duration::ZERO,
         expected_cid: Some("QmFallback".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) = setup_app_with_options(
@@ -3070,6 +3132,7 @@ async fn test_get_content_accepts_exact_size_limit() {
         body: body.clone(),
         delay: Duration::ZERO,
         expected_cid: Some("QmBoundary".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) =
@@ -3141,6 +3204,7 @@ async fn test_get_content_all_gateways_fail() {
         body: b"secret gateway body".to_vec(),
         delay: Duration::ZERO,
         expected_cid: Some("QmAllFail".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let second = MockGateway::start(MockResponse {
@@ -3148,6 +3212,7 @@ async fn test_get_content_all_gateways_fail() {
         body: b"another secret".to_vec(),
         delay: Duration::ZERO,
         expected_cid: Some("QmAllFail".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) = setup_app_with_options(
@@ -3203,6 +3268,7 @@ async fn test_get_content_novel_returns_markdown_mime() {
         body: body.clone(),
         delay: Duration::ZERO,
         expected_cid: Some("QmNovel".to_string()),
+        inflated_content_length: None,
     })
     .await;
     let (app, db) =
