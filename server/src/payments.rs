@@ -353,6 +353,26 @@ pub async fn get_order(
     Ok(Json(load_order(&state, &order_id, &claims.sub).await?))
 }
 
+/// 期限切れ注文を EXPIRED へ更新して拒否する（更新系エンドポイント共通）。
+async fn reject_if_expired(state: &AppState, order: &PaymentOrder) -> Result<(), AppError> {
+    if order.expires_at <= chrono::Utc::now().to_rfc3339() {
+        state
+            .db
+            .execute(
+                "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
+                (
+                    STATUS_EXPIRED,
+                    order.order_id.as_str(),
+                    STATUS_FINALIZED,
+                    STATUS_EXPIRED,
+                ),
+            )
+            .await?;
+        return Err(AppError::BadRequest("order has expired".to_string()));
+    }
+    Ok(())
+}
+
 pub async fn bind_wallet(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -360,6 +380,12 @@ pub async fn bind_wallet(
     Json(payload): Json<BindWalletRequest>,
 ) -> Result<Json<bool>, AppError> {
     let order = load_order(&state, &order_id, &claims.sub).await?;
+    if order.status == STATUS_EXPIRED || order.status == STATUS_FAILED {
+        return Err(AppError::BadRequest(
+            "order is no longer verifiable".to_string(),
+        ));
+    }
+    reject_if_expired(state.as_ref(), &order).await?;
     if order.status != STATUS_PENDING {
         return Err(AppError::BadRequest(
             "order is not awaiting wallet binding".to_string(),
@@ -392,17 +418,7 @@ pub async fn verify_order(
         ));
     }
     // status が PENDING のまま expires_at を過ぎた注文も期限切れとして扱う。
-    // 状態を永続化してから拒否し、再試行でも同じ結果になるようにする。
-    if order.expires_at <= chrono::Utc::now().to_rfc3339() {
-        state
-            .db
-            .execute(
-                "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
-                (STATUS_EXPIRED, order_id, STATUS_FINALIZED, STATUS_EXPIRED),
-            )
-            .await?;
-        return Err(AppError::BadRequest("order has expired".to_string()));
-    }
+    reject_if_expired(state.as_ref(), &order).await?;
 
     let verifier = state.payment_verifier.clone().ok_or_else(|| {
         AppError::NotImplemented("chain verification is not configured".to_string())

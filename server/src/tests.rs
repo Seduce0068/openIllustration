@@ -3928,6 +3928,49 @@ async fn test_payment_verify_rejects_reused_transaction() {
     );
 }
 
+/// 決済: 期限切れ注文へのウォレット紐付けを拒否する。
+#[tokio::test]
+async fn test_bind_wallet_rejects_elapsed_expiry() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _amount) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    db.execute(
+        "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
+        ("2000-01-01T00:00:00+00:00".to_string(), order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    let message = crate::payments::wallet_bind_message(&order_id);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
 /// 決済: status が PENDING のまま expires_at を過ぎた注文を拒否し EXPIRED へ更新する。
 #[tokio::test]
 async fn test_payment_verify_rejects_elapsed_expiry() {
