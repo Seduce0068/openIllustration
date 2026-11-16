@@ -115,7 +115,8 @@ status: current
 - [対応済み] 実 multipart サイズ境界: `Content-Length` 検査ミドルウェアを追加し、10 MiB 超を 413 で拒否（単体テストと実サーバーで確認）。虚偽/欠落時は axum の本文制限が多層防御（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] アップロード重複フィールド: 同一 `price` の二重送信が 400（Duplicate price field）で拒否される回帰テストを追加（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実鍵署名試験: 実 RSA 秘密鍵で署名したアップロードの受理と、署名を別バイト列へ使い回した場合の 401 拒否を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [低] アップロード: 完全なJPEG XLデコード検証、画像デコード前検査、安全な保存名（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] JXL デコード検証の技術選定: `jxl-oxide` 0.12.6 を第一候補とし、現時点では依存追加しない判断を [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録。
+- [低] 本番受入要件確定後の完全なJPEG XLデコード検証の実装（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.7 運用・可観測性・停止動作
 
