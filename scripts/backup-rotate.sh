@@ -16,6 +16,8 @@ gpg_bin="${GPG_BIN:-gpg}"
 # オフサイト保存: 実行ファイルのパスと宛先を指定する（eval は使わない）。
 offsitecopy="${OFFSITE_COPY_CMD:-}"
 offsitedest="${OFFSITE_DEST:-}"
+# 失敗通知: 実行ファイルのパス。呼び出しは <メッセージ> の1引数（eval 不使用）。
+alert_cmd="${ALERT_CMD:-}"
 
 run_bin() {
 	local name="$1"
@@ -47,6 +49,23 @@ if [[ -n "$offsitecopy" && ! -x "$offsitecopy" ]]; then
 	echo "OFFSITE_COPY_CMD is not executable: ${offsitecopy}" >&2
 	exit 1
 fi
+if [[ -n "$alert_cmd" && ! -x "$alert_cmd" ]]; then
+	echo "ALERT_CMD is not executable: ${alert_cmd}" >&2
+	exit 1
+fi
+
+# 失敗時に通知する。通知自体が失敗しても元の終了コードを維持する。
+on_failure() {
+	local code=$?
+	if ((code == 0)); then
+		return 0
+	fi
+	if [[ -n "$alert_cmd" ]]; then
+		"$alert_cmd" "openIllustration backup failed (exit ${code}) on $(hostname)" >/dev/null 2>&1 || true
+	fi
+	return "$code"
+}
+trap on_failure EXIT
 
 mkdir -p "$backup_dir"
 chmod 700 "$backup_dir" || echo "warning: failed to restrict permissions on ${backup_dir}" >&2
