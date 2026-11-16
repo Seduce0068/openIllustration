@@ -10,21 +10,29 @@ tags: [licenses, dependencies, compliance]
 
 - 本リポジトリの全クレートは `AGPL-3.0-or-later`（[LICENSE](../LICENSE)）で提供し、
   `[workspace.package].license` として Cargo メタデータにも宣言済み。
-- 配布物（server バイナリ、client wasm）へ組み込まれる実行時依存（433パッケージ）は
-  すべて許容的ライセンス（MIT/Apache-2.0系、BSD系、ISC、Zlib、Unicode-3.0、
-  Unlicense、0BSD、BSL-1.0、CDLA-Permissive-2.0、CC0-1.0）で構成される。
+- 配布物（server バイナリ、client wasm）へ組み込まれる実行時依存（和集合 419 パッケージ、
+  2026-11-17 再計算）はすべて許容的ライセンス（MIT/Apache-2.0系、BSD系、ISC、Zlib、
+  Unicode-3.0、Unlicense、0BSD、BSL-1.0、CDLA-Permissive-2.0、CC0-1.0）で構成される。
 - 第三者依存にコピーレフトを強制するものはない。コピーレフトは自リポジトリの
   3 クレート（`AGPL-3.0-or-later`）のみである。
-- CI の `cargo deny check licenses` で検査済み。配布時のライセンス本文・
-  NOTICE の同梱運用は未整備（§5）。
-- 本監査は 2026-11-15 の依存更新後に再実行した。
+- CI の `cargo deny check licenses` と配布スクリプトの事前検査で検証済み。
+  ライセンス本文・NOTICE・依存一覧の同梱は `scripts/prepare-distribution.sh` で生成する（§5）。
+- 本監査は 2026-11-17 に再計算した（`tracing-serde` 追加を反映）。
+
+数字の定義（混同しないこと）:
+
+| 値 | 意味 | 出典 |
+| --- | --- | --- |
+| 419 | 実行時依存（server 300 / client wasm 237）の和集合 | `cargo metadata` の normal edges |
+| 800 | 全依存（build/dev 含む）のライセンス式×クレート行 | `cargo deny list --format json` |
+| 452 | ローカル cargo レジストリから取得できたライセンス本文ファイル数 | `prepare-distribution.sh` の成果物 |
 
 ## 2. 調査方法
 
 実行時依存（normal edges）のみを対象とする。build-dependencies と
 dev-dependencies は配布物へ組み込まれないため対象外
-（`cargo metadata` の解決総数 532 のうち、実行時は server 310、
-client(wasm) 234、和集合 433）。
+（`cargo metadata` の解決総数 533 のうち、実行時は server 300、
+client(wasm) 237、和集合 419）。
 
 再現コマンド:
 
@@ -39,7 +47,11 @@ cargo deny check licenses
 SPDX フィールドを持たないクレートは自リポジトリの 3 クレートのみで、
 本監査と同時に宣言を追加した。
 
-## 3. 実行時依存のライセンス分布（和集合 433）
+## 3. 実行時依存のライセンス分布（2026-11-15 時点のスナップショット）
+
+以下の内訳は過去の監査時点の値で、現在の合計（和集合 419）とは一致しない。
+現在の許容ライセンス一覧は `deny.toml`、全依存のライセンス式×件数は
+`cargo deny list --format json` が権威情報である。
 
 | ライセンス式 | 件数 |
 | ------------ | ---- |
@@ -65,7 +77,7 @@ SPDX フィールドを持たないクレートは自リポジトリの 3 クレ
 
 ## 4. 注意が必要な依存
 
-現行の実行時グラフ（和集合 433）に、コピーレフトを強制する第三者依存はない。
+現行の実行時グラフ（和集合 419）に、コピーレフトを強制する第三者依存はない。
 以前の監査で挙げた `self_cell` と `r-efi` は現行グラフから外れた。
 `cargo deny check licenses` は現行グラフで成功している。
 
@@ -86,6 +98,6 @@ SPDX フィールドを持たないクレートは自リポジトリの 3 クレ
 - `cargo-deny` 0.20.2 を CI に導入した。`deny.toml` の許可リストで
   `cargo deny check licenses` を実行し、違反時は CI を失敗させる。
 - 依存更新のたびに本監査を再実行する（現状は手動。手順は §2）。
-  2026-11-15 の依存更新後に再実行済み（和集合 433）。
+  2026-11-17 に再計算済み（和集合 419）。
 - 脆弱性勧告（RUSTSEC）はライセンスとは別に
   [Security advisories](SECURITY_ADVISORIES.md) で管理する。

@@ -128,7 +128,7 @@ status: current
 - [中] **既知の脆弱性勧告（受容中）**: `libsql 0.10` 由来 10 件（上流/代替の見直し、特にリモートDB利用前）と `paste` 1 件（RUSTSEC-2024-0436, unmaintained・ビルド時マクロ・既知脆弱性なし・パッチなし、Leptos 側の除去待ち）。CI で `cargo deny check advisories` を通過させつつ四半期/更新時に再評価（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
 - [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（451件）を生成（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 - [対応済み] 配布時のライセンス再監査: `scripts/prepare-distribution.sh` が `cargo deny check licenses` を事前実行し、不整合なら成果物を生成しない。NOTICE に生成時刻とエントリ数を記録（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
-- [低] ライセンス監査ドキュメントの件数（433/452/800）の自動同期。
+- [対応済み] ライセンス監査ドキュメントの数字を定義別に整理: 実行時和集合 419 / `cargo deny list` 全行 800 / 取得ライセンス本文 452。旧スナップショットは明示して現在値と混同しないようにした（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 
 ### 3.9 将来検討（必要性・方式未決定）
 
