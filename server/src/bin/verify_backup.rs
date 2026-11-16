@@ -13,8 +13,8 @@ fn print_help() {
         "Usage: verify_backup --input PATH\n\
          \n\
          Verifies that a backup produced by backup_db is structurally usable:\n\
-         the file exists, opens as SQLite, has tables, has a migration ledger,\n\
-         and every applied migration has a matching version.\n\
+         the file exists, opens as SQLite, passes PRAGMA integrity_check,\n\
+         has tables, and has a migration ledger.\n\
          This is a structural check, not a full application-level restore test.\n\
          Exit code: 0 if valid, 1 on error."
     );
@@ -55,6 +55,21 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("failed to open backup")?
         .connect()?;
+
+    // 構造的な破損を検出する（restore_db と同じ判定）。
+    let mut rows = db
+        .query("PRAGMA integrity_check", ())
+        .await
+        .context("integrity_check failed")?;
+    let result: String = rows
+        .next()
+        .await
+        .context("no integrity_check result")?
+        .context("no integrity_check row")?
+        .get(0)?;
+    if result != "ok" {
+        return Err(anyhow!("backup integrity_check failed: {result}"));
+    }
 
     let mut rows = db
         .query(

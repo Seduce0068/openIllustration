@@ -89,7 +89,9 @@ cargo run -p server --bin verify_backup -- --input /path/to/backups/openillustra
 cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backups/openillustration-YYYYMMDD-HHMMSS.db
 ```
 
-`verify_backup` はファイルが開けること、テーブルと `_migrations` が存在することを確認する。
+`verify_backup` はファイルが開けること、`PRAGMA integrity_check` が `ok` であること、
+テーブルと `_migrations` が存在することを確認する。破損したページを持つ
+バックアップを実 DB で作り、integrity_check エラーで拒否されることを確認済み。
 `verify_audit_log` は監査ハッシュ連鎖・`log_id` 連続性・Merkle root を検証する。
 両方成功しなければバックアップを本番バックアップとして認めない。
 
@@ -147,7 +149,7 @@ cargo run -p server --bin restore_db -- \
 - `backup_db` がスナップショットを作成し、10 テーブル・5 マイグレーションを保持。
 - 既存ファイルへの上書き試行が失敗（終了コード 1）。
 - バックアップからユーザー・コンテンツ・`_migrations` が復元できる。
-- `verify_backup` が正常ファイルで成功し、存在しないファイルで失敗。
+- `verify_backup` が正常ファイルで成功し、存在しないファイルと破損ファイルで失敗（integrity_check）。
 - 復元 DB に対して `verify_audit_log` が成功。
 - `restore_db` が既存 DB の上書きを `--force` 無しで拒否、WAL サイドカー存在時に拒否、`--force` で安全コピー作成＋原子的置換＋データ保持を確認。
 
