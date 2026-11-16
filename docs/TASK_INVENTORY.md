@@ -100,6 +100,7 @@ status: current
 - [対応済み] **既存DBの段階的アップグレード試験**: 001→003 適用済みDBに 004 を追加して新カラムの backfill と既存データ保持を確認。`verify_migrations` は適用済みだがファイルが無いバージョンを検出し起動を拒否（古いデプロイイメージ誤用の防止）。
 - [対応済み] 単一ライター起動の強制: ローカル DB 起動時に `<DB path>.instance.lock` を原子的作成し、生存 PID のロックでは第二インスタンスを拒否。stale ロックは自動回収、停止時に削除（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。リモート DB は警告のみ。
 - [対応済み] ロールバック判断手順: 前方のみ（down migration なし）の方針を明示し、適用前バックアップ＋旧バイナリへの復帰手順、失われるデータと監査ログの範囲を [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に記載。
+- [対応済み] マイグレーション検証の fail-closed 強化: ディレクトリ欠落時に `verify_migrations` が `Ok(())` を返し「適用済みファイル欠落」検査をすり抜けていた問題を修正。単体テストで拒否を確認。
 - [低] down migration 自体の実装（現状は未採用、必要になった時点で設計）。
 - [対応済み] 複数インスタンス起動方針: **単一ライター運用**を初期運用の前提として決定・文書化。プロセス内書き込みは接続ごとロックで直列化し、プロセス間排他はアーキテクチャ側で回避（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] バックアップ/リストア手順: `backup_db`（VACUUM INTO・上書き拒否）と `verify_backup`（構造検証）を追加。実 DB で作成・検証・データ保持・監査連動を確認し、[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に手順化。

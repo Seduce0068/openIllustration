@@ -241,8 +241,13 @@ pub async fn verify_migrations_from(
 ) -> Result<(), AppError> {
     ensure_migrations_table(db).await?;
 
+    // ディレクトリ自体が無い場合は「適用済みバージョンに対応するファイルが無い」
+    // 検査をすり抜けてしまうため、fail-closed で起動を拒否する。
     if !migrations_path.exists() {
-        return Ok(());
+        return Err(AppError::Internal(format!(
+            "Migrations directory not found: {}; refusing to start without migration files",
+            migrations_path.display()
+        )));
     }
 
     let entries = fs::read_dir(migrations_path)
@@ -515,6 +520,15 @@ mod tests {
         .unwrap();
         let err = verify_migrations_from(&db, &dir).await.unwrap_err();
         assert!(err.to_string().contains("checksum mismatch"));
+
+        // ディレクトリを丸ごと失った場合も fail-closed で拒否する
+        // （「適用済みファイル欠落」検査をすり抜けない）。
+        fs::remove_dir_all(&dir).unwrap();
+        let err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("Migrations directory not found"),
+            "unexpected error: {err}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
