@@ -44,6 +44,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - JWTはHS256既定検証を用い、有効期限を確認する。起動時に32バイト未満の `JWT_SECRET` を拒否する。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は RS256 となり、署名ヘッダに公開鍵由来の `kid` を付与する。検証は `JWT_RSA_VERIFICATION_KEYS` に登録した `kid` → 公開鍵で行い、未知 `kid` は拒否する（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。発行者/audience検証は別途要件化する。
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。`ALLOW_MOCK_AUTH=1` の開発時のみ、未設定ならローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]` の8080）へフォールバックする。モック認証が無効な本番相当で未設定なら全オリジンを拒否（fail-closed、警告ログ付き）。空エントリと `http(s)://` 形式以外（`null` を除く）は無視する。末尾スラッシュは除去し、ワイルドカードは指定できない。本番配信オリジンの決定と値の運用は未決定。
 - リクエスト本文は最大10 MiB。上限超過のアップロードは axum 0.8 の Multipart extractor が先に解析するため、413 ではなく 400（multipart parse error）として拒否される（実テストで確認）。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10 MiB（超過は 400）。
+- IPFS 取得時にチェックサム不一致を検出した場合は 401 で拒否し、CID と redact 済みゲートウェイ URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を確認済み。ゲートウェイのフォールバックは HTTP エラー/タイムアウトに対して行い、不正データは次のゲートウェイへ送らず即拒否する。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。
 - ログは `tracing` + `tracing-subscriber` で標準出力へ出し、`RUST_LOG` でレベルを制御する（未設定時は INFO、タイムスタンプは RFC 3339 UTC）。`LOG_FORMAT=json` 設定時は 1行1 JSON（timestamp / level / fields / target）で出力しログ集約基盤へ取り込める。起動メッセージも tracing 経由に統一し、JSON モードでパース失敗する行を作らない。JWT・認証ヘッダ・投稿本文など機微情報はログへ出さない。
 - 停止時は SIGTERM/SIGINT を捕捉し、処理中リクエストの完了を待って終了する（graceful shutdown）。待ち時間は `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、範囲 1〜300）で上限を設け、超過時は警告ログを出して残接続を切断する。停止シグナルで readiness は 503 へ切り替わる。

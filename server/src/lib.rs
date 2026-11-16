@@ -1392,6 +1392,13 @@ pub async fn get_content(
 
                 let actual_checksum = sha256::digest(&bytes[..]);
                 if actual_checksum != expected_checksum {
+                    // 本文・チェックサム値は出さず、どの CID / ゲートウェイで
+                    // 不整合が起きたかだけを記録する（運用監視用）。
+                    warn!(
+                        "IPFS integrity mismatch: cid={} gateway={}",
+                        cid,
+                        redact_url(&gateway_url)
+                    );
                     return Err(AppError::Unauthorized("Integrity check failed".to_string()));
                 }
 
