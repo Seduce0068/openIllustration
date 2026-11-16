@@ -137,7 +137,8 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
 
 - 新規エントリは `AuditLogEntry::calculate_hash_v2` で生成する。CID、状態、主体、理由、前エントリーハッシュに長さプレフィックスを付け、ドメイン分離ラベルを付与した上でSHA-256化するため、フィールド境界の曖昧さによる衝突を排除する。既存DB向けに旧 `calculate_hash`（v1）も残し、`verify_audit_log` は v1/v2 の両方を検証する。
 - `compute_audit_chain_digest` は `log_id` の連続性と entry_hash 列の Merkle root を計算する。`verify_audit_log --expect-root` で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
-- 一意で曖昧さのない正規化シリアライズ、署名鍵、DB外アンカー、信用できる第三者による独立検証は未実装。
+- `sign_audit_export` は件数と Merkle root を RSA 署名したスナップショットを生成し、`verify_audit_export` は公開鍵 DER のみで署名・完全性を検証する（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。これは運営者が公開したことを示すに留まり、DB外アンカーや追記専用媒体の代替ではない。
+- DB外アンカー、信用できる第三者による独立検証、鍵の HSM 管理とローテーションは未実装。
 - 目的はDB内の連鎖整合性チェック補助に限定し、改ざん不能・否認防止を主張しない。root の外部保存先は各デプロイの運用者が決める。
 
 ## 7. 必須要件を満たす目標フロー

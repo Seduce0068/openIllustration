@@ -1,7 +1,10 @@
 pub mod age;
 
 use rsa::sha2::Sha256 as RsaSha256;
-use rsa::{Pkcs1v15Sign, PublicKey, pkcs8::DecodePublicKey};
+use rsa::{
+    Pkcs1v15Sign, PrivateKey, PublicKey,
+    pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey},
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -157,6 +160,66 @@ pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChai
     })
 }
 
+/// 署名付き監査スナップショット。第三者は公開鍵だけで検証できる。
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct SignedAuditSnapshot {
+    pub version: u32,
+    pub entry_count: usize,
+    pub merkle_root: String,
+    /// base64 エンコードした署名（署名対象は `signature_payload()`）。
+    pub signature: String,
+}
+
+impl SignedAuditSnapshot {
+    /// 署名対象の正規化バイト列。JSON のフィールド順に依存しない。
+    pub fn signature_payload(&self) -> Vec<u8> {
+        format!(
+            "OPENILLUSTRATION_AUDIT_EXPORT_V1\0{}\0{}\0{}",
+            self.version, self.entry_count, self.merkle_root
+        )
+        .into_bytes()
+    }
+}
+
+/// PEM 秘密鍵でスナップショットに署名する。
+pub fn sign_audit_snapshot(
+    snapshot: &SignedAuditSnapshot,
+    private_key_pem: &str,
+) -> Result<String, ForensicError> {
+    let key = PrivateKey::from_pkcs8_pem(private_key_pem)
+        .map_err(|e| ForensicError::Crypto(format!("Invalid private key: {e}")))?;
+    let signing_key = rsa::pkcs1v15::SigningKey::<RsaSha256>::new(key);
+    use rsa::signature::{SignatureEncoding, Signer};
+    let signature = signing_key.sign(&snapshot.signature_payload());
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        signature.to_bytes(),
+    ))
+}
+
+/// 公開鍵 DER でスナップショット署名を検証する。
+pub fn verify_audit_snapshot(
+    snapshot: &SignedAuditSnapshot,
+    public_key_der: &[u8],
+) -> Result<(), ForensicError> {
+    let signature = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &snapshot.signature,
+    )
+    .map_err(|e| ForensicError::InvalidSignature(format!("Invalid base64: {e}")))?;
+    verify_rsa_signature(public_key_der, &snapshot.signature_payload(), &signature)
+}
+
+/// PEM 秘密鍵から公開鍵 DER を導出する（配布用）。
+pub fn public_key_der_from_private_pem(private_key_pem: &str) -> Result<Vec<u8>, ForensicError> {
+    let key = PrivateKey::from_pkcs8_pem(private_key_pem)
+        .map_err(|e| ForensicError::Crypto(format!("Invalid private key: {e}")))?;
+    key.to_public_key()
+        .to_public_key_der()
+        .map(|der| der.as_ref().to_vec())
+        .map_err(|e| ForensicError::Crypto(format!("Public key encoding failed: {e}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,6 +252,59 @@ mod tests {
         (1..=4)
             .map(|id| (id, "a".repeat(63) + &format!("{id:x}")))
             .collect()
+    }
+
+    #[test]
+    fn signed_audit_snapshot_verifies_with_public_key() {
+        use rsa::pkcs8::EncodePrivateKey;
+        struct TestRng(u64);
+        impl rsa::rand_core::TryRng for TestRng {
+            type Error = rsa::rand_core::Infallible;
+            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+                Ok((self.next() >> 32) as u32)
+            }
+            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+                Ok(self.next())
+            }
+            fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+                for chunk in dst.chunks_mut(8) {
+                    let value = self.next().to_le_bytes();
+                    chunk.copy_from_slice(&value[..chunk.len()]);
+                }
+                Ok(())
+            }
+        }
+        impl TestRng {
+            fn next(&mut self) -> u64 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 7;
+                self.0 ^= self.0 << 17;
+                self.0
+            }
+        }
+        impl rsa::rand_core::TryCryptoRng for TestRng {}
+        let mut rng = TestRng(0x9E37_79B9_7F4A_7C15);
+        let key = PrivateKey::new(&mut rng, 2048).unwrap();
+        let private_pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
+
+        let mut snapshot = SignedAuditSnapshot {
+            version: 1,
+            entry_count: 3,
+            merkle_root: "ab".repeat(32),
+            signature: String::new(),
+        };
+        snapshot.signature = sign_audit_snapshot(&snapshot, &private_pem).unwrap();
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
+
+        let tampered = SignedAuditSnapshot {
+            merkle_root: "cd".repeat(32),
+            ..snapshot.clone()
+        };
+        assert!(verify_audit_snapshot(&tampered, &public_der).is_err());
     }
 
     #[test]

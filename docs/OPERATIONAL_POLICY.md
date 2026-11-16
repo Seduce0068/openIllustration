@@ -40,7 +40,8 @@ tags: [operations, security, payments]
 - BAN は根拠と期間を必須とし、UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。これは運用ログであり第三者検証可能な監査ではない。投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]` で読み取り専用に検証できる。連鎖に加え `log_id` の連続性と entry_hash 列の Merkle root を出力し、別経路で保存した root を `--expect-root` に渡すと末尾切り詰め・欠落を検出できる（実測で検出確認済み）。エントリハッシュは v2（長さプレフィックス付き正規化）を生成し、v1（既存互換）も検証できる。これは計算整合性の確認であり、第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
-- 本番前に署名鍵管理、監査対象・公開範囲、外部検証手段、個人情報保護、障害時運用を定めて試験する。
+- 監査スナップショットは `sign_audit_export` で署名し、`verify_audit_export` で公開鍵検証する（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。秘密鍵はファイルで厳重管理し、CLI 引数や環境変数へ内容を渡さない。
+- 本番前に署名鍵の HSM 管理とローテーション、監査対象・公開範囲、外部アンカー、個人情報保護、障害時運用を定めて試験する。
 
 ## 4. 支援・決済
 

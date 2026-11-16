@@ -77,7 +77,8 @@ status: current
 
 ### 3.4 監査（DEC-04）
 
-- [高][要判断] **第三者検証可能な監査の実装**: 正規化シリアライズ、署名鍵、DB外アンカー/追記専用媒体、公開範囲、訂正/削除との調整（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。運用者は各デプロイが設定する。現行は `content_audit_log` とハッシュ連鎖のみ（`server/src/lib.rs`, `common/src/lib.rs`）。
+- [一部対応] **署名付き監査エクスポート**: ADR-0005 に基づき、`sign_audit_export` が Merkle root と件数を RSA 署名したスナップショットを生成し、`verify_audit_export` が公開鍵のみで検証（改ざん検出を実測確認）。手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
+- [高][要判断] **第三者検証可能な監査の残項目**: DB外アンカー/追記専用媒体、公開範囲、訂正/削除との調整、鍵の HSM 管理とローテーション（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [REVIEW_REPORT.md](REVIEW_REPORT.md)）。運用者は各デプロイが設定する。
 - [中] [一部対応] ローカルDBの `content_audit_log` ハッシュ連鎖は `cargo run -p server --bin verify_audit_log -- [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]` で読み取り専用に検証可能（`common::AuditLogEntry::calculate_hash` と同一計算）。`log_id` 連続性チェックと Merkle root を追加し、外部保存 root との照合で欠落・末尾切り詰めを検出できる（実測確認済み）。新規エントリは長さプレフィックス付き v2 正規化ハッシュを生成し、v1 も投稿時に互換検証する。これは計算整合性の確認であり、第三者検証可能な監査方式の代替ではない（AUDIT-01/DEC-04 は未充足）。
 
 ### 3.5 DB・移行・信頼性

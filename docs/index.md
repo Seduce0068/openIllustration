@@ -13,6 +13,7 @@
 
 * [Operational policy](OPERATIONAL_POLICY.md) - 運用方針と本番化条件。
 * [Backup and restore runbook](BACKUP_RESTORE_RUNBOOK.md) - DB スナップショットの取得・検証・復旧手順。
+* [Audit export runbook](AUDIT_EXPORT_RUNBOOK.md) - 署名付き監査エクスポートと第三者検証の手順。
 * [Infrastructure and network](INFRA_NETWORK.md) - ネットワーク設計。
 * [Age validation policy](AGE_VALIDATION_POLICY.md) - DEC-02採用方針・公開設定・実装制約。
 * [Test specification](TEST_SPECIFICATION.md) - 回帰テストと受け入れ条件。

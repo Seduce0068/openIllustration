@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 170件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 171件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -218,6 +218,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
+- `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
 - `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション手続（Accepted）。
