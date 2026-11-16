@@ -124,7 +124,8 @@ status: current
 
 - [対応済み] 構造化ログ: `LOG_FORMAT=json` で 1行1 JSON 出力（tracing-serde は tracing-subscriber の公式依存）。起動メッセージも tracing 統一。実サーバーで全行パース成功（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] 最小メトリクス: `GET /metrics` が Prometheus 形式の全リクエスト数・4xx/5xx 数を公開（外部クレートなし、パス/個人情報なし）。単体テストと実サーバーで確認（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- [中] ログ集約基盤・アラート通知先の選定、障害対応・鍵ローテーション手順（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み] 鍵ローテーション・障害対応 Runbook: [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md) に `kid` 無停止ローテーション2段階、漏えい時対応、認証障害切り分け表を記載。`openssl` の SPKI DER 出力を実確認し、既存ドキュメントの公開鍵形式表記を SPKI へ修正。
+- [中] ログ集約基盤・アラート通知先の選定（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] liveness `/health` と readiness `/ready` を分離。readiness は DB `SELECT 1` と停止フラグを検査し、停止時は 503。IP ゲートはバイパスしない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] readiness の意味を「API リクエストを受けられるか」と定義し、外部依存障害は反映しない方針を明記。外部依存の検知は /metrics と WARN ログ（IPFS チェックサム不整合等）で実施（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] 外部依存のアラート通知先への接続と実運用でのデプロイ・復旧訓練。

@@ -616,3 +616,4 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
   --all-targets -- -D warnings`、ローカル E2E 9 件が成功。RS256 での
   実起動ログ（`JWT signing algorithm: RS256`）も確認した。
 - 未実装: 鍵ローテーション、`kid` による複数鍵の併用、HSM 等の外部鍵管理。
+- 追記（2026-11-17）: 上記は当時の記録。`kid` 複数鍵併用と無停止ローテーション手順は実装済み（[KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)）。残るは HSM 等の外部鍵管理のみ。
