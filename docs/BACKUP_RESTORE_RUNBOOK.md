@@ -48,12 +48,24 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 ## リストア（復旧訓練）
 
 1. 対象サーバーを停止する（SIGTERM）。readiness `/ready` が 503 になることを確認する。
-2. 現行 DB を退避する（上書き防止のため別名へコピー）。
-3. バックアップファイルを本番 DB パスへコピーする。
-4. サーバーを起動し、マイグレーション検証（`_migrations` チェックサム）が通ることを確認する。
-5. `/health` 200、`/ready` 200 を確認する。
-6. `verify_audit_log` を本番 DB に対して実行し、監査連鎖が健全であることを確認する。
-7. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
+2. リストアを実行する（WAL/SHM サイドカーが残っている場合は拒否される）:
+
+```bash
+# Kubuntu / リポジトリルート
+cargo run -p server --bin restore_db -- \
+  --backup /path/to/backups/openillustration-YYYYMMDD-HHMMSS.db \
+  --target /path/to/local.db \
+  --force
+```
+
+`--force` を付けないと既存 DB の上書きを拒否する。`--force` 時は
+`<target>.pre-restore-<timestamp>` に安全コピーを作成してから原子的に置換する。
+バックアップの `PRAGMA integrity_check` と `_migrations` の存在を検証し、
+置換後にも再検証する。
+3. サーバーを起動し、マイグレーション検証（`_migrations` チェックサム）が通ることを確認する。
+4. `/health` 200、`/ready` 200 を確認する。
+5. `verify_audit_log` を本番 DB に対して実行し、監査連鎖が健全であることを確認する。
+6. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
 
 ## 検証済み事項（2026-11-17）
 
@@ -64,6 +76,7 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 - バックアップからユーザー・コンテンツ・`_migrations` が復元できる。
 - `verify_backup` が正常ファイルで成功し、存在しないファイルで失敗。
 - 復元 DB に対して `verify_audit_log` が成功。
+- `restore_db` が既存 DB の上書きを `--force` 無しで拒否、WAL サイドカー存在時に拒否、`--force` で安全コピー作成＋原子的置換＋データ保持を確認。
 
 ## 未解決事項
 
