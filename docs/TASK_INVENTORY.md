@@ -74,6 +74,7 @@ status: current
 - [一部対応] 決済異常系: モックで同一送金の再 verify・確認数進展→`FINALIZED`・確定後不変を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実チェーン上の再編成・二重通知・別コントラクト検知は RPC 実装時に検討。
 - [対応済み e87df61] 決済 verify の防御分岐を回帰テストで保護: 金額不一致（`MISMATCH` 遷移）、送金再利用（`"transaction is already used by another order"`）、期限切れ注文（`"order is no longer verifiable"`）、必要確認数未満（`CONFIRMING` 維持）の4ケース（`test_payment_verify_rejects_transfer_mismatch`, `test_payment_verify_rejects_reused_transaction`, `test_payment_verify_rejects_expired_order`, `test_payment_verify_keeps_confirming_until_threshold`）。ハンドラ挙動変更なし。
 - [対応済み] `expires_at` 経過の実質的な期限切れ注文を拒否: 旧実装は `status` が `PENDING` のまま期限を過ぎると verify / bind を通してしまうため、共通ヘルパーで時刻比較と `EXPIRED` 更新を追加。両エンドポイントの回帰テストで確認。
+- [対応済み] BIP44 受取アドレス派生インデックスの境界チェック: 旧実装の `index as u32` は `u32::MAX` 超で wrap around しアドレスを再利用していた。`derivation_index_to_u32` で明示拒否し境界テストを追加。
 
 ### 3.3 モデレーション・コンテンツ
 

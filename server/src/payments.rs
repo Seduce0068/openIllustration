@@ -132,6 +132,17 @@ pub fn wallet_bind_message(order_id: &str) -> String {
 }
 
 /// 円建て金額を JPYC の最小単位（10^18）へ変換する。
+/// DB の derivation_index (i64) を BIP44 用の u32 へ安全に変換する。
+/// 境界を超える値は受取アドレスの再利用を防ぐため拒否する。
+pub fn derivation_index_to_u32(index: i64) -> Result<u32, AppError> {
+    u32::try_from(index).map_err(|_| {
+        AppError::Internal(format!(
+            "derivation index {index} exceeds the supported maximum {}",
+            u32::MAX
+        ))
+    })
+}
+
 pub fn jpy_to_wei(amount_jpy: u64) -> Result<String, AppError> {
     if amount_jpy == 0 || amount_jpy > MAX_ORDER_JPY {
         return Err(AppError::BadRequest(format!(
@@ -291,7 +302,10 @@ pub async fn create_order(
             Some(row) => row.get(0)?,
             None => 0,
         };
-        (derive_receiving_address(xprv, index as u32)?, Some(index))
+        (
+            derive_receiving_address(xprv, derivation_index_to_u32(index)?)?,
+            Some(index),
+        )
     } else if let Some(address) = &state.payment_receiving_address {
         (normalize_address(address), None)
     } else {

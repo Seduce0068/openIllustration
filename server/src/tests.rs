@@ -4969,6 +4969,18 @@ async fn test_backchannel_logout_revokes_session_with_sid_and_sub() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// JPYC: derivation_index の u32 境界を超える値は受取アドレス再利用を防ぐため拒否。
+#[test]
+fn test_derivation_index_bounds() {
+    assert_eq!(crate::payments::derivation_index_to_u32(0).unwrap(), 0u32);
+    assert_eq!(
+        crate::payments::derivation_index_to_u32(u32::MAX as i64).unwrap(),
+        u32::MAX
+    );
+    assert!(crate::payments::derivation_index_to_u32(-1).is_err());
+    assert!(crate::payments::derivation_index_to_u32(u32::MAX as i64 + 1).is_err());
+}
+
 /// JPYC: BIP44派生が決定的で、indexごとに異なるアドレスを返す。
 #[test]
 fn test_derive_receiving_address() {
