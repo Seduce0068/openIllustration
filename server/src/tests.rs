@@ -592,6 +592,57 @@ async fn oidc_login(
     serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap()
 }
 
+/// OIDC ログインを行い、レスポンス本文とリフレッシュトークン Cookie を返す。
+async fn oidc_login_with_refresh(
+    app: &Router,
+    oidc: &crate::oidc::OidcState,
+    mock: &MockOidcServer,
+) -> (serde_json::Value, String) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let refresh = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|part| part.trim().strip_prefix("refresh_token="))
+        .unwrap_or_default()
+        .to_string();
+    assert!(!refresh.is_empty(), "refresh_token cookie must be set");
+    let body =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    (body, refresh)
+}
+
 /// テスト用のローカル IPFS ゲートウェイ。
 /// 外部ネットワークに依存せず、応答の状態・遅延・宣言長を制御できる。
 struct MockGateway {
@@ -5558,4 +5609,150 @@ async fn test_readiness_requires_ipv6_peer() {
         StatusCode::FORBIDDEN,
         "readiness must not bypass the IP gate"
     );
+}
+
+// ---- リフレッシュトークンのローテーションと盗用検知 ----
+
+/// /auth/refresh へリクエストし、(status, _new_refresh_cookie, body) を返す。
+async fn post_refresh(app: &Router, token: &str) -> (StatusCode, String, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/refresh")
+                .header(header::COOKIE, format!("refresh_token={token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let new_refresh = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(';'))
+        .find_map(|part| part.trim().strip_prefix("refresh_token="))
+        .unwrap_or_default()
+        .to_string();
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    (status, new_refresh, body)
+}
+
+#[tokio::test]
+async fn test_refresh_rotates_token_and_issues_new_session() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let sub = login["user_hash"].as_str().unwrap().to_string();
+
+    let (status, new_refresh, body) = post_refresh(&app, &refresh).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["authorized"], true);
+    assert!(body["token"].as_str().is_some());
+    assert!(
+        !new_refresh.is_empty(),
+        "a new refresh token must be issued"
+    );
+    assert_ne!(new_refresh, refresh, "the refresh token must be rotated");
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE sub = ? AND used_at IS NOT NULL",
+            [sub],
+        )
+        .await
+        .unwrap();
+    let used: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(used, 1, "the presented refresh token must be consumed");
+}
+
+#[tokio::test]
+async fn test_refresh_reuse_revokes_family() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (_login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+
+    let (status, new_refresh, _) = post_refresh(&app, &refresh).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // 古いトークンの再提示は盗用検知となり、新しいトークンも失効する。
+    let (status, _, _) = post_refresh(&app, &refresh).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = post_refresh(&app, &new_refresh).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the whole family must be revoked"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE used_at IS NULL",
+            (),
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        active, 0,
+        "no refresh token in the family may remain active"
+    );
+}
+
+#[tokio::test]
+async fn test_refresh_rejects_unknown_token() {
+    let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
+    let (status, _, _) = post_refresh(&app, "not-a-real-token").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_logout_revokes_refresh_family() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let token = login["token"].as_str().unwrap().to_string();
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .header(header::COOKIE, format!("refresh_token={refresh}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (status, _, _) = post_refresh(&app, &refresh).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "logout must revoke the family"
+    );
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE used_at IS NULL",
+            (),
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(active, 0);
+}
+
+#[tokio::test]
+async fn test_refresh_rejects_missing_cookie() {
+    let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/refresh").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }

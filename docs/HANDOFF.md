@@ -96,7 +96,7 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
-ローカル実行では fmt / clippy / test(workspace: 173件) / deny(licenses, advisories) /
+ローカル実行では fmt / clippy / test(workspace: 178件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
@@ -218,6 +218,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `server/migrations/004_moderation_deadlines.sql`: 投票期限・確定時刻・異議の連鎖。
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
+- `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
@@ -244,7 +245,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 
 - DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`)のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
 - JPKI: `acr`/`amr` の保証レベル検証、`auth_time`/`max_age`、
-  リフレッシュトークンのローテーションと盗用検知。
+  リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。残るは失効状態の永続化と実OP運用整合。
   `sub` 単位の全セッション失効はインメモリ閾値方式（`iat` 比較、再認証で新しい `iat` を発行）を実装済み。永続化・多プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。

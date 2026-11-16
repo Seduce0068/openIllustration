@@ -4,11 +4,11 @@
 //! and `code_verifier` server-side, and consumes them once at the callback.
 //! ID tokens are verified against the provider's JWKS with ES256.
 
-use crate::{AppError, AppState, Claims, VerifyResponse};
+use crate::{AppError, AppState, Claims, VerifyResponse, ensure_user_not_banned};
 use axum::{
     Json,
     extract::{Form, Query, State},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -26,6 +26,56 @@ use uuid::Uuid;
 const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
 const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
+/// リフレッシュトークンの有効期間（30日）。
+const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// リフレッシュトークンの SHA-256 ハッシュ。DB にはハッシュのみ保存する。
+/// トークン本体は UUIDv4（128bit 乱数）を base64url で表現する。
+fn hash_refresh_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+/// 新しいリフレッシュトークンを生成し、指定ファミリへ登録する。
+async fn issue_refresh_token(
+    state: &AppState,
+    sub: &str,
+    family_id: &str,
+) -> Result<String, AppError> {
+    let token = URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes());
+    let token_hash = hash_refresh_token(&token);
+    let expires_at = (Utc::now() + Duration::seconds(REFRESH_TTL_SECS)).to_rfc3339();
+    state
+        .db
+        .execute(
+            "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at) VALUES (?, ?, ?, ?)",
+            (token_hash, sub.to_string(), family_id.to_string(), expires_at),
+        )
+        .await?;
+    Ok(token)
+}
+
+/// HttpOnly のリフレッシュトークン Cookie を構築する。
+fn refresh_cookie(token: &str, secure: bool) -> Result<HeaderValue, AppError> {
+    let value = format!(
+        "refresh_token={token}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={REFRESH_TTL_SECS}{}",
+        if secure { "; Secure" } else { "" }
+    );
+    HeaderValue::from_str(&value)
+        .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))
+}
+
+/// ファミリ全体を失効させる（盗用検知時）。
+async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), AppError> {
+    state
+        .db
+        .execute(
+            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
+            [family_id],
+        )
+        .await?;
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct OidcConfig {
@@ -489,6 +539,9 @@ pub async fn callback(
     )
     .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
 
+    let family_id = Uuid::new_v4().to_string();
+    let refresh_token = issue_refresh_token(&state, &user_hash, &family_id).await?;
+
     let cookie = format!(
         "session={session_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{}",
         if oidc.config.cookie_secure {
@@ -509,6 +562,118 @@ pub async fn callback(
         HeaderValue::from_str(&cookie)
             .map_err(|_| AppError::Internal("invalid session cookie".to_string()))?,
     );
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        refresh_cookie(&refresh_token, oidc.config.cookie_secure)?,
+    );
+    Ok(response)
+}
+
+/// リフレッシュトークンを回転させ、新しいセッション JWT とリフレッシュトークンを発行する。
+/// 既に使用済みのトークンが再提示された場合は盗用とみなし、ファミリ全体を失効する。
+pub async fn refresh(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    let token = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|part| {
+                let (name, value) = part.trim().split_once('=')?;
+                (name == "refresh_token").then_some(value)
+            })
+        })
+        .ok_or_else(|| AppError::Unauthorized("refresh token is missing".to_string()))?;
+
+    let token_hash = hash_refresh_token(token);
+    let row = {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT sub, family_id, expires_at, used_at FROM refresh_tokens WHERE token_hash = ?",
+                [token_hash.clone()],
+            )
+            .await?;
+        rows.next()
+            .await?
+            .map(
+                |row| -> Result<(String, String, String, Option<String>), AppError> {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                },
+            )
+            .transpose()?
+    };
+    let (sub, family_id, expires_at, used_at) =
+        row.ok_or_else(|| AppError::Unauthorized("unknown refresh token".to_string()))?;
+
+    if used_at.is_some() {
+        // 既に消費済みのトークンの再利用は盗用の兆候。ファミリを全失効する。
+        revoke_refresh_family(&state, &family_id).await?;
+        return Err(AppError::Unauthorized(
+            "refresh token reuse detected; token family revoked".to_string(),
+        ));
+    }
+    if expires_at <= Utc::now().to_rfc3339() {
+        return Err(AppError::Unauthorized("refresh token expired".to_string()));
+    }
+
+    // 消費済みへ更新（Concurrent な再利用は UPDATE の影響件数で検出する）。
+    let updated = state
+        .db
+        .execute(
+            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL",
+            [token_hash],
+        )
+        .await?;
+    if updated == 0 {
+        revoke_refresh_family(&state, &family_id).await?;
+        return Err(AppError::Unauthorized(
+            "refresh token reuse detected; token family revoked".to_string(),
+        ));
+    }
+    ensure_user_not_banned(&state.db, &sub).await?;
+
+    let now_ts = Utc::now().timestamp() as usize;
+    let expiration = (Utc::now() + Duration::seconds(SESSION_TTL_SECS)).timestamp() as usize;
+    let iat = {
+        let revoked_subs = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        match revoked_subs.get(&sub).copied() {
+            Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
+            None => now_ts,
+        }
+    };
+    let session_claims = Claims {
+        sub: sub.clone(),
+        exp: expiration,
+        sid: Some(Uuid::new_v4().to_string()),
+        iat: Some(iat),
+    };
+    let session_token = jsonwebtoken::encode(
+        &state.jwt_keys.header(),
+        &session_claims,
+        state.jwt_keys.encoding_key(),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
+    let new_refresh = issue_refresh_token(&state, &sub, &family_id).await?;
+
+    let secure = state
+        .oidc
+        .as_ref()
+        .map(|oidc| oidc.config.cookie_secure)
+        .unwrap_or(true);
+    let mut response = Json(VerifyResponse {
+        authorized: true,
+        user_hash: Some(sub),
+        token: Some(session_token),
+    })
+    .into_response();
+    response
+        .headers_mut()
+        .append(header::SET_COOKIE, refresh_cookie(&new_refresh, secure)?);
     Ok(response)
 }
 

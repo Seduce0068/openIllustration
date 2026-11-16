@@ -799,6 +799,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/auth/verify", post(auth_verify))
         .route("/auth/oidc/start", get(oidc::start))
         .route("/auth/oidc/callback", get(oidc::callback))
+        .route("/auth/refresh", post(oidc::refresh))
         .route("/auth/logout", post(logout))
         .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
         .route("/content", get(list_contents))
@@ -1044,6 +1045,7 @@ pub async fn auth_verify(
 pub async fn logout(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<bool>, AppError> {
     if let Some(sid) = &claims.sid {
         state
@@ -1051,6 +1053,36 @@ pub async fn logout(
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
             .insert(sid.clone());
+    }
+    // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
+    if let Some(token) = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|cookies| {
+            cookies.split(';').find_map(|part| {
+                let (name, value) = part.trim().split_once('=')?;
+                (name == "refresh_token").then_some(value)
+            })
+        })
+    {
+        let token_hash = sha256::digest(token.as_bytes());
+        let mut rows = state
+            .db
+            .query(
+                "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
+                [token_hash],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            let family_id: String = row.get(0)?;
+            state
+                .db
+                .execute(
+                    "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
+                    [family_id],
+                )
+                .await?;
+        }
     }
     Ok(Json(true))
 }
