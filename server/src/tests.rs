@@ -1228,6 +1228,20 @@ async fn test_auth_login_returns_nonce() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 
+/// R1-21: モック認証が無効な構成では /auth/login を公開しない。
+#[tokio::test]
+async fn test_auth_login_requires_mock_auth() {
+    let (app, _db) = setup_app_with_options(Vec::new(), Duration::from_secs(15), false).await;
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/login").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
 #[tokio::test]
 async fn test_read_routes_require_authentication() {
     let paths = [

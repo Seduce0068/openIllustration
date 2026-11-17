@@ -1298,7 +1298,15 @@ pub fn issue_mock_nonce_for_test() -> String {
     nonce
 }
 
-pub async fn auth_login() -> Result<Json<Oid4vpRequest>, AppError> {
+pub async fn auth_login(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Oid4vpRequest>, AppError> {
+    // 開発用モック経路を本番相当で公開しない（設計書との整合）。
+    if !state.allow_mock_auth {
+        return Err(AppError::NotImplemented(
+            "mock authentication is disabled".to_string(),
+        ));
+    }
     let nonce = Uuid::new_v4().to_string();
     {
         let mut nonces = MOCK_NONCES
