@@ -1,7 +1,10 @@
 use gloo_net::http::Request;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use pulldown_cmark::{CowStr, Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::fmt::Write as _;
 use wasm_bindgen::prelude::*;
 use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement};
 
@@ -30,14 +33,126 @@ const API_BASE: &str = "http://localhost:3000";
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
+/// 本文と TOC で共有する見出し情報。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HeadingEntry {
+    level: HeadingLevel,
+    text: String,
+    slug: String,
+}
+
+/// テキストを HTML として安全に出力できる形にエスケープする（TOC の表示名用）。
+fn escape_html_text(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+/// 見出しテキストから slug を作る。許可するのは ASCII 英数字・`-`・`_` のみで、
+/// それ以外は除去する（属性注入を防ぐ）。大文字は小文字に畳み、
+/// すべて除去された場合は `section` を返す。
+fn sanitize_heading_slug(text: &str) -> String {
+    let mut slug = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            slug.push(ch.to_ascii_lowercase());
+        }
+    }
+    if slug.is_empty() {
+        "section".to_string()
+    } else {
+        slug
+    }
+}
+
+/// 既に使われている slug と衝突しない一意の値を割り当てる。
+/// 例: `foo`, `foo-1`, `foo-2`。
+fn assign_unique_slug(base: &str, used: &mut HashSet<String>) -> String {
+    let base = sanitize_heading_slug(base);
+    let mut candidate = base.clone();
+    let mut suffix = 1usize;
+    while used.contains(&candidate) {
+        candidate = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    used.insert(candidate.clone());
+    candidate
+}
+
+/// Markdown を一度だけ解析し、見出しのレベル・表示名・一意 slug を集める。
+/// `render_markdown` と `render_toc` の両方がこの純粋関数を使うため、
+/// TOC のアンカーと本文の見出し id は必ず一致する。
+fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
+    let mut headings = Vec::new();
+    let mut used = HashSet::new();
+    let mut current: Option<(HeadingLevel, String)> = None;
+
+    for event in Parser::new(markdown) {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                current = Some((level, String::new()));
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((level, text)) = current.take() {
+                    let slug = assign_unique_slug(&text, &mut used);
+                    headings.push(HeadingEntry { level, text, slug });
+                }
+            }
+            // render_markdown と同じく生 HTML も文字列として扱う。
+            Event::Text(text) | Event::Code(text) | Event::Html(text) | Event::InlineHtml(text) => {
+                if let Some((_, buf)) = current.as_mut() {
+                    buf.push_str(&text);
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if let Some((_, buf)) = current.as_mut() {
+                    buf.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    headings
+}
+
 fn render_markdown(markdown: &str) -> String {
-    let events = pulldown_cmark::Parser::new(markdown).map(|event| match event {
-        pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link {
+    // 先に見出しを収集し、Start(Heading) の順に id を割り当てる。
+    // id は pulldown-cmark の HTML レンダラがエスケープするため安全。
+    let headings = collect_headings(markdown);
+    let mut next_heading = 0usize;
+    let events = Parser::new(markdown).map(|event| match event {
+        Event::Start(Tag::Heading {
+            level,
+            id: _,
+            classes,
+            attrs,
+        }) => {
+            let id = headings
+                .get(next_heading)
+                .map(|heading| CowStr::from(heading.slug.clone()));
+            next_heading += 1;
+            Event::Start(Tag::Heading {
+                level,
+                id,
+                classes,
+                attrs,
+            })
+        }
+        Event::Start(Tag::Link {
             link_type,
             dest_url,
             title,
             id,
-        }) => pulldown_cmark::Event::Start(pulldown_cmark::Tag::Link {
+        }) => Event::Start(Tag::Link {
             link_type,
             dest_url: if is_safe_markdown_url(&dest_url, false) {
                 dest_url
@@ -47,12 +162,12 @@ fn render_markdown(markdown: &str) -> String {
             title,
             id,
         }),
-        pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image {
+        Event::Start(Tag::Image {
             link_type,
             dest_url,
             title,
             id,
-        }) => pulldown_cmark::Event::Start(pulldown_cmark::Tag::Image {
+        }) => Event::Start(Tag::Image {
             link_type,
             dest_url: if is_safe_markdown_url(&dest_url, true) {
                 dest_url
@@ -62,14 +177,29 @@ fn render_markdown(markdown: &str) -> String {
             title,
             id,
         }),
-        pulldown_cmark::Event::Html(html) | pulldown_cmark::Event::InlineHtml(html) => {
-            pulldown_cmark::Event::Text(html)
-        }
+        Event::Html(html) | Event::InlineHtml(html) => Event::Text(html),
         event => event,
     });
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
     html
+}
+
+/// 見出し一覧から TOC（アンカーリンクのリスト）を生成する。
+/// リンク先は `collect_headings` が生成した `#slug` のみを使う。
+fn render_toc(markdown: &str) -> String {
+    let mut toc = String::new();
+    for heading in collect_headings(markdown) {
+        let indent = (heading.level as u32).saturating_sub(1) * 2;
+        let _ = writeln!(
+            toc,
+            "<a class=\"block py-1 text-[10px] text-gray-400 hover:text-green-500 truncate\" style=\"padding-left:{}em\" href=\"#{}\">{}</a>",
+            indent,
+            escape_html_text(&heading.slug),
+            escape_html_text(&heading.text),
+        );
+    }
+    toc
 }
 
 /// Markdown links and images may only use web-safe schemes or relative destinations.
@@ -349,6 +479,7 @@ fn ContentViewer(
     let cid_label = cid.clone();
     let (verified, set_verified) = signal(None::<bool>);
     let (novel_html, set_novel_html) = signal(String::new());
+    let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
     let (show_audit, set_show_audit) = signal(false);
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
@@ -382,6 +513,8 @@ fn ContentViewer(
                         }
                     } else {
                         let text = String::from_utf8_lossy(&bytes).to_string();
+                        // 本文と TOC は同じテキストから生成し、アンカーの一致を保証する。
+                        set_novel_toc.set(render_toc(&text));
                         set_novel_html.set(render_markdown(&text));
                     }
                 }
@@ -403,6 +536,7 @@ fn ContentViewer(
     let ct_can = content_type.clone();
     let ct_nov = content_type.clone();
     let ct_bad = content_type.clone();
+    let ct_toc = content_type.clone();
 
     view! {
         <div class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
@@ -415,6 +549,15 @@ fn ContentViewer(
                     </button>
                 </div>
             </div>
+
+            <Show when=move || verified.get() == Some(true) && ct_toc == "Novel" && !novel_toc.get().is_empty() fallback=|| ()>
+                <details class="border border-white/10 bg-white/5 p-3">
+                    <summary class="text-[10px] tracking-widest uppercase text-gray-400 hover:text-white cursor-pointer">
+                        "Table of Contents"
+                    </summary>
+                    <nav class="mt-3 space-y-1 max-h-40 overflow-y-auto" inner_html=move || novel_toc.get() />
+                </details>
+            </Show>
 
             <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
                 <canvas node_ref=canvas_ref class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
@@ -823,6 +966,110 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
+    /// レンダリング結果から `id="..."` を順に取り出す（見出しアンカー用）。
+    fn heading_ids(html: &str) -> Vec<String> {
+        const PREFIX: &str = " id=\"";
+        html.match_indices(PREFIX)
+            .map(|(idx, _)| {
+                html[idx + PREFIX.len()..]
+                    .split('"')
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// TOC の `href="#..."` からフラグメントを順に取り出す。
+    fn anchor_fragments(html: &str) -> Vec<String> {
+        const PREFIX: &str = "href=\"#";
+        html.match_indices(PREFIX)
+            .map(|(idx, _)| {
+                html[idx + PREFIX.len()..]
+                    .split('"')
+                    .next()
+                    .unwrap_or("")
+                    .to_string()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn markdown_headings_get_ids_for_h1_h2_h3() {
+        let rendered = super::render_markdown("# Alpha\n\n## Beta\n\n### Gamma\n");
+        assert!(rendered.contains("<h1 id=\"alpha\">"), "{rendered}");
+        assert!(rendered.contains("<h2 id=\"beta\">"), "{rendered}");
+        assert!(rendered.contains("<h3 id=\"gamma\">"), "{rendered}");
+    }
+
+    #[test]
+    fn toc_anchors_match_body_heading_ids() {
+        let markdown = "# Alpha\n\n## Beta\n\n### Gamma\n\n## Delta\n";
+        let body = super::render_markdown(markdown);
+        let toc = super::render_toc(markdown);
+
+        let expected = vec!["alpha", "beta", "gamma", "delta"];
+        assert_eq!(heading_ids(&body), expected, "{body}");
+        assert_eq!(anchor_fragments(&toc), expected, "{toc}");
+        // TOC の全アンカーが本文の見出し id に存在すること（逆方向も確認）。
+        for fragment in anchor_fragments(&toc) {
+            assert!(body.contains(&format!("id=\"{fragment}\"")), "{body}");
+        }
+    }
+
+    #[test]
+    fn duplicate_headings_get_sequential_slugs() {
+        let markdown = "# Foo\n\n# Foo\n\n## Foo\n\n# foo\n";
+        let slugs: Vec<String> = super::collect_headings(markdown)
+            .iter()
+            .map(|heading| heading.slug.clone())
+            .collect();
+        assert_eq!(slugs, vec!["foo", "foo-1", "foo-2", "foo-3"]);
+
+        let body = super::render_markdown(markdown);
+        for slug in &slugs {
+            assert!(body.contains(&format!("id=\"{slug}\"")), "{body}");
+        }
+        assert_eq!(anchor_fragments(&super::render_toc(markdown)), slugs);
+    }
+
+    #[test]
+    fn heading_slugs_are_sanitized_against_injection() {
+        // 危険文字・HTML ・日本語は slug から除去され、属性を壊せない。
+        assert_eq!(super::sanitize_heading_slug("A-B_C 123!"), "a-b_c123");
+        assert_eq!(super::sanitize_heading_slug("日本語!!!"), "section");
+
+        let markdown = "# <img src=x onerror=alert(1)>\n\n# \"quoted\" & symbols!!!\n";
+        let headings = super::collect_headings(markdown);
+        assert_eq!(headings[0].slug, "imgsrcxonerroralert1");
+        assert_eq!(headings[1].slug, "quotedsymbols");
+
+        let body = super::render_markdown(markdown);
+        assert!(!body.contains("id=\"<"), "{body}");
+        assert!(!body.contains("id=\"\""), "{body}");
+
+        let toc = super::render_toc(markdown);
+        assert_eq!(
+            anchor_fragments(&toc),
+            vec!["imgsrcxonerroralert1", "quotedsymbols"],
+            "{toc}"
+        );
+        // TOC の表示名はエスケープされ、生タグとして出力されない。
+        assert!(!toc.contains("<img"), "{toc}");
+        assert!(toc.contains("&lt;img"), "{toc}");
+        assert!(toc.contains("&amp;"), "{toc}");
+    }
+
+    #[test]
+    fn symbol_only_headings_fall_back_to_unique_section_slugs() {
+        let markdown = "# !!!\n\n# ???\n";
+        let slugs: Vec<String> = super::collect_headings(markdown)
+            .iter()
+            .map(|heading| heading.slug.clone())
+            .collect();
+        assert_eq!(slugs, vec!["section", "section-1"]);
+    }
+
     #[test]
     fn upload_media_type_prefers_browser_type_then_extension() {
         assert_eq!(super::upload_media_type("image/jxl", "a.bin"), "image/jxl");
