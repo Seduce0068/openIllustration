@@ -245,6 +245,26 @@ impl PaymentVerifier for MockVerifier {
     }
 }
 
+/// 検証中に注文状態を書き換える verifier（CAS の回帰テスト用）。
+struct RacingVerifier {
+    db: Arc<libsql::Connection>,
+    verification: PaymentVerification,
+}
+
+#[async_trait]
+impl PaymentVerifier for RacingVerifier {
+    async fn verify(&self, order: &PaymentOrder) -> Result<PaymentVerification, AppError> {
+        // load_order の後に状態を変更し、CAS が無いと上書きされる状況を再現する。
+        self.db
+            .execute(
+                "UPDATE payment_orders SET status = ? WHERE order_id = ?",
+                (crate::payments::STATUS_MISMATCH, order.order_id.clone()),
+            )
+            .await?;
+        Ok(self.verification.clone())
+    }
+}
+
 async fn setup_app_with_payments(
     receiving_address: &str,
     verifier: Arc<dyn PaymentVerifier>,
@@ -4119,6 +4139,87 @@ async fn create_payment_order(
         created["order_id"].as_str().unwrap().to_string(),
         created["amount_wei"].as_str().unwrap().to_string(),
     )
+}
+
+/// R1-25: 検証中に状態が変わった注文は CAS で拒否し、上書きしない。
+#[tokio::test]
+async fn test_payment_verify_cas_rejects_stale_status() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
+    let verification = PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xrace".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: "1000000000000000000000".to_string(),
+    };
+    let verifier = Arc::new(RacingVerifier {
+        db: db.clone(),
+        verification,
+    });
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: Some(receiving.to_string()),
+        payment_receiving_xprv: None,
+        payment_verifier: Some(verifier),
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    });
+    let app = build_router(shared_state);
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status,
+        crate::payments::STATUS_MISMATCH,
+        "stale write must not win"
+    );
 }
 
 /// R1-24: ウォレット所有証明の記録が無い注文は verify を拒否する。

@@ -478,13 +478,19 @@ pub async fn verify_order(
         || normalize_address(&verification.to) != order.recipient_address
         || verification.amount_wei != order.amount_wei
     {
-        state
-            .db
-            .execute(
-                "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE order_id = ?",
-                (STATUS_MISMATCH, order_id.clone()),
-            )
-            .await?;
+        let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        tx.execute(
+            "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE order_id = ? AND status = ? AND status <> ?",
+            (
+                STATUS_MISMATCH,
+                order_id.clone(),
+                order.status.clone(),
+                STATUS_FINALIZED,
+            ),
+        )
+        .await?;
+        tx.commit().await?;
         return Err(AppError::BadRequest(
             "transfer does not match the order".to_string(),
         ));
@@ -496,18 +502,16 @@ pub async fn verify_order(
         STATUS_CONFIRMING
     };
 
-    let tx = state
-        .db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    // 検証（非同期 I/O）の間に状態が変わっていないことを CAS で担保する。
+    // 書き込みロックも取得し、同一プロセス内の並行 verify を直列化する。
+    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
 
     let update = tx
         .execute(
             "UPDATE payment_orders
              SET status = ?, tx_hash = ?, log_index = ?, block_number = ?,
                  confirmations = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE order_id = ?",
+             WHERE order_id = ? AND status = ? AND status <> ?",
             (
                 STATUS_DETECTED,
                 verification.tx_hash.clone(),
@@ -515,6 +519,8 @@ pub async fn verify_order(
                 verification.block_number,
                 verification.confirmations,
                 order_id.clone(),
+                order.status.clone(),
+                STATUS_FINALIZED,
             ),
         )
         .await;
@@ -526,12 +532,24 @@ pub async fn verify_order(
             "transaction is already used by another order".to_string(),
         ));
     }
+    if tx.changes() != 1 {
+        return Err(AppError::Conflict(
+            "order status changed during verification".to_string(),
+        ));
+    }
 
+    // 確定済みへは 1 回だけ遷移する。DETECTED を期待することで
+    // 並行する別の verify の最終状態を上書きしない。
     tx.execute(
         "UPDATE payment_orders
          SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE order_id = ?",
-        (next_status, order_id.clone()),
+         WHERE order_id = ? AND status = ? AND status <> ?",
+        (
+            next_status,
+            order_id.clone(),
+            STATUS_DETECTED,
+            STATUS_FINALIZED,
+        ),
     )
     .await?;
 

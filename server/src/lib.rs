@@ -194,6 +194,8 @@ pub enum AppError {
     BadRequest(String),
     #[error("Forbidden: {0}")]
     Forbidden(String),
+    #[error("Conflict: {0}")]
+    Conflict(String),
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 }
@@ -216,6 +218,7 @@ impl IntoResponse for AppError {
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
         };
 
