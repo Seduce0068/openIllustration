@@ -442,6 +442,10 @@ pub struct ContentMeta {
     pub description: String,
     /// DB ではカンマ区切りの TEXT。API では文字列配列として返す。
     pub tags: Vec<String>,
+    /// 一覧取得時に、現在のユーザーがお気に入り登録しているかを設定する。
+    /// 旧 JSON にこの項目が無い場合は serde の既定値 false として読む。
+    #[serde(default)]
+    pub is_favorite: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1281,6 +1285,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/mod/vote", post(mod_vote))
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
+        .route(
+            "/content/{cid}/favorite",
+            post(add_favorite).delete(remove_favorite),
+        )
         .route("/content/{cid}/support", post(support_creator))
         .route("/payments/orders", post(payments::create_order))
         .route("/payments/orders/{order_id}", get(payments::get_order))
@@ -1803,6 +1811,8 @@ pub struct ContentQuery {
     pub content_type: Option<String>,
     pub limit: Option<String>,
     pub offset: Option<String>,
+    /// "1" / "true" のとき、本人のお気に入りのみを返す。
+    pub favorite_only: Option<String>,
 }
 
 /// 正規化済みの検索条件。`limit` / `offset` は SQL のバインド値として使う整数。
@@ -1813,6 +1823,7 @@ pub struct ContentFilter {
     pub content_type: Option<String>,
     pub limit: i64,
     pub offset: i64,
+    pub favorite_only: bool,
 }
 
 pub const DEFAULT_CONTENT_LIMIT: i64 = 50;
@@ -1840,6 +1851,12 @@ pub fn parse_content_query(query: &ContentQuery) -> ContentFilter {
         .and_then(|value| value.trim().parse::<i64>().ok())
         .filter(|value| *value >= 0)
         .unwrap_or(0);
+    // favorite_only は "1" / "true"（大文字小文字・前後空白を無視）だけを真とし、
+    // それ以外は安全側の false（絞り込みなし）として扱う。
+    let favorite_only = query
+        .favorite_only
+        .as_deref()
+        .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"));
     ContentFilter {
         q: optional_text(query.q.as_deref()),
         tag: optional_text(query.tag.as_deref()),
@@ -1850,6 +1867,7 @@ pub fn parse_content_query(query: &ContentQuery) -> ContentFilter {
             .map(ToString::to_string),
         limit,
         offset,
+        favorite_only,
     }
 }
 
@@ -1868,20 +1886,23 @@ pub fn escape_like(value: &str) -> String {
     escaped
 }
 
-/// 認証必須・Approved 限定・新着順は維持しつつ、省略可能な検索条件を適用する。
+/// `GET /content` の SQL 文とバインド値を組み立てる純粋関数。
 /// ユーザー入力は SQL 文へ一切埋め込まず、すべてバインドパラメータで渡す。
-pub async fn list_contents(
-    State(state): State<Arc<AppState>>,
-    _claims: AuthClaims,
-    Query(query): Query<ContentQuery>,
-) -> Result<Json<Vec<ContentMeta>>, AppError> {
-    let filter = parse_content_query(&query);
-
+/// `viewer_sub` は is_favorite の判定と favorite_only の絞り込みにだけ使い、
+/// ログやエラー応答へは出力しない。
+pub fn build_content_query(
+    filter: &ContentFilter,
+    viewer_sub: &str,
+) -> (String, Vec<libsql::Value>) {
+    // JOIN するとお気に入りの重複行でページング件数が壊れるため、相関 EXISTS
+    // で判定する（重複行を作らず、favorite_only のときだけ favorites を参照）。
     let mut sql = String::from(
-        "SELECT cid, checksum, type, status, price, title, description, tags \
+        "SELECT cid, checksum, type, status, price, title, description, tags, \
+         EXISTS (SELECT 1 FROM favorites f WHERE f.cid = contents.cid AND f.user_hash = ?) AS is_favorite \
          FROM contents WHERE status = 'Approved'",
     );
-    let mut params: Vec<libsql::Value> = Vec::new();
+    // SELECT 句のプレースホルダが先に来るため、閲覧者の sub を最初に積む。
+    let mut params: Vec<libsql::Value> = vec![libsql::Value::Text(viewer_sub.to_string())];
 
     if let Some(q) = filter.q.as_deref() {
         sql.push_str(" AND (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");
@@ -1900,10 +1921,27 @@ pub async fn list_contents(
         sql.push_str(" AND type = ?");
         params.push(libsql::Value::Text(kind.to_string()));
     }
+    if filter.favorite_only {
+        sql.push_str(
+            " AND EXISTS (SELECT 1 FROM favorites ff WHERE ff.cid = contents.cid AND ff.user_hash = ?)",
+        );
+        params.push(libsql::Value::Text(viewer_sub.to_string()));
+    }
     sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
     params.push(libsql::Value::Integer(filter.limit));
     params.push(libsql::Value::Integer(filter.offset));
+    (sql, params)
+}
 
+/// 認証必須・Approved 限定・新着順は維持しつつ、省略可能な検索条件を適用する。
+/// 各項目の is_favorite は閲覧者（Claims.sub）視点で設定する。
+pub async fn list_contents(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Query(query): Query<ContentQuery>,
+) -> Result<Json<Vec<ContentMeta>>, AppError> {
+    let filter = parse_content_query(&query);
+    let (sql, params) = build_content_query(&filter, &claims.sub);
     let mut rows = state.db.query(&sql, params).await?;
 
     let mut items = Vec::new();
@@ -1917,9 +1955,90 @@ pub async fn list_contents(
             title: row.get(5)?,
             description: row.get(6)?,
             tags: parse_tags_field(&row.get::<String>(7)?),
+            is_favorite: row.get::<i64>(8)? != 0,
         });
     }
     Ok(Json(items))
+}
+
+/// お気に入り操作のレスポンス。ユーザー識別子は一切含めない。
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FavoriteResponse {
+    pub is_favorite: bool,
+}
+
+/// お気に入りの追加 / 削除に共通する処理。
+/// ユーザー識別は `Claims.sub` のみ。リクエスト本文やクエリの ID は受け取らない。
+/// 既存行への再追加・未登録行の削除はどちらも成功として扱う（冪等）。
+/// DB 由来のエラー詳細は sub を含み得るため、公開・ログ出力とも固定文言にする。
+async fn change_favorite(
+    state: &Arc<AppState>,
+    sub: &str,
+    cid: &str,
+    add: bool,
+) -> Result<FavoriteResponse, AppError> {
+    if !is_safe_cid(cid) {
+        return Err(AppError::BadRequest("Invalid CID".to_string()));
+    }
+    let mut rows = state
+        .db
+        .query(
+            "SELECT 1 FROM contents WHERE cid = ? AND status = 'Approved'",
+            [cid.to_string()],
+        )
+        .await
+        .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?;
+    if rows
+        .next()
+        .await
+        .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?
+        .is_none()
+    {
+        // 存在しない / Approved でないコンテンツの有無を識別子で区別しない。
+        return Err(AppError::NotFound);
+    }
+    if add {
+        state
+            .db
+            .execute(
+                "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES (?, ?)",
+                (sub.to_string(), cid.to_string()),
+            )
+            .await
+            .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
+    } else {
+        state
+            .db
+            .execute(
+                "DELETE FROM favorites WHERE user_hash = ? AND cid = ?",
+                (sub.to_string(), cid.to_string()),
+            )
+            .await
+            .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
+    }
+    Ok(FavoriteResponse { is_favorite: add })
+}
+
+/// `POST /content/{cid}/favorite`: 認証済みユーザーが自分の sub でお気に入りを追加する。
+pub async fn add_favorite(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(cid): Path<String>,
+) -> Result<Json<FavoriteResponse>, AppError> {
+    Ok(Json(
+        change_favorite(&state, &claims.sub, &cid, true).await?,
+    ))
+}
+
+/// `DELETE /content/{cid}/favorite`: 認証済みユーザーが自分の sub のお気に入りを削除する。
+pub async fn remove_favorite(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+    Path(cid): Path<String>,
+) -> Result<Json<FavoriteResponse>, AppError> {
+    Ok(Json(
+        change_favorite(&state, &claims.sub, &cid, false).await?,
+    ))
 }
 
 /// 支援APIは無効化している。模擬支援記録はチェーン送金の検証を欠き支払証明に

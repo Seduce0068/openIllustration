@@ -1,8 +1,9 @@
 use crate::{
-    AppError, AppState, ContentFilter, ContentQuery, DEFAULT_CONTENT_LIMIT,
-    MAX_CONTENT_DESCRIPTION_BYTES, MAX_CONTENT_LIMIT, MAX_CONTENT_TAG_BYTES, MAX_CONTENT_TAGS,
-    MAX_CONTENT_TITLE_BYTES, VerifyRequest, VerifyResponse, allowed_origins, build_router,
-    ensure_user_not_banned, escape_like, parse_content_query, parse_tags_field,
+    AppError, AppState, ContentFilter, ContentMeta, ContentQuery, DEFAULT_CONTENT_LIMIT,
+    FavoriteResponse, MAX_CONTENT_DESCRIPTION_BYTES, MAX_CONTENT_LIMIT, MAX_CONTENT_TAG_BYTES,
+    MAX_CONTENT_TAGS, MAX_CONTENT_TITLE_BYTES, VerifyRequest, VerifyResponse, allowed_origins,
+    build_content_query, build_router, ensure_user_not_banned, escape_like, parse_content_query,
+    parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
     process_report_conclusion, update_content_status, validate_age, validate_content_metadata,
     validate_jwt_secret, validate_upload_content, validate_upload_content_type,
@@ -7709,6 +7710,7 @@ fn test_content_query_parser_defaults_and_bounds() {
         content_type: None,
         limit: None,
         offset: None,
+        favorite_only: None,
     };
     assert_eq!(
         parse_content_query(&empty),
@@ -7718,6 +7720,7 @@ fn test_content_query_parser_defaults_and_bounds() {
             content_type: None,
             limit: DEFAULT_CONTENT_LIMIT,
             offset: 0,
+            favorite_only: false,
         }
     );
 
@@ -7727,6 +7730,7 @@ fn test_content_query_parser_defaults_and_bounds() {
         content_type: None,
         limit: Some(limit.to_string()),
         offset: Some(offset.to_string()),
+        favorite_only: None,
     };
     for limit in ["1", "100"] {
         assert_eq!(
@@ -7758,6 +7762,7 @@ fn test_content_query_parser_defaults_and_bounds() {
         content_type: Some("Novel".to_string()),
         limit: Some("2".to_string()),
         offset: Some("1".to_string()),
+        favorite_only: None,
     };
     let parsed = parse_content_query(&filled);
     assert_eq!(parsed.q.as_deref(), Some("cat"));
@@ -8216,4 +8221,453 @@ async fn test_upload_accepts_optional_metadata() {
     );
     let (status, _) = send_upload(&app, &token, boundary, body).await;
     assert_eq!(status, StatusCode::OK, "empty metadata must be accepted");
+}
+
+// ---- R5-02: お気に入り / ブックマーク ----
+
+/// お気に入り操作を送る。ユーザー ID は本文に載せず、認証トークンの sub だけに依存する。
+async fn send_favorite_request(
+    app: &Router,
+    method: axum::http::Method,
+    token: &str,
+    cid: &str,
+    body: Body,
+) -> (StatusCode, serde_json::Value) {
+    let uri = format!("/content/{cid}/favorite");
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::builder()
+                .method(method)
+                .uri(uri.as_str())
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    (status, value)
+}
+
+async fn post_favorite(app: &Router, token: &str, cid: &str) -> (StatusCode, serde_json::Value) {
+    send_favorite_request(app, axum::http::Method::POST, token, cid, Body::empty()).await
+}
+
+async fn delete_favorite(app: &Router, token: &str, cid: &str) -> (StatusCode, serde_json::Value) {
+    send_favorite_request(app, axum::http::Method::DELETE, token, cid, Body::empty()).await
+}
+
+async fn favorite_count(db: &libsql::Connection, sub: &str, cid: &str) -> i64 {
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM favorites WHERE user_hash = ? AND cid = ?",
+            (sub.to_string(), cid.to_string()),
+        )
+        .await
+        .unwrap();
+    rows.next().await.unwrap().unwrap().get(0).unwrap()
+}
+
+#[tokio::test]
+async fn test_favorite_add_and_remove_are_idempotent() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // 同じ CID を2回追加しても行は1つだけ（UNIQUE + INSERT OR IGNORE）。
+    for _ in 0..2 {
+        let (status, body) = post_favorite(&app, &token, "QmTestCID").await;
+        assert_eq!(status, StatusCode::OK, "response: {body}");
+        assert_eq!(body, json!({"is_favorite": true}));
+        let parsed: FavoriteResponse = serde_json::from_value(body).unwrap();
+        assert!(parsed.is_favorite);
+        assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
+    }
+
+    // 未登録の削除も冪等で、行が0件のまま成功する。
+    for _ in 0..2 {
+        let (status, body) = delete_favorite(&app, &token, "QmTestCID").await;
+        assert_eq!(status, StatusCode::OK, "response: {body}");
+        assert_eq!(body, json!({"is_favorite": false}));
+        let parsed: FavoriteResponse = serde_json::from_value(body).unwrap();
+        assert!(!parsed.is_favorite);
+        assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
+    }
+
+    // 削除後に再追加できる。
+    let (status, _) = post_favorite(&app, &token, "QmTestCID").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
+}
+
+#[tokio::test]
+async fn test_favorite_requires_auth_and_valid_approved_cid() {
+    let (app, db) = setup_app_with_db().await;
+
+    // 未認証は 401（ POST / DELETE とも）。
+    for method in [axum::http::Method::POST, axum::http::Method::DELETE] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::builder()
+                    .method(method)
+                    .uri("/content/QmTestCID/favorite")
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    // 英数字以外の CID は既存の is_safe_cid で拒否される。
+    let (status, _) = post_favorite(&app, &token, "bad-cid!").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Approved 以外は対象にできない。
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+         VALUES ('QmReported', 'Illustration', 'test_user', 'sum', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    let (status, _) = post_favorite(&app, &token, "QmReported").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(favorite_count(&db, "test_user", "QmReported").await, 0);
+}
+
+#[tokio::test]
+async fn test_favorite_uses_claims_sub_only() {
+    let (app, db) = setup_app_with_db().await;
+    // FK のため attacker も users に存在するものとする（OIDC 経由で作成される）。
+    db.execute("INSERT INTO users (user_hash) VALUES ('attacker')", ())
+        .await
+        .unwrap();
+    let victim_token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let attacker_token = generate_token(TEST_JWT_SECRET, "attacker").await;
+
+    // 攻撃者のトークン + 本文に被害者の user_hash を入れても無視され、
+    // 増えるのは攻撃者自身の行だけ。
+    let body = Body::from(json!({"user_hash": "test_user"}).to_string());
+    let (status, response) = send_favorite_request(
+        &app,
+        axum::http::Method::POST,
+        &attacker_token,
+        "QmTestCID",
+        body,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "response: {response}");
+    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
+    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 1);
+
+    // 攻撃者の削除も攻撃者の行にだけ作用する。
+    let (status, _) = delete_favorite(&app, &attacker_token, "QmTestCID").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
+    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 0);
+
+    // 被害者本人の追加は被害者の行だけを作る。
+    let (status, _) = post_favorite(&app, &victim_token, "QmTestCID").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
+    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 0);
+}
+
+#[tokio::test]
+async fn test_favorite_only_lists_own_favorites_only() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute("DELETE FROM contents", ()).await.unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('attacker')", ())
+        .await
+        .unwrap();
+    insert_content_meta(
+        &db,
+        "QmFavMine",
+        "Illustration",
+        "mine",
+        "",
+        "",
+        "2026-01-04 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmFavOther",
+        "Illustration",
+        "other",
+        "",
+        "",
+        "2026-01-03 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmPlain",
+        "Illustration",
+        "plain",
+        "",
+        "",
+        "2026-01-02 00:00:00",
+    )
+    .await;
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('test_user', 'QmFavMine')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('attacker', 'QmFavOther')",
+        (),
+    )
+    .await
+    .unwrap();
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let attacker_token = generate_token(TEST_JWT_SECRET, "attacker").await;
+
+    // 絞り込みなし: 全件を新着順で返し、is_favorite は閲覧者視点。
+    let (status, items) = get_content_list(&app, &token, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmFavMine", "QmFavOther", "QmPlain"]
+    );
+    assert_eq!(items[0]["is_favorite"], true);
+    assert_eq!(items[1]["is_favorite"], false);
+    assert_eq!(items[2]["is_favorite"], false);
+    let (_, items) = get_content_list(&app, &attacker_token, "").await;
+    assert_eq!(items[0]["is_favorite"], false);
+    assert_eq!(items[1]["is_favorite"], true);
+
+    // favorite_only は "1" / "true"（大小文字無視・前後空白許容）で本人分のみ。
+    for query in [
+        "?favorite_only=1",
+        "?favorite_only=true",
+        "?favorite_only=TRUE",
+        "?favorite_only=%201%20",
+    ] {
+        let (status, items) = get_content_list(&app, &token, query).await;
+        assert_eq!(status, StatusCode::OK, "query={query}");
+        assert_eq!(listed_cids(&items), vec!["QmFavMine"], "query={query}");
+    }
+    let (_, items) = get_content_list(&app, &attacker_token, "?favorite_only=1").await;
+    assert_eq!(listed_cids(&items), vec!["QmFavOther"]);
+
+    // それ以外の値は絞り込みなし（安全側の既定）。
+    for query in [
+        "?favorite_only=0",
+        "?favorite_only=false",
+        "?favorite_only=maybe",
+    ] {
+        let (_, items) = get_content_list(&app, &token, query).await;
+        assert_eq!(items.len(), 3, "query={query}");
+    }
+
+    // 既存条件との AND とページング。JOIN の重複で件数が壊れないことを確認する。
+    let (_, items) = get_content_list(
+        &app,
+        &token,
+        "?favorite_only=1&q=mine&type=Illustration&limit=1&offset=0",
+    )
+    .await;
+    assert_eq!(listed_cids(&items), vec!["QmFavMine"]);
+    let (_, items) = get_content_list(&app, &token, "?favorite_only=1&offset=1").await;
+    assert!(items.is_empty());
+
+    // Approved 限定は維持。Reported に変えたコンテンツはお気に入り一覧から消える。
+    db.execute(
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmFavMine'",
+        (),
+    )
+    .await
+    .unwrap();
+    let (_, items) = get_content_list(&app, &token, "?favorite_only=1").await;
+    assert!(items.is_empty());
+}
+
+#[test]
+fn test_content_meta_backward_compatible_without_is_favorite() {
+    let legacy = json!({
+        "cid": "QmLegacy",
+        "checksum": "sum",
+        "type": "Illustration",
+        "status": "Approved",
+        "price": 0,
+        "title": "",
+        "description": "",
+        "tags": [],
+    });
+    let meta: ContentMeta = serde_json::from_value(legacy).unwrap();
+    assert!(!meta.is_favorite, "旧 JSON は false として読める");
+
+    let mut current = json!({
+        "cid": "QmCurrent",
+        "checksum": "sum",
+        "type": "Novel",
+        "status": "Approved",
+        "price": 0,
+        "title": "title",
+        "description": "description",
+        "tags": ["cat"],
+        "is_favorite": true,
+    });
+    let meta: ContentMeta = serde_json::from_value(current.clone()).unwrap();
+    assert!(meta.is_favorite);
+    assert_eq!(serde_json::to_value(&meta).unwrap(), current);
+
+    current["is_favorite"] = json!(false);
+    let meta: ContentMeta = serde_json::from_value(current).unwrap();
+    assert!(!meta.is_favorite);
+}
+
+#[test]
+fn test_favorite_only_parser_and_query_builder() {
+    let make = |value: Option<&str>| ContentQuery {
+        q: None,
+        tag: None,
+        content_type: None,
+        limit: None,
+        offset: None,
+        favorite_only: value.map(ToString::to_string),
+    };
+    for truthy in ["1", "true", "TRUE", " true "] {
+        assert!(
+            parse_content_query(&make(Some(truthy))).favorite_only,
+            "truthy={truthy:?}"
+        );
+    }
+    for falsy in [None, Some("0"), Some("false"), Some("yes"), Some("")] {
+        assert!(
+            !parse_content_query(&make(falsy)).favorite_only,
+            "falsy={falsy:?}"
+        );
+    }
+
+    let (sql_false, params_false) =
+        build_content_query(&parse_content_query(&make(None)), "viewer_sub");
+    assert_eq!(sql_false.matches("EXISTS").count(), 1);
+    assert_eq!(params_false.len(), 3); // SELECT 用 sub + limit + offset
+    let filter = parse_content_query(&make(Some("1")));
+    let (sql_true, params_true) = build_content_query(&filter, "viewer_sub");
+    assert_eq!(sql_true.matches("EXISTS").count(), 2);
+    assert_eq!(params_true.len(), 4); // 上記 + favorite_only 用 sub
+    assert!(sql_true.contains("FROM favorites"));
+    assert!(
+        !sql_true.contains("viewer_sub"),
+        "sub は SQL 文へ埋め込まずバインドする"
+    );
+    assert!(
+        params_true
+            .iter()
+            .any(|value| matches!(value, libsql::Value::Text(text) if text == "viewer_sub"))
+    );
+}
+
+#[tokio::test]
+async fn test_migration_012_favorites_unique_and_cascade() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    crate::migration::run_migrations(&db).await.unwrap();
+    // libsql の既定に依存せず、CASCADE の検証のため FK を有効化する。
+    db.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('u1')", ())
+        .await
+        .unwrap();
+    db.execute("INSERT INTO users (user_hash) VALUES ('u2')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, checksum) VALUES ('QmFav', 'sum')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    // UNIQUE(user_hash, cid): 同じ組の2回目の INSERT は失敗する。
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+        (),
+    )
+    .await
+    .unwrap();
+    assert!(
+        db.execute(
+            "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+            (),
+        )
+        .await
+        .is_err(),
+        "duplicate favorite must violate UNIQUE(user_hash, cid)"
+    );
+    db.execute(
+        "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+        (),
+    )
+    .await
+    .unwrap();
+    assert_eq!(favorite_count(&db, "u1", "QmFav").await, 1);
+    // 別ユーザーなら同じ CID を登録できる。
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u2', 'QmFav')",
+        (),
+    )
+    .await
+    .unwrap();
+    assert_eq!(favorite_count(&db, "u2", "QmFav").await, 1);
+
+    // 指定のインデックスが作成されている。
+    let mut rows = db
+        .query(
+            "SELECT name FROM sqlite_master WHERE type = 'index' \
+             AND name IN ('idx_favorites_user_cid', 'idx_favorites_user_created')",
+            (),
+        )
+        .await
+        .unwrap();
+    let mut names = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        names.push(row.get::<String>(0).unwrap());
+    }
+    names.sort();
+    assert_eq!(
+        names,
+        vec!["idx_favorites_user_cid", "idx_favorites_user_created"]
+    );
+
+    // FK CASCADE: コンテンツを削除すると両ユーザーのお気に入りも消える。
+    db.execute("DELETE FROM contents WHERE cid = 'QmFav'", ())
+        .await
+        .unwrap();
+    assert_eq!(favorite_count(&db, "u1", "QmFav").await, 0);
+    assert_eq!(favorite_count(&db, "u2", "QmFav").await, 0);
+
+    // ユーザー削除でも CASCADE する（別のコンテンツで確認）。
+    db.execute(
+        "INSERT INTO contents (cid, checksum) VALUES ('QmFav2', 'sum')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav2')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute("DELETE FROM users WHERE user_hash = 'u1'", ())
+        .await
+        .unwrap();
+    assert_eq!(favorite_count(&db, "u1", "QmFav2").await, 0);
 }
