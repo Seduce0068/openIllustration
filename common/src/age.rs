@@ -82,9 +82,18 @@ impl AgePolicy {
     ///
     /// 不正な値は安全側に倒してエラーとする（起動失敗させる用途を想定）。
     pub fn from_env() -> Result<Self, String> {
+        // 欠落・非 Unicode の環境変数は従来どおり「未設定」として扱う。
+        Self::from_env_with(|key| std::env::var(key).ok())
+    }
+
+    /// 依存注入版の `from_env`。
+    ///
+    /// `getter` は環境変数名を受け取り、設定されていれば値を `Some` で返す。
+    /// プロセス環境を直接変更せずに分岐・境界値をテストするための入口。
+    pub fn from_env_with(getter: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let mut policy = Self::default();
 
-        if let Ok(value) = std::env::var("AGE_DEFAULT_MINIMUM") {
+        if let Some(value) = getter("AGE_DEFAULT_MINIMUM") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
                 let parsed = trimmed
@@ -94,15 +103,15 @@ impl AgePolicy {
             }
         }
 
-        if let Ok(value) = std::env::var("AGE_COUNTRY_OVERRIDES") {
+        if let Some(value) = getter("AGE_COUNTRY_OVERRIDES") {
             policy.country_minimums = parse_country_minimums(&value)?;
         }
 
-        if let Ok(value) = std::env::var("AGE_TARGET_REGIONS") {
+        if let Some(value) = getter("AGE_TARGET_REGIONS") {
             policy.target_regions = parse_csv_list(&value);
         }
 
-        if let Ok(value) = std::env::var("AGE_ENFORCEMENT_MODE") {
+        if let Some(value) = getter("AGE_ENFORCEMENT_MODE") {
             let normalized = value.trim().to_ascii_lowercase();
             policy.enforcement_mode = match normalized.as_str() {
                 "" | "self_reported" | "self_reported_dob_country" => {
@@ -120,13 +129,13 @@ impl AgePolicy {
             };
         }
 
-        if let Ok(value) = std::env::var("AGE_REQUIRE_EXPLICIT_CONFIGURATION") {
+        if let Some(value) = getter("AGE_REQUIRE_EXPLICIT_CONFIGURATION") {
             policy.require_explicit_configuration = parse_bool_env(&value).ok_or_else(|| {
                 "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)".to_string()
             })?;
         }
 
-        if let Ok(value) = std::env::var("AGE_POLICY_CONFIGURED") {
+        if let Some(value) = getter("AGE_POLICY_CONFIGURED") {
             policy.operator_configured = parse_bool_env(&value).ok_or_else(|| {
                 "AGE_POLICY_CONFIGURED must be a boolean (1/0/true/false)".to_string()
             })?;
@@ -424,5 +433,135 @@ mod tests {
         assert!(parse_country_minimums("JP=0").is_err());
         assert!(validate_minimum_age(0, "AGE_DEFAULT_MINIMUM").is_err());
         assert_eq!(validate_minimum_age(1, "AGE_DEFAULT_MINIMUM").unwrap(), 1);
+    }
+
+    /// テスト用の環境変数 getter。呼び出し元のエントリ列を借用し、同じ文の中で使う。
+    fn getter_from<'a>(
+        entries: &'a [(&'static str, &'static str)],
+    ) -> impl Fn(&str) -> Option<String> + 'a {
+        move |key| {
+            entries
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    #[test]
+    fn from_env_with_returns_conservative_defaults_when_unset() {
+        let policy = AgePolicy::from_env_with(getter_from(&[])).unwrap();
+        assert_eq!(policy.default_minimum_age, 21);
+        assert!(policy.country_minimums.is_empty());
+        assert!(policy.target_regions.is_empty());
+        assert!(!policy.operator_configured);
+        assert!(!policy.require_explicit_configuration);
+        assert_eq!(
+            policy.enforcement_mode,
+            AgeEnforcementMode::SelfReportedDobCountry
+        );
+        assert!(policy.settings_always_public);
+        // from_env 経由では normalize() が notes をソートするため、内容を集合として比較する。
+        let mut expected_notes = AgePolicy::default().notes;
+        expected_notes.sort();
+        assert_eq!(policy.notes, expected_notes);
+    }
+
+    #[test]
+    fn from_env_with_rejects_zero_default_minimum() {
+        // 0 を許すと年齢ゲートが実質無効化されるため、起動前に拒否する。
+        for raw in ["0", " 0 "] {
+            let err = AgePolicy::from_env_with(getter_from(&[("AGE_DEFAULT_MINIMUM", raw)]))
+                .expect_err("zero minimum must be rejected");
+            assert!(
+                err.contains("AGE_DEFAULT_MINIMUM"),
+                "error must name the variable: {err}"
+            );
+        }
+        assert_eq!(
+            AgePolicy::from_env_with(getter_from(&[("AGE_DEFAULT_MINIMUM", "1")]))
+                .unwrap()
+                .default_minimum_age,
+            1
+        );
+    }
+
+    #[test]
+    fn from_env_with_rejects_invalid_boolean_configuration_flag() {
+        // 不正値は受け入れて緩めるのではなく、エラーとして起動を失敗させる（fail closed）。
+        let err = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION",
+            "maybe",
+        )]))
+        .expect_err("invalid boolean must be rejected");
+        assert!(
+            err.contains("AGE_REQUIRE_EXPLICIT_CONFIGURATION"),
+            "error must name the variable: {err}"
+        );
+
+        let enabled = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION",
+            "true",
+        )]))
+        .unwrap();
+        assert!(enabled.require_explicit_configuration);
+        let disabled =
+            AgePolicy::from_env_with(getter_from(&[("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "0")]))
+                .unwrap();
+        assert!(!disabled.require_explicit_configuration);
+    }
+
+    #[test]
+    fn from_env_with_parses_trusted_attribute_required_mode() {
+        for raw in ["trusted_attribute_required", " TRUSTED_ATTRIBUTE_REQUIRED "] {
+            let policy =
+                AgePolicy::from_env_with(getter_from(&[("AGE_ENFORCEMENT_MODE", raw)])).unwrap();
+            assert_eq!(
+                policy.enforcement_mode,
+                AgeEnforcementMode::TrustedAttributeRequired
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_with_normalizes_country_override_codes() {
+        let policy =
+            AgePolicy::from_env_with(getter_from(&[("AGE_COUNTRY_OVERRIDES", "jp=18, US = 21")]))
+                .unwrap();
+        assert_eq!(policy.country_minimums.get("JP"), Some(&18));
+        assert_eq!(policy.country_minimums.get("US"), Some(&21));
+        assert_eq!(policy.minimum_age_for("jp"), 18);
+        assert_eq!(policy.minimum_age_for(" us "), 21);
+        // 上書きのない国は保守的既定値のまま。
+        assert_eq!(policy.minimum_age_for("DE"), 21);
+    }
+
+    #[test]
+    fn from_env_with_rejects_invalid_country_code_length() {
+        let err = AgePolicy::from_env_with(getter_from(&[("AGE_COUNTRY_OVERRIDES", "JPN=20")]))
+            .expect_err("three-letter country code must be rejected");
+        assert!(
+            err.contains("JPN"),
+            "error must name the offending code: {err}"
+        );
+        assert!(
+            AgePolicy::from_env_with(getter_from(&[("AGE_COUNTRY_OVERRIDES", "J1=20",)])).is_err()
+        );
+    }
+
+    #[test]
+    fn from_env_with_rejects_zero_country_override_age() {
+        let err = AgePolicy::from_env_with(getter_from(&[("AGE_COUNTRY_OVERRIDES", "JP=0")]))
+            .expect_err("zero country override age must be rejected");
+        assert!(err.contains("JP"), "error must name the country: {err}");
+    }
+
+    #[test]
+    fn from_env_with_trims_and_deduplicates_target_regions() {
+        let policy = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_TARGET_REGIONS",
+            " JP , US ,, DE , JP ",
+        )]))
+        .unwrap();
+        assert_eq!(policy.target_regions, vec!["DE", "JP", "US"]);
     }
 }
