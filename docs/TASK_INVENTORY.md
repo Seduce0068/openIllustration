@@ -77,6 +77,7 @@ status: current
 - [対応済み] back-channel logout の異常系クレーム拒否: `events` 欠落と `sid`/`sub` 両方欠落の署名済み logout token が 401 拒否される回帰テストを追加。
 - [対応済み] 年齢計算 proptest の実効化: 旧テストは同語反復でバグを検出できなかった。独立参照計算との突き合わせと境界月日（今日と同月日）の明示的サンプリングへ変更し、`<`→`<=` の mutation
   を検出できることを実証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] WASM JXL デコードの decompression bomb 対策: ヘッダーとレンダ結果の寸法を 8000px / 64M ピクセルで検証し、巨大バッファ確保と usize オーバーフローを防止。境界テスト8ケースを追加。
 - [中・運用設計] **RS256 運用強化の残項目**: HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布・ローテーション手順（`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET`
   の秘密管理・ログ非出力を継続）（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md),
   [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
