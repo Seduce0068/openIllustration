@@ -9,7 +9,7 @@ mod payments;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, FromRef, Multipart, Path, State},
+    extract::{ConnectInfo, FromRef, Multipart, Path, Query, State},
     http::{HeaderValue, StatusCode, header},
     middleware::from_fn,
     response::{IntoResponse, Response},
@@ -437,6 +437,11 @@ pub struct ContentMeta {
     pub content_type: String,
     pub status: String,
     pub price: i64,
+    /// 既存行は migration 011 の既定値により空文字列になる。
+    pub title: String,
+    pub description: String,
+    /// DB ではカンマ区切りの TEXT。API では文字列配列として返す。
+    pub tags: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1788,17 +1793,118 @@ pub async fn get_content(
     )))
 }
 
+/// `GET /content` の省略可能なクエリ。`limit` / `offset` は生の文字列として受け、
+/// 純粋関数 `parse_content_query` で安全側の既定値へ正規化する。
+#[derive(Debug, Deserialize)]
+pub struct ContentQuery {
+    pub q: Option<String>,
+    pub tag: Option<String>,
+    #[serde(rename = "type")]
+    pub content_type: Option<String>,
+    pub limit: Option<String>,
+    pub offset: Option<String>,
+}
+
+/// 正規化済みの検索条件。`limit` / `offset` は SQL のバインド値として使う整数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentFilter {
+    pub q: Option<String>,
+    pub tag: Option<String>,
+    pub content_type: Option<String>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub const DEFAULT_CONTENT_LIMIT: i64 = 50;
+pub const MAX_CONTENT_LIMIT: i64 = 100;
+
+/// 検索クエリを純粋に解析する。範囲外・非数値の `limit` は 400 にせず既定 50
+/// （安全側）へフォールバックする。負・非数値の `offset` は 0 とする。
+/// `type` は完全一致を保つため前後の空白を除去しない（未知の値は 0 件になる）。
+pub fn parse_content_query(query: &ContentQuery) -> ContentFilter {
+    let optional_text = |value: Option<&str>| -> Option<String> {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    };
+    let limit = query
+        .limit
+        .as_deref()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| (1..=MAX_CONTENT_LIMIT).contains(value))
+        .unwrap_or(DEFAULT_CONTENT_LIMIT);
+    let offset = query
+        .offset
+        .as_deref()
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(0);
+    ContentFilter {
+        q: optional_text(query.q.as_deref()),
+        tag: optional_text(query.tag.as_deref()),
+        content_type: query
+            .content_type
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        limit,
+        offset,
+    }
+}
+
+/// LIKE パターン内のワイルドカード（`%` / `_`）とエスケープ文字自身（`\`）を
+/// リテラルとして扱う。SQL 側では必ず `ESCAPE '\'` と併用する。
+pub fn escape_like(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for ch in value.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '%' => escaped.push_str("\\%"),
+            '_' => escaped.push_str("\\_"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
+/// 認証必須・Approved 限定・新着順は維持しつつ、省略可能な検索条件を適用する。
+/// ユーザー入力は SQL 文へ一切埋め込まず、すべてバインドパラメータで渡す。
 pub async fn list_contents(
     State(state): State<Arc<AppState>>,
     _claims: AuthClaims,
+    Query(query): Query<ContentQuery>,
 ) -> Result<Json<Vec<ContentMeta>>, AppError> {
-    let mut rows = state
-        .db
-        .query(
-            "SELECT cid, checksum, type, status, price FROM contents WHERE status = 'Approved' ORDER BY created_at DESC LIMIT 50",
-            (),
-        )
-        .await?;
+    let filter = parse_content_query(&query);
+
+    let mut sql = String::from(
+        "SELECT cid, checksum, type, status, price, title, description, tags \
+         FROM contents WHERE status = 'Approved'",
+    );
+    let mut params: Vec<libsql::Value> = Vec::new();
+
+    if let Some(q) = filter.q.as_deref() {
+        sql.push_str(" AND (title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");
+        let pattern = format!("%{}%", escape_like(q));
+        params.push(libsql::Value::Text(pattern.clone()));
+        params.push(libsql::Value::Text(pattern));
+    }
+    if let Some(tag) = filter.tag.as_deref() {
+        // tags はカンマ区切り。先頭タグと、カンマに続くタグの前方一致を許す。
+        sql.push_str(" AND (tags LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')");
+        let escaped = escape_like(tag);
+        params.push(libsql::Value::Text(format!("{escaped}%")));
+        params.push(libsql::Value::Text(format!("%,{escaped}%")));
+    }
+    if let Some(kind) = filter.content_type.as_deref() {
+        sql.push_str(" AND type = ?");
+        params.push(libsql::Value::Text(kind.to_string()));
+    }
+    sql.push_str(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+    params.push(libsql::Value::Integer(filter.limit));
+    params.push(libsql::Value::Integer(filter.offset));
+
+    let mut rows = state.db.query(&sql, params).await?;
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().await? {
@@ -1808,6 +1914,9 @@ pub async fn list_contents(
             content_type: row.get(2)?,
             status: row.get(3)?,
             price: row.get(4)?,
+            title: row.get(5)?,
+            description: row.get(6)?,
+            tags: parse_tags_field(&row.get::<String>(7)?),
         });
     }
     Ok(Json(items))
@@ -2469,6 +2578,10 @@ pub async fn upload_content(
     // 型を省略すると i32 にフォールバックし、文書化された整数値を不正として拒否する。
     let mut price: i64 = 0;
     let mut price_seen = false;
+    // R5-01: 任意メタデータ。未指定時は空文字列として保存する。
+    let mut title: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut tags: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
@@ -2476,7 +2589,10 @@ pub async fn upload_content(
         .map_err(|e| AppError::BadRequest(format!("Multipart error: {}", e)))?
     {
         let name = field.name().unwrap_or_default().to_string();
-        if !matches!(name.as_str(), "file" | "owner_hash" | "signature" | "price") {
+        if !matches!(
+            name.as_str(),
+            "file" | "owner_hash" | "signature" | "price" | "title" | "description" | "tags"
+        ) {
             return Err(AppError::BadRequest(format!("Unexpected field: {name}")));
         }
         match name.as_str() {
@@ -2542,6 +2658,39 @@ pub async fn upload_content(
                     )));
                 }
             }
+            "title" => {
+                if title.is_some() {
+                    return Err(AppError::BadRequest("Duplicate title field".to_string()));
+                }
+                title = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("Invalid title: {}", e)))?,
+                );
+            }
+            "description" => {
+                if description.is_some() {
+                    return Err(AppError::BadRequest(
+                        "Duplicate description field".to_string(),
+                    ));
+                }
+                description =
+                    Some(field.text().await.map_err(|e| {
+                        AppError::BadRequest(format!("Invalid description: {}", e))
+                    })?);
+            }
+            "tags" => {
+                if tags.is_some() {
+                    return Err(AppError::BadRequest("Duplicate tags field".to_string()));
+                }
+                tags = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| AppError::BadRequest(format!("Invalid tags: {}", e)))?,
+                );
+            }
             _ => {}
         }
     }
@@ -2559,6 +2708,13 @@ pub async fn upload_content(
 
     let content_kind = validate_upload_content_type(content_type.as_deref())?;
     validate_upload_content(content_kind, &data)?;
+
+    // メタデータは外部へのピン留め前に検証し、超過時は無駄な IPFS 呼び出しを避ける。
+    let title = title.unwrap_or_default();
+    let description = description.unwrap_or_default();
+    let parsed_tags = parse_tags_field(tags.as_deref().unwrap_or(""));
+    validate_content_metadata(&title, &description, &parsed_tags)?;
+    let stored_tags = parsed_tags.join(",");
 
     // 1. Verify Signature (dev mock: all-zero signature when ALLOW_MOCK_AUTH)
     let mock_sig = state.allow_mock_auth && signature.iter().all(|&b| b == 0);
@@ -2590,13 +2746,17 @@ pub async fn upload_content(
     }
 
     tx.execute(
-        "INSERT INTO contents (cid, type, owner_hash, checksum, price) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO contents (cid, type, owner_hash, checksum, price, title, description, tags)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
             cid.clone(),
             content_kind.to_string(),
             owner_hash.clone(),
             checksum,
             price,
+            title,
+            description,
+            stored_tags,
         ),
     )
     .await
@@ -2694,6 +2854,52 @@ pub fn validate_upload_content(content_kind: &str, data: &[u8]) -> Result<(), Ap
         )),
         _ => Err(AppError::BadRequest("Unsupported content kind".to_string())),
     }
+}
+
+/// 任意メタデータの上限。文字数ではなく UTF-8 バイト数で検査する。
+pub const MAX_CONTENT_TITLE_BYTES: usize = 200;
+pub const MAX_CONTENT_DESCRIPTION_BYTES: usize = 2000;
+pub const MAX_CONTENT_TAGS: usize = 10;
+pub const MAX_CONTENT_TAG_BYTES: usize = 50;
+
+/// カンマ区切りの `tags` フィールドを分割する。空要素は捨て、前後の空白を除去する。
+/// クライアントが空文字を送った場合は空ベクトルになる。
+pub fn parse_tags_field(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+/// title / description / tags の長さ・個数を検証する。超過は 400。
+pub fn validate_content_metadata(
+    title: &str,
+    description: &str,
+    tags: &[String],
+) -> Result<(), AppError> {
+    if title.len() > MAX_CONTENT_TITLE_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "title must not exceed {MAX_CONTENT_TITLE_BYTES} bytes"
+        )));
+    }
+    if description.len() > MAX_CONTENT_DESCRIPTION_BYTES {
+        return Err(AppError::BadRequest(format!(
+            "description must not exceed {MAX_CONTENT_DESCRIPTION_BYTES} bytes"
+        )));
+    }
+    if tags.len() > MAX_CONTENT_TAGS {
+        return Err(AppError::BadRequest(format!(
+            "tags must not contain more than {MAX_CONTENT_TAGS} items"
+        )));
+    }
+    if tags.iter().any(|tag| tag.len() > MAX_CONTENT_TAG_BYTES) {
+        return Err(AppError::BadRequest(format!(
+            "each tag must not exceed {MAX_CONTENT_TAG_BYTES} bytes"
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

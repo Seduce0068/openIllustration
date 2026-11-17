@@ -1,9 +1,11 @@
 use crate::{
-    AppError, AppState, VerifyRequest, VerifyResponse, allowed_origins, build_router,
-    ensure_user_not_banned,
+    AppError, AppState, ContentFilter, ContentQuery, DEFAULT_CONTENT_LIMIT,
+    MAX_CONTENT_DESCRIPTION_BYTES, MAX_CONTENT_LIMIT, MAX_CONTENT_TAG_BYTES, MAX_CONTENT_TAGS,
+    MAX_CONTENT_TITLE_BYTES, VerifyRequest, VerifyResponse, allowed_origins, build_router,
+    ensure_user_not_banned, escape_like, parse_content_query, parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
-    process_report_conclusion, update_content_status, validate_age, validate_jwt_secret,
-    validate_upload_content, validate_upload_content_type,
+    process_report_conclusion, update_content_status, validate_age, validate_content_metadata,
+    validate_jwt_secret, validate_upload_content, validate_upload_content_type,
 };
 use async_trait::async_trait;
 use axum::{
@@ -7695,4 +7697,523 @@ async fn test_metrics_expose_prometheus_counters() {
         errors_before + 1,
         "each 4xx response must increment the error counter exactly once"
     );
+}
+
+// ---- R5-01: コンテンツメタデータと検索・絞り込み ----
+
+#[test]
+fn test_content_query_parser_defaults_and_bounds() {
+    let empty = ContentQuery {
+        q: None,
+        tag: None,
+        content_type: None,
+        limit: None,
+        offset: None,
+    };
+    assert_eq!(
+        parse_content_query(&empty),
+        ContentFilter {
+            q: None,
+            tag: None,
+            content_type: None,
+            limit: DEFAULT_CONTENT_LIMIT,
+            offset: 0,
+        }
+    );
+
+    let make = |limit: &str, offset: &str| ContentQuery {
+        q: None,
+        tag: None,
+        content_type: None,
+        limit: Some(limit.to_string()),
+        offset: Some(offset.to_string()),
+    };
+    for limit in ["1", "100"] {
+        assert_eq!(
+            parse_content_query(&make(limit, "7")).limit,
+            limit.parse::<i64>().unwrap()
+        );
+    }
+    // 範囲外は 400 にせず既定 50 へフォールバックする（安全側）。
+    for limit in ["0", "101", "-1", "abc", ""] {
+        assert_eq!(
+            parse_content_query(&make(limit, "0")).limit,
+            DEFAULT_CONTENT_LIMIT,
+            "limit={limit:?}"
+        );
+    }
+    assert_eq!(MAX_CONTENT_LIMIT, 100);
+    for offset in ["-1", "abc", ""] {
+        assert_eq!(
+            parse_content_query(&make("50", offset)).offset,
+            0,
+            "offset={offset:?}"
+        );
+    }
+    assert_eq!(parse_content_query(&make("50", "9")).offset, 9);
+
+    let filled = ContentQuery {
+        q: Some("  cat  ".to_string()),
+        tag: Some(" fantasy ".to_string()),
+        content_type: Some("Novel".to_string()),
+        limit: Some("2".to_string()),
+        offset: Some("1".to_string()),
+    };
+    let parsed = parse_content_query(&filled);
+    assert_eq!(parsed.q.as_deref(), Some("cat"));
+    assert_eq!(parsed.tag.as_deref(), Some("fantasy"));
+    assert_eq!(parsed.content_type.as_deref(), Some("Novel"));
+}
+
+#[test]
+fn test_content_metadata_validation_bounds() {
+    let tags = vec!["tag".to_string()];
+    assert!(validate_content_metadata("", "", &[]).is_ok());
+    assert!(validate_content_metadata(&"a".repeat(MAX_CONTENT_TITLE_BYTES), "", &tags).is_ok());
+    assert!(
+        validate_content_metadata(&"a".repeat(MAX_CONTENT_TITLE_BYTES + 1), "", &tags).is_err()
+    );
+    assert!(
+        validate_content_metadata("", &"a".repeat(MAX_CONTENT_DESCRIPTION_BYTES), &tags).is_ok()
+    );
+    assert!(
+        validate_content_metadata("", &"a".repeat(MAX_CONTENT_DESCRIPTION_BYTES + 1), &tags)
+            .is_err()
+    );
+
+    let max_tags: Vec<String> = (0..MAX_CONTENT_TAGS).map(|i| format!("t{i}")).collect();
+    assert!(validate_content_metadata("", "", &max_tags).is_ok());
+    let too_many: Vec<String> = (0..MAX_CONTENT_TAGS + 1).map(|i| format!("t{i}")).collect();
+    assert!(validate_content_metadata("", "", &too_many).is_err());
+
+    let max_tag = vec!["a".repeat(MAX_CONTENT_TAG_BYTES)];
+    assert!(validate_content_metadata("", "", &max_tag).is_ok());
+    let long_tag = vec!["a".repeat(MAX_CONTENT_TAG_BYTES + 1)];
+    assert!(validate_content_metadata("", "", &long_tag).is_err());
+    // 複数バイト文字は文字数ではなくバイト数で検査される。
+    let multibyte = "あ".repeat(MAX_CONTENT_TAG_BYTES / 3 + 1);
+    assert!(validate_content_metadata("", "", &[multibyte]).is_err());
+
+    assert_eq!(
+        parse_tags_field(" cat , fantasy ,, "),
+        vec!["cat".to_string(), "fantasy".to_string()]
+    );
+    assert!(parse_tags_field("").is_empty());
+}
+
+#[test]
+fn test_like_escaping_keeps_wildcards_literal() {
+    assert_eq!(escape_like("plain"), "plain");
+    assert_eq!(escape_like("100%_cat\\x"), "100\\%\\_cat\\\\x");
+}
+
+#[tokio::test]
+async fn test_migration_011_existing_rows_read_as_empty_metadata() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    // 011 適用前（001 直後）の contents を再現し、既存行を挿入する。
+    db.execute(
+        "CREATE TABLE contents (
+            cid TEXT PRIMARY KEY,
+            type TEXT CHECK(type IN ('Illustration', 'Novel')),
+            owner_hash TEXT,
+            checksum TEXT NOT NULL,
+            status TEXT CHECK(status IN ('Approved', 'Reported', 'Rejected')) DEFAULT 'Approved',
+            price INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, checksum) VALUES ('QmLegacy', 'Novel', 'legacy_sum')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    crate::migration::run_migrations(&db).await.unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT title, description, tags FROM contents WHERE cid = 'QmLegacy'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let title: String = row.get(0).unwrap();
+    let description: String = row.get(1).unwrap();
+    let tags: String = row.get(2).unwrap();
+    assert_eq!(title, "");
+    assert_eq!(description, "");
+    assert_eq!(tags, "");
+    assert!(parse_tags_field(&tags).is_empty());
+}
+
+async fn insert_content_meta(
+    db: &libsql::Connection,
+    cid: &str,
+    kind: &str,
+    title: &str,
+    description: &str,
+    tags: &str,
+    created_at: &str,
+) {
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, title, description, tags, created_at)
+         VALUES (?, ?, 'test_user', 'sum', 'Approved', 0, ?, ?, ?, ?)",
+        (cid, kind, title, description, tags, created_at),
+    )
+    .await
+    .unwrap();
+}
+
+async fn get_content_list(
+    app: &Router,
+    token: &str,
+    query: &str,
+) -> (StatusCode, Vec<serde_json::Value>) {
+    let uri = format!("/content{query}");
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let items: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    (status, items)
+}
+
+fn listed_cids(items: &[serde_json::Value]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| item["cid"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// ASCII 安全文字だけを残し、それ以外を percent-encode する（テスト用）。
+fn percent_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+/// q / tag / type の絞り込みと、追加メタデータが JSON で返ることを検証する。
+#[tokio::test]
+async fn test_list_contents_filters_by_query_tag_and_type() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute("DELETE FROM contents", ()).await.unwrap();
+    insert_content_meta(
+        &db,
+        "QmCatArt",
+        "Illustration",
+        "Cat illustration",
+        "A cute cat",
+        "fantasy,art",
+        "2026-01-04 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmDogNovel",
+        "Novel",
+        "Dog novel",
+        "A brave story",
+        "dog,novel",
+        "2026-01-03 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmCatTag",
+        "Illustration",
+        "Landscape",
+        "Nice colors",
+        "cat,fantasy",
+        "2026-01-02 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmCatlikeTag",
+        "Novel",
+        "Poetry",
+        "Verses",
+        "story,catlike",
+        "2026-01-01 00:00:00",
+    )
+    .await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // q は title / description の部分一致（tags は検索しない）。
+    let (status, items) = get_content_list(&app, &token, "?q=cat").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed_cids(&items), vec!["QmCatArt"]);
+
+    // tag はカンマ区切りの各タグの前方一致（先頭・カンマ後ともに該当）。
+    let (_, items) = get_content_list(&app, &token, "?tag=cat").await;
+    assert_eq!(listed_cids(&items), vec!["QmCatTag", "QmCatlikeTag"]);
+
+    // type は完全一致。未知の値は 400 ではなく 0 件。
+    let (_, items) = get_content_list(&app, &token, "?type=Novel").await;
+    assert_eq!(listed_cids(&items), vec!["QmDogNovel", "QmCatlikeTag"]);
+    let (status, items) = get_content_list(&app, &token, "?type=Unknown").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(items.is_empty());
+
+    // 複数条件は AND。既定の並び順（新着順）も維持される。
+    let (_, items) = get_content_list(&app, &token, "?type=Novel&tag=cat").await;
+    assert_eq!(listed_cids(&items), vec!["QmCatlikeTag"]);
+
+    // 追加メタデータが既存5項目と一緒に JSON で返る。
+    let (_, items) = get_content_list(&app, &token, "?q=Landscape").await;
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["cid"], "QmCatTag");
+    assert_eq!(items[0]["title"], "Landscape");
+    assert_eq!(items[0]["description"], "Nice colors");
+    assert_eq!(items[0]["tags"], serde_json::json!(["cat", "fantasy"]));
+    assert_eq!(items[0]["type"], "Illustration");
+    assert_eq!(items[0]["status"], "Approved");
+    assert_eq!(items[0]["price"], 0);
+}
+
+#[tokio::test]
+async fn test_list_contents_limit_boundaries_and_offset() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute("DELETE FROM contents", ()).await.unwrap();
+    for day in 1..=5 {
+        insert_content_meta(
+            &db,
+            &format!("Qm{day:03}"),
+            "Illustration",
+            &format!("title {day}"),
+            "",
+            "",
+            &format!("2026-01-{day:02} 00:00:00"),
+        )
+        .await;
+    }
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // 全5件しかないため、範囲外が既定 50 へフォールバックすれば 5 件返る。
+    for (query, expected_len) in [
+        ("", 5),
+        ("?limit=1", 1),
+        ("?limit=100", 5),
+        ("?limit=0", 5),
+        ("?limit=101", 5),
+    ] {
+        let (status, items) = get_content_list(&app, &token, query).await;
+        assert_eq!(status, StatusCode::OK, "query={query}");
+        assert_eq!(items.len(), expected_len, "query={query}");
+    }
+
+    // 新着順 5,4,3,2,1 の 3 件目以降から 2 件。
+    let (_, items) = get_content_list(&app, &token, "?limit=2&offset=2").await;
+    assert_eq!(listed_cids(&items), vec!["Qm003", "Qm002"]);
+    let (_, items) = get_content_list(&app, &token, "?offset=10").await;
+    assert!(items.is_empty());
+}
+
+#[tokio::test]
+async fn test_like_wildcards_are_literal() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute("DELETE FROM contents", ()).await.unwrap();
+    insert_content_meta(
+        &db,
+        "QmPlain",
+        "Illustration",
+        "plain title",
+        "plain description",
+        "plain",
+        "2026-01-02 00:00:00",
+    )
+    .await;
+    insert_content_meta(
+        &db,
+        "QmWild",
+        "Illustration",
+        "50%_done",
+        "note",
+        "%_tag",
+        "2026-01-01 00:00:00",
+    )
+    .await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // エスケープされていれば "%" / "_" はリテラルとして扱われ、QmWild だけに一致する。
+    for query in ["%", "_"] {
+        let (_, items) =
+            get_content_list(&app, &token, &format!("?q={}", percent_encode(query))).await;
+        assert_eq!(listed_cids(&items), vec!["QmWild"], "query={query}");
+    }
+    let (_, items) = get_content_list(&app, &token, &format!("?tag={}", percent_encode("%"))).await;
+    assert_eq!(listed_cids(&items), vec!["QmWild"]);
+
+    // SQL 断片を入れても全件ヒットせず、リテラル文字列として扱われる。
+    let injection = "%' OR 1=1 --";
+    let (_, items) =
+        get_content_list(&app, &token, &format!("?q={}", percent_encode(injection))).await;
+    assert!(
+        items.is_empty(),
+        "LIKE wildcards must not be interpreted as SQL or patterns"
+    );
+}
+
+/// title / description / tags を付けた multipart 本文を組み立てる。
+/// 必須フィールドは既存ヘルパーに任せ、末尾のクロージングデリミタ直前に差し込む。
+fn multipart_upload_body_with_metadata(
+    boundary: &str,
+    file_bytes: &[u8],
+    title: Option<&str>,
+    description: Option<&str>,
+    tags: Option<&str>,
+) -> Vec<u8> {
+    let closing = format!("\r\n--{boundary}--\r\n");
+    let mut body = multipart_upload_body_full(
+        boundary,
+        "upload.jxl",
+        "image/jxl",
+        file_bytes,
+        None,
+        "test_user",
+        &[0u8; 16],
+    );
+    body.truncate(body.len() - closing.len());
+    for (name, value) in [
+        ("title", title),
+        ("description", description),
+        ("tags", tags),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| value.map(|value| (name, value)))
+    {
+        // 値の直後の CRLF は次のデリミタの一部なので、ここでは付けない。
+        body.extend_from_slice(
+            format!(
+                "\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}"
+            )
+            .as_bytes(),
+        );
+    }
+    body.extend_from_slice(closing.as_bytes());
+    body
+}
+
+#[tokio::test]
+async fn test_upload_rejects_oversized_metadata() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let long_title = "a".repeat(MAX_CONTENT_TITLE_BYTES + 1);
+    let long_description = "a".repeat(MAX_CONTENT_DESCRIPTION_BYTES + 1);
+    let many_tags = ["t"; MAX_CONTENT_TAGS + 1].join(",");
+    let long_tag = "a".repeat(MAX_CONTENT_TAG_BYTES + 1);
+    let cases: Vec<(Option<&str>, Option<&str>, Option<&str>)> = vec![
+        (Some(&long_title), None, None),
+        (None, Some(&long_description), None),
+        (None, None, Some(&many_tags)),
+        (None, None, Some(&long_tag)),
+    ];
+    for (index, (title, description, tags)) in cases.into_iter().enumerate() {
+        let boundary = format!("oversized-meta-{index}");
+        let body = multipart_upload_body_with_metadata(
+            &boundary,
+            &[0xFF, 0x0A, 0x01, index as u8],
+            title,
+            description,
+            tags,
+        );
+        let (status, response) = send_upload(&app, &token, &boundary, body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "case {index}: {response}");
+    }
+
+    // 拒否されたアップロードは保存されない（fixture の1件だけが残る）。
+    let mut rows = db.query("SELECT COUNT(*) FROM contents", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn test_upload_accepts_optional_metadata() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // 境界値ちょうどは受理される。
+    let boundary = "metadata-boundary";
+    let body = multipart_upload_body_with_metadata(
+        boundary,
+        &[0xFF, 0x0A, 0x01],
+        Some(&"a".repeat(MAX_CONTENT_TITLE_BYTES)),
+        Some(&"b".repeat(MAX_CONTENT_DESCRIPTION_BYTES)),
+        Some(
+            &(0..MAX_CONTENT_TAGS)
+                .map(|i| format!("t{i}"))
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    );
+    let (status, response) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "boundary values must be accepted: {response}"
+    );
+
+    // 空文字（クライアントが常に送る値）とタグの前後空白も受理される。
+    let boundary = "metadata-empty";
+    let body = multipart_upload_body_with_metadata(
+        boundary,
+        &[0xFF, 0x0A, 0x02],
+        Some("My cat"),
+        Some("A description"),
+        Some(" cat , fantasy "),
+    );
+    let (status, response) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let cid: String = serde_json::from_str(&response).unwrap();
+    let mut rows = db
+        .query(
+            "SELECT title, description, tags FROM contents WHERE cid = ?",
+            [cid],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let title: String = row.get(0).unwrap();
+    let description: String = row.get(1).unwrap();
+    let tags: String = row.get(2).unwrap();
+    assert_eq!(title, "My cat");
+    assert_eq!(description, "A description");
+    assert_eq!(tags, "cat,fantasy");
+
+    let boundary = "metadata-blank";
+    let body = multipart_upload_body_with_metadata(
+        boundary,
+        &[0xFF, 0x0A, 0x03],
+        Some(""),
+        Some(""),
+        Some(""),
+    );
+    let (status, _) = send_upload(&app, &token, boundary, body).await;
+    assert_eq!(status, StatusCode::OK, "empty metadata must be accepted");
 }
