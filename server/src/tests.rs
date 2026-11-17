@@ -8178,6 +8178,33 @@ fn read_metric(body: &str, name: &str) -> u64 {
         .unwrap()
 }
 
+/// 現在の中立化 URL カウンタ値を `/metrics` から読み取る。
+async fn read_neutralized_metric(app: &Router) -> u64 {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body =
+        String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    read_metric(&body, "openillustration_neutralized_urls_total")
+}
+
+/// 中立化 URL イベントを 1 件送信する（既定 count を使う）。
+fn client_event_request(body: Body) -> Request<Body> {
+    with_peer(
+        Request::post("/metrics/client-events")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .unwrap(),
+        test_ipv6_peer(),
+    )
+}
+
 #[tokio::test]
 async fn test_metrics_expose_prometheus_counters() {
     let app = setup_app().await;
@@ -8197,6 +8224,7 @@ async fn test_metrics_expose_prometheus_counters() {
         String::from_utf8(to_bytes(before.into_body(), 4096).await.unwrap().to_vec()).unwrap();
     let requests_before = read_metric(&before_body, "openillustration_http_requests_total");
     let errors_before = read_metric(&before_body, "openillustration_http_errors_total");
+    let neutralized_before = read_metric(&before_body, "openillustration_neutralized_urls_total");
 
     // 404 を発生させ、エラーカウンタが進むことを確認する。
     let missing = app
@@ -8209,6 +8237,16 @@ async fn test_metrics_expose_prometheus_counters() {
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 
+    // クライアントイベントを送り、専用カウンタが count だけ進むことを確認する。
+    let event = app
+        .clone()
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"neutralized_url","count":3}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(event.status(), StatusCode::NO_CONTENT);
+
     let after = app
         .oneshot(with_peer(
             Request::get("/metrics").body(Body::empty()).unwrap(),
@@ -8220,10 +8258,11 @@ async fn test_metrics_expose_prometheus_counters() {
         String::from_utf8(to_bytes(after.into_body(), 4096).await.unwrap().to_vec()).unwrap();
     let requests_after = read_metric(&after_body, "openillustration_http_requests_total");
     let errors_after = read_metric(&after_body, "openillustration_http_errors_total");
+    let neutralized_after = read_metric(&after_body, "openillustration_neutralized_urls_total");
     // 注入されたカウンタは他テストと共有されないため、正確な差分を検証できる。
     assert_eq!(
         requests_after,
-        requests_before + 2,
+        requests_before + 3,
         "requests must be counted exactly"
     );
     assert_eq!(
@@ -8231,6 +8270,191 @@ async fn test_metrics_expose_prometheus_counters() {
         errors_before + 1,
         "each 4xx response must increment the error counter exactly once"
     );
+    assert_eq!(
+        neutralized_after,
+        neutralized_before + 3,
+        "neutralized URL counter must advance by exactly the reported count"
+    );
+}
+
+// ---- クライアントイベント集計（URL 本文を送らず件数だけを集計する） ----
+
+/// 正常系: count 指定 / 省略 / 上限値がそれぞれ正確に加算される。
+#[tokio::test]
+async fn test_client_events_neutralized_url_increments_counter() {
+    let app = setup_app().await;
+    let before = read_neutralized_metric(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"neutralized_url","count":7}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert!(
+        to_bytes(response.into_body(), 16).await.unwrap().is_empty(),
+        "204 response must have no body"
+    );
+    assert_eq!(read_neutralized_metric(&app).await, before + 7);
+
+    // count 省略時は 1。
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"neutralized_url"}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(read_neutralized_metric(&app).await, before + 8);
+
+    // 上限 1000 も受け付ける。
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"neutralized_url","count":1000}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(read_neutralized_metric(&app).await, before + 1008);
+}
+
+/// 異常系: 不正な event / count / JSON は 400 で、カウンタを一切動かさない。
+#[tokio::test]
+async fn test_client_events_rejects_invalid_payloads() {
+    let app = setup_app().await;
+    let before = read_neutralized_metric(&app).await;
+
+    let invalid_bodies = [
+        r#"{"event":"other_event","count":1}"#,
+        r#"{"event":"neutralized_url ","count":1}"#,
+        r#"{"event":"neutralized_url","count":0}"#,
+        r#"{"event":"neutralized_url","count":1001}"#,
+        r#"{"event":"neutralized_url","count":-1}"#,
+        r#"{"event":"neutralized_url","count":1.5}"#,
+        r#"{"event":"neutralized_url","count":"1"}"#,
+        r#"{"event":"neutralized_url","count":null}"#,
+        r#"{"event":123,"count":1}"#,
+        r#"{}"#,
+        r#"[]"#,
+        r#"not json"#,
+    ];
+    for body in invalid_bodies {
+        let response = app
+            .clone()
+            .oneshot(client_event_request(Body::from(body)))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "body: {body}");
+        assert!(
+            to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap()
+                .is_empty(),
+            "error response must have no body: {body}"
+        );
+    }
+    // どの不正入力も加算してはならない（絶対値ではなく差分で検証）。
+    assert_eq!(read_neutralized_metric(&app).await, before);
+}
+
+/// 1 KiB を超えるボディは 400 で、境界値の 1024 バイトは受け付ける。
+#[tokio::test]
+async fn test_client_events_rejects_oversized_body() {
+    let app = setup_app().await;
+    let before = read_neutralized_metric(&app).await;
+
+    let prefix = br#"{"event":"neutralized_url","count":1,"pad":""#;
+    let suffix = br#""}"#;
+    let padding = 1024 - prefix.len() - suffix.len();
+
+    let mut exact_body = prefix.to_vec();
+    exact_body.extend(vec![b'x'; padding]);
+    exact_body.extend_from_slice(suffix);
+    assert_eq!(exact_body.len(), 1024);
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(exact_body)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(read_neutralized_metric(&app).await, before + 1);
+
+    // Content-Length なしの 1025 バイト（to_bytes 側の上限で拒否される経路）。
+    let mut too_large = prefix.to_vec();
+    too_large.extend(vec![b'x'; padding + 1]);
+    too_large.extend_from_slice(suffix);
+    assert_eq!(too_large.len(), 1025);
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(too_large)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(read_neutralized_metric(&app).await, before + 1);
+
+    // Content-Length が 10 MiB 超の宣言でも 413 ではなく 400（本文なし）。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/metrics/client-events")
+                .header(header::CONTENT_LENGTH, "10485761")
+                .body(Body::from(r#"{"event":"neutralized_url"}"#))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert!(
+        to_bytes(response.into_body(), 1024)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(read_neutralized_metric(&app).await, before + 1);
+}
+
+/// このエンドポイントも既存の IP 単位レート制限の対象（除外されていない）。
+#[tokio::test]
+async fn test_client_events_is_rate_limited() {
+    let app = build_router(rate_limit_test_state(2).await);
+    let peer = test_ipv6_peer();
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/metrics/client-events")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"event":"neutralized_url"}"#))
+                    .unwrap(),
+                peer,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/metrics/client-events")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"event":"neutralized_url"}"#))
+                .unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 // ---- R5-01: コンテンツメタデータと検索・絞り込み ----

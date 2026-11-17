@@ -27,6 +27,9 @@ use tower_http::cors::CorsLayer;
 use tracing::warn;
 use uuid::Uuid;
 
+/// `/metrics/client-events` が受け付けるリクエストボディの上限（1 KiB）。
+const MAX_CLIENT_EVENT_BODY_BYTES: usize = 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Connection>,
@@ -68,26 +71,38 @@ pub struct AppState {
     pub rate_limit: Option<Arc<RateLimitState>>,
 }
 
-/// `Content-Length` が 10 MiB を超えるリクエストを 413 で拒否する。
+/// `Content-Length` が上限を超えるリクエストを拒否する。
 /// axum の Multipart extractor はストリームを先に解析し 400 を返すため、
 /// その前にヘッダーで拒否して適切なステータスを返す（多層防御の1段目）。
+/// `/metrics/client-events` は 1 KiB 上限で、他エンドポイントより厳しい 400 を返す。
 async fn reject_oversized_body(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     const MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
+    let is_client_events = request.uri().path() == "/metrics/client-events";
+    let max = if is_client_events {
+        MAX_CLIENT_EVENT_BODY_BYTES as u64
+    } else {
+        MAX_BODY_BYTES
+    };
     if let Some(length) = request
         .headers()
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        && length > MAX_BODY_BYTES
+        && length > max
     {
-        return (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            Json(json!({"error": "request body exceeds 10 MiB"})),
-        )
-            .into_response();
+        return if is_client_events {
+            // 入力を一切エコーしないため、エラーでも本文を返さない。
+            StatusCode::BAD_REQUEST.into_response()
+        } else {
+            (
+                StatusCode::PAYLOAD_TOO_LARGE,
+                Json(json!({"error": "request body exceeds 10 MiB"})),
+            )
+                .into_response()
+        };
     }
     next.run(request).await
 }
@@ -126,6 +141,8 @@ pub fn max_concurrent_requests(env_value: Option<&str>) -> usize {
 pub struct Metrics {
     pub requests: std::sync::atomic::AtomicU64,
     pub errors: std::sync::atomic::AtomicU64,
+    /// クライアントが中立化した危険 URL の件数。URL 本文自体は保持しない。
+    pub neutralized_urls: std::sync::atomic::AtomicU64,
 }
 
 /// レート制限キーを決定する。
@@ -231,7 +248,10 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
          openillustration_http_requests_total {}\n\
          # HELP openillustration_http_errors_total Total 4xx/5xx HTTP responses.\n\
          # TYPE openillustration_http_errors_total counter\n\
-         openillustration_http_errors_total {}\n",
+         openillustration_http_errors_total {}\n\
+         # HELP openillustration_neutralized_urls_total Total neutralized dangerous URLs reported by clients.\n\
+         # TYPE openillustration_neutralized_urls_total counter\n\
+         openillustration_neutralized_urls_total {}\n",
         state
             .metrics
             .requests
@@ -240,6 +260,10 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             .metrics
             .errors
             .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .neutralized_urls
+            .load(std::sync::atomic::Ordering::Relaxed),
     );
     (
         StatusCode::OK,
@@ -247,6 +271,48 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         body,
     )
         .into_response()
+}
+
+/// `POST /metrics/client-events` のペイロード。
+///
+/// URL 本文や利用者識別子は受け取らず、`event` と `count` だけを扱う。
+#[derive(Deserialize)]
+struct ClientEventPayload {
+    event: String,
+    #[serde(default = "default_client_event_count")]
+    count: u32,
+}
+
+fn default_client_event_count() -> u32 {
+    1
+}
+
+/// クライアントが中立化した危険 URL の件数を集計する。
+///
+/// 匿名リクエストを受け付け、URL 本文・IP・User-Agent を記録もログ出力もしない。
+/// 成功時は本文なしの 204、不正入力時は本文なしの 400 を返す。
+pub async fn client_events(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+) -> Response {
+    // DefaultBodyLimit(10 MiB) に依存せず、このエンドポイント専用の上限で読む。
+    let bytes = match axum::body::to_bytes(request.into_body(), MAX_CLIENT_EVENT_BODY_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let payload: ClientEventPayload = match serde_json::from_slice(&bytes) {
+        Ok(payload) => payload,
+        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    // 新しい event 種別を増やすときはこのホワイトリストだけを拡張する。
+    if payload.event != "neutralized_url" || !(1..=1000).contains(&payload.count) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    state.metrics.neutralized_urls.fetch_add(
+        u64::from(payload.count),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
@@ -1322,6 +1388,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health", get(|| async { "ok" }))
         .route("/ready", get(readiness))
         .route("/metrics", get(metrics))
+        .route("/metrics/client-events", post(client_events))
         .route("/policy/age", get(get_age_policy))
         .route("/me/export", get(me_export))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
