@@ -61,6 +61,142 @@ pub fn verify_rsa_signature(
         .map_err(|e| ForensicError::InvalidSignature(e.to_string()))
 }
 
+/// base58btc アルファベット（CIDv0 で使用）。
+const BASE58_BTC_ALPHABET: &[u8; 58] =
+    b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+/// RFC 4648 base32 の小文字アルファベット（パディング無しの CIDv1 で使用）。
+const BASE32_LOWER_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// CID 文字列の受付上限。これを超える入力は解析前に拒否する。
+const MAX_CID_LEN: usize = 128;
+
+/// CID が仕様どおりの厳密な形式かどうかを判定する（外部依存なし）。
+///
+/// - CIDv0: `Qm` + base58btc 44 文字（全体で 46 文字）。
+/// - CIDv1: `b` + パディング無し base32lower。デコード結果が
+///   varint version=1 / codec=0x55(raw) または 0x70(dag-pb) /
+///   multihash=0x12(sha2-256) / digest 長 32 / 32 バイト digest で終わること。
+///
+/// 空文字・不正文字・上限超過・末尾の余りバイトはすべて拒否する。
+/// digest の内容（元データとのハッシュ一致）は検証しない。
+pub fn is_valid_cid(cid: &str) -> bool {
+    if cid.is_empty() || cid.len() > MAX_CID_LEN {
+        return false;
+    }
+
+    if cid.starts_with("Qm") {
+        return cid.len() == 46
+            && cid.as_bytes()[2..]
+                .iter()
+                .all(|byte| BASE58_BTC_ALPHABET.contains(byte));
+    }
+
+    if let Some(body) = cid.strip_prefix('b') {
+        return decode_base32_lower(body).is_some_and(|bytes| is_valid_v1_bytes(&bytes));
+    }
+
+    false
+}
+
+/// パディング無し base32lower をデコードする。
+/// 不正文字・非正規の末尾ビット・途中で切れた文字列は拒否する。
+fn decode_base32_lower(input: &str) -> Option<Vec<u8>> {
+    if input.is_empty() {
+        return None;
+    }
+
+    let mut decoded = Vec::with_capacity(input.len() * 5 / 8);
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &ch in input.as_bytes() {
+        let value = BASE32_LOWER_ALPHABET.iter().position(|&c| c == ch)? as u32;
+        acc = (acc << 5) | value;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            decoded.push((acc >> bits) as u8);
+        }
+    }
+
+    // 残りビットが 5 以上だと 1 バイトに足りない（文字数 mod 8 が 1/3/6）。
+    if bits >= 5 {
+        return None;
+    }
+    // パディングに相当する末尾ビットは 0 でなければ非正規表現として拒否する。
+    if bits > 0 && acc & ((1u32 << bits) - 1) != 0 {
+        return None;
+    }
+
+    Some(decoded)
+}
+
+/// CIDv1 のデコード済みバイト列が、許可された形かどうかを判定する。
+fn is_valid_v1_bytes(bytes: &[u8]) -> bool {
+    let mut pos = 0;
+
+    let Some(version) = read_varint(bytes, &mut pos) else {
+        return false;
+    };
+    if version != 1 {
+        return false;
+    }
+
+    let Some(codec) = read_varint(bytes, &mut pos) else {
+        return false;
+    };
+    if codec != 0x55 && codec != 0x70 {
+        return false;
+    }
+
+    let Some(hash_code) = read_varint(bytes, &mut pos) else {
+        return false;
+    };
+    if hash_code != 0x12 {
+        return false;
+    }
+
+    let Some(digest_len) = read_varint(bytes, &mut pos) else {
+        return false;
+    };
+    if digest_len != 32 {
+        return false;
+    }
+
+    // read_varint は読み取った分しか pos を進めないため、ここでは pos <= bytes.len()。
+    // digest の後ろに余りバイトがあってはならない。
+    bytes.len() - pos == 32
+}
+
+/// 符号なし LEB128 (varint) を 1 つ読み、位置を進める。
+/// 10 バイト超・u64 オーバーフロー・非最小表現は拒否する。
+fn read_varint(bytes: &[u8], pos: &mut usize) -> Option<u64> {
+    let mut value: u64 = 0;
+    let mut shift: u32 = 0;
+    let mut count = 0;
+    loop {
+        let byte = *bytes.get(*pos)?;
+        *pos += 1;
+        count += 1;
+        if count > 10 {
+            return None;
+        }
+        let payload = (byte & 0x7f) as u64;
+        if shift == 63 && payload > 1 {
+            return None;
+        }
+        value |= payload << shift;
+        if byte & 0x80 == 0 {
+            // 複数バイトで 0 を表す等非最小表現は受け付けない。
+            if count > 1 && payload == 0 {
+                return None;
+            }
+            return Some(value);
+        }
+        shift += 7;
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuditLogEntry {
     pub log_id: Option<i64>,
@@ -1284,5 +1420,180 @@ mod tests {
         assert_eq!(empty.count, 0);
         assert_eq!(empty.first_log_id, None);
         assert_eq!(empty.last_log_id, None);
+    }
+
+    // ---- CID 厳密検証 (is_valid_cid) ----
+
+    /// リポジトリ内の監査ログ例にも登場する既知の CIDv1。
+    const VALID_CIDV1: &str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+
+    /// テスト用: バイト列をパディング無し base32lower に符号化する。
+    fn encode_base32_lower(bytes: &[u8]) -> String {
+        const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+        let mut encoded = String::new();
+        let mut acc: u32 = 0;
+        let mut bits: u32 = 0;
+        for &byte in bytes {
+            acc = (acc << 8) | u32::from(byte);
+            bits += 8;
+            while bits >= 5 {
+                bits -= 5;
+                encoded.push(ALPHABET[((acc >> bits) & 0x1f) as usize] as char);
+            }
+        }
+        if bits > 0 {
+            encoded.push(ALPHABET[((acc << (5 - bits)) & 0x1f) as usize] as char);
+        }
+        encoded
+    }
+
+    /// テスト用: version=1 / mh=0x12 / digest 長 32 の 36 バイト列を作る。
+    fn v1_bytes(codec: u8) -> Vec<u8> {
+        let mut raw = vec![1, codec, 0x12, 32];
+        raw.extend(core::array::from_fn::<u8, 32, _>(|i| i as u8));
+        raw
+    }
+
+    fn cid_from_bytes(raw: &[u8]) -> String {
+        format!("b{}", encode_base32_lower(raw))
+    }
+
+    #[test]
+    fn is_valid_cid_accepts_known_cidv0() {
+        // 使用前に前提を自前で検証する（46 文字 / Qm / 残り 44 文字が base58btc）。
+        const CIDV0: &str = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5AXQfD";
+        assert_eq!(CIDV0.len(), 46);
+        assert!(CIDV0.starts_with("Qm"));
+        assert!(
+            CIDV0.as_bytes()[2..]
+                .iter()
+                .all(|byte| BASE58_BTC_ALPHABET.contains(byte))
+        );
+        assert!(is_valid_cid(CIDV0));
+    }
+
+    #[test]
+    fn is_valid_cid_accepts_known_cidv1() {
+        // デコード結果が version=1 / dag-pb / sha2-256 / digest 32 バイトであることを確認。
+        let decoded = decode_base32_lower(&VALID_CIDV1[1..]).expect("known CIDv1 must decode");
+        assert_eq!(decoded.len(), 36);
+        assert_eq!(&decoded[..4], &[1, 0x70, 0x12, 32]);
+        assert!(is_valid_cid(VALID_CIDV1));
+
+        // raw codec (0x55) も許容される。
+        let raw_cid = cid_from_bytes(&v1_bytes(0x55));
+        assert!(
+            is_valid_cid(&raw_cid),
+            "raw CIDv1 must be accepted: {raw_cid}"
+        );
+    }
+
+    #[test]
+    fn is_valid_cid_rejects_invalid_plain_strings() {
+        let mut invalid: Vec<String> = [
+            "",
+            "QmTestCID",
+            "../etc/passwd",
+            "?etc/passwd",
+            "#etc/passwd",
+            "/etc/passwd",
+            "b",
+            "b0189",
+            "b!!!!",
+            "aafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        ]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+
+        // 区切り文字の混入（先頭・末尾）。
+        for sep in ['?', '#', '/'] {
+            invalid.push(format!("{sep}{VALID_CIDV1}"));
+            invalid.push(format!("{VALID_CIDV1}{sep}"));
+        }
+        // base58 に存在しない文字。
+        for bad in ['0', 'O', 'I', 'l'] {
+            invalid.push(format!("Qm{}", bad.to_string().repeat(44)));
+        }
+        // 長さ違反（46 文字でない Qm / 上限 128 文字超）。
+        // 47 文字の base58 文字列は上限ガードにマスクされず、CIDv0 の
+        // ちょうど 46 文字というチェックだけが効くケースとして残す。
+        invalid.push(format!("Qm{}", "a".repeat(44) + "x"));
+        invalid.push(format!("{VALID_CIDV1}x"));
+        invalid.push("b".to_string() + &"a".repeat(200));
+        invalid.push("a".repeat(129));
+        invalid.push("b".repeat(129));
+        invalid.push("Qm".to_string() + &"a".repeat(127));
+        invalid.push("Qm".to_string() + &"a".repeat(200));
+
+        for cid in invalid {
+            assert!(!is_valid_cid(&cid), "must reject {cid:?}");
+        }
+    }
+
+    #[test]
+    fn is_valid_cid_rejects_wrong_v1_structure() {
+        let mut cases: Vec<(&str, String)> = Vec::new();
+
+        // 不正 version（version チェックの mutation を弾く）。
+        for version in [0u8, 2, 0x7f] {
+            let mut raw = v1_bytes(0x70);
+            raw[0] = version;
+            cases.push(("version", cid_from_bytes(&raw)));
+        }
+        // 不正 codec（raw/dag-pb 以外）。
+        for codec in [0u8, 0x54, 0x71, 0x7f] {
+            cases.push(("codec", cid_from_bytes(&v1_bytes(codec))));
+        }
+        // 不正 multihash code。
+        let mut raw = v1_bytes(0x70);
+        raw[2] = 0x13;
+        cases.push(("multihash", cid_from_bytes(&raw)));
+        // 不正 digest 長。
+        for len in [0u8, 31, 33] {
+            let mut raw = v1_bytes(0x70);
+            raw[3] = len;
+            cases.push(("digest_len", cid_from_bytes(&raw)));
+        }
+        // digest が 1 バイト足りない / 余分にある。
+        let mut short = v1_bytes(0x70);
+        short.pop();
+        cases.push(("short digest", cid_from_bytes(&short)));
+        let mut long = v1_bytes(0x70);
+        long.push(0);
+        cases.push(("trailing byte", cid_from_bytes(&long)));
+        // 非最小 varint（version=1 を 0x81 0x00 で表現）。
+        let mut non_minimal = vec![0x81, 0x00, 0x70, 0x12, 32];
+        non_minimal.extend([0u8; 32]);
+        cases.push(("non-minimal varint", cid_from_bytes(&non_minimal)));
+
+        for (name, cid) in cases {
+            assert!(!is_valid_cid(&cid), "{name} must be rejected: {cid}");
+        }
+    }
+
+    #[test]
+    fn is_valid_cid_rejects_invalid_base32_and_noncanonical_padding() {
+        let valid = cid_from_bytes(&v1_bytes(0x70));
+        assert!(
+            is_valid_cid(&valid),
+            "control: generated CIDv1 must be valid"
+        );
+
+        // なお 'l' は base32lower の有効文字なのでここには含めない。
+        for ch in ['0', '1', '8', '9', '=', 'A', 'O', 'I', '/', '?', '#'] {
+            let mut broken = valid.clone();
+            broken.replace_range(10..11, &ch.to_string());
+            assert!(
+                !is_valid_cid(&broken),
+                "invalid base32 char {ch:?} must be rejected"
+            );
+        }
+
+        // 末尾 2 ビットのパディングが 0 でない非正規 base32（'i'=8 の下位 2 ビットは 00、'j'=9 は 01）。
+        let mut noncanonical = VALID_CIDV1.to_string();
+        assert_eq!(noncanonical.pop(), Some('i'));
+        noncanonical.push('j');
+        assert!(!is_valid_cid(&noncanonical));
     }
 }
