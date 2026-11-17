@@ -33,7 +33,7 @@ test.describe('Content Upload Flow', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify('QmMockUploadCID12345'),
+        body: JSON.stringify('QmXU4R1WzwFggZbSRrrgtL31sQFzHFqEZaydErQUwhCm8e'),
       });
     });
 

@@ -10,7 +10,7 @@ test.describe('R5-04: Export My Data', () => {
     generated_at: '2026-11-18T00:00:00Z',
     sub: 'mock_sub_hash',
     users: [{ sub: 'mock_sub_hash' }],
-    contents: [{ cid: 'QmExportTest' }],
+    contents: [{ cid: 'QmRh161kL1ZzjpqnbeeGfeTycfyz9sjriFRgJNCZmDhs6y' }],
     favorites: [],
     transactions: [],
     signatures: [],

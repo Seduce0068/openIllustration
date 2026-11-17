@@ -58,8 +58,7 @@ P2（品質・保守・プロダクト拡張）:
 - [x] 既存 /mod/reports の通報理由を要約化（2026-11-18 対応済み、ADR-0004 §9 に整合）
 - [x] R5-04 のエクスポートのみ（2026-11-18 対応済み、削除権は法務・外部アンカー決定後）
 - [x] client のエラー表示: /auth/verify 500 と /content/{cid}/audit 500 のサイレント失敗を修正（2026-11-18 対応済み）
-- [ ] CID 厳密検証（REVIEW_REPORT 残課題）: is_safe_cid は英数字・128字以下の基本検査のみ。
-  CIDv0/v1 の multibase/multicodec/varint 長を common へ実装し各入力で適用する。
+- [x] CID 厳密検証（REVIEW_REPORT 残課題、2026-11-18 対応済み）: common::is_valid_cid で CIDv0/v1 を検証し全入力へ適用、mock CID も正規形式へ修正。
 - [ ] 中立化URLの件数指標（URL本文・IPを出さず /metrics へ）と価格単位の型エイリアス固定。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲

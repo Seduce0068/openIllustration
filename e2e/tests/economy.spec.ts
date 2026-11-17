@@ -7,7 +7,7 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
   };
 
   test('should keep mock support disabled and the ledger read-only', async ({ page }) => {
-    const mockCID = 'QmSupportTest123';
+    const mockCID = 'QmXgZ73Cr8k75MwkR9e3MwP94bnFx1bgvRRdA9rfd7D6JU';
     const mockPrice = 500;
     const mockContent = Buffer.from('fake-jxl-data');
     const mockHash = computeHash(mockContent);

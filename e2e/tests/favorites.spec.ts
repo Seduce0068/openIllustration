@@ -14,7 +14,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     const plainBody = 'plain novel body';
     const items = [
       {
-        cid: 'QmFavoriteNovel',
+        cid: 'QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB',
         checksum: computeHash(novelBody),
         type: 'Novel',
         status: 'Approved',
@@ -25,7 +25,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
         is_favorite: true,
       },
       {
-        cid: 'QmPlainNovel',
+        cid: 'QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP',
         checksum: computeHash(plainBody),
         type: 'Novel',
         status: 'Approved',
@@ -123,7 +123,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     // 各アイテムの実体と監査ログ（カードの検証表示を安定させる）。
     for (const item of items) {
-      const body = item.cid === 'QmFavoriteNovel' ? novelBody : plainBody;
+      const body = item.cid === 'QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB' ? novelBody : plainBody;
       await page.route(
         url => url.pathname === `/content/${item.cid}`,
         async route => {
@@ -159,7 +159,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     // 回数を固定し、かつリクエスト内容も完全一致で検証して過剰再フェッチを検出する。
     await card('Plain Story').getByRole('button', { name: 'Add to favorites' }).click();
     await expect.poll(() => favoriteCalls).toEqual([
-      { method: 'POST', path: '/content/QmPlainNovel/favorite' },
+      { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
     ]);
     await expect(
       card('Plain Story').getByRole('button', { name: 'Remove from favorites' }),
@@ -172,8 +172,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     // ★ → DELETE が呼ばれ、ボタン状態が戻る。
     await card('Fav Story').getByRole('button', { name: 'Remove from favorites' }).click();
     await expect.poll(() => favoriteCalls).toEqual([
-      { method: 'POST', path: '/content/QmPlainNovel/favorite' },
-      { method: 'DELETE', path: '/content/QmFavoriteNovel/favorite' },
+      { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
+      { method: 'DELETE', path: '/content/QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB/favorite' },
     ]);
     await expect(
       card('Fav Story').getByRole('button', { name: 'Add to favorites' }),
@@ -207,9 +207,9 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await card('Fav Story').getByRole('button', { name: 'Add to favorites' }).focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => favoriteCalls).toEqual([
-      { method: 'POST', path: '/content/QmPlainNovel/favorite' },
-      { method: 'DELETE', path: '/content/QmFavoriteNovel/favorite' },
-      { method: 'POST', path: '/content/QmFavoriteNovel/favorite' },
+      { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
+      { method: 'DELETE', path: '/content/QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB/favorite' },
+      { method: 'POST', path: '/content/QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB/favorite' },
     ]);
     await expect(
       card('Fav Story').getByRole('button', { name: 'Remove from favorites' }),

@@ -109,7 +109,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
   });
 
   test('AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること', async ({ page }) => {
-    const cid = 'QmErrorPathsAudit500';
+    const cid = 'QmW6DWQWmUGYuNy9iFErbYjGdorPNjMevh6fgfrbDQqhy2';
     // ダッシュボードに監査対象のカードを1件だけ出す。
     await page.route('**/content', async route => {
       await route.fulfill({

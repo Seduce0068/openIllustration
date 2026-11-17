@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
-  const mockCID = 'QmAuditTestCID';
+  const mockCID = 'QmVPyxX9eKoR9LaKp2Hgt9rVkAffptArJ3zW5hvPLE713h';
 
   // GET /mod/reports の reason はサーバー側 common::summarize_reason で
   // PII 除去 + 最大120文字に要約される。E2E では実サーバー結合を行わず、
@@ -14,7 +14,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   };
   const reportFixture = (reason: string) => ({
     report_id: 42,
-    target_cid: 'QmSummaryReportCID',
+    target_cid: 'QmRRTBnaNs7jwYiWadPrEDgrs9a199VZUD3ftVLEJ5DJw5',
     reason,
     created_at: '2026-11-18T00:00:00Z',
     status: 'Pending',
@@ -58,9 +58,9 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
     const reasonLine = page.locator('p:has-text("Reason:")').first();
     await expect(reasonLine).toContainText(summarizedReason, { timeout: 10000 });
-    await expect(page.getByText('QmSummaryReportCID')).toBeVisible();
+    await expect(page.getByText('QmRRTBnaNs7jwYiWadPrEDgrs9a199VZUD3ftVLEJ5DJw5')).toBeVisible();
 
-    await page.locator('input[placeholder="TARGET CID"]').fill('QmTestReportCID');
+    await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
 
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();

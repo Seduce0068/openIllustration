@@ -13,7 +13,7 @@ test.describe('Content search and filtering (R5-01)', () => {
     const novelBody = 'novel body';
     const illustrationBody = 'illustration body';
     const novel = {
-      cid: 'QmSearchNovel123',
+      cid: 'QmQX9pNudeUXaYgUxs2tYxXY5ZmWp3HnThR3Q8ZD7GK6Cx',
       checksum: computeHash(novelBody),
       type: 'Novel',
       status: 'Approved',
@@ -24,7 +24,7 @@ test.describe('Content search and filtering (R5-01)', () => {
       is_favorite: false,
     };
     const illustration = {
-      cid: 'QmSearchIllustration123',
+      cid: 'QmbgbnQRxbKUvPLW7Nx4PonKWZfiTRa2YvJchE6chYqigT',
       checksum: computeHash(illustrationBody),
       type: 'Illustration',
       status: 'Approved',

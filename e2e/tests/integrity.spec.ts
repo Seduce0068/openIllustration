@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import * as crypto from 'crypto';
 
 test.describe('Forensic Integrity Verification (INT-01)', () => {
-  const MOCK_CID = 'QmTestForensicIntegrity12345';
+  const MOCK_CID = 'QmTFfE7GUfHHzrJDcUQycwRqHhxMCJ2Z1nJ8cqu2uoerhp';
   const ORIGINAL_CONTENT = 'This is a genuine forensic evidence content.';
   const TAMPERED_CONTENT = 'This is a TAMPERED forensic evidence content.';
   
