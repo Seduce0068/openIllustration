@@ -86,9 +86,13 @@ cargo test -p common
 cd e2e && npm test
 ```
 
-
 ## 年齢/地域ポリシー（DEC-02 方針、公開設定）
 
-- 有効な年齢/地域ポリシー設定値（非秘密）は認証不要 `GET /policy/age` で常時公開される（`settings_always_public=true`）。
-- 既定は保守的一律ベースライン `AGE_DEFAULT_MINIMUM=21`（法的事実/適合の確定主張ではない）。`AGE_COUNTRY_OVERRIDES`・`AGE_TARGET_REGIONS`・`AGE_ENFORCEMENT_MODE`・`AGE_REQUIRE_EXPLICIT_CONFIGURATION`・`AGE_POLICY_CONFIGURED` で運用者が構成可能。
-- `trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行入力は自己申告であり、本人確認済み属性ではない。詳細と制約は [docs/AGE_VALIDATION_POLICY.md](docs/AGE_VALIDATION_POLICY.md) を参照。
+- 有効な年齢/地域ポリシー設定値（非秘密）は認証不要 `GET /policy/age` で常時公開される
+  （`settings_always_public=true`）。
+- 既定は保守的一律ベースライン `AGE_DEFAULT_MINIMUM=21`（法的事実/適合の確定主張ではない）。
+  `AGE_COUNTRY_OVERRIDES`・`AGE_TARGET_REGIONS`・`AGE_ENFORCEMENT_MODE`・
+  `AGE_REQUIRE_EXPLICIT_CONFIGURATION`・`AGE_POLICY_CONFIGURED` で運用者が構成可能。
+- `trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。
+  現行入力は自己申告であり、本人確認済み属性ではない。詳細と制約は
+  [docs/AGE_VALIDATION_POLICY.md](docs/AGE_VALIDATION_POLICY.md) を参照。
