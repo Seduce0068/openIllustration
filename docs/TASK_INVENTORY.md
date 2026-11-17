@@ -181,6 +181,7 @@ status: current
 - [外部要因] 2026-11-16 時点で GitHub Actions のジョブが請求/上限により開始されない。CI 再開までローカル検証ループ（fmt/clippy/test/deny/wasm/E2E）を代替ゲートとする。
 
 - [対応済み] E2E 失敗時アーカイブ: `ci-e2e.sh` が `e2e/test-results`（trace/スクリーンショット/error-context）と `e2e/playwright-report`（HTML）をタイムスタンプ付き tar.gz へ保存しパスを表示。`E2E_ARTIFACT_DIR` で出力先を変更可。アーカイブ内容を実確認（[REVIEW_REPORT.md](REVIEW_REPORT.md)）。
+- [対応済み] 年齢拒否 E2E のフレーキー対策: `waitForTimeout(2000)` を廃し、インターセプトした 403 レスポンスの完了を `waitForResponse` で待つ状態ベース検証へ変更。E2E 9件成功を確認。
 - [中] CI 側の artifact アップロードとチェック結果の分離（共通ワークフロー拡張が必要）。
 - [対応済み] CI E2E スクリプトのローカル再現: trunk 0.21.14 固定版の `NO_COLOR=1` 解釈エラーを `unset NO_COLOR` で回避。8080 占有時に備え `E2E_CLIENT_PORT` 既定値 18080 を設定。`bash e2e/ci-e2e.sh` が9件成功（CI と同一ゲート）。
 - [対応済み] E2E 依存バージョン検証: `ci-e2e.sh` が `MIN_NODE_MAJOR`（既定18、`package.json` の engines と整合）と `MIN_CHROME_MAJOR`（既定120）を検査し、下回れば失敗。拒否ケース（999指定）と通常実行（9件成功）を確認。

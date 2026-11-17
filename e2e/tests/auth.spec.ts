@@ -28,9 +28,15 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
 
     await page.goto('/');
     const loginButton = page.getByRole('button', { name: 'CONNECT WITH JPKI' });
+
+    // 固定スリープではなく、インターセプトした 403 レスポンスの完了を待つ。
+    const rejected = page.waitForResponse(
+      response => response.url().includes('/auth/verify') && response.status() === 403,
+      { timeout: 10000 }
+    );
     await loginButton.click();
-    
-    await page.waitForTimeout(2000);
+    await rejected;
+
     await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
   });
 });
