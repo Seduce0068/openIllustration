@@ -11,7 +11,7 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
 
     await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
     
-    const userHash = page.locator('span.text-green-500');
+    const userHash = page.getByTestId('user-hash');
     await expect(userHash).toBeVisible();
     const hashText = await userHash.innerText();
     expect(hashText.length).toBeGreaterThan(0);

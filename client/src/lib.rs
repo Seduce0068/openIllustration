@@ -636,7 +636,7 @@ pub fn App() -> impl IntoView {
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
                             "LEDGER"
                         </button>
-                        <span class="text-green-500 border border-green-500/20 px-2">
+                        <span data-testid="user-hash" class="text-green-500 border border-green-500/20 px-2">
                             {move || user_hash.get().map(|h| h[0..8.min(h.len())].to_string()).unwrap_or_default()}
                         </span>
                     </div>
