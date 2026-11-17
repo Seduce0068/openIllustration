@@ -19,7 +19,7 @@ use common::Claims;
 use libsql::{Builder, Connection};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1283,6 +1283,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/mod/operators/{user_hash}/unban", post(unban_user))
         .route("/mod/content/{cid}/unpin", post(record_unpin))
         .route("/mod/vote", post(mod_vote))
+        .route("/mod/stats", get(mod_stats))
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
         .route(
@@ -2908,6 +2909,259 @@ pub async fn ensure_user_not_banned(db: &Connection, user_hash: &str) -> Result<
         }
     }
     Ok(())
+}
+
+// ---- R5-09: 透明性ダッシュボード（運用者限定の認証内集計） ----
+//
+// プライバシー設計: DB からは集計済みのカラム（月 / ステータス / アクション /
+// 件数 / 定足数フラグ）だけを読み、CID・reason・user_hash は一切 SELECT しない。
+// レスポンス型も同じホワイトリストで、移送可能なフィールドを型レベルで固定する。
+
+/// `content_audit_log` の集計行（新ステータス・月・件数のみ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModAuditCountRow {
+    /// UTC の `YYYY-MM`（`substr(created_at, 1, 7)`）。
+    pub month: String,
+    /// `content_audit_log.new_status` のホワイトリスト値。
+    pub new_status: String,
+    pub count: i64,
+}
+
+/// `governance_audit_log` の集計行（アクション・月・件数のみ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModGovernanceCountRow {
+    /// UTC の `YYYY-MM`（`substr(created_at, 1, 7)`）。
+    pub month: String,
+    /// `governance_audit_log.action` のホワイトリスト値。
+    pub action: String,
+    pub count: i64,
+}
+
+/// 確定通報の集計行（月・定足数未達フラグ・件数のみ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModConclusionCountRow {
+    /// UTC の `YYYY-MM`（`substr(concluded_at, 1, 7)`）。
+    pub month: String,
+    /// 投票数が定足数（3）未達で棄却された確定かどうか。
+    pub quorum_not_met: bool,
+    pub count: i64,
+}
+
+/// 全体集計。 snake_case のフィールド名がそのまま JSON キーになる。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModStatsTotals {
+    pub reports: i64,
+    pub concluded: i64,
+    pub approved: i64,
+    pub rejected: i64,
+    pub quorum_not_met: i64,
+    pub bans: i64,
+    pub unbans: i64,
+    pub unpins: i64,
+}
+
+/// 月次集計。 `quorum_not_met` は共通インターフェース上 totals のみに存在する。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModStatsMonthly {
+    pub month: String,
+    pub reports: i64,
+    pub concluded: i64,
+    pub approved: i64,
+    pub rejected: i64,
+    pub bans: i64,
+    pub unbans: i64,
+    pub unpins: i64,
+}
+
+/// `GET /mod/stats` のレスポンス。機微情報（CID / reason / user_hash）は型に存在しない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModStatsResponse {
+    /// RFC 3339（UTC）。
+    pub generated_at: String,
+    pub totals: ModStatsTotals,
+    pub monthly: Vec<ModStatsMonthly>,
+}
+
+/// 月次エントリを取得（または既定値で作成）する。
+fn mod_stats_month<'a>(
+    monthly: &'a mut BTreeMap<String, ModStatsMonthly>,
+    month: &str,
+) -> &'a mut ModStatsMonthly {
+    monthly
+        .entry(month.to_string())
+        .or_insert_with(|| ModStatsMonthly {
+            month: month.to_string(),
+            ..Default::default()
+        })
+}
+
+/// DB 依存を持たない集計ロジック。
+///
+/// - `new_status` / `action` はホワイトリスト方式で、未知の値は無視する。
+/// - 定足数未達の確定は ADR-0004 により `new_status='Approved'` として監査に残る。
+///   そのため `approved` から差し引き、`quorum_not_met` として別枠で計上する
+///   （同数は `Rejected` なので `rejected` にそのまま計上される）。
+/// - 月は入力行の `YYYY-MM` をそのまま使い、UTC 境界の再解釈は行わない。
+/// - 月次は月の昇順で返す。
+pub fn build_mod_stats(
+    generated_at: &str,
+    audits: &[ModAuditCountRow],
+    governance: &[ModGovernanceCountRow],
+    conclusions: &[ModConclusionCountRow],
+) -> ModStatsResponse {
+    let mut totals = ModStatsTotals::default();
+    let mut monthly: BTreeMap<String, ModStatsMonthly> = BTreeMap::new();
+
+    for row in audits {
+        let count = row.count.max(0);
+        match row.new_status.as_str() {
+            "Reported" => {
+                totals.reports += count;
+                mod_stats_month(&mut monthly, &row.month).reports += count;
+            }
+            "Approved" => {
+                totals.approved += count;
+                mod_stats_month(&mut monthly, &row.month).approved += count;
+            }
+            "Rejected" => {
+                totals.rejected += count;
+                mod_stats_month(&mut monthly, &row.month).rejected += count;
+            }
+            _ => {}
+        }
+    }
+
+    for row in governance {
+        let count = row.count.max(0);
+        match row.action.as_str() {
+            "BAN" => {
+                totals.bans += count;
+                mod_stats_month(&mut monthly, &row.month).bans += count;
+            }
+            "UNBAN" => {
+                totals.unbans += count;
+                mod_stats_month(&mut monthly, &row.month).unbans += count;
+            }
+            "UNPIN" => {
+                totals.unpins += count;
+                mod_stats_month(&mut monthly, &row.month).unpins += count;
+            }
+            _ => {}
+        }
+    }
+
+    for row in conclusions {
+        let count = row.count.max(0);
+        totals.concluded += count;
+        mod_stats_month(&mut monthly, &row.month).concluded += count;
+        if row.quorum_not_met {
+            totals.quorum_not_met += count;
+            totals.approved = totals.approved.saturating_sub(count);
+            let entry = mod_stats_month(&mut monthly, &row.month);
+            entry.approved = entry.approved.saturating_sub(count);
+        }
+    }
+
+    ModStatsResponse {
+        generated_at: generated_at.to_string(),
+        totals,
+        monthly: monthly.into_values().collect(),
+    }
+}
+
+/// `content_audit_log` から集計行だけを読み出す（CID / reason / changed_by は SELECT しない）。
+async fn load_mod_audit_counts(db: &Connection) -> Result<Vec<ModAuditCountRow>, AppError> {
+    let mut rows = db
+        .query(
+            "SELECT substr(created_at, 1, 7) AS month, new_status, COUNT(*) AS cnt
+             FROM content_audit_log
+             GROUP BY month, new_status",
+            (),
+        )
+        .await?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().await? {
+        result.push(ModAuditCountRow {
+            month: row.get(0)?,
+            new_status: row.get(1)?,
+            count: row.get(2)?,
+        });
+    }
+    Ok(result)
+}
+
+/// `governance_audit_log` から集計行だけを読み出す（target / actor_hash / reason は SELECT しない）。
+async fn load_mod_governance_counts(
+    db: &Connection,
+) -> Result<Vec<ModGovernanceCountRow>, AppError> {
+    let mut rows = db
+        .query(
+            "SELECT substr(created_at, 1, 7) AS month, action, COUNT(*) AS cnt
+             FROM governance_audit_log
+             GROUP BY month, action",
+            (),
+        )
+        .await?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().await? {
+        result.push(ModGovernanceCountRow {
+            month: row.get(0)?,
+            action: row.get(1)?,
+            count: row.get(2)?,
+        });
+    }
+    Ok(result)
+}
+
+/// 確定通報を月・定足数未達フラグ別に集計する。
+/// reason / target_cid / voter_hash は SELECT せず、投票数（COUNT）だけを使う。
+async fn load_mod_conclusion_counts(
+    db: &Connection,
+) -> Result<Vec<ModConclusionCountRow>, AppError> {
+    let mut rows = db
+        .query(
+            "SELECT substr(r.concluded_at, 1, 7) AS month,
+                    CASE WHEN COALESCE(v.vote_count, 0) < 3 THEN 1 ELSE 0 END AS quorum_not_met,
+                    COUNT(*) AS cnt
+             FROM reports r
+             LEFT JOIN (
+                 SELECT report_id, COUNT(*) AS vote_count FROM votes GROUP BY report_id
+             ) v ON v.report_id = r.report_id
+             WHERE r.concluded_at IS NOT NULL
+             GROUP BY month, quorum_not_met",
+            (),
+        )
+        .await?;
+    let mut result = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let quorum_not_met: i64 = row.get(1)?;
+        result.push(ModConclusionCountRow {
+            month: row.get(0)?,
+            quorum_not_met: quorum_not_met != 0,
+            count: row.get(2)?,
+        });
+    }
+    Ok(result)
+}
+
+/// R5-09: 透明性ダッシュボードの集計値を返す（公開 API ではない）。
+/// 認証済みかつ設定済みの運用者だけが参照でき、未設定・未登録・BAN 済みは 403 とする。
+pub async fn mod_stats(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+) -> Result<Json<ModStatsResponse>, AppError> {
+    require_moderation_operator(&state, &claims.sub).await?;
+
+    let audits = load_mod_audit_counts(&state.db).await?;
+    let governance = load_mod_governance_counts(&state.db).await?;
+    let conclusions = load_mod_conclusion_counts(&state.db).await?;
+
+    Ok(Json(build_mod_stats(
+        &chrono::Utc::now().to_rfc3339(),
+        &audits,
+        &governance,
+        &conclusions,
+    )))
 }
 
 pub fn validate_age(

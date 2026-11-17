@@ -1,9 +1,10 @@
 use crate::{
     AppError, AppState, ContentFilter, ContentMeta, ContentQuery, DEFAULT_CONTENT_LIMIT,
     FavoriteResponse, MAX_CONTENT_DESCRIPTION_BYTES, MAX_CONTENT_LIMIT, MAX_CONTENT_TAG_BYTES,
-    MAX_CONTENT_TAGS, MAX_CONTENT_TITLE_BYTES, VerifyRequest, VerifyResponse, allowed_origins,
-    build_content_query, build_router, ensure_user_not_banned, escape_like, parse_content_query,
-    parse_tags_field,
+    MAX_CONTENT_TAGS, MAX_CONTENT_TITLE_BYTES, ModAuditCountRow, ModConclusionCountRow,
+    ModGovernanceCountRow, ModStatsMonthly, ModStatsResponse, ModStatsTotals, VerifyRequest,
+    VerifyResponse, allowed_origins, build_content_query, build_mod_stats, build_router,
+    ensure_user_not_banned, escape_like, parse_content_query, parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
     process_report_conclusion, update_content_status, validate_age, validate_content_metadata,
     validate_jwt_secret, validate_upload_content, validate_upload_content_type,
@@ -8670,4 +8671,432 @@ async fn test_migration_012_favorites_unique_and_cascade() {
         .await
         .unwrap();
     assert_eq!(favorite_count(&db, "u1", "QmFav2").await, 0);
+}
+
+// ---- R5-09: 透明性ダッシュボード（運用者限定の認証内集計） ----
+
+/// 認証付きで `/mod/stats` を呼ぶ（`None` なら認証ヘッダなし）。
+async fn send_mod_stats_request(app: &Router, sub: Option<&str>) -> Response {
+    let mut request = Request::get("/mod/stats");
+    if let Some(sub) = sub {
+        request = request.header(
+            "authorization",
+            format!("Bearer {}", generate_token(TEST_JWT_SECRET, sub).await),
+        );
+    }
+    app.clone()
+        .oneshot(with_peer(
+            request.body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap()
+}
+
+fn audit_count(month: &str, new_status: &str, count: i64) -> ModAuditCountRow {
+    ModAuditCountRow {
+        month: month.to_string(),
+        new_status: new_status.to_string(),
+        count,
+    }
+}
+
+fn governance_count(month: &str, action: &str, count: i64) -> ModGovernanceCountRow {
+    ModGovernanceCountRow {
+        month: month.to_string(),
+        action: action.to_string(),
+        count,
+    }
+}
+
+fn conclusion_count(month: &str, quorum_not_met: bool, count: i64) -> ModConclusionCountRow {
+    ModConclusionCountRow {
+        month: month.to_string(),
+        quorum_not_met,
+        count,
+    }
+}
+
+const STATS_GENERATED_AT: &str = "2026-11-18T02:00:00+00:00";
+
+#[test]
+fn test_build_mod_stats_empty() {
+    let stats = build_mod_stats(STATS_GENERATED_AT, &[], &[], &[]);
+
+    assert_eq!(stats.generated_at, STATS_GENERATED_AT);
+    assert_eq!(stats.totals, ModStatsTotals::default());
+    assert!(stats.monthly.is_empty());
+}
+
+#[test]
+fn test_build_mod_stats_tie_maps_to_rejected() {
+    // ADR-0004: 同数（Reject >= Approve）は Rejected に倒る。
+    let stats = build_mod_stats(
+        STATS_GENERATED_AT,
+        &[audit_count("2026-11", "Rejected", 1)],
+        &[],
+        &[conclusion_count("2026-11", false, 1)],
+    );
+
+    assert_eq!(stats.totals.rejected, 1);
+    assert_eq!(stats.totals.concluded, 1);
+    assert_eq!(stats.totals.quorum_not_met, 0);
+    assert_eq!(stats.totals.approved, 0);
+    assert_eq!(
+        stats.monthly,
+        vec![ModStatsMonthly {
+            month: "2026-11".to_string(),
+            rejected: 1,
+            concluded: 1,
+            ..Default::default()
+        }]
+    );
+}
+
+#[test]
+fn test_build_mod_stats_quorum_not_met_excluded_from_approved() {
+    // 定足数未達の確定は new_status='Approved' として監査に残るが、
+    // 承認ではなく quorum_not_met として別枠に計上する。
+    let stats = build_mod_stats(
+        STATS_GENERATED_AT,
+        &[audit_count("2026-11", "Approved", 1)],
+        &[],
+        &[conclusion_count("2026-11", true, 1)],
+    );
+
+    assert_eq!(stats.totals.quorum_not_met, 1);
+    assert_eq!(stats.totals.approved, 0);
+    assert_eq!(stats.totals.concluded, 1);
+    assert_eq!(stats.totals.rejected, 0);
+    assert_eq!(
+        stats.monthly,
+        vec![ModStatsMonthly {
+            month: "2026-11".to_string(),
+            concluded: 1,
+            ..Default::default()
+        }]
+    );
+}
+
+#[test]
+fn test_build_mod_stats_month_boundary_utc() {
+    // 1月31日 23:59:59 と 2月1日 00:00:00 を UTC の YYYY-MM で分ける。
+    let stats = build_mod_stats(
+        STATS_GENERATED_AT,
+        &[
+            audit_count("2025-12", "Reported", 1),
+            audit_count("2026-01", "Reported", 2),
+            audit_count("2026-01", "Approved", 3),
+        ],
+        &[
+            governance_count("2025-12", "BAN", 1),
+            governance_count("2026-01", "UNBAN", 1),
+            governance_count("2026-01", "UNPIN", 2),
+        ],
+        &[conclusion_count("2026-01", true, 1)],
+    );
+
+    assert_eq!(stats.totals.reports, 3);
+    assert_eq!(stats.totals.approved, 2); // 3 - 定足数未達1
+    assert_eq!(stats.totals.quorum_not_met, 1);
+    assert_eq!(stats.totals.concluded, 1);
+    assert_eq!(stats.totals.bans, 1);
+    assert_eq!(stats.totals.unbans, 1);
+    assert_eq!(stats.totals.unpins, 2);
+    assert_eq!(
+        stats.monthly,
+        vec![
+            ModStatsMonthly {
+                month: "2025-12".to_string(),
+                reports: 1,
+                bans: 1,
+                ..Default::default()
+            },
+            ModStatsMonthly {
+                month: "2026-01".to_string(),
+                reports: 2,
+                approved: 2,
+                concluded: 1,
+                unbans: 1,
+                unpins: 2,
+                ..Default::default()
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn test_mod_stats_requires_authentication() {
+    let (app, _db) = setup_mod_app_with_operators(&["operator"]).await;
+    let response = send_mod_stats_request(&app, None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_mod_stats_forbidden_when_operator_not_configured() {
+    // 運用者未設定（空集合）はフェイルクローズで 403。
+    let (app, _db) = setup_mod_app().await;
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_mod_stats_forbidden_when_operator_not_registered() {
+    // 設定済み運用者と別の sub は 403。
+    let (app, _db) = setup_mod_app_with_operators(&["configured_operator"]).await;
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_mod_stats_forbidden_when_operator_banned() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('operator')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "UPDATE users SET is_banned = TRUE WHERE user_hash = 'operator'",
+        (),
+    )
+    .await
+    .unwrap();
+
+    // BAN 済み運用者は既存の ensure_user_not_banned で拒否される。
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_mod_stats_response_contains_no_sensitive_fields() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
+         VALUES ('QmModTest', 'Approved', 'Reported', 'SECRET_USER_HASH_SENTINEL',
+                 'SECRET_REASON_SENTINEL', 'hash1', '2026-01-31 23:59:59')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
+         VALUES ('BAN', 'SECRET_CID_SENTINEL', 'SECRET_USER_HASH_SENTINEL',
+                 'SECRET_REASON_SENTINEL', '2026-02-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+
+    // 移送してはならない値がレスポンス文字列に一切現れないこと。
+    for sentinel in [
+        "SECRET_REASON_SENTINEL",
+        "SECRET_CID_SENTINEL",
+        "SECRET_USER_HASH_SENTINEL",
+        "reason",
+        "cid",
+        "user_hash",
+    ] {
+        assert!(
+            !body.contains(sentinel),
+            "response must not contain {sentinel:?}: {body}"
+        );
+    }
+
+    // ホワイトリストでキー集合を固定（余分なフィールドがないこと）。
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let root = value.as_object().unwrap();
+    let mut root_keys: Vec<&String> = root.keys().collect();
+    root_keys.sort();
+    assert_eq!(
+        root_keys,
+        vec!["generated_at", "monthly", "totals"],
+        "top-level keys must be snake_case and whitelisted"
+    );
+
+    let mut total_keys: Vec<&String> = root["totals"].as_object().unwrap().keys().collect();
+    total_keys.sort();
+    assert_eq!(
+        total_keys,
+        vec![
+            "approved",
+            "bans",
+            "concluded",
+            "quorum_not_met",
+            "rejected",
+            "reports",
+            "unbans",
+            "unpins",
+        ]
+    );
+
+    let monthly = root["monthly"].as_array().unwrap();
+    assert_eq!(monthly.len(), 2, "月またぎで 2 エントリになること");
+    for entry in monthly {
+        let mut keys: Vec<&String> = entry.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "approved",
+                "bans",
+                "concluded",
+                "month",
+                "rejected",
+                "reports",
+                "unbans",
+                "unpins",
+            ],
+            "monthly must not contain quorum_not_met"
+        );
+    }
+
+    // レスポンス型へも機微フィールドが存在しない（コンパイル時の型保証）。
+    let parsed: ModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed.totals.reports, 1);
+    assert_eq!(parsed.totals.bans, 1);
+}
+
+#[tokio::test]
+async fn test_mod_stats_aggregates_from_real_db() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+
+    // 月またぎの監査エントリ（UTC 文字列の先頭7桁で grouping される）。
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
+         VALUES ('QmModTest', 'Approved', 'Reported', 'reporter', 'report reason',
+                 'hash1', '2025-12-31 23:59:59')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
+         VALUES ('QmModTest', 'Reported', 'Rejected', 'SYSTEM_GOVERNANCE', 'tie',
+                 'hash2', '2026-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
+         VALUES ('QmModTest', 'Rejected', 'Approved', 'SYSTEM_GOVERNANCE', 'quorum not met',
+                 'hash3', '2026-01-01 00:00:01')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
+         VALUES ('BAN', 'target1', 'operator', 'ban reason', '2025-12-31 23:59:59')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
+         VALUES ('UNBAN', 'target1', 'operator', 'unban reason', '2026-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
+         VALUES ('UNPIN', 'QmModTest', 'operator', 'unpin reason', '2026-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    // report 1 は定足数充足（4票）の確定。
+    db.execute(
+        "UPDATE reports SET concluded_at = '2026-01-01 00:00:00' WHERE report_id = 1",
+        (),
+    )
+    .await
+    .unwrap();
+    // report 2 は定足数未達（2票）の確定。report 3 は未確定で集計対象外。
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason, concluded_at)
+         VALUES (2, 'QmModTest', 'secret2', '2026-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (3, 'QmModTest', 'secret3')",
+        (),
+    )
+    .await
+    .unwrap();
+    for voter in ["v1", "v2", "v3", "v4", "v5", "v6", "v7"] {
+        db.execute(
+            "INSERT INTO users (user_hash) VALUES (?)",
+            [voter.to_string()],
+        )
+        .await
+        .unwrap();
+    }
+    for (report_id, voter, result) in [
+        (1, "v1", "Approve"),
+        (1, "v2", "Approve"),
+        (1, "v3", "Reject"),
+        (1, "v4", "Reject"),
+        (2, "v5", "Approve"),
+        (2, "v6", "Reject"),
+        (3, "v7", "Approve"),
+    ] {
+        db.execute(
+            "INSERT INTO votes (report_id, voter_hash, vote_result) VALUES (?, ?, ?)",
+            (report_id, voter, result),
+        )
+        .await
+        .unwrap();
+    }
+
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let stats: ModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(&stats.generated_at).is_ok(),
+        "generated_at must be RFC3339"
+    );
+    assert_eq!(stats.totals.reports, 1);
+    assert_eq!(stats.totals.concluded, 2);
+    assert_eq!(stats.totals.rejected, 1);
+    assert_eq!(stats.totals.approved, 0); // Approved監査1件 - 定足数未達1件
+    assert_eq!(stats.totals.quorum_not_met, 1);
+    assert_eq!(stats.totals.bans, 1);
+    assert_eq!(stats.totals.unbans, 1);
+    assert_eq!(stats.totals.unpins, 1);
+    assert_eq!(
+        stats.monthly,
+        vec![
+            ModStatsMonthly {
+                month: "2025-12".to_string(),
+                reports: 1,
+                bans: 1,
+                ..Default::default()
+            },
+            ModStatsMonthly {
+                month: "2026-01".to_string(),
+                rejected: 1,
+                approved: 0,
+                concluded: 2,
+                unbans: 1,
+                unpins: 1,
+                ..Default::default()
+            },
+        ]
+    );
 }
