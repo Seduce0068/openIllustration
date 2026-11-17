@@ -396,20 +396,31 @@ impl MockOidcServer {
         }
     }
 
-    fn logout_token(&self, sid: &str) -> String {
+    /// 指定した追加クレームで logout token を署名する（異常系テスト用）。
+    fn logout_token_with_claims(&self, extra: serde_json::Value) -> String {
         let now = chrono::Utc::now().timestamp() as usize;
-        let claims = json!({
+        let mut claims = json!({
             "iss": self.state.base_url,
             "aud": self.state.client_id,
             "exp": now + 300,
             "iat": now,
             "jti": uuid::Uuid::new_v4().to_string(),
-            "sid": sid,
-            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
         });
+        if let (Some(base), Some(extra)) = (claims.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                base.insert(key.clone(), value.clone());
+            }
+        }
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some("test-kid".to_string());
         encode(&header, &claims, &self.state.encoding_key).unwrap()
+    }
+
+    fn logout_token(&self, sid: &str) -> String {
+        self.logout_token_with_claims(json!({
+            "sid": sid,
+            "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+        }))
     }
 
     fn logout_token_for_sub(&self, sub: &str) -> String {
@@ -4882,6 +4893,35 @@ async fn test_backchannel_logout_rejects_invalid_token() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// ADR-0002: events 欠落 / sid と sub の両方欠落の logout token は拒否される。
+#[tokio::test]
+async fn test_backchannel_logout_rejects_malformed_claims() {
+    let (app, _oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let cases = [
+        ("missing_events", json!({"sid": "some-sid"})),
+        (
+            "missing_sid_and_sub",
+            json!({"events": {"http://schemas.openid.net/event/backchannel-logout": {}}}),
+        ),
+    ];
+    for (name, extra) in cases {
+        let logout_token = mock.logout_token_with_claims(extra);
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/backchannel-logout")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={logout_token}")))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "case={name}");
+    }
 }
 
 /// ADR-0002: back-channel logout で sid を失効させる。
