@@ -485,6 +485,140 @@ pub fn public_key_der_from_private_pem(private_key_pem: &str) -> Result<Vec<u8>,
 mod tests {
     use super::*;
 
+    // 決定論的 RNG により RSA 鍵生成を再現可能にする（既存テストと共有）。
+    struct TestRng(u64);
+    impl rsa::rand_core::TryRng for TestRng {
+        type Error = rsa::rand_core::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok((self.next() >> 32) as u32)
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(self.next())
+        }
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            for chunk in dst.chunks_mut(8) {
+                let value = self.next().to_le_bytes();
+                chunk.copy_from_slice(&value[..chunk.len()]);
+            }
+            Ok(())
+        }
+    }
+    impl TestRng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+    }
+    impl rsa::rand_core::TryCryptoRng for TestRng {}
+
+    fn test_key_pair() -> (String, Vec<u8>) {
+        use rsa::pkcs8::EncodePrivateKey;
+        let mut rng = TestRng(0x9E37_79B9_7F4A_7C15);
+        let key = PrivateKey::new(&mut rng, 2048).unwrap();
+        let private_pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
+        (private_pem, public_der)
+    }
+
+    /// 署名検証だけを独立に行い、連鎖検証と分離して検証できるようにする。
+    fn assert_signature_is_valid(snapshot: &SignedAuditSnapshot, public_der: &[u8]) {
+        let signature = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &snapshot.signature,
+        )
+        .expect("signature must be valid base64");
+        verify_rsa_signature(public_der, &snapshot.signature_payload(), &signature)
+            .expect("re-signed signature must verify");
+    }
+
+    /// log_id が 1..=count で連続し、previous_log_hash / entry_hash も整合する列を作る。
+    fn build_chained_entries(count: usize) -> Vec<AuditSnapshotEntry> {
+        let mut entries = Vec::with_capacity(count);
+        let mut previous = "GENESIS_HASH".to_string();
+        for id in 1..=count as i64 {
+            let log = AuditLogEntry {
+                log_id: Some(id),
+                cid: format!("QmTest{id}"),
+                old_status: "Approved".into(),
+                new_status: "Reported".into(),
+                changed_by: "reporter".into(),
+                reason: format!("reason-{id}"),
+                previous_log_hash: previous.clone(),
+            };
+            let entry_hash = log.calculate_hash_v2();
+            entries.push(AuditSnapshotEntry {
+                log_id: id,
+                cid: log.cid,
+                old_status: log.old_status,
+                new_status: log.new_status,
+                changed_by: log.changed_by,
+                reason: log.reason,
+                previous_log_hash: log.previous_log_hash,
+                entry_hash: entry_hash.clone(),
+            });
+            previous = entry_hash;
+        }
+        entries
+    }
+
+    /// フィールド改ざん後に entry_hash を再計算する（reasons_masked=false 用）。
+    fn refresh_entry_hash(entry: &mut AuditSnapshotEntry) {
+        let log = AuditLogEntry {
+            log_id: Some(entry.log_id),
+            cid: entry.cid.clone(),
+            old_status: entry.old_status.clone(),
+            new_status: entry.new_status.clone(),
+            changed_by: entry.changed_by.clone(),
+            reason: entry.reason.clone(),
+            previous_log_hash: entry.previous_log_hash.clone(),
+        };
+        entry.entry_hash = log.calculate_hash_v2();
+    }
+
+    /// entry_hash 列だけから Merkle root を求める（連番チェックに依存しない）。
+    fn merkle_root_of(hashes: &[String]) -> String {
+        let pairs: Vec<(i64, String)> = hashes
+            .iter()
+            .enumerate()
+            .map(|(index, hash)| (index as i64 + 1, hash.clone()))
+            .collect();
+        compute_audit_chain_digest(&pairs).unwrap().root_hash
+    }
+
+    /// 未マスク版スナップショットに（再）署名して返す。
+    fn resign(
+        entries: Vec<AuditSnapshotEntry>,
+        merkle_root: String,
+        private_pem: &str,
+    ) -> SignedAuditSnapshot {
+        let mut snapshot = SignedAuditSnapshot {
+            version: AUDIT_SNAPSHOT_VERSION,
+            reasons_masked: false,
+            entries,
+            governance_entries: Vec::new(),
+            merkle_root,
+            signature: String::new(),
+        };
+        snapshot.signature = sign_audit_snapshot(&snapshot, private_pem).unwrap();
+        snapshot
+    }
+
+    fn assert_chain_error(snapshot: &SignedAuditSnapshot, fragment: &str) {
+        let error = snapshot.verify_chain().expect_err("chain must be rejected");
+        match error {
+            ForensicError::InvalidSignature(message) => assert!(
+                message.contains(fragment),
+                "expected error containing {fragment:?}, got {message:?}"
+            ),
+            other => panic!("expected InvalidSignature, got {other:?}"),
+        }
+    }
+
     #[test]
     fn verify_checksum_matches_sha256_hex() {
         let data = b"forensic payload";
@@ -580,40 +714,7 @@ mod tests {
 
     #[test]
     fn signed_audit_snapshot_verifies_with_public_key() {
-        use rsa::pkcs8::EncodePrivateKey;
-        struct TestRng(u64);
-        impl rsa::rand_core::TryRng for TestRng {
-            type Error = rsa::rand_core::Infallible;
-            fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
-                Ok((self.next() >> 32) as u32)
-            }
-            fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
-                Ok(self.next())
-            }
-            fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
-                for chunk in dst.chunks_mut(8) {
-                    let value = self.next().to_le_bytes();
-                    chunk.copy_from_slice(&value[..chunk.len()]);
-                }
-                Ok(())
-            }
-        }
-        impl TestRng {
-            fn next(&mut self) -> u64 {
-                self.0 ^= self.0 << 13;
-                self.0 ^= self.0 >> 7;
-                self.0 ^= self.0 << 17;
-                self.0
-            }
-        }
-        impl rsa::rand_core::TryCryptoRng for TestRng {}
-        let mut rng = TestRng(0x9E37_79B9_7F4A_7C15);
-        let key = PrivateKey::new(&mut rng, 2048).unwrap();
-        let private_pem = key
-            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
-            .unwrap()
-            .to_string();
-        let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
+        let (private_pem, public_der) = test_key_pair();
 
         let entry = AuditLogEntry {
             log_id: Some(1),
@@ -719,6 +820,94 @@ mod tests {
         // フラグ改ざんは署名検証で検出される。
         masked.reasons_masked = false;
         assert!(verify_audit_snapshot(&masked, &public_der).is_err());
+    }
+
+    /// 正常系（未マスク版）: 署名・連鎖・連番・Merkle root がすべて有効なら受理する。
+    #[test]
+    fn verify_chain_accepts_valid_unmasked_snapshot() {
+        let (private_pem, public_der) = test_key_pair();
+        let entries = build_chained_entries(3);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let snapshot = resign(entries, merkle_root_of(&hashes), &private_pem);
+
+        assert_signature_is_valid(&snapshot, &public_der);
+        assert!(
+            snapshot.verify_chain().is_ok(),
+            "valid unmasked chain must be accepted"
+        );
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
+    }
+
+    /// 連番飛ばし: 再署名で署名は有効なまま、verify_chain が non-contiguous で拒否する。
+    #[test]
+    fn verify_chain_rejects_log_id_gap_with_valid_signature() {
+        let (private_pem, public_der) = test_key_pair();
+        let mut entries = build_chained_entries(3);
+        entries.remove(1); // log_id=2 を欠落させ [1, 3] にする
+        assert_eq!(
+            entries.iter().map(|entry| entry.log_id).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        // Merkle root は欠落後の entry_hash 列に一致させておき、
+        // 連番エラーが Merkle root 不一致にマスクされないようにする。
+        let snapshot = resign(entries, merkle_root_of(&hashes), &private_pem);
+
+        assert_signature_is_valid(&snapshot, &public_der);
+        assert_chain_error(&snapshot, "non-contiguous log_id: expected 2, got 3");
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_err());
+    }
+
+    /// 連鎖改ざん: previous_log_hash を壊しても entry_hash を再計算して再署名すれば
+    /// 署名は有効だが、verify_chain が chain mismatch で拒否する。
+    #[test]
+    fn verify_chain_rejects_broken_previous_hash_with_valid_signature() {
+        let (private_pem, public_der) = test_key_pair();
+        let mut entries = build_chained_entries(2);
+        entries[1].previous_log_hash = "BROKEN_PREVIOUS_HASH".into();
+        refresh_entry_hash(&mut entries[1]); // verify_hash を通す
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let snapshot = resign(entries, merkle_root_of(&hashes), &private_pem);
+
+        assert!(
+            snapshot.entries[1].verify_hash(),
+            "前提: entry_hash は再計算済みで署名も有効"
+        );
+        assert_signature_is_valid(&snapshot, &public_der);
+        assert_chain_error(&snapshot, "chain mismatch at log_id=2");
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_err());
+    }
+
+    /// Merkle root 改ざん: 再署名で署名は有効なまま、verify_chain が
+    /// Merkle root mismatch で拒否する。
+    #[test]
+    fn verify_chain_rejects_broken_merkle_root_with_valid_signature() {
+        let (private_pem, public_der) = test_key_pair();
+        let entries = build_chained_entries(2);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let original_root = merkle_root_of(&hashes);
+        let wrong_root = if original_root == "b".repeat(64) {
+            "c".repeat(64)
+        } else {
+            "b".repeat(64)
+        };
+        let snapshot = resign(entries, wrong_root, &private_pem);
+
+        assert_signature_is_valid(&snapshot, &public_der);
+        assert_chain_error(&snapshot, "Merkle root mismatch");
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_err());
     }
 
     #[test]
