@@ -28,7 +28,7 @@ jobs:
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
         ALLOW_IPV4_LOCALHOST=1
-      clippy_args: "-A clippy::module-inception"
+      clippy_args: "-A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
         cargo build -p client --target wasm32-unknown-unknown --locked

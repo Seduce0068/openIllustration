@@ -81,6 +81,26 @@ use tower::ServiceExt;
 /// プロセス環境変数を変更するテストの直列化に使う。
 static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
+/// テスト専用の環境変数設定（呼び出し前に `ENV_LOCK` を保持すること）。
+///
+/// # Safety
+/// Rust 2024 では `set_var` / `remove_var` が unsafe だが、これは「他スレッドが
+/// 同時に環境変数を読まないこと」の保証を呼び出し側が負う API である。
+/// 本関数は crate 内のテストからしか呼ばれず、すべての呼び出し箇所で
+/// `ENV_LOCK` を保持して直列化しているため、並行読み取りは発生しない。
+/// また対象はテスト固有の環境変数（`ALLOW_IPV4_LOCALHOST` /
+/// `EXPOSE_INTERNAL_ERRORS`）のみで、本番コードパスでは呼ばれない。
+fn test_set_env(key: &str, value: &str) {
+    // SAFETY: 上記のとおり ENV_LOCK により並行アクセスが排除されている。
+    unsafe { std::env::set_var(key, value) };
+}
+
+/// テスト専用の環境変数削除（呼び出し前に `ENV_LOCK` を保持すること）。
+fn test_remove_env(key: &str) {
+    // SAFETY: 同上。ENV_LOCK により並行アクセスが排除されている。
+    unsafe { std::env::remove_var(key) };
+}
+
 /// テスト用の HS256 秘密。HS256 の要件どおり 32 バイト以上にする。
 const TEST_JWT_SECRET: &str = "test_secret_for_openillustration_tests";
 
@@ -887,7 +907,7 @@ async fn send_upload(
 #[tokio::test]
 async fn test_ipv4_public_address_forbidden() {
     let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::remove_var("ALLOW_IPV4_LOCALHOST") };
+    test_remove_env("ALLOW_IPV4_LOCALHOST");
     let app = setup_app().await;
     let req = with_peer(
         Request::get("/health").body(Body::empty()).unwrap(),
@@ -1080,7 +1100,7 @@ fn test_cid_validation_rejects_path_characters() {
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
     let _env_guard = ENV_LOCK.lock().await;
-    unsafe { std::env::remove_var("EXPOSE_INTERNAL_ERRORS") };
+    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 
     // Default: generic message without internal details
     let hidden = AppError::Internal("no such table: users".to_string()).into_response();
@@ -1094,7 +1114,7 @@ async fn test_internal_error_details_visibility() {
     assert!(text.contains("Internal server error"));
 
     // Opt-in: details visible for debugging
-    unsafe { std::env::set_var("EXPOSE_INTERNAL_ERRORS", "1") };
+    test_set_env("EXPOSE_INTERNAL_ERRORS", "1");
     let exposed = AppError::Internal("no such table: users".to_string()).into_response();
     let body = to_bytes(exposed.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8_lossy(&body);
@@ -1103,7 +1123,7 @@ async fn test_internal_error_details_visibility() {
         "details must be visible: {text}"
     );
 
-    unsafe { std::env::remove_var("EXPOSE_INTERNAL_ERRORS") };
+    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
 
 #[tokio::test]
