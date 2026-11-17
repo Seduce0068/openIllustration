@@ -21,6 +21,7 @@ test.describe('Content search and filtering (R5-01)', () => {
       title: 'Moonlit Harbor',
       description: 'A quiet seaside story',
       tags: ['fantasy', 'night'],
+      is_favorite: false,
     };
     const illustration = {
       cid: 'QmSearchIllustration123',
@@ -31,6 +32,7 @@ test.describe('Content search and filtering (R5-01)', () => {
       title: 'Neon Alley',
       description: 'Cyberpunk city sketch',
       tags: ['urban', 'neon'],
+      is_favorite: false,
     };
     const seenQueries: Array<string | null> = [];
 

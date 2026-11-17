@@ -38,7 +38,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
           price: mockPrice,
           title: 'Gilded Sigil',
           description: 'Mock illustration for the ledger flow',
-          tags: ['jxl', 'mock']
+          tags: ['jxl', 'mock'],
+          is_favorite: false
         }])
       });
     });

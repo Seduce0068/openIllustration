@@ -83,7 +83,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
           price: 100,
           title: 'Audit Fixture',
           description: 'Content with a forensic timeline',
-          tags: ['audit', 'mock']
+          tags: ['audit', 'mock'],
+          is_favorite: false
         }]),
       });
     });

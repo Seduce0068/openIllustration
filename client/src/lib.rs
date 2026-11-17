@@ -76,7 +76,8 @@ fn url_encode(input: &str) -> String {
 
 /// 省略可能な絞り込み条件から `/content` のクエリ文字列を組み立てる。
 /// 空の条件は送らず、条件が無い場合は既存と同じ `/content` を返す。
-fn build_content_query(q: &str, tag: &str, content_type: &str) -> String {
+/// `favorite_only` は値を取らないフラグで、他の条件と併用できる。
+fn build_content_query(q: &str, tag: &str, content_type: &str, favorite_only: bool) -> String {
     let mut params = Vec::new();
     let q = q.trim();
     let tag = tag.trim();
@@ -89,6 +90,9 @@ fn build_content_query(q: &str, tag: &str, content_type: &str) -> String {
     }
     if !content_type.is_empty() {
         params.push(format!("type={}", url_encode(content_type)));
+    }
+    if favorite_only {
+        params.push("favorite_only=1".to_string());
     }
     if params.is_empty() {
         String::new()
@@ -336,6 +340,9 @@ pub struct ContentMeta {
     pub description: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// お気に入り状態。旧サーバーのレスポンスでも false として受け取る。
+    #[serde(default)]
+    pub is_favorite: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -492,6 +499,10 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let (q, set_q) = signal(String::new());
     let (tag, set_tag) = signal(String::new());
     let (content_type, set_content_type) = signal(String::new());
+    let (favorite_only, set_favorite_only) = signal(false);
+    // トグル成功後に一覧を再取得するためのトリガー。
+    let (refresh_counter, set_refresh_counter) = signal(0u32);
+    let on_favorite_changed = move || set_refresh_counter.update(|n| *n += 1);
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
@@ -499,7 +510,14 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     Effect::new(move |_| {
         let token = token_stored.get_value();
         // 入力 signal をここで読むことで、変化のたびに再取得する。
-        let query = build_content_query(&q.get(), &tag.get(), &content_type.get());
+        let query = build_content_query(
+            &q.get(),
+            &tag.get(),
+            &content_type.get(),
+            favorite_only.get(),
+        );
+        // お気に入りトグルの成功通知も再取得のトリガーにする。
+        let _refresh = refresh_counter.get();
         spawn_local(async move {
             match Request::get(&format!("{}/content{}", API_BASE, query))
                 .header("Authorization", &format!("Bearer {}", token))
@@ -523,7 +541,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             <search>
                 <form
                     on:submit=move |ev| ev.prevent_default()
-                    class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto] gap-4 items-end border border-white/10 p-4"
+                    class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto_auto] gap-4 items-end border border-white/10 p-4"
                 >
                     <div class="space-y-1">
                         <label for="content-q" class="block text-[9px] uppercase tracking-widest text-gray-500">
@@ -575,6 +593,22 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                             <option value="Novel">"Novel"</option>
                         </select>
                     </div>
+                    <div class="flex items-center gap-2 pb-3">
+                        <input
+                            id="favorite-only"
+                            name="favorite_only"
+                            type="checkbox"
+                            on:change=move |ev: web_sys::Event| {
+                                set_favorite_only.set(event_target_checked(&ev))
+                            }
+                            prop:checked=favorite_only
+                            class="h-4 w-4 accent-green-500 cursor-pointer"
+                        />
+                        <label for="favorite-only"
+                            class="text-[9px] uppercase tracking-widest text-gray-500 cursor-pointer">
+                            "Favorites only"
+                        </label>
+                    </div>
                     <button type="submit"
                         class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors">
                         "Search"
@@ -600,6 +634,8 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                                 title=item.title.clone()
                                 description=item.description.clone()
                                 tags=item.tags.clone()
+                                is_favorite=item.is_favorite
+                                on_favorite_changed=on_favorite_changed
                             />
                         }
                     }
@@ -621,7 +657,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
 mod jxl;
 
 #[component]
-fn ContentViewer(
+fn ContentViewer<F>(
     cid: String,
     expected_checksum: String,
     content_type: String,
@@ -631,7 +667,12 @@ fn ContentViewer(
     title: String,
     description: String,
     tags: Vec<String>,
-) -> impl IntoView {
+    is_favorite: bool,
+    on_favorite_changed: F,
+) -> impl IntoView
+where
+    F: Fn() + 'static + Clone,
+{
     let cid_label = cid.clone();
     // メタデータは信頼できない入力なので、escape_html_text を通した文字列だけを
     // inner_html へ渡す（Markdown 本文/TOC の既存レンダリングには触れない）。
@@ -644,6 +685,47 @@ fn ContentViewer(
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
     let token_stored = StoredValue::new(token);
+    // For は同じ cid の行を作り直さないため、トグル状態はカード内で保持し、
+    // 成功時に親へ通知して一覧を再取得する。
+    let (favorite, set_favorite) = signal(is_favorite);
+    let (favorite_error, set_favorite_error) = signal(String::new());
+
+    let favorite_cid = cid.clone();
+    let toggle_favorite = move |_| {
+        let cid = favorite_cid.clone();
+        let token = token_stored.get_value();
+        let turning_on = !favorite.get();
+        let on_favorite_changed = on_favorite_changed.clone();
+        spawn_local(async move {
+            let url = format!("{}/content/{}/favorite", API_BASE, cid);
+            let res = if turning_on {
+                Request::post(&url)
+            } else {
+                Request::delete(&url)
+            }
+            .header("Authorization", &format!("Bearer {}", token))
+            .send()
+            .await;
+
+            match res {
+                Ok(response) if response.ok() => {
+                    set_favorite_error.set(String::new());
+                    set_favorite.set(turning_on);
+                    // 一覧を再取得して、サーバー側の状態と表示を揃える。
+                    on_favorite_changed();
+                }
+                Ok(response) => {
+                    set_favorite_error.set(format!(
+                        "Failed to update favorite (HTTP {}).",
+                        response.status()
+                    ));
+                }
+                Err(_) => {
+                    set_favorite_error.set("Network error updating favorite.".to_string());
+                }
+            }
+        });
+    };
 
     let ct_ef = content_type.clone();
     Effect::new(move |_| {
@@ -702,12 +784,23 @@ fn ContentViewer(
             <div class="flex justify-between items-start">
                 <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
                 <div class="flex gap-2">
+                    <button
+                        type="button"
+                        on:click=toggle_favorite
+                        aria-label=move || if favorite.get() { "Remove from favorites" } else { "Add to favorites" }
+                        aria-pressed=move || if favorite.get() { "true" } else { "false" }
+                        class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors">
+                        {move || if favorite.get() { "★" } else { "☆" }}
+                    </button>
                     <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
                         class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
                     </button>
                 </div>
             </div>
+            <Show when=move || !favorite_error.get().is_empty() fallback=|| ()>
+                <p role="alert" class="text-[8px] text-red-500">{move || favorite_error.get()}</p>
+            </Show>
             <div class="border-b border-white/10 pb-3" inner_html=meta_html />
 
             <Show when=move || verified.get() == Some(true) && ct_toc == "Novel" && !novel_toc.get().is_empty() fallback=|| ()>
@@ -1391,14 +1484,23 @@ mod tests {
 
     #[test]
     fn content_query_is_built_from_optional_filters() {
-        assert_eq!(super::build_content_query("", "", ""), "");
+        assert_eq!(super::build_content_query("", "", "", false), "");
         assert_eq!(
-            super::build_content_query("neon", "", "Novel"),
+            super::build_content_query("neon", "", "Novel", false),
             "?q=neon&type=Novel"
         );
         assert_eq!(
-            super::build_content_query("a b&c", "日本", ""),
+            super::build_content_query("a b&c", "日本", "", false),
             "?q=a%20b%26c&tag=%E6%97%A5%E6%9C%AC"
+        );
+        // お気に入り絞り込みは既存条件と併用できる。
+        assert_eq!(
+            super::build_content_query("neon", "city", "Illustration", true),
+            "?q=neon&tag=city&type=Illustration&favorite_only=1"
+        );
+        assert_eq!(
+            super::build_content_query("", "", "", true),
+            "?favorite_only=1"
         );
     }
 
@@ -1431,6 +1533,16 @@ mod tests {
         assert_eq!(meta.title, "");
         assert_eq!(meta.description, "");
         assert!(meta.tags.is_empty());
+        assert!(!meta.is_favorite);
+    }
+
+    #[test]
+    fn content_meta_reads_is_favorite_from_current_json() {
+        let meta: super::ContentMeta = serde_json::from_str(
+            r#"{"cid":"c","checksum":"s","type":"Novel","status":"Approved","price":0,"is_favorite":true}"#,
+        )
+        .unwrap();
+        assert!(meta.is_favorite);
     }
 
     #[test]

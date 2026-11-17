@@ -27,7 +27,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
           price: 0,
           title: 'Forensic Evidence Log',
           description: 'Integrity verification fixture',
-          tags: ['forensic', 'test']
+          tags: ['forensic', 'test'],
+          is_favorite: false
         }])
       });
     });
@@ -86,7 +87,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
           price: 0,
           title: 'Forensic Evidence Log',
           description: 'Integrity verification fixture',
-          tags: ['forensic', 'test']
+          tags: ['forensic', 'test'],
+          is_favorite: false
         }])
       });
     });
