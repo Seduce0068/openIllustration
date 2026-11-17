@@ -40,6 +40,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
+| データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 
 ## 3. 必須要件のリリースゲート
 
@@ -71,6 +72,14 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
 | MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート14件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
+| EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
+| EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
+| EXPORT-04 | `reason` / `details` のマスク | `mask_reason` により既定でマスクされ、元の本文が現れない（例: `[redacted:N bytes]`） | テスト名確定: `me_export_masks_reason_and_details` |
+| EXPORT-05 | 未認証でのエクスポート要求 | 401で拒否し、データを返さない | テスト名確定: `me_export_requires_auth` |
+| EXPORT-06 | エクスポートのレスポンスヘッダとログ非出力 | `Content-Disposition: attachment; filename="openillustration-export.json"` と `Cache-Control: no-store` を付与。本文はログへ出さない | テスト名確定: `me_export_headers`。行数上限・`truncated` フラグは設けず全行を返す |
+| EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
+| EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。実JPKIの失効・期限切れは未検証 |
@@ -92,10 +101,12 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 cargo test --workspace
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシーの回帰のみ
+cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
+cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -177,6 +188,24 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    レスポンスに CID / reason / `user_hash` は無いため表示されず、サーバー側の
    `test_mod_stats_response_contains_no_sensitive_fields` と合わせて個人情報非含有を担保する。
    本シナリオは認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
+
+### E2E エクスポートシナリオ（R5-04）
+
+`e2e/tests/export.spec.ts` の `R5-04: Export My Data` は、モック認証
+（`ALLOW_MOCK_AUTH=1`）でログイン後、Dashboard の `EXPORT MY DATA`
+（`aria-label` 付き、`data-testid="export-my-data"`）ボタンからエクスポートを実行する。
+
+1. 認証トークン付きで `GET /me/export` を呼び、`page.waitForEvent('download')` で
+   JSONダウンロードがトリガされることを確認する（テスト名:
+   `R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること`）。
+2. `/me/export` の応答を401に差し替えると、`getByRole('alert')` に
+   「ログインが必要です」が表示されることを確認する（テスト名:
+   `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること`）。
+3. レスポンス本文の全12表・他ユーザー非漏えい・除外項目・マスク・ヘッダはサーバー側の
+   `me_export_*` テスト（EXPORT-01〜06）で担保する。本シナリオは UI からのダウンロード起動と
+   エラー表示に焦点を当てる。削除権は未実装のため UI に存在しない。
+4. 実装側で chromium / firefox の2テストが pass していることを確認済み。webkit はホスト側の
+   libicu/libxml2 不在で起動不可（環境依存）のため未検証。
 
 ## 5. リリース証跡
 

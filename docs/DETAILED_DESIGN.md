@@ -50,6 +50,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
 | GET | `/mod/stats` | Bearer JWT + 運用者 | 認証内集計。`AuthClaims` 必須かつ `require_moderation_operator`（未設定・未登録・BAN済みは403）。`generated_at` / `totals` / `monthly` のみをホワイトリスト方式で返し、CID・reason・`user_hash` は返さない |
+| GET | `/me/export` | Bearer JWT (`AuthClaims` 必須) | 自分のデータのエクスポート（R5-04）。`version:1` / `generated_at` / `sub` と12表（`users`, `contents`, `favorites`, `transactions`, `signatures`, `content_audit_log`, `reports`, `votes`, `payment_orders`, `governance_audit_log`, `refresh_tokens`, `revoked_subs`）の配列を返す。全行を返し行数上限・`truncated` フラグは設けない。`reason` / `details` は `mask_reason`（既定でマスク）、`token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID は除外。`Content-Disposition: attachment`、`Cache-Control: no-store`。本文はログへ出さない |
 
 ### API横断規則
 
@@ -334,3 +335,30 @@ migration 012 は `favorites` テーブルを作成する。`user_hash` は `use
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。
 - メタデータ検索は `LIKE` による部分一致・前方一致の簡易実装。正規化したタグテーブル、
   全文検索、あいまい一致、スコアリング、およびブラウザ URL との検索条件同期は未実装。
+
+## 9. データ主体の権利（エクスポート / 削除権）
+
+### 実装範囲: エクスポートのみ
+
+- `GET /me/export` は `AuthClaims` 必須とし、未認証は401で拒否する（ルート表は「1. API仕様」を参照）。
+- 認証主体（`sub`）に紐づく行のみを返す。対象は `users` / `contents` / `favorites` / `transactions` /
+  `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` /
+  `governance_audit_log` / `refresh_tokens` / `revoked_subs` の12表。
+- トップレベル項目は `version:1` / `generated_at`（RFC 3339）/ `sub` と上記12表の配列。
+  `revoked_sessions` は対象外。行数上限・`truncated` フラグは設けず全行を返す。
+- `reason` / `details` は `mask_reason` により既定でマスクする（例: `[redacted:N bytes]`）。
+- `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` /
+  他ユーザーID はレスポンスへ含めない。
+- `Content-Disposition: attachment` と `Cache-Control: no-store` を付与し、エクスポート本文は
+  アプリログへ出力しない（認証ヘッダ・投稿本文と同様の機微情報扱い）。
+
+### 未実装: 削除権（erase）
+
+- 削除権（データ消去 / erase）は**未実装**である。エクスポートのみを提供し、
+  削除要求を受け付ける API は存在しない。
+- 実装着手の前提条件は次の3点の決定後とする。
+  - 法務判断（対象法令・保持期間・例外・本人確認手続）。
+  - 第三者検証可能な監査の外部アンカー方針（DEC-04、ADR-0005 の未実装項目）。
+  - バックアップからの消去方針（消去対象・保持ライフサイクル・リストア時の整合性）。
+- 決定前に削除 API を提供すると、監査連鎖の連続性・バックアップからの復元経路と矛盾するため、
+  現時点では提供しない。
