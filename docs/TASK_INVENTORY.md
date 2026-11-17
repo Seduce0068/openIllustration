@@ -157,6 +157,8 @@ status: current
   が拒否されることを確認（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - [対応済み] `unsafe` 禁止の CI enforcement: グローバル指示に従い clippy に `-D clippy::undocumented_unsafe_blocks` を追加。テストの環境変数操作4箇所を
   safe ヘルパー2関数へ集約し、`ENV_LOCK` による直列化を安全性根拠として文書化（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+- [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
+ 共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。
 - [対応済み] Markdown URL の Unicode 空白バイパス修正: `is_safe_markdown_url` が ASCII 空白のみ拒否し、ZWSP/NBSP を先頭に付けた `javascript:`
   を「相対URL」として受理していた問題を修正。Unicode 空白/制御文字を拒否し、不正スキームは fail-closed で拒否（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 監査エントリハッシュのテスト強化: 各内容フィールドを1つずつ変えて v1/v2 ハッシュが変わることを検証。cid を計算から外す mutation で失敗することを実証（`log_id` は意図的に非依存で、
