@@ -1,0 +1,9 @@
+@import "tailwindcss";
+@source "src";
+
+/* 外部フォント CDN を使わず、ローカルの等幅フォントスタックで表示する。 */
+body {
+  font-family: "JetBrains Mono", "Noto Sans Mono CJK JP", "Source Code Pro", ui-monospace,
+    SFMono-Regular, Menlo, Consolas, monospace;
+  background-color: black;
+}

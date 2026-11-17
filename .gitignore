@@ -2,6 +2,7 @@
 **/target/
 dist/
 client/dist/
+client/tailwind.css
 .e2e-cache/
 e2e-artifacts/
 **/node_modules/

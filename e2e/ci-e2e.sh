@@ -97,7 +97,14 @@ export E2E_CLIENT_PORT="${E2E_CLIENT_PORT:-18080}"
 
 echo "==> サーバーとクライアントを事前ビルド"
 cargo build -p server --locked
+# Tailwind はビルド時 CSS のみを使う（実行時 CDN は禁止）。
+(cd client && npm ci --ignore-scripts --no-audit --no-fund && npm run build-css)
 (cd client && trunk build)
+# 外部 CDN / フォントへの参照が残っていないことをゲートする。
+if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' client/dist/index.html; then
+	echo "external asset reference remains in client/dist/index.html" >&2
+	exit 1
+fi
 
 echo "==> E2E 依存の導入（ブラウザは channel: chrome を使うため取得しない）"
 (cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci)

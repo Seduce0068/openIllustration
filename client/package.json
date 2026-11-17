@@ -1,0 +1,12 @@
+{
+  "name": "openillustration-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Build-time Tailwind CSS generation for the Leptos client",
+  "scripts": {
+    "build-css": "tailwindcss -i ./input.css -o ./tailwind.css --minify"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.5"
+  }
+}

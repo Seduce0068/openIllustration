@@ -179,6 +179,7 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R1-10: Tailwind をビルド時 CSS 化（`@tailwindcss/cli` 4.3.5、MIT、一次情報確認済み）。実行時 CDN と外部フォントを除去し、E2E ビルドで外部参照の残存をゲート。
 - [対応済み] R1-24: ウォレット所有証明（bind）を `wallet_bound` 列へ永続化（migration 010）。未バインド注文は verify を 400 で拒否。既存注文は既定 0 で fail-closed。mutation（必須条件削除）でテスト失敗を確認。
 - [対応済み] R4-01 / R4-04: 本番相当（`ALLOW_MOCK_AUTH` 無効）起動時に OIDC 必須設定と実
   `PINATA_JWT` を検査し、不足/開発用 `mock_jwt` なら起動拒否（fail-closed）。秘密値は
