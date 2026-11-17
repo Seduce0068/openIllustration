@@ -77,6 +77,7 @@ status: current
 - [対応済み] back-channel logout の異常系クレーム拒否: `events` 欠落と `sid`/`sub` 両方欠落の署名済み logout token が 401 拒否される回帰テストを追加。
 - [対応済み] 年齢計算 proptest の実効化: 旧テストは同語反復でバグを検出できなかった。独立参照計算との突き合わせと境界月日（今日と同月日）の明示的サンプリングへ変更し、`<`→`<=` の mutation
   を検出できることを実証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] 年齢しきい値 0 の拒否: `AGE_DEFAULT_MINIMUM=0` / `AGE_COUNTRY_OVERRIDES=JP=0` が年齢ゲートを無効化していた。1 以上を要求する検証を追加し、設定ドキュメントも修正。
 - [対応済み] WASM JXL デコードの decompression bomb 対策: ヘッダーとレンダ結果の寸法を 8000px / 64M ピクセルで検証し、巨大バッファ確保と usize オーバーフローを防止。境界テスト8ケースを追加。
 - [対応済み] WASM JXL のチャンネル数別 RGBA 変換: グレー(1) / グレー+α(2) / RGB(3) / RGBA以上(4+) を正しく変換。
   旧実装は 1/2 チャンネルで隣接ピクセルを RGB として読んでいた。値のクランプと範囲外の 0 埋めもテスト化。

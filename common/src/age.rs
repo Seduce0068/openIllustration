@@ -87,9 +87,10 @@ impl AgePolicy {
         if let Ok(value) = std::env::var("AGE_DEFAULT_MINIMUM") {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                policy.default_minimum_age = trimmed.parse::<u32>().map_err(|_| {
-                    "AGE_DEFAULT_MINIMUM must be a non-negative integer".to_string()
-                })?;
+                let parsed = trimmed
+                    .parse::<u32>()
+                    .map_err(|_| "AGE_DEFAULT_MINIMUM must be a positive integer".to_string())?;
+                policy.default_minimum_age = validate_minimum_age(parsed, "AGE_DEFAULT_MINIMUM")?;
             }
         }
 
@@ -166,6 +167,14 @@ impl AgePolicy {
     }
 }
 
+/// 年齢しきい値を検証する。0 を許すと年齢ゲートが無効化されるため拒否する。
+fn validate_minimum_age(age: u32, label: &str) -> Result<u32, String> {
+    if age == 0 {
+        return Err(format!("{label} must be at least 1"));
+    }
+    Ok(age)
+}
+
 fn parse_bool_env(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Some(true),
@@ -206,6 +215,7 @@ fn parse_country_minimums(value: &str) -> Result<BTreeMap<String, u32>, String> 
             .trim()
             .parse::<u32>()
             .map_err(|_| format!("AGE_COUNTRY_OVERRIDES has invalid age for '{code}'"))?;
+        let age = validate_minimum_age(age, &format!("AGE_COUNTRY_OVERRIDES age for '{code}'"))?;
         map.insert(code, age);
     }
     Ok(map)
@@ -410,5 +420,9 @@ mod tests {
         assert!(parse_country_minimums("JPN=20").is_err());
         assert!(parse_country_minimums("JP=xx").is_err());
         assert!(parse_country_minimums("JP").is_err());
+        // 0 は年齢ゲートを無効化するため拒否する。
+        assert!(parse_country_minimums("JP=0").is_err());
+        assert!(validate_minimum_age(0, "AGE_DEFAULT_MINIMUM").is_err());
+        assert_eq!(validate_minimum_age(1, "AGE_DEFAULT_MINIMUM").unwrap(), 1);
     }
 }

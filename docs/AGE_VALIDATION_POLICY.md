@@ -44,8 +44,8 @@ tags: [age-validation, jpki, privacy, dec-02]
 
 | 変数 | 既定値 | 説明 |
 | --- | --- | --- |
-| `AGE_DEFAULT_MINIMUM` | `21` | 一律の既定最少年齢（0〜150）。保守的な安全余裕ベースライン。 |
-| `AGE_COUNTRY_OVERRIDES` | 空 | 国別上書き。形式: `CC=NN,CC=NN`（例: `JP=18,US=21`）。国コードは英字2文字を大文字化、年齢は0〜150。 |
+| `AGE_DEFAULT_MINIMUM` | `21` | 一律の既定最少年齢（1以上、0 は年齢ゲート無効化のため拒否）。保守的な安全余裕ベースライン。 |
+| `AGE_COUNTRY_OVERRIDES` | 空 | 国別上書き。形式: `CC=NN,CC=NN`（例: `JP=18,US=21`）。国コードは英字2文字を大文字化、年齢は1以上（0 は拒否）。 |
 | `AGE_TARGET_REGIONS` | 空 | 対象地域コードのカンマ区切り（例: `JP,US,DE`）。英字2文字を大文字化し重複除去・ソート。 |
 | `AGE_ENFORCEMENT_MODE` | `self_reported` | `self_reported` / `self_reported_dob_country`: 申告された生年月日・国コードで判定（信頼属性ではない）。`trusted_attribute_required` / `trusted_attribute`: 検証済み属性入力が未実装のため現時点では常に拒否（フェイルクローズ）。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | `false` | `1`/`true` で有効。明示的な設定完了を要求する。 |
