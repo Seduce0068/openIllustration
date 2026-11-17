@@ -73,9 +73,10 @@ const MAX_CID_LEN: usize = 128;
 
 /// CID が仕様どおりの厳密な形式かどうかを判定する（外部依存なし）。
 ///
-/// - CIDv0: `Qm` + base58btc 44 文字（全体で 46 文字）。
+/// - CIDv0: `Qm` + base58btc 44 文字（全体で 46 文字）。文字列全体を base58btc
+///   デコードすると 34 バイトの `0x12 0x20` + 32 バイト digest になること。
 /// - CIDv1: `b` + パディング無し base32lower。デコード結果が
-///   varint version=1 / codec=0x55(raw) または 0x70(dag-pb) /
+///   varint version=1 / codec=0x55(raw), 0x70(dag-pb), 0x71(dag-cbor) /
 ///   multihash=0x12(sha2-256) / digest 長 32 / 32 バイト digest で終わること。
 ///
 /// 空文字・不正文字・上限超過・末尾の余りバイトはすべて拒否する。
@@ -89,7 +90,8 @@ pub fn is_valid_cid(cid: &str) -> bool {
         return cid.len() == 46
             && cid.as_bytes()[2..]
                 .iter()
-                .all(|byte| BASE58_BTC_ALPHABET.contains(byte));
+                .all(|byte| BASE58_BTC_ALPHABET.contains(byte))
+            && decode_base58_btc(cid).is_some_and(|bytes| is_valid_v0_bytes(&bytes));
     }
 
     if let Some(body) = cid.strip_prefix('b') {
@@ -97,6 +99,44 @@ pub fn is_valid_cid(cid: &str) -> bool {
     }
 
     false
+}
+
+/// base58btc 文字列を自前でデコードする（外部依存なし）。
+///
+/// 先頭の `1` はゼロバイトとして扱う。不正文字が含まれる場合は `None`。
+fn decode_base58_btc(input: &str) -> Option<Vec<u8>> {
+    if input.is_empty() {
+        return None;
+    }
+
+    let leading_zeros = input.bytes().take_while(|&byte| byte == b'1').count();
+    // 数値部をリトルエンディアンで保持し、58 倍して桁を加えていく。
+    // 46 文字でも高々 34 バイトなので、入力長 + 1 バイトで十分に収まる。
+    let mut magnitude = Vec::with_capacity(input.len() + 1);
+    for &ch in input.as_bytes() {
+        let digit = BASE58_BTC_ALPHABET.iter().position(|&c| c == ch)? as u16;
+        let mut carry = digit;
+        for byte in &mut magnitude {
+            let value = u16::from(*byte) * 58 + carry;
+            *byte = value as u8;
+            carry = value >> 8;
+        }
+        while carry > 0 {
+            magnitude.push(carry as u8);
+            carry >>= 8;
+        }
+    }
+
+    let mut decoded = Vec::with_capacity(leading_zeros + magnitude.len());
+    decoded.resize(leading_zeros, 0);
+    // magnitude はリトルエンディアンなので、base58 の桁順（ビッグエンディアン）に直す。
+    decoded.extend(magnitude.iter().rev());
+    Some(decoded)
+}
+
+/// CIDv0 のデコード済みバイト列が sha2-256 / 32 バイト digest の multihash か判定する。
+fn is_valid_v0_bytes(bytes: &[u8]) -> bool {
+    bytes.len() == 34 && bytes.starts_with(&[0x12u8, 0x20])
 }
 
 /// パディング無し base32lower をデコードする。
@@ -145,7 +185,7 @@ fn is_valid_v1_bytes(bytes: &[u8]) -> bool {
     let Some(codec) = read_varint(bytes, &mut pos) else {
         return false;
     };
-    if codec != 0x55 && codec != 0x70 {
+    if codec != 0x55 && codec != 0x70 && codec != 0x71 {
         return false;
     }
 
@@ -1469,7 +1509,53 @@ mod tests {
                 .iter()
                 .all(|byte| BASE58_BTC_ALPHABET.contains(byte))
         );
+        // 全体を base58btc デコードすると sha2-256 multihash（34 バイト）になる。
+        let decoded = decode_base58_btc(CIDV0).expect("known CIDv0 must decode");
+        assert_eq!(decoded.len(), 34);
+        assert_eq!(&decoded[..2], &[0x12, 0x20]);
         assert!(is_valid_cid(CIDV0));
+    }
+
+    /// prefix チェックを外す mutation を検出するためのテスト。
+    /// `Qm` + `1`×44 は 34 バイトにデコードされるが、先頭が 0x12 0x1e で不正。
+    #[test]
+    fn is_valid_cid_rejects_cidv0_with_wrong_multihash_prefix() {
+        let bad = format!("Qm{}", "1".repeat(44));
+        let decoded = decode_base58_btc(&bad).expect("must decode to 34 bytes");
+        assert_eq!(decoded.len(), 34, "test precondition: length check passes");
+        assert_ne!(
+            &decoded[..2],
+            &[0x12, 0x20],
+            "test precondition: wrong prefix"
+        );
+        assert!(
+            !is_valid_cid(&bad),
+            "base58 string without sha2-256 prefix must be rejected"
+        );
+    }
+
+    /// デコード長が 34 バイトでない CIDv0 は拒否される。
+    #[test]
+    fn is_valid_cid_rejects_cidv0_with_wrong_decoded_length() {
+        // デコード済みバイト列そのものを判定するヘルパーを直接叩く。
+        assert!(!is_valid_v0_bytes(&[]));
+        assert!(!is_valid_v0_bytes(&[0x12, 0x20]));
+        let short = [0x12, 0x20]
+            .into_iter()
+            .chain([0u8; 31])
+            .collect::<Vec<_>>();
+        assert_eq!(short.len(), 33);
+        assert!(!is_valid_v0_bytes(&short));
+        let long = [0x12, 0x20]
+            .into_iter()
+            .chain([0u8; 33])
+            .collect::<Vec<_>>();
+        assert_eq!(long.len(), 35);
+        assert!(!is_valid_v0_bytes(&long));
+
+        // Qm 文字列側の長さガードも残っている。
+        assert!(!is_valid_cid(&format!("Qm{}", "1".repeat(43))));
+        assert!(!is_valid_cid(&format!("Qm{}", "1".repeat(45))));
     }
 
     #[test]
@@ -1485,6 +1571,19 @@ mod tests {
         assert!(
             is_valid_cid(&raw_cid),
             "raw CIDv1 must be accepted: {raw_cid}"
+        );
+    }
+
+    /// dag-cbor codec (0x71) の CIDv1 も受理される（既存ヘルパーで自前構築）。
+    #[test]
+    fn is_valid_cid_accepts_dag_cbor_v1() {
+        let dag_cbor_cid = cid_from_bytes(&v1_bytes(0x71));
+        let decoded = decode_base32_lower(&dag_cbor_cid[1..]).expect("must decode");
+        assert_eq!(decoded.len(), 36);
+        assert_eq!(&decoded[..4], &[1, 0x71, 0x12, 32]);
+        assert!(
+            is_valid_cid(&dag_cbor_cid),
+            "dag-cbor CIDv1 must be accepted: {dag_cbor_cid}"
         );
     }
 
@@ -1541,8 +1640,8 @@ mod tests {
             raw[0] = version;
             cases.push(("version", cid_from_bytes(&raw)));
         }
-        // 不正 codec（raw/dag-pb 以外）。
-        for codec in [0u8, 0x54, 0x71, 0x7f] {
+        // 不正 codec（raw(0x55)/dag-pb(0x70)/dag-cbor(0x71) 以外）。
+        for codec in [0u8, 0x54, 0x72, 0x7f] {
             cases.push(("codec", cid_from_bytes(&v1_bytes(codec))));
         }
         // 不正 multihash code。
