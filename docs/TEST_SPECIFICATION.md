@@ -39,6 +39,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | お気に入り | 追加/削除の冪等（重複追加・未登録削除）、未認証401・不正CID400・非Approved404、他人subからの操作拒否、`favorite_only` の本人分のみ返却（真理値パース・既存条件とのAND・ページング・Approved限定）、旧JSONの `is_favorite` 欠落互換、migration 012 の UNIQUE + FK CASCADE を API・ユニットテストで検証 | `user_hash` をログ・監査・レスポンスへ出さないことは設計方針で担保。実運用ログの確認は未実施 |
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
+| 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 
 ## 3. 必須要件のリリースゲート
 
@@ -66,6 +67,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-01 | 同一ユーザーの同一通報への再投票 | 拒否 | 実装済み（API検査＋DB一意インデックス）、回帰テストあり |
 | MOD-02 | 3人の異なる投票者による結果 | 規則通り状態遷移 | 実装済み（確定後の追加投票は400で拒否）、回帰テストあり |
 | MOD-03 | レビュー中コンテンツへの重複通報 | 拒否 | 実装済み、回帰テストあり |
+| MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全10件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_tie_maps_to_rejected` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc`。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
+| MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
+| MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート14件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。実JPKIの失効・期限切れは未検証 |
@@ -86,9 +91,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 ```bash
 cargo test --workspace
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
+cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシーの回帰のみ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
+cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -152,6 +159,24 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 3. お気に入り状態のコンテンツで検索フォームの `Favorites only` チェックボックスをONにし、
    `/content` へ `favorite_only=1` が付与され、該当コンテンツのみが表示されることを確認する。
    既存の `q` / `tag` / `type` との併用はAPIテスト（FAV-04）で担保する。
+
+### E2E 透明性ダッシュボードシナリオ（R5-09）
+
+`e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` に含まれる
+`R5-09: should display moderation stats for operators and permission error on 403` が、
+モック認証（`ALLOW_MOCK_AUTH=1`）で `GET /mod/stats` の応答を差し替えて次を確認する。
+
+1. 運用者としてログインし、MODERATION 画面を開く。`TRANSPARENCY DASHBOARD`
+   （`data-testid="moderation-stats-section"`）と `GENERATED_AT: <generated_at>` が表示され、
+   `data-testid="moderation-stats-totals"` に Reports / Concluded / Approved / Rejected /
+   Quorum Not Met / Bans / Unbans / Unpins、`data-testid="moderation-stats-monthly"` に
+   Month / Reports / Concluded / Approved / Rejected / Bans / Unbans / Unpins の列が並ぶことを確認する。
+2. 同じ画面で `/mod/stats` の応答を403に差し替えると、`role="alert"` と
+   `data-testid="moderation-stats-error"` に `運用者権限が必要です` が表示されることを確認する。
+3. 動的文字列（`generated_at` / `month` / 数値）は既存の `escape_html_text` を通して描画される。
+   レスポンスに CID / reason / `user_hash` は無いため表示されず、サーバー側の
+   `test_mod_stats_response_contains_no_sensitive_fields` と合わせて個人情報非含有を担保する。
+   本シナリオは認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
 
 ## 5. リリース証跡
 

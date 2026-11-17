@@ -49,6 +49,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/operators/{user_hash}/ban` | Bearer JWT | 運用者特権。`MODERATION_OPERATOR_HASHES` 登録者のみBAN可能。根拠・期間必須、`governance_audit_log` に記録 |
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
+| GET | `/mod/stats` | Bearer JWT + 運用者 | 認証内集計。`AuthClaims` 必須かつ `require_moderation_operator`（未設定・未登録・BAN済みは403）。`generated_at` / `totals` / `monthly` のみをホワイトリスト方式で返し、CID・reason・`user_hash` は返さない |
 
 ### API横断規則
 
@@ -236,6 +237,23 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   `process_report_conclusion` が期限到達・`Reported` 状態・未確定を検査し、投票結果を改変できないため、集計の確定という効果しか持たない（BAN/UNBAN/UNPIN
   のような運用判断エンドポイントではない）。確定理由は `content_audit_log` に記録される。
 - **未実装**: 投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、第三者検証可能な監査。モデレーション結果を法的判断とみなさない。
+
+### 透明性ダッシュボード `GET /mod/stats`
+
+- 認可: `AuthClaims` 必須。`require_moderation_operator` により、`MODERATION_OPERATOR_HASHES`
+  未設定・未登録・BAN済みの主体は403で拒否する（フェイルクローズ）。
+- レスポンス: `generated_at`（集計生成時刻）、`totals`、`monthly` のみ。`totals` の内訳は
+  `reports` / `concluded` / `approved` / `rejected` / `quorum_not_met` / `bans` / `unbans` / `unpins`。
+  `monthly` の各要素は `month`（`YYYY-MM`）と `reports` / `concluded` / `approved` / `rejected` /
+  `bans` / `unbans` / `unpins`。`quorum_not_met` は `totals` のみで月次表の列には含めない
+  （月次は提示されたインターフェースの列に合わせ、集計済み件数を持たない）。
+- 集計ロジックは純粋関数 `build_mod_stats`（`server/src/lib.rs`）に集約し、DB行を直接返さない。
+- プライバシー: CID・通報理由（`reason`）・`user_hash` は返さない。レスポンス項目をホワイトリスト方式で
+  定義し、DB行をそのままシリアライズしない。集計値のみを返し、個人を特定する情報を含めない。
+- 位置づけ: **認証内集計であり第三者公開ではない**。第三者検証可能な監査（DEC-04）は未決定のままであり、
+  本エンドポイントをもって監査要件を満たしたとはみなさない。
+- 既存ギャップ（注記のみ、修正しない）: `GET /mod/reports` は認証済み参加者へ `reason` を返す。
+  本ダッシュボードは個人情報を返さないが、当該ルートの返却項目は現行のまま維持する。
 
 ## 5. データモデル（現行起動時DDLの要約）
 
