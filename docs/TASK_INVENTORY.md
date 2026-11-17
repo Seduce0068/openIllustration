@@ -44,7 +44,7 @@ status: current
 | DEC-06 クロスプラットフォーム | 対応OS/端末/ブラウザ/最小バージョン、JXL/JPKI/ウォレット実機試験範囲、安全なフォールバック | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)） | 対応マトリクスと受入基準の定義 |
 | DEC-07 性能・費用 | 初期表示/API/転送量/Wasmサイズ/運用費/手数料の測定条件と受入値（SLO） | 未決定（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md)） | 計測条件・閾値の合意と計測 |
 | DEC-08 本番ネットワーク・運用 | ホスティング、TLS、プロキシ、CORS、本番オリジン、IPポリシー、復旧手順、鍵ローテーション | 未決定/未整備（[DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)） | 本番構成・責任分界・Runbook整備 |
-| DEC-09 OSSライセンス運用 | 配布チャネル確定時の同梱手順 | `AGPL-3.0-or-later` 宣言・依存棚卸し・`cargo-deny` 検査・`scripts/prepare-distribution.sh`（事前ライセンス検査＋LICENSE/NOTICE/依存一覧/本文452件を生成）は実装済み（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)） | 配布形態（バイナリ/コンテナ/ソース）の確定とリリースプロセスへの組込み、AGPL ソース提供手段の決定 |
+| DEC-09 OSSライセンス運用 | 配布チャネル確定時の同梱手順 | `AGPL-3.0-or-later` 宣言・依存棚卸し・`cargo-deny` 検査・`scripts/prepare-distribution.sh`（事前ライセンス検査＋LICENSE/NOTICE/依存一覧/本文467件を生成）は実装済み（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)） | 配布形態（バイナリ/コンテナ/ソース）の確定とリリースプロセスへの組込み、AGPL ソース提供手段の決定 |
 
 ## 3. 実装可能な残作業（優先度の目安つき）
 
@@ -324,11 +324,11 @@ status: current
   `chrono` 1 件（RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）。CI で
   `cargo deny check advisories` を通過させつつ四半期/更新時に再評価。chrono は
   jiff/time への移行を計画（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
-- [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（452件、TSV 798行）を生成（
+- [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（2026-11-18 実測: 467件、TSV 822行）を生成（
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 - [対応済み] 配布時のライセンス再監査: `scripts/prepare-distribution.sh` が `cargo deny check licenses` を事前実行し、不整合なら成果物を生成しない。NOTICE
   に生成時刻とエントリ数を記録（[DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
-- [対応済み] ライセンス監査ドキュメントの数字を定義別に整理: 実行時和集合 417 / `cargo deny list` 全行 798 / 取得ライセンス本文 452。旧スナップショットは明示して現在値と混同しないようにした（
+- [対応済み] ライセンス監査ドキュメントの数字を定義別に整理（2026-11-18 再計算）: 実行時和集合 457 / `cargo deny list` 全行 822 / 取得ライセンス本文 467。旧スナップショットは明示して現在値と混同しないようにした（
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 
 ### 3.9 将来検討（必要性・方式未決定）
