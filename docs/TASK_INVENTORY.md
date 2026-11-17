@@ -172,6 +172,9 @@ status: current
 - [対応済み] 未使用依存の削除: clippy の `unused_dependencies` 警告で検出された `common` の `uuid` と
   `client` の `leptos_router` を削除。全クレートの警告が 0 になり、攻撃面を縮小。
 - [対応済み] E2E 失敗アーカイブの Git 管理外化: 生成先 `e2e-artifacts/` を `.gitignore` へ追加（`git check-ignore` で確認）。トレース等の機微情報を含む成果物の誤コミットを防止。
+- [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
+  `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
+  0 違反、markdownlint 0 issues を検証。
 - [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
  共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。
 - [対応済み] Markdown URL の Unicode 空白バイパス修正: `is_safe_markdown_url` が ASCII 空白のみ拒否し、ZWSP/NBSP を先頭に付けた `javascript:`

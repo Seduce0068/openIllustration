@@ -1,7 +1,11 @@
 ---
+title: "要件仕様書 (Requirements Specification)"
 type: Requirements
 description: 必須の機能・非機能要件とリリースゲートを定める。
 tags: [requirements, security, compatibility]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 要件仕様書 (Requirements Specification)

@@ -1,7 +1,11 @@
 ---
+title: "ADR-0001: プロダクト原則と信頼境界"
 type: Architecture Decision Record
 description: 必須のプロダクト原則、技術方針、信頼境界を記録する。
 tags: [adr, product, trust-boundaries]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## ADR-0001: プロダクト原則と信頼境界

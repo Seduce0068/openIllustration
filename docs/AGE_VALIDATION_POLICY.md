@@ -1,7 +1,11 @@
 ---
+title: "年齢判定ポリシー（DEC-02 採用方針・実装制約）"
 type: Policy
 description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装、公開設定、制約を記録する。
 tags: [age-validation, jpki, privacy, dec-02]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）

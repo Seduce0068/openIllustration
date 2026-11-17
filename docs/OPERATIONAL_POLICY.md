@@ -1,7 +1,11 @@
 ---
+title: "運用ポリシー (Operational Policy)"
 type: Policy
 description: 認証、決済、監査、コンテンツの運用方針と本番化条件を定める。
 tags: [operations, security, payments]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)

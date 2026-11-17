@@ -1,7 +1,11 @@
 ---
+title: "テスト仕様書 (Test Specification Document)"
 type: Test Specification
 description: 現行回帰テストと必須要件のリリース受け入れ条件を定義する。
 tags: [testing, acceptance, quality]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)

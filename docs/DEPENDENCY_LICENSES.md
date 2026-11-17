@@ -1,7 +1,11 @@
 ---
+title: "依存ライセンス監査"
 type: License Audit
 description: 実行時依存のライセンス棚卸しと AGPL-3.0-or-later との整合を記録する。
 tags: [licenses, dependencies, compliance]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 依存ライセンス監査

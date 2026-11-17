@@ -1,7 +1,11 @@
 ---
+title: "基本設計書 (Basic Design Document)"
 type: Design
 description: プロダクト方針とシステムの基本設計を定義する。
 tags: [basic-design, architecture]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 基本設計書 (Basic Design Document)

@@ -1,7 +1,11 @@
 ---
+title: "システム構成図 (System Architecture Diagram)"
 type: Architecture
 description: 目標構成と現行プロトタイプのシステム境界を示す。
 tags: [architecture, system-design]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## システム構成図 (System Architecture Diagram)

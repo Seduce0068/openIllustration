@@ -1,7 +1,11 @@
 ---
+title: "詳細設計書 (Detailed Design Document)"
 type: Design
 description: API、認証、データ設計および未実装事項を記録する。
 tags: [detailed-design, api, security]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)

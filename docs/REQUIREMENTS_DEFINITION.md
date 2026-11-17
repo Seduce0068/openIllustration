@@ -1,7 +1,11 @@
 ---
+title: "要求定義書 (Requirements Definition)"
 type: Requirements
 description: OpenIllustrationの目的、成功条件、対象範囲を定義する。
 tags: [requirements, product]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 要求定義書 (Requirements Definition)

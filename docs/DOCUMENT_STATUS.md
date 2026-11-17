@@ -1,7 +1,11 @@
 ---
+title: "文書・設計判断の確定状況"
 type: Project Status
 description: 文書の確定範囲と本番公開前に必要な設計判断を整理する。
 tags: [documentation, decisions, release-gates]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## 文書・設計判断の確定状況

@@ -1,7 +1,11 @@
 ---
+title: "ADR-0004: モデレーション手続"
 type: Architecture Decision Record
 description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決定する。
 tags: [adr, moderation, governance, accepted]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## ADR-0004: モデレーション手続

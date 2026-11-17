@@ -1,7 +1,11 @@
 ---
+title: "インフラ・ネットワーク設計（MVPの制約）"
 type: Design
 description: 現行ネットワーク実装と本番化に必要な境界・制約を記録する。
 tags: [infrastructure, networking, security]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## インフラ・ネットワーク設計（MVPの制約）

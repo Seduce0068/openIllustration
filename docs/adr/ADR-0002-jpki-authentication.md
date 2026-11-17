@@ -1,7 +1,11 @@
 ---
+title: "ADR-0002: JPKI認証連携方式"
 type: Architecture Decision Record
 description: マイナアプリ/JPKI認証の連携方式、検証要件、移行手順を提案する。
 tags: [adr, authentication, jpki, oidc, proposed]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## ADR-0002: JPKI認証連携方式

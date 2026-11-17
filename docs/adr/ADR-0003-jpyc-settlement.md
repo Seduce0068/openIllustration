@@ -1,7 +1,11 @@
 ---
+title: "ADR-0003: JPYC決済方式"
 type: Architecture Decision Record
 description: JPYC決済の対応チェーン、コントラクト検証、最終性、運用を提案する。
 tags: [adr, payment, jpyc, settlement, proposed]
+generated:
+  by: dsh
+  at: "2026-11-17T13:02:57+09:00"
 ---
 
 ## ADR-0003: JPYC決済方式
