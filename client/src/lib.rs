@@ -6,6 +6,8 @@ use wasm_bindgen::prelude::*;
 use web_sys::{Blob, FormData, HtmlInputElement};
 
 const API_BASE: &str = "http://localhost:3000";
+/// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
+const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
 fn render_markdown(markdown: &str) -> String {
     let events = pulldown_cmark::Parser::new(markdown).map(|event| match event {
@@ -483,6 +485,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         if let Some(files) = input.files()
             && let Some(f) = files.get(0)
         {
+            if f.size() > MAX_UPLOAD_BYTES {
+                set_file.set(None);
+                set_status.set("ERROR: File exceeds the 10 MiB limit.".to_string());
+                return;
+            }
+            set_status.set(String::new());
             set_file.set(Some(f));
         }
     };
