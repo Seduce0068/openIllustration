@@ -134,6 +134,7 @@ generated:
 | `OIDC_AUTHORIZATION_ENDPOINT` | 任意 | 未設定 | 認可エンドポイント。 |
 | `OIDC_TOKEN_ENDPOINT` | 任意 | 未設定 | トークンエンドポイント。 |
 | `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
+| `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
 | `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で Cookie の `Secure` を外す。開発時のみ。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数。 |

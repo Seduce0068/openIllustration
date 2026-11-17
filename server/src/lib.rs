@@ -635,7 +635,12 @@ pub async fn run() -> anyhow::Result<()> {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
-        http_client: Client::new(),
+        http_client: Client::builder()
+            .timeout(oidc_http_timeout(
+                std::env::var("OIDC_HTTP_TIMEOUT_SECS").ok().as_deref(),
+            ))
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
         jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth,
         ipfs_gateways,
@@ -903,6 +908,20 @@ pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
             .map(|gateway| (*gateway).to_string())
             .collect(),
     }
+}
+
+/// `OIDC_HTTP_TIMEOUT_SECS` を解析する。未設定・不正値・範囲外は既定の 10 秒。
+/// OIDC の token / JWKS 取得が実質無期限にハングするのを防ぐ。
+pub fn oidc_http_timeout(env_value: Option<&str>) -> Duration {
+    const DEFAULT_SECS: u64 = 10;
+    const MIN_SECS: u64 = 1;
+    const MAX_SECS: u64 = 60;
+
+    env_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
 
 /// `IPFS_TIMEOUT_SECS` を解析する。未設定・0・不正値・上限超過は既定の 15 秒。

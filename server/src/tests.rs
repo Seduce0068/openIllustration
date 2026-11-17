@@ -1136,6 +1136,30 @@ fn test_ipfs_timeout_configuration() {
     assert_eq!(crate::ipfs_timeout(Some("300")), Duration::from_secs(300));
 }
 
+/// R4-03: OIDC HTTP タイムアウトは 1〜60 秒の範囲で設定する。
+#[test]
+fn test_oidc_http_timeout_configuration() {
+    assert_eq!(crate::oidc_http_timeout(None), Duration::from_secs(10));
+    assert_eq!(
+        crate::oidc_http_timeout(Some("30")),
+        Duration::from_secs(30)
+    );
+    assert_eq!(crate::oidc_http_timeout(Some("1")), Duration::from_secs(1));
+    assert_eq!(
+        crate::oidc_http_timeout(Some("60")),
+        Duration::from_secs(60)
+    );
+    assert_eq!(crate::oidc_http_timeout(Some("0")), Duration::from_secs(10));
+    assert_eq!(
+        crate::oidc_http_timeout(Some("61")),
+        Duration::from_secs(10)
+    );
+    assert_eq!(
+        crate::oidc_http_timeout(Some("bad")),
+        Duration::from_secs(10)
+    );
+}
+
 #[test]
 fn test_ipfs_max_attempts_configuration() {
     assert_eq!(crate::ipfs_max_attempts(None), 1);

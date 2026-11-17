@@ -179,6 +179,9 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R4-03: `OIDC_HTTP_TIMEOUT_SECS`（1〜60 秒、既定 10 秒）を追加し、
+  OIDC の HTTP クライアントへ適用。境界値テストを追加し、mutation（範囲検査削除）で
+  テスト失敗を確認。
 - [対応済み] C2 / R1-21: `/auth/login` を `ALLOW_MOCK_AUTH` でゲートし、無効時は 501 を返すよう修正。設計書の「開発用モック経路は `ALLOW_MOCK_AUTH=1` の場合のみ有効」と整合。mutation（ゲート削除）でテスト失敗を確認。
 - [対応済み] R1-17（fail-closed 側）: `TrustedAttributeRequired` モードで OIDC callback / refresh を
   403 で拒否し年齢ゲートのバイパスを遮断。mutation（ゲート削除）でテスト失敗を確認。
