@@ -51,9 +51,12 @@ fn render_markdown(markdown: &str) -> String {
 
 /// Markdown links and images may only use web-safe schemes or relative destinations.
 fn is_safe_markdown_url(destination: &str, image: bool) -> bool {
+    // ASCII に限らず Unicode の空白・制御文字を拒否する。
+    // これらを先頭に付けるとスキーム解析が外れ、ブラウザが javascript: を
+    // 実行するバイパスになり得る（ZWSP / NBSP 等）。
     if destination
-        .bytes()
-        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
     {
         return false;
     }
@@ -61,6 +64,8 @@ fn is_safe_markdown_url(destination: &str, image: bool) -> bool {
     let Some((scheme, _)) = destination.split_once(':') else {
         return true;
     };
+    // `:` があるのにスキームが不正な場合は、相対 URL として扱わず拒否する
+    // （fail-closed）。曖昧な文字列を安全とみなさない。
     if scheme.is_empty()
         || !scheme.bytes().enumerate().all(|(index, byte)| match byte {
             b'a'..=b'z' | b'A'..=b'Z' => true,
@@ -68,7 +73,7 @@ fn is_safe_markdown_url(destination: &str, image: bool) -> bool {
             _ => false,
         })
     {
-        return true;
+        return false;
     }
 
     match scheme.to_ascii_lowercase().as_str() {
@@ -806,6 +811,15 @@ mod tests {
         assert!(rendered.contains("src=\"#\""));
         assert!(!super::is_safe_markdown_url(" javascript:alert(1)", false));
         assert!(!super::is_safe_markdown_url("java\tscript:alert(1)", false));
+        // Unicode の空白制御文字でスキームを隠すバイパスを拒否する。
+        assert!(!super::is_safe_markdown_url(
+            "\u{200B}javascript:alert(1)",
+            false
+        ));
+        assert!(!super::is_safe_markdown_url(
+            "\u{00A0}javascript:alert(1)",
+            false
+        ));
     }
 
     #[test]
