@@ -110,8 +110,21 @@ generated:
   `iat` を発行し、DB の閾値を削除する。
 - （2026-11-17 更新）リフレッシュトークンは `refresh_tokens` テーブルへ
   SHA-256 ハッシュのみ保存し、使用ごとに回転、再提示時にファミリ全体を失効する。
+- （2026-11-18 更新）リフレッシュ Cookie の属性を `Path=/auth` に設定した。
+  ログアウト時のファミリ失効エンドポイント（`Path=/auth` 配下）へ Cookie が送られ、
+  再提示検知によるファミリ失効がブラウザから到達可能になる。
+- （2026-11-18 更新）`AgeEnforcementMode::TrustedAttributeRequired` では
+  OIDC callback と refresh を 403 で拒否する fail-closed を実装した。
+  これにより信頼属性未入力のまま年齢ゲートを通過する経路を塞ぐ。信頼属性の
+  実入力経路は外部 OP のクレーム仕様待ちで未実装（DEC-01 / Open Questions）。
+- （2026-11-18 更新）設定検証 CLI `doctor`（`cargo run -p server --bin doctor`）を
+  追加した。本番必須設定（OIDC 必須項目・実 `PINATA_JWT`）、`ALLOW_MOCK_AUTH` と
+  本番相当設定の併用、JWT（HS256 秘密長・RS256 PEM と検証キーの整合・`kid`）、
+  IPFS ゲートウェイ／タイムアウト／試行回数、OIDC HTTP タイムアウト、年齢ポリシー、
+  レート制限・同時実行上限を診断する。既定は警告のみで、`--strict` のときのみ
+  問題があれば終了コード 1 とし、秘密値は一切出力しない。
 - 未実装: 実サービス接続、事業者申込、複数プロセス間の失効状態共有
-  （多プロセス共有）。
+  （多プロセス共有）、信頼属性の実入力経路（外部 OP 仕様待ち）。
 
 ## Consequences
 
