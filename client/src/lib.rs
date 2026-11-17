@@ -820,6 +820,15 @@ mod tests {
             "\u{00A0}javascript:alert(1)",
             false
         ));
+
+        // レンダリング経由でも危険な href/src が残らないことを確認する。
+        let rendered = super::render_markdown(
+            "[\u{200B}js](javascript:alert%281%29) ![\u{200B}img](javascript:alert%281%29)",
+        );
+        assert!(!rendered.contains("href=\"javascript:"));
+        assert!(!rendered.contains("src=\"javascript:"));
+        assert!(rendered.contains("href=\"#\""));
+        assert!(rendered.contains("src=\"#\""));
     }
 
     #[test]
