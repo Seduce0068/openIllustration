@@ -10,7 +10,7 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-15T12:22:13+09:00"
+  at: "2026-11-18T03:49:23+09:00"
 verified:
   by: dsh
   at: "2026-11-15T12:39:43+09:00"
@@ -129,7 +129,12 @@ status: current
 - [対応済み] **期限到達の自動検知**: 起動時のバックグラウンドワーカーが `MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒・30〜3600秒）ごとに期限超過通報を走査して確定。
   停止シグナルで終了し、手動 finalize と冪等。手動 finalize の権限設計（認証済みなら誰でも可、投票結果は改変不可）を設計書へ明記。
 - [対応済み] BAN 済みユーザーの通報扱いを ADR-0004 へ明記: 投票資格は BAN で喪失するが、通報は有害コンテンツ発見の経路として許可する（現行実装と整合）。
-- [判断材料] 認証済みユーザー向けの通報一覧・取引一覧の公開範囲を運用方針へ明記。第三者公開（DEC-04）とは切り分け、本番前にマスキング/閲覧制限の要否を判断する（現時点では API 挙動変更なし）。
+- [対応済み 2026-11-18] **通報理由の要約化（R5-04 関連のプライバシー改善）**: `common::summarize_reason` を追加し
+  `GET /mod/reports` の `reason` へ適用（認証必須・Reported 限定・新着順は維持、運用者限定にはしない）。空は空のまま、
+  最大120 Unicode 文字（超過は先頭119文字＋`…`）、メール／4桁以上の数字列／http(s) URL を `[redacted]` に置換。
+  DB 全文・監査エクスポートの本文は変更しない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md),
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md) に反映）。
+  第三者公開範囲（DEC-04）は未決定のまま。
 - [高・要判断] **ADR-0004 の残項目**: 投票者選出・Sybil耐性・オンチェーン記録方針、`governance_audit_log` の第三者検証可能な監査への昇格（DEC-04 と連携）（
   [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
 - [対応済み] 並行投票の競合対策: libSQL ローカル接続は同時に1つの `BEGIN` しか保持できないため、接続ごとの書き込みロックでトランザクションをプロセス内直列化。

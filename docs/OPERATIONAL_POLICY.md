@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-18T03:49:23+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -49,9 +49,11 @@ generated:
 - BAN は根拠と期間を必須とし、UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。これは運用ログであり第三者検証可能な監査ではない。
   投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
-- 認証済みユーザーは `GET /mod/reports`（通報対象 CID・理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
-  これらはデプロイ内の参加者向けの閲覧機能であり、第三者への公開範囲（DEC-04 未決定）を意図するものではない。通報理由は自由記述のため個人情報が含まれ得る。本番公開前に公開範囲とマスキング方針を確定し、
-  必要なら操作者限定または項目限定へ絞る（現時点では API 挙動を変更しない）。
+- 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
+  通報一覧は認証必須・Reported 限定・新着順を維持し、運用者限定にはしない。理由は `common::summarize_reason` で要約して返す。
+  要約は空文字をそのまま返し、最大120 Unicode 文字（超過は先頭119文字＋`…`）、メール／4桁以上の数字列／http(s) URL を `[redacted]` に置換する。
+  DB の全文と監査エクスポートの本文は変更せず、要約は API レスポンス時のみ適用する。
+  これらはデプロイ内の参加者向けの閲覧機能であり、第三者への公開範囲（DEC-04 未決定）を意図するものではない。本番公開前に公開範囲を確定する。
 - ローカルDBの `content_audit_log` ハッシュ連鎖は
   `cargo run -p server --bin verify_audit_log` に `--database-url` / `--database-token` /
   `--cid` / `--expect-root` の各オプションを付けて実行する。

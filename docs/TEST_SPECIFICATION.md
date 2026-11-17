@@ -5,7 +5,7 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-18T03:49:23+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -40,6 +40,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
+| 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・メール／4桁以上数字列／http(s) URL の `[redacted]` 置換）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 
 ## 3. 必須要件のリリースゲート
@@ -72,6 +73,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
 | MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート14件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。メール／4桁以上の数字列／http(s) URL は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`common` に単体テストを追加） |
+| MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -95,6 +98,31 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
 
+### 通報理由の要約のテスト設計（R5-04 関連）
+
+`common::summarize_reason` と `GET /mod/reports` を対象に、PII 除去・境界・日本語・
+統合時の全文非漏えいを検証する。テストの根拠は ADR-0004 決定9（理由の要約を公開し、
+通報者・投票者の識別情報は公開しない）と運用ポリシーの閲覧範囲（認証必須・
+Reported 限定・新着順・運用者非限定）である。設計技法は同値クラスと境界値解析
+（ISO/IEC/IEEE 29119-4 の境界値解析）を用いる。
+
+| ケース | 入力例 | 期待結果 |
+| --- | --- | --- |
+| 空文字 | `""` | `""` |
+| 境界内（ASCII） | 119文字 / 120文字 | 変更なし |
+| 境界超過（ASCII） | 121文字 | 先頭119文字＋`…` |
+| 境界内（日本語） | 漢字・かな 120 Unicode 文字 | 変更なし。バイト数ではなく文字数で計数 |
+| 境界超過（日本語） | 漢字・かな 121 Unicode 文字 | 先頭119文字＋`…` |
+| メール | `user@example.com` を含む文字列 | `@` を含むトークンが `[redacted]` |
+| 数字列 | `1234` と `123` | 4桁以上は `[redacted]`、3桁は残る |
+| URL | `https://example.com/path` と `http://example.com` | いずれも `[redacted]` |
+| 複合 PII | 日本語＋メール＋URL＋長文 | 要約後も PII が残らず上限120文字を守る |
+| 統合 | PII を含む通報を登録し `GET /mod/reports` を呼ぶ | `reason` は要約値のみ。全文・PII がレスポンスへ現れない。未認証401・Reported 限定・新着順・運用者非限定も維持 |
+
+DB 全文（`reports.reason`）と監査エクスポートの本文は変更しない。エクスポートの
+マスクは EXPORT-04 の既存挙動を維持する。本テストは第三者公開（DEC-04 未決定）を
+証明するものではない。
+
 ## 4. 実行コマンド
 
 ```bash
@@ -102,6 +130,8 @@ cargo test --workspace
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシーの回帰のみ
 cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
+cargo test -p common summarize_reason   # 要約の単体テスト（PII除去・境界・日本語）
+cargo test -p server list_reports       # GET /mod/reports の要約適用・全文非漏えいの回帰のみ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
