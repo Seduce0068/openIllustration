@@ -246,11 +246,22 @@ impl SignedAuditSnapshot {
             serde_json::to_string(&self.entries).expect("serializing audit entries cannot fail");
         let governance_json = serde_json::to_string(&self.governance_entries)
             .expect("serializing governance entries cannot fail");
-        format!(
-            "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}\0{}",
-            self.version, self.reasons_masked, entries_json, governance_json, self.merkle_root
-        )
-        .into_bytes()
+        // 後方互換: reasons_masked=false の既存 v3 スナップショットは旧形式の
+        // 署名対象を維持する。true（マスク版）のときだけフラグを含め、
+        // フラグ改ざん（true→false）も署名検証で検出できるようにする。
+        if self.reasons_masked {
+            format!(
+                "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0masked\0{}\0{}\0{}",
+                self.version, entries_json, governance_json, self.merkle_root
+            )
+            .into_bytes()
+        } else {
+            format!(
+                "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}",
+                self.version, entries_json, governance_json, self.merkle_root
+            )
+            .into_bytes()
+        }
     }
 
     /// エントリ列のハッシュ連鎖・連番・Merkle root を再計算して検証する。
@@ -524,6 +535,16 @@ mod tests {
         };
         snapshot.signature = sign_audit_snapshot(&snapshot, &private_pem).unwrap();
         assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
+
+        // 後方互換: 既存 v3（フラグ無し）の署名対象は旧形式のまま。
+        let legacy_payload = format!(
+            "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}",
+            snapshot.version,
+            serde_json::to_string(&snapshot.entries).unwrap(),
+            serde_json::to_string(&snapshot.governance_entries).unwrap(),
+            snapshot.merkle_root
+        );
+        assert_eq!(snapshot.signature_payload(), legacy_payload.as_bytes());
 
         let tampered = SignedAuditSnapshot {
             reasons_masked: false,

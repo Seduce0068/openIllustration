@@ -162,6 +162,7 @@ status: current
 - [対応済み] マスク済み監査エクスポートの検証不能バグ: 既定の `--include-reasons` 未指定時に理由をマスクすると
   `entry_hash` 再計算が不一致となり検証が失敗していた。`reasons_masked` フラグ（署名対象）を追加し、
   マスク時は再計算をスキップ。実 DB で既定エクスポートが検証可能であることを実証。
+  `reasons_masked=false` の署名対象は旧形式を維持し、既存 v3 スナップショットの検証も後方互換。
 - [対応済み] `unsafe` 禁止の CI enforcement: グローバル指示に従い clippy に `-D clippy::undocumented_unsafe_blocks` を追加。テストの環境変数操作4箇所を
   safe ヘルパー2関数へ集約し、`ENV_LOCK` による直列化を安全性根拠として文書化（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] E2E 失敗アーカイブの Git 管理外化: 生成先 `e2e-artifacts/` を `.gitignore` へ追加（`git check-ignore` で確認）。トレース等の機微情報を含む成果物の誤コミットを防止。
