@@ -25,11 +25,13 @@ fn env(name: &str) -> Option<String> {
 fn check_all() -> Vec<(&'static str, Vec<String>)> {
     let mut results = Vec::new();
 
+    let allow_mock_auth = env("ALLOW_MOCK_AUTH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     // 本番必須設定は既存の fail-closed 判定へ委譲する（再実装しない）。
     let production = production_config_errors(
-        env("ALLOW_MOCK_AUTH")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false),
+        allow_mock_auth,
         env("OIDC_ISSUER").is_some()
             && env("OIDC_CLIENT_ID").is_some()
             && env("OIDC_CLIENT_SECRET").is_some()
@@ -43,6 +45,31 @@ fn check_all() -> Vec<(&'static str, Vec<String>)> {
         "production",
         production.into_iter().map(str::to_string).collect(),
     ));
+
+    // モック認証と本番相当の設定の併用は危険（モック認証で本番データが触れる）。
+    // ALLOW_MOCK_AUTH が真で実質的な本番設定が一つでもあれば警告する。秘密値は出力しない。
+    const OIDC_REQUIRED: [&str; 7] = [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    let oidc_any = OIDC_REQUIRED.iter().any(|name| env(name).is_some());
+    let pinata_production = env("PINATA_JWT")
+        .map(|v| !v.is_empty() && v != "mock_jwt")
+        .unwrap_or(false);
+    let mut mock_auth_errors = Vec::new();
+    if allow_mock_auth
+        && (pinata_production || oidc_any || env("JWT_RSA_PRIVATE_KEY_PEM").is_some())
+    {
+        mock_auth_errors.push(
+            "ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration".to_string(),
+        );
+    }
+    results.push(("mock_auth_with_production_config", mock_auth_errors));
 
     // JWT: HS256 は 32 バイト以上、RS256 は PEM と検証キーの整合を検査する。
     let jwt_pem = env("JWT_RSA_PRIVATE_KEY_PEM");
