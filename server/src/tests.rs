@@ -9468,3 +9468,135 @@ async fn me_export_headers() {
             .starts_with("application/json")
     );
 }
+
+// ---------------------------------------------------------------------------
+// R5-04: GET /mod/reports（通報理由の要約化）
+// ---------------------------------------------------------------------------
+
+/// 認証付き一覧は要約を返し、DB の全文や末尾センチネルを漏らさない。
+#[tokio::test]
+async fn list_reports_returns_summarized_reason() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute(
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmTestCID'",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let full_reason = format!(
+        "SENTINEL_HEAD user@example.com {} _TAIL_SENTINEL",
+        "x".repeat(130)
+    );
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmTestCID', ?)",
+        [full_reason.clone()],
+    )
+    .await
+    .unwrap();
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/mod/reports")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(&full_reason), "全文が漏れた: {text}");
+    assert!(
+        !text.contains("_TAIL_SENTINEL"),
+        "末尾センチネルが漏れた: {text}"
+    );
+
+    let items: Vec<crate::ReportResponse> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].reason, common::summarize_reason(&full_reason));
+    assert_eq!(items[0].reason.chars().count(), 120);
+    assert!(items[0].reason.ends_with('…'));
+    assert!(items[0].reason.contains("[redacted]"));
+    assert!(!items[0].reason.contains("example.com"));
+
+    // 要約はレスポンスだけに適用され、DB には全文が残る（監査エクスポート用）。
+    let mut rows = db
+        .query("SELECT reason FROM reports WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    assert_eq!(row.get::<String>(0).unwrap(), full_reason);
+}
+
+/// 未認証の GET /mod/reports は従来どおり 401。
+#[tokio::test]
+async fn list_reports_requires_auth() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/mod/reports").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// Reported コンテンツのみ、新着順で返る（既存契約の維持確認）。
+#[tokio::test]
+async fn list_reports_filters_reported_and_orders_newest_first() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+         VALUES ('QmOtherCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmTestCID'",
+        (),
+    )
+    .await
+    .unwrap();
+    for (id, cid, reason, created_at) in [
+        (1, "QmTestCID", "old reason", "2026-01-01 00:00:00"),
+        (2, "QmOtherCID", "should not appear", "2026-01-02 00:00:00"),
+        (3, "QmTestCID", "new reason", "2026-01-03 00:00:00"),
+    ] {
+        db.execute(
+            "INSERT INTO reports (report_id, target_cid, reason, created_at)
+             VALUES (?, ?, ?, ?)",
+            (id, cid, reason, created_at),
+        )
+        .await
+        .unwrap();
+    }
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/mod/reports")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let items: Vec<crate::ReportResponse> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        items.iter().map(|item| item.report_id).collect::<Vec<_>>(),
+        vec![3, 1]
+    );
+    assert_eq!(items[0].reason, "new reason");
+    assert_eq!(items[1].reason, "old reason");
+}

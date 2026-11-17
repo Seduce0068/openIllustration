@@ -194,6 +194,75 @@ pub fn mask_reason(reason: &str, include: bool) -> String {
     }
 }
 
+/// モデレーション画面向けの通報理由要約。
+///
+/// - 空文字はそのまま返す。
+/// - PII（`@` を含むトークン、4桁以上の連続 ASCII 数字、`http://` / `https://` で
+///   始まるトークン）を `[redacted]` に置換する。
+/// - 最大 120 Unicode 文字。超過時は先頭 119 文字 + `…`（文字境界を守る）。
+///
+/// 監査エクスポート向けの [`mask_reason`] とは用途が異なるため変更しない。
+pub fn summarize_reason(reason: &str) -> String {
+    if reason.is_empty() {
+        return String::new();
+    }
+
+    const MAX_CHARS: usize = 120;
+
+    let mut redacted = String::with_capacity(reason.len());
+    let mut token = String::new();
+    for ch in reason.chars() {
+        if ch.is_whitespace() {
+            push_redacted_token(&mut redacted, &token);
+            token.clear();
+            redacted.push(ch);
+        } else {
+            token.push(ch);
+        }
+    }
+    push_redacted_token(&mut redacted, &token);
+
+    // 置換で文字数が伸びる場合があるため、上限は置換後に適用する。
+    if redacted.chars().count() <= MAX_CHARS {
+        return redacted;
+    }
+    let mut summarized: String = redacted.chars().take(MAX_CHARS - 1).collect();
+    summarized.push('…');
+    summarized
+}
+
+/// 空白区切りの 1 トークンを PII 置換して `out` に追加する。
+fn push_redacted_token(out: &mut String, token: &str) {
+    if token.is_empty() {
+        return;
+    }
+    if token.contains('@') || token.starts_with("http://") || token.starts_with("https://") {
+        out.push_str("[redacted]");
+        return;
+    }
+
+    let mut digits = String::new();
+    for ch in token.chars() {
+        if ch.is_ascii_digit() {
+            digits.push(ch);
+        } else {
+            push_digits_run(out, &digits);
+            digits.clear();
+            out.push(ch);
+        }
+    }
+    push_digits_run(out, &digits);
+}
+
+/// ASCII 数字の連続が 4 桁以上なら `[redacted]` に置換する。
+fn push_digits_run(out: &mut String, digits: &str) {
+    if digits.len() >= 4 {
+        out.push_str("[redacted]");
+    } else {
+        out.push_str(digits);
+    }
+}
+
 /// 運用判断の監査イベント。コンテンツ監査とは別テーブルから抽出する。
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct GovernanceAuditEntry {
@@ -606,6 +675,60 @@ mod tests {
         assert_eq!(mask_reason("secret details", false), "[redacted:14 bytes]");
         assert_eq!(mask_reason("", false), "");
         assert_eq!(mask_reason("secret details", true), "secret details");
+    }
+
+    #[test]
+    fn summarize_reason_keeps_empty_and_short_text() {
+        assert_eq!(summarize_reason(""), "");
+        assert_eq!(summarize_reason("short reason"), "short reason");
+        assert_eq!(summarize_reason("日本語の理由"), "日本語の理由");
+        // 3 桁の数字は PII ではないため保持する。
+        assert_eq!(summarize_reason("code 123"), "code 123");
+    }
+
+    #[test]
+    fn summarize_reason_truncates_at_char_boundary() {
+        let exactly_120 = "a".repeat(120);
+        assert_eq!(summarize_reason(&exactly_120), exactly_120);
+
+        let over_120 = "a".repeat(121);
+        assert_eq!(summarize_reason(&over_120), "a".repeat(119) + "…");
+
+        // マルチバイト文字の途中で切らず、文字数ベースで詰める。
+        let jp = "あ".repeat(121);
+        assert_eq!(summarize_reason(&jp), "あ".repeat(119) + "…");
+        let mixed = "あい".repeat(60) + "x"; // 121 Unicode 文字 / 241 bytes
+        let summarized = summarize_reason(&mixed);
+        assert_eq!(summarized.chars().count(), 120);
+        assert_eq!(summarized, "あい".repeat(59) + "あ" + "…");
+        assert!(summarized.ends_with('…'));
+    }
+
+    #[test]
+    fn summarize_reason_redacts_pii() {
+        assert_eq!(
+            summarize_reason("mail: user@example.com"),
+            "mail: [redacted]"
+        );
+        assert_eq!(summarize_reason("card 1234567812345678"), "card [redacted]");
+        assert_eq!(
+            summarize_reason("see https://example.com/a"),
+            "see [redacted]"
+        );
+        assert_eq!(summarize_reason("http://example.com"), "[redacted]");
+        assert_eq!(
+            summarize_reason("連絡先 foo@bar.jp 電話 09012345678"),
+            "連絡先 [redacted] 電話 [redacted]"
+        );
+    }
+
+    #[test]
+    fn summarize_reason_respects_limit_after_redaction() {
+        let text = format!("{} user@example.com", "a".repeat(110));
+        let summarized = summarize_reason(&text);
+        assert_eq!(summarized.chars().count(), 120);
+        assert!(summarized.ends_with('…'));
+        assert!(!summarized.contains("example.com"));
     }
 
     #[test]

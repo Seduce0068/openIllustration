@@ -1358,10 +1358,12 @@ pub async fn list_reports(
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().await? {
+        // DB には全文を保持したまま、一覧レスポンスには要約だけを返す。
+        let reason: String = row.get(2)?;
         items.push(ReportResponse {
             report_id: row.get(0)?,
             target_cid: row.get(1)?,
-            reason: row.get(2)?,
+            reason: common::summarize_reason(&reason),
             created_at: row.get(3)?,
             status: row.get(4)?,
         });
