@@ -197,8 +197,12 @@ pub fn mask_reason(reason: &str, include: bool) -> String {
 /// モデレーション画面向けの通報理由要約。
 ///
 /// - 空文字はそのまま返す。
-/// - PII（`@` を含むトークン、4桁以上の連続 ASCII 数字、`http://` / `https://` で
-///   始まるトークン）を `[redacted]` に置換する。
+/// - PII を `[redacted]` に置換する。検出対象は以下。
+///   - `@` を含むトークン（メールアドレス等）
+///   - `://` を含むトークン（括弧等で囲まれた URL を含む）
+///   - `www.` で始まるトークン（スキーム無し URL）
+///   - IPv4 らしい `\d{1,3}(\.\d{1,3}){3}` 部分列を含むトークン
+///   - Unicode 数字（全角数字等）の 4 連続
 /// - 最大 120 Unicode 文字。超過時は先頭 119 文字 + `…`（文字境界を守る）。
 ///
 /// 監査エクスポート向けの [`mask_reason`] とは用途が異なるため変更しない。
@@ -236,31 +240,78 @@ fn push_redacted_token(out: &mut String, token: &str) {
     if token.is_empty() {
         return;
     }
-    if token.contains('@') || token.starts_with("http://") || token.starts_with("https://") {
+    // トークン全体が秘密情報と判定できるケース。
+    if token.contains('@')
+        || token.contains("://")
+        || starts_with_www(token)
+        || contains_ipv4_like(token)
+    {
         out.push_str("[redacted]");
         return;
     }
 
-    let mut digits = String::new();
+    // トークン内の Unicode 数字 4 連続は部分置換する（既存挙動を維持）。
+    let mut run = String::new();
     for ch in token.chars() {
-        if ch.is_ascii_digit() {
-            digits.push(ch);
+        if ch.is_numeric() {
+            run.push(ch);
         } else {
-            push_digits_run(out, &digits);
-            digits.clear();
+            push_numeric_run(out, &run);
+            run.clear();
             out.push(ch);
         }
     }
-    push_digits_run(out, &digits);
+    push_numeric_run(out, &run);
 }
 
-/// ASCII 数字の連続が 4 桁以上なら `[redacted]` に置換する。
-fn push_digits_run(out: &mut String, digits: &str) {
-    if digits.len() >= 4 {
+/// Unicode 数字の連続が 4 桁以上なら `[redacted]` に置換する。
+/// 全角数字は UTF-8 で 3 バイトなので、バイト数ではなく文字数で判定する。
+fn push_numeric_run(out: &mut String, run: &str) {
+    if run.chars().count() >= 4 {
         out.push_str("[redacted]");
     } else {
-        out.push_str(digits);
+        out.push_str(run);
     }
+}
+
+/// トークンが `www.` で始まるか（大文字小文字を区別しない）。
+fn starts_with_www(token: &str) -> bool {
+    token
+        .as_bytes()
+        .get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"www."))
+}
+
+/// トークン内に IPv4 らしい `\d{1,3}(\.\d{1,3}){3}` 部分列があるか。
+/// 各セグメントの 0-255 範囲は厳密に検査しない（検出は過剰気味でよい）。
+fn contains_ipv4_like(token: &str) -> bool {
+    let chars: Vec<char> = token.chars().collect();
+    for start in 0..chars.len() {
+        if !chars[start].is_numeric() {
+            continue;
+        }
+        let mut pos = start;
+        let mut segments = 0;
+        loop {
+            let mut len = 0;
+            while pos < chars.len() && chars[pos].is_numeric() && len < 3 {
+                pos += 1;
+                len += 1;
+            }
+            if len == 0 {
+                break;
+            }
+            segments += 1;
+            if segments == 4 {
+                return true;
+            }
+            if pos >= chars.len() || chars[pos] != '.' {
+                break;
+            }
+            pos += 1; // 区切りドット
+        }
+    }
+    false
 }
 
 /// 運用判断の監査イベント。コンテンツ監査とは別テーブルから抽出する。
@@ -719,6 +770,29 @@ mod tests {
         assert_eq!(
             summarize_reason("連絡先 foo@bar.jp 電話 09012345678"),
             "連絡先 [redacted] 電話 [redacted]"
+        );
+        // 4 桁ちょうどを検出する（`>=4` を `>=5` にする mutation を弾く）。
+        assert_eq!(summarize_reason("1234"), "[redacted]");
+        // 3 桁は PII ではないので残る。
+        assert_eq!(summarize_reason("123"), "123");
+    }
+
+    #[test]
+    fn summarize_reason_redacts_additional_pii_patterns() {
+        // 括弧で始まる URL（トークン内の `://` を検出）。
+        assert_eq!(summarize_reason("url(https://x)"), "[redacted]");
+        // スキーム無し URL。
+        assert_eq!(summarize_reason("www.example.com"), "[redacted]");
+        // IPv4 らしいドット区切り（各セグメントが 4 桁未満でも検出）。
+        assert_eq!(summarize_reason("10.0.0.1"), "[redacted]");
+        // 全角（Unicode）数字の電話番号。
+        assert_eq!(summarize_reason("０９０１２３４５６７８"), "[redacted]");
+        // 複合ケース: 各パターンと非 PII（3 桁数字）が混在しても個別に置換される。
+        assert_eq!(
+            summarize_reason(
+                "連絡先 foo@bar.jp IP 10.0.0.1 site www.example.com ref url(https://x) tel ０９０１２３４５６７８ code 123"
+            ),
+            "連絡先 [redacted] IP [redacted] site [redacted] ref [redacted] tel [redacted] code 123"
         );
     }
 
