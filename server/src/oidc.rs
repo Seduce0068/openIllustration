@@ -594,6 +594,16 @@ pub async fn callback(
         .as_ref()
         .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
 
+    // R1-17: 信頼属性必須モードでは、OIDC 経路に検証済み年齢属性の入力が無いため
+    // 年齢ゲートをバイパスできないよう fail-closed で拒否する。
+    if state.age_policy.enforcement_mode
+        == common::age::AgeEnforcementMode::TrustedAttributeRequired
+    {
+        return Err(AppError::Forbidden(
+            "trusted age attributes are not available on the OIDC path".to_string(),
+        ));
+    }
+
     let pending = oidc.take_pending(&query.state)?;
     let token = exchange_code(
         &state.http_client,
@@ -698,6 +708,14 @@ pub async fn refresh(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
+    // R1-17: 信頼属性必須モードではリフレッシュも年齢判定を迂回できないようにする。
+    if state.age_policy.enforcement_mode
+        == common::age::AgeEnforcementMode::TrustedAttributeRequired
+    {
+        return Err(AppError::Forbidden(
+            "trusted age attributes are not available on the OIDC path".to_string(),
+        ));
+    }
     let token = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())

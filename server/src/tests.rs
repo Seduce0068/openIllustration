@@ -578,6 +578,17 @@ async fn setup_app_with_oidc() -> (
     MockOidcServer,
     Arc<libsql::Connection>,
 ) {
+    setup_app_with_oidc_and_age_policy(common::age::AgePolicy::default()).await
+}
+
+async fn setup_app_with_oidc_and_age_policy(
+    age_policy: common::age::AgePolicy,
+) -> (
+    Router,
+    Arc<crate::oidc::OidcState>,
+    MockOidcServer,
+    Arc<libsql::Connection>,
+) {
     let mock = MockOidcServer::start().await;
     let config = crate::oidc::OidcConfig {
         issuer: mock.base_url.clone(),
@@ -620,12 +631,51 @@ async fn setup_app_with_oidc() -> (
         oidc: Some(oidc.clone()),
         revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
         revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-        age_policy: common::age::AgePolicy::default(),
+        age_policy,
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
 
     (build_router(shared_state), oidc, mock, db)
+}
+
+/// R1-17: 信頼属性必須モードでは OIDC callback / refresh を年齢ゲートで拒否する。
+#[tokio::test]
+async fn test_trusted_age_mode_blocks_oidc_callback_and_refresh() {
+    let policy = common::age::AgePolicy {
+        enforcement_mode: common::age::AgeEnforcementMode::TrustedAttributeRequired,
+        ..common::age::AgePolicy::default()
+    };
+    let (app, oidc, mock, _db) = setup_app_with_oidc_and_age_policy(policy).await;
+
+    // callback は state を消費する前に拒否される。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/callback?code=test-code&state=any-state")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // refresh もクッキーより先に拒否される。
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/refresh")
+                .header(header::COOKIE, "refresh_token=anything")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // 参照を残さないためのダミー利用（ mock / oidc は拒否経路では未使用）。
+    let _ = (oidc, mock);
 }
 
 async fn oidc_login(
