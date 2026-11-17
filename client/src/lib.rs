@@ -496,7 +496,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     };
 
     let sign_and_upload = move |_| {
-        let f = file.get().unwrap();
+        // ファイル未選択（サイズ拒否を含む）ではパニックせずエラー表示する。
+        let Some(f) = file.get() else {
+            set_status.set("ERROR: Select a file first.".to_string());
+            return;
+        };
         let user_hash = user_hash.clone();
         let token = token.clone();
         let price_val = price.get();

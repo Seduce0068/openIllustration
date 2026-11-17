@@ -43,6 +43,29 @@ test.describe('Content Upload Flow', () => {
     await expect(page.locator('text=SUCCESS: Content registered')).toBeVisible({ timeout: 15000 });
   });
 
+  test('should reject files over 10 MiB before upload', async ({ page }) => {
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+
+    let uploadAttempted = false;
+    await page.route('**/content/upload', async route => {
+      uploadAttempted = true;
+      await route.abort();
+    });
+
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles({
+      name: 'oversized.jxl',
+      mimeType: 'image/jxl',
+      buffer: Buffer.alloc(10 * 1024 * 1024 + 1),
+    });
+
+    await expect(page.locator('text=ERROR: File exceeds the 10 MiB limit.')).toBeVisible({ timeout: 10000 });
+
+    // 拒否後はファイルが保持されず、送信ボタンは無効になる。
+    await expect(page.getByRole('button', { name: /Sign & Submit/i })).toBeDisabled();
+    expect(uploadAttempted).toBe(false);
+  });
+
   test('INT-02: should reject ZIP files', async ({ page }) => {
     await page.getByRole('button', { name: 'UPLOAD' }).click();
 
