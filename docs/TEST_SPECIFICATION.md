@@ -81,9 +81,10 @@ trunk・Node 18 以上が必要である。trunk は CI と同じ
 `cargo install trunk --version 0.21.14 --locked` を推奨する。
 
 ローカルでは既存プロセスと `server/local.db` を再利用するため、
-クリーンな状態で検証する場合は `E2E_REUSE=0` で起動を強制し、
-`server/local.db` と稼働中プロセスを確認する。CI はチェックアウト直後の
-クリーンな DB とワークスペースを使う。
+クリーンな状態で検証する場合は `E2E_REUSE=0` で起動を強制する。このとき
+一時 DB パスが server の `DATABASE_URL` へ渡される（計算のみで未使用だった
+問題を修正）。`server/local.db` と稼働中プロセスを確認する。CI は
+チェックアウト直後のクリーンな DB とワークスペースを使う。
 
 CI では共通ワークフロー `rust-gates.yml` の追加ゲートとして
 `e2e/ci-e2e.sh` を実行する。trunk は v0.21.14 に固定し

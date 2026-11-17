@@ -55,6 +55,7 @@ export default defineConfig({
       command: 'cargo run --locked',
       cwd: '../server',
       env: {
+        ...(serverDatabaseUrl ? { DATABASE_URL: serverDatabaseUrl } : {}),
         JWT_SECRET: e2eJwtSecret,
         ALLOW_MOCK_AUTH: '1',
         ALLOW_IPV4_LOCALHOST: '1',
