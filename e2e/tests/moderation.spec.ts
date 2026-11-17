@@ -3,6 +3,23 @@ import { test, expect } from '@playwright/test';
 test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const mockCID = 'QmAuditTestCID';
 
+  // GET /mod/reports の reason はサーバー側 common::summarize_reason で
+  // PII 除去 + 最大120文字に要約される。E2E では実サーバー結合を行わず、
+  // 要約済み文字列をモックから返して UI 側の表示契約を検証する。
+  const summarizedReason = '不審な投稿です [redacted]';
+  const piiFixture = {
+    email: 'reporter@example.com',
+    phone: '090-1234-5678',
+    url: 'https://phish.example.com/login',
+  };
+  const reportFixture = (reason: string) => ({
+    report_id: 42,
+    target_cid: 'QmSummaryReportCID',
+    reason,
+    created_at: '2026-11-18T00:00:00Z',
+    status: 'Pending',
+  });
+
   test('GOV-01: should report content and transition to Reported status', async ({ page }) => {
     // 認証のモック
     await page.route('**/auth/login', async route => {
@@ -23,11 +40,25 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         body: JSON.stringify(true),
       });
     });
+    // 陪審員キューへ要約済み reason のレポートを1件返す。
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([reportFixture(summarizedReason)]),
+      });
+    });
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'MODERATION' }).click();
+
+    // サーバーが要約した reason がそのまま投票キューに表示されること。
+    await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
+    const reasonLine = page.locator('p:has-text("Reason:")').first();
+    await expect(reasonLine).toContainText(summarizedReason, { timeout: 10000 });
+    await expect(page.getByText('QmSummaryReportCID')).toBeVisible();
 
     await page.locator('input[placeholder="TARGET CID"]').fill('QmTestReportCID');
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
@@ -35,6 +66,47 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
     await expect(page.locator('text=Report accepted. Content marked Reported')).toBeVisible({ timeout: 10000 });
+  });
+
+  test('GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない', async ({ page }) => {
+    // 元の通報理由は次のような全文（サーバー側で要約される前の想定値）:
+    //   `不審な投稿です。連絡先: reporter@example.com / 090-1234-5678 / https://phish.example.com/login`
+    // common::summarize_reason が PII を [redacted] に置換し最大120文字へ丸めるため、
+    // クライアントが受け取るのは summarizedReason のみ。実サーバー結合は行わない。
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'juror_hash', token: 'mock_jwt_token' })
+      });
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([reportFixture(summarizedReason)]),
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+
+    // 要約済み文字列と [redacted] は表示される。
+    await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
+    const reasonLine = page.locator('p:has-text("Reason:")').first();
+    await expect(reasonLine).toContainText(summarizedReason, { timeout: 10000 });
+    await expect(reasonLine).toContainText('[redacted]');
+
+    // 元全文に含まれていたメールアドレス・電話番号・URL は UI に出ない。
+    for (const pii of [piiFixture.email, piiFixture.phone, piiFixture.url]) {
+      await expect(reasonLine).not.toContainText(pii);
+      await expect(page.locator('body')).not.toContainText(pii);
+    }
   });
 
   test('should display audit trail for content', async ({ page }) => {
