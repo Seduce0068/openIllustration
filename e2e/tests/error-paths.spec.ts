@@ -152,11 +152,14 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
     // 実装文言（client/src/lib.rs, ContentViewer の audit 取得失敗時）:
     //   "監査ログの取得に失敗しました (HTTP 500)."
-    // FORENSIC_TIMELINE を持つ監査パネル内の role="alert" を検証する。
-    const auditPanel = page.locator('div').filter({ hasText: 'FORENSIC_TIMELINE' }).last();
-    const auditAlert = auditPanel.getByRole('alert');
+    // 監査パネルの <div> 自体には data-testid が無く、文言で絞り込むと祖先要素も
+    // 一致するため .last() に依存していた。パネル内で一意な
+    // <p role="alert" data-testid="audit-error"> を直接特定する（client/src/lib.rs
+    // は担当外のため、パネル側に testid は追加しない）。
+    const auditAlert = page.getByTestId('audit-error');
     await expect(auditAlert)
       .toHaveText('監査ログの取得に失敗しました (HTTP 500).', { timeout: 10000 });
-    await expect(auditPanel.getByTestId('audit-error')).toBeVisible();
+    await expect(auditAlert).toHaveAttribute('role', 'alert');
+    await expect(auditAlert).toBeVisible();
   });
 });

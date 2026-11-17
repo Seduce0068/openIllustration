@@ -9,8 +9,10 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 # trunk はコンパイルせず、固定バージョン + 固定 checksum のリリース
-# バイナリを一時ディレクトリへ展開する。更新時は version・sha256・
-# 資産名の 3 点を同時に変更する。
+# アーカイブからバイナリを取り出す。README の
+# `cargo install trunk --version 0.21.14 --locked` はローカル開発向けで、
+# CI はダウンロード削減のため固定アーカイブ方式を採る（版は 0.21.14 で共通）。
+# 更新時は version・sha256・資産名の 3 点を同時に変更する。
 trunk_version="v0.21.14"
 trunk_tarball="trunk-x86_64-unknown-linux-gnu.tar.gz"
 trunk_sha256="f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b"
@@ -18,22 +20,31 @@ trunk_sha256="f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-# 固定版 trunk は checksum 付きでローカルへキャッシュし、再ダウンロードを避ける。
-# CI のコールド環境ではキャッシュが無いため通常どおりダウンロードする。
+# 固定版 trunk のアーカイブをローカルへキャッシュし、再ダウンロードを避ける。
+# キャッシュの有無にかかわらず checksum を検証し、検証済みアーカイブから
+# 毎回バイナリを展開して PATH に追加する（改ざんされたキャッシュの
+# fail-open を防ぐ）。CI のコールド環境ではキャッシュが無いためダウンロードする。
 trunk_cache="${repo_root}/.e2e-cache/trunk-${trunk_version}"
 mkdir -p "$trunk_cache"
-if [[ -x "${trunk_cache}/trunk" ]]; then
-	echo "==> trunk ${trunk_version} をキャッシュから利用"
+trunk_archive="${trunk_cache}/${trunk_tarball}"
+if [[ -f "$trunk_archive" ]]; then
+	echo "==> trunk ${trunk_version} のキャッシュ済みアーカイブを使用"
 else
 	echo "==> trunk ${trunk_version} を導入"
 	curl -sSfL --connect-timeout 10 --retry 3 --retry-delay 2 \
-		-o "${workdir}/${trunk_tarball}" \
+		-o "$trunk_archive" \
 		"https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
-	echo "${trunk_sha256}  ${workdir}/${trunk_tarball}" | sha256sum -c -
-	tar -xzf "${workdir}/${trunk_tarball}" -C "${trunk_cache}" trunk
-	chmod +x "${trunk_cache}/trunk"
 fi
-export PATH="${trunk_cache}:${PATH}"
+# キャッシュヒット時も必ず検証を通す。不一致なら壊れたアーカイブを削除して失敗。
+if ! echo "${trunk_sha256}  ${trunk_archive}" | sha256sum -c -; then
+	rm -f "$trunk_archive"
+	echo "trunk ${trunk_version} の sha256 が一致しない。" >&2
+	exit 1
+fi
+mkdir -p "${workdir}/bin"
+tar -xzf "$trunk_archive" -C "${workdir}/bin" trunk
+chmod +x "${workdir}/bin/trunk"
+export PATH="${workdir}/bin:${PATH}"
 
 # trunk 0.21.14 は NO_COLOR=1 を --no-color として解釈し、
 # 値が true/false でない場合にエラーになる。固定版では明示的に解除する。

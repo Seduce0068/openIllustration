@@ -1,7 +1,9 @@
 # 個人リポジトリ共通の再利用可能ワークフロー
 # （Seduce0068/workflows の rust-gates.yml）へ委譲する。cargo test 用の
-# 環境変数は env_vars、clippy の追加引数は clippy_args で渡し、
-# client の wasm ビルド、ライセンス検査、E2E（Playwright）は extra_gates で追加する。
+# 環境変数は env_vars、clippy の追加引数は clippy_args で渡す。
+# wasm ターゲットの導入は wasm_targets、client の wasm ビルドは
+# e2e/ci-e2e.sh の trunk build に一元化する（extra_gates での重複を避ける）。
+# ライセンス検査と E2E（Playwright）は extra_gates で追加する。
 # E2E の JWT シークレットは e2e/ci-e2e.sh が実行ごとに生成する。
 name: CI
 
@@ -28,11 +30,12 @@ jobs:
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
         ALLOW_IPV4_LOCALHOST=1
-      clippy_args: "-A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
+      # 共通ワークフローは -D warnings を先頭に付けるが、ローカル検証ループと
+      # 同じ引数を明示する（重複しても無害）。
+      clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
         npx --yes markdownlint-cli2@0.24.0 "docs/**/*.md" "todo.md" "README.md"
-        cargo build -p client --target wasm32-unknown-unknown --locked
         cargo install cargo-deny --version 0.20.2 --locked
         cargo deny check licenses
         cargo deny check advisories
