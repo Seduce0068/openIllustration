@@ -30,8 +30,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
 | GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ（全リクエスト数・4xx/5xx 応答数）。外部クレートなし。 |
-| GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`） |
+| GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`）、`favorite_only` で本人のお気に入りへ絞り込み |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
+| POST | `/content/:cid/favorite` | Bearer JWT | お気に入り追加。`Claims.sub` のみで識別し、本人の行にだけ作用。重複追加は冪等で200 |
+| DELETE | `/content/:cid/favorite` | Bearer JWT | お気に入り削除。同上の識別。未登録の削除も冪等で200 |
 | GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |
 | POST | `/content/upload` | Bearer JWT | コンテンツ投稿。任意の `title` / `description` / `tags` も受理し長さ上限を検査 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
@@ -181,9 +183,30 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   エスケープし `ESCAPE '\'` 句を付ける。`q` は `%...%`、`tag` は `...%` または `%,...%` とし、
   全パラメータをバインド引数として渡す（SQL 文字列への直接埋め込み禁止）。
 - レスポンスの `ContentMeta` は `cid` / `checksum` / `type` / `status` / `price` に加えて
-  `title` / `description` / `tags`（文字列配列）を含む。旧サーバー互換のため欠落時は空値。
+  `title` / `description` / `tags`（文字列配列）と `is_favorite`（bool）を含む。旧サーバー互換のため
+  メタデータの欠落時は空値、`is_favorite` の欠落時は `false` として読む（`#[serde(default)]`）。
+- `favorite_only` は値が `1` / `true`（大小文字無視・前後空白除去）のときのみ真とし、本人
+  （`Claims.sub`）のお気に入りへ絞り込む。未指定およびそれ以外の値は安全側の false とし、
+  既存条件とは AND で結合する。`Approved` 限定・`created_at DESC` も維持する。JOIN による
+  重複でページング件数が壊れないよう相関 `EXISTS` を用い、`sub` は SQL 文へ埋め込まず
+  バインドパラメータで渡す。
+- `is_favorite` は閲覧者（`Claims.sub`）視点で設定する。他人のお気に入り状態は一覧から観測できない。
 - サーバーは保存・JSON 返却ともに生テキストを扱い、HTML エスケープは行わない。
   XSS 対策は一覧カードを描画するクライアントの `escape_html_text` が担う（API横断規則を参照）。
+
+### お気に入り `POST` / `DELETE /content/:cid/favorite`
+
+- 認証必須（Bearer JWT）。未認証は401。`AuthClaims` の `sub` のみをユーザー識別に用い、
+  リクエスト本文やクエリのIDは受け取らない（他人の `sub` を本文へ入れても本人の行は増えない）。
+- CIDは既存の `is_safe_cid` で検証し、不正なら400。対象は `status = 'Approved'` のみで、
+  存在しない・非Approvedは404（存在の有無を識別子で区別しない）。
+- 追加は `INSERT OR IGNORE`、削除は `WHERE user_hash = ? AND cid = ?` の `DELETE` とし、
+  重複追加・未登録削除のどちらも冪等（成功）。レスポンスは `is_favorite` のみを含み
+  （追加時 `{"is_favorite": true}` / 削除時 `{"is_favorite": false}`）、ユーザー識別子は返さない。
+- プライバシー方針: お気に入りの一覧・件数は本人以外へ返さない。`favorite_only` と
+  `is_favorite` は閲覧者本人の視点に限定し、他ユーザーのお気に入りは観測できない。
+  `user_hash`（`Claims.sub`）はDBへ識別子として保存するが、監査ログ・アプリログ・
+  メトリクス・エラー応答へは出力しない（DB由来のエラー詳細は固定文言へ置換する）。
 
 ### 取得 `GET /content/:cid`
 
@@ -220,6 +243,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |---|---|---|
 |`users`|`user_hash`, `public_key_der`, `is_banned`, `banned_at`|利用者識別・公開鍵・BAN状態|
 |`contents`|`cid`, `type`, `owner_hash`, `checksum`, `status`, `price`, `created_at`, `title`, `description`, `tags`|CIDを主キーとするコンテンツメタデータ。メタデータ3列は migration 011 で追加、`tags` はカンマ区切りで `idx_contents_tags` インデックス付き|
+|`favorites`|`id`, `user_hash`, `cid`, `created_at`|お気に入り。`(user_hash, cid)` に一意インデックス。`users(user_hash)` / `contents(cid)` へ `ON DELETE CASCADE` のFK|
 |`reports`|`report_id`, `target_cid`, `reason`, `created_at`, `deadline_at`, `concluded_at`, `appeal_of`|通報記録（7日期限・確定時刻・異議の連鎖）|
 |`votes`|`vote_id`, `report_id`, `voter_hash`, `vote_result`, `voted_at`|投票記録。現行DDLに複合一意制約なし|
 |`signatures`|`target_id`, `signer_hash`, `signature_blob`, `algorithm`|投稿・投票署名の保存|
@@ -228,12 +252,16 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `011_content_metadata.sql`）としてバージョン管理され、起動時に
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `012_favorites.sql`）としてバージョン管理され、起動時に
 `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
 適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
 migration 011 は `contents` へ `title` / `description` / `tags`（いずれも `TEXT NOT NULL DEFAULT ''`）を追加し、
 `tags` に `idx_contents_tags` インデックスを作成する。既存行のメタデータは空文字として読み出され、
 適用済みマイグレーションの改変は従来どおり起動時に検出される。
+migration 012 は `favorites` テーブルを作成する。`user_hash` は `users(user_hash)`、`cid` は
+`contents(cid)` を参照し、いずれも `ON DELETE CASCADE`。一意性は `idx_favorites_user_cid`
+（`UNIQUE(user_hash, cid)`）で担保し、本人分の新着順参照用に
+`idx_favorites_user_created`（`user_hash, created_at DESC`）を作成する。
 ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ

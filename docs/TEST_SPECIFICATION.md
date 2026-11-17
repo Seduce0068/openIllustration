@@ -36,6 +36,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | モデレーション | 通報状態遷移、重複通報拒否、通報reasonの空/過大拒否とトリム保存、期限前は確定しないこと、期限後確定（同数→`Rejected`、定足数未達→`Approved` 復帰）、期限切れ投票拒否、投稿者投票拒否、BAN済み投票者の拒否、30日以内の異議と30日超の通常通報、finalize エンドポイントの冪等性、重複投票拒否、確定後投票拒否、投票ペイロード検証（report_id/result）とトークンsub不一致401の拒否、投票署名メッセージが report_id と result の両方に束縛されること、運用者未設定時の BAN/UNBAN/UNPIN 拒否、運用者による BAN（根拠・期間）/UNBAN/UNPIN の監査記録、自己BAN・不正期間・空理由・BAN済み運用者の拒否、期限前スキップ・期限後自動確定・複数件処理・冪等性・ワーカー周期の範囲検証 | 同一接続への並行 `BEGIN` が失敗することの再現、書き込みロックによる直列化、並行投票と自動確定の同時実行を検証。ワーカー停止/再起動時の挙動、実運用手続、第三者検証可能な監査（DEC-04）の試験が不足。reason上限値の妥当性はADR-0004の運用で見直し |
 | Upload | Content-Typeのユニット/APIテスト、負価格・非整数価格・64bit範囲外価格・上限超過価格の拒否（拒否理由を検証）、価格0と上限値 `MAX_ORDER_JPY` の受理と保存を検証、必須フィールド欠落・owner不一致・BANユーザーの拒否、実 RSA 鍵で署名したバイト列の受理と別バイト列への署名使い回し401拒否 | 実multipartサイズ境界・実Pinata連携の試験が不足 |
 | ContentMeta / list_contents | `ContentMeta` が `title` / `description` / `tags` を返すこと、`list_contents` が省略可の `q` / `tag` / `type` / `limit` / `offset` を受理し既定値（limit=50、offset=0）と範囲（`1..=100`）へフォールバックすることを API テストで検証。`q` の部分一致、`tag` の前方一致、`type` の完全一致、`created_at DESC` の並びとページングの重複なしも確認 | 長さ上限・LIKE 注入拒否・XSS エスケープは CONTENT-06〜08 で個別に検証。タグの正規化・全文検索は未実装 |
+| お気に入り | 追加/削除の冪等（重複追加・未登録削除）、未認証401・不正CID400・非Approved404、他人subからの操作拒否、`favorite_only` の本人分のみ返却（真理値パース・既存条件とのAND・ページング・Approved限定）、旧JSONの `is_favorite` 欠落互換、migration 012 の UNIQUE + FK CASCADE を API・ユニットテストで検証 | `user_hash` をログ・監査・レスポンスへ出さないことは設計方針で担保。実運用ログの確認は未実施 |
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 
@@ -56,6 +57,12 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存 |
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
+| FAV-01 | お気に入りの追加/削除を繰り返す | 重複追加も未登録削除も200で成功し、行数は0または1のまま。削除後の再追加も可 | 実装済み（`test_favorite_add_and_remove_are_idempotent`） |
+| FAV-02 | 未認証・不正CID・非Approvedコンテンツへの操作 | それぞれ401 / 400 / 404で拒否し、お気に入りを登録しない | 実装済み（`test_favorite_requires_auth_and_valid_approved_cid`） |
+| FAV-03 | 他人のsubを本文に指定した操作 | 増減するのは操作者本人の行のみ。他人の行は変化しない | 実装済み（`test_favorite_uses_claims_sub_only`） |
+| FAV-04 | `favorite_only` による絞り込み | 本人分のみを新着順で返す。既存条件とAND、ページング重複なし、非Approved除外、他値は絞り込みなし | 実装済み（`test_favorite_only_lists_own_favorites_only` / `test_favorite_only_parser_and_query_builder`） |
+| FAV-05 | 旧JSONとの後方互換 | `is_favorite` 欠落の旧 `ContentMeta` が `false` として読め、現行JSONは往復一致する | 実装済み（`test_content_meta_backward_compatible_without_is_favorite`） |
+| FAV-06 | migration 012 の制約 | `UNIQUE(user_hash, cid)` 違反はエラー、`INSERT OR IGNORE` は冪等、FK CASCADE で削除連動 | 実装済み（`test_migration_012_favorites_unique_and_cascade`） |
 | MOD-01 | 同一ユーザーの同一通報への再投票 | 拒否 | 実装済み（API検査＋DB一意インデックス）、回帰テストあり |
 | MOD-02 | 3人の異なる投票者による結果 | 規則通り状態遷移 | 実装済み（確定後の追加投票は400で拒否）、回帰テストあり |
 | MOD-03 | レビュー中コンテンツへの重複通報 | 拒否 | 実装済み、回帰テストあり |
@@ -81,6 +88,7 @@ cargo test --workspace
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
+cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -127,6 +135,23 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    `q` の値に `Neon` が含まれ、`Neon Alley` が残り `Moonlit Harbor` が消えることを確認する。
 3. タグ・種別入力、結果件数告知（`role="status"`）、XSS エスケープ表示は API テスト
    （CONTENT-06〜08）で担保し、本シナリオは `q` の絞り込みとメタデータ表示に焦点を当てる。
+
+### E2E お気に入りシナリオ（R5-02）
+
+`e2e/tests/favorites.spec.ts` の `Favorites / Bookmarks (R5-02)` は、モック認証
+（`ALLOW_MOCK_AUTH=1`）でログイン後、一覧カードのトグルボタンからPOST/DELETEを発行し、
+`favorite_only=1` の絞り込みまでを通しで確認する（テスト名:
+`toggles favorites via POST/DELETE and filters with favorite_only=1`）。
+
+1. BROWSE画面の一覧カードで、未お気に入りのボタンが `☆`（`aria-label="Add to favorites"`、
+   `aria-pressed="false"`）であることを確認する。クリックすると `POST /content/{cid}/favorite` が
+   送信され、`★`（`aria-label="Remove from favorites"`、`aria-pressed="true"`）へ変わることを確認する。
+2. 再度クリックすると `DELETE /content/{cid}/favorite` が送信され、`☆` へ戻ることを確認する。
+   通信失敗時はカード内に `Failed to update favorite (HTTP <status>).` または
+   `Network error updating favorite.` が表示される。
+3. お気に入り状態のコンテンツで検索フォームの `Favorites only` チェックボックスをONにし、
+   `/content` へ `favorite_only=1` が付与され、該当コンテンツのみが表示されることを確認する。
+   既存の `q` / `tag` / `type` との併用はAPIテスト（FAV-04）で担保する。
 
 ## 5. リリース証跡
 
