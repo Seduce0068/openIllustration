@@ -6697,6 +6697,43 @@ async fn test_purge_expired_refresh_tokens() {
 }
 
 #[tokio::test]
+async fn test_purge_stale_revoked_subs() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let now = chrono::Utc::now().timestamp();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('old', ?)",
+        [now - 24 * 60 * 60 - 3600],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('recent', ?)",
+        [now],
+    )
+    .await
+    .unwrap();
+
+    let purged = crate::purge_stale_revoked_subs(&db).await.unwrap();
+    assert_eq!(purged, 1, "only the stale revocation must be purged");
+
+    let mut rows = db.query("SELECT sub FROM revoked_subs", ()).await.unwrap();
+    let mut remaining = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        remaining.push(row.get::<String>(0).unwrap());
+    }
+    assert_eq!(remaining, vec!["recent"]);
+}
+
+#[tokio::test]
 async fn test_purge_stale_revoked_sessions() {
     let db = Arc::new(
         Builder::new_local(":memory:")

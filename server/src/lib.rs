@@ -957,6 +957,16 @@ async fn purge_stale_revoked_sessions(db: &Connection) -> Result<u64, libsql::Er
     .map(|_| db.changes())
 }
 
+/// 古い sub 失効閾値を回収する。閾値より前に発行された JWT は最大
+/// SESSION_TTL_SECS で期限切れになるため、それより古い閾値は不要になる。
+/// 新しい JWT は常に現在時刻より後ろの iat を持つため、失効は復活しない。
+async fn purge_stale_revoked_subs(db: &Connection) -> Result<u64, libsql::Error> {
+    let cutoff = chrono::Utc::now().timestamp() - oidc::SESSION_TTL_SECS - 60;
+    db.execute("DELETE FROM revoked_subs WHERE revoked_at <= ?", [cutoff])
+        .await
+        .map(|_| db.changes())
+}
+
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     interval: Duration,
@@ -977,6 +987,11 @@ async fn run_moderation_finalizer(
         Ok(count) => tracing::info!("Purged {} stale revoked session(s) on startup", count),
         Err(error) => tracing::warn!("Revoked session purge failed on startup: {}", error),
     }
+    match purge_stale_revoked_subs(db.as_ref()).await {
+        Ok(0) => {}
+        Ok(count) => tracing::info!("Purged {} stale revoked sub(s) on startup", count),
+        Err(error) => tracing::warn!("Revoked sub purge failed on startup: {}", error),
+    }
 
     loop {
         tokio::select! {
@@ -990,6 +1005,11 @@ async fn run_moderation_finalizer(
                     Ok(0) => {}
                     Ok(count) => tracing::info!("Purged {} stale revoked session(s)", count),
                     Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
+                }
+                match purge_stale_revoked_subs(db.as_ref()).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!("Purged {} stale revoked sub(s)", count),
+                    Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
                 }
                 match finalize_due_reports(db.as_ref()).await {
                     Ok(0) => {}
