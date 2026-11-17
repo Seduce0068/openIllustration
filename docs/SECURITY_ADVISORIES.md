@@ -170,6 +170,8 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - クライアント: 未使用の `image` / `imageproc` / `image-webp` を削除し、
     3.3 の ttf-parser を解消した（2026-11-15）。
   - libsql: 0.10.0 が最新で、上流の tonic / rustls 更新待ち。
+    2026-11-17 に crates.io の `max_version` を再確認し、現行版と同一
+    （2026-10-13 公開）であることを確認済み。受容判断は変更なし。
     リモート DB 採用前に代替 crate を再評価する。
 - D3: `cargo deny check advisories` を ignore リスト付きで CI に導入した。
   新しい勧告は CI を失敗させ、不要になった ignore も検出する。
@@ -207,3 +209,5 @@ cargo deny check advisories
   （13 → 11 件）。
 - 2026-11-15: 既知 11 件を ignore して `cargo deny check advisories` を
   CI に導入。paste は上流修正がないため受容した。
+- 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
+  受容 11 件に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
