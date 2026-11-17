@@ -1285,7 +1285,7 @@ fn multipart_upload_body_as(
         file_bytes,
         price,
         "test_user",
-        &[0u8; 16],
+        &[0u8; 256],
     )
 }
 
@@ -2461,7 +2461,7 @@ async fn test_upload_rejects_duplicate_fields() {
             )
             .as_bytes(),
         );
-        body.extend_from_slice(&[0u8; 16]);
+        body.extend_from_slice(&[0u8; 256]);
         body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
         body
     };
@@ -2731,7 +2731,7 @@ async fn test_upload_duplicate_content_rejected() {
         )
         .as_bytes(),
     );
-    body.extend_from_slice(&[0u8; 16]);
+    body.extend_from_slice(&[0u8; 256]);
     body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
 
     let send = |app: Router| {
@@ -2790,7 +2790,7 @@ async fn test_upload_rejects_missing_required_fields() {
         format!("--{boundary}\r\nContent-Disposition: form-data; name=\"signature\"\r\n\r\n")
             .as_bytes()
             .to_vec();
-    signature_part.extend_from_slice(&[0u8; 16]);
+    signature_part.extend_from_slice(&[0u8; 256]);
     signature_part.extend_from_slice(b"\r\n");
 
     let build = |parts: [&[u8]; 2]| -> Vec<u8> {
@@ -3518,6 +3518,93 @@ async fn test_vote_with_invalid_signature_rejected() {
         .unwrap();
     let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(count, 0, "a failed signature must not record a vote");
+}
+
+/// ALLOW_MOCK_AUTH=1 でも空署名・不正長の全ゼロ署名はモックとして受理しない。
+#[tokio::test]
+async fn test_vote_rejects_empty_and_wrong_length_zero_signatures() {
+    let (app, db) = setup_mod_app().await;
+    let (juror_hash, _key) = insert_juror(&db).await;
+    let token = generate_token(TEST_JWT_SECRET, &juror_hash).await;
+
+    for (name, signature, expected) in [
+        ("empty", Vec::new(), StatusCode::BAD_REQUEST),
+        ("64-byte zero", vec![0u8; 64], StatusCode::UNAUTHORIZED),
+        ("66-byte zero", vec![0u8; 66], StatusCode::UNAUTHORIZED),
+    ] {
+        let vote_body = json!({
+            "report_id": 1,
+            "juror_hash": juror_hash,
+            "result": "Approve",
+            "signature": signature,
+        });
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/mod/vote")
+                    .header("content-type", "application/json")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::from(vote_body.to_string()))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "case={name}");
+    }
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 0,
+        "malformed signatures must not be recorded as votes"
+    );
+}
+
+/// モック署名は 256 バイトの全ゼロ列のみ受理し、既存の投票フローを維持する。
+#[tokio::test]
+async fn test_vote_accepts_exact_mock_signature_length() {
+    let (app, db) = setup_mod_app().await;
+    let (juror_hash, _key) = insert_juror(&db).await;
+    let vote_body = json!({
+        "report_id": 1,
+        "juror_hash": juror_hash,
+        "result": "Approve",
+        "signature": vec![0u8; crate::MOCK_SIGNATURE_LEN],
+    });
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/mod/vote")
+                .header("content-type", "application/json")
+                .header(
+                    "authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, &juror_hash).await
+                    ),
+                )
+                .body(Body::from(vote_body.to_string()))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "256-byte zero signature is the only accepted mock signature"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "mock vote must still be recorded");
 }
 
 /// 不正な投票ペイロード（report_id <= 0、未知の result）は 400 で拒否され、票を記録しない
@@ -4284,7 +4371,7 @@ async fn test_zero_signature_rejected_when_mock_auth_disabled() {
         &[0xFF, 0x0A, 0x01, 0x00],
         None,
         &owner_hash,
-        &[0u8; 16],
+        &[0u8; 256],
     );
 
     let (status, response_body) = send_upload(&app, &token, boundary, body).await;
@@ -4298,6 +4385,46 @@ async fn test_zero_signature_rejected_when_mock_auth_disabled() {
         response_body.contains("Invalid digital signature"),
         "rejection must come from signature verification: {response_body}"
     );
+}
+
+/// ALLOW_MOCK_AUTH=1 でも空署名・不正長の全ゼロ署名はアップロードで受理しない。
+#[tokio::test]
+async fn test_upload_rejects_empty_and_wrong_length_zero_signatures() {
+    let (app, db) = setup_app_with_db().await;
+    // 不正長署名はモックを通らず RSA 検証へ進むため、公開鍵を登録しておく。
+    use rsa::pkcs8::DecodePrivateKey;
+    let private_key = PrivateKey::from_pkcs8_pem(&test_rsa_private_pem()).unwrap();
+    let public_der = private_key
+        .to_public_key()
+        .to_public_key_der()
+        .unwrap()
+        .to_vec();
+    db.execute(
+        "UPDATE users SET public_key_der = ? WHERE user_hash = 'test_user'",
+        [public_der],
+    )
+    .await
+    .unwrap();
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    for (len, expected) in [
+        (0usize, StatusCode::BAD_REQUEST),
+        (64, StatusCode::UNAUTHORIZED),
+        (66, StatusCode::UNAUTHORIZED),
+    ] {
+        let boundary = format!("signature-length-{len}");
+        let body = multipart_upload_body_full(
+            &boundary,
+            "upload.jxl",
+            "image/jxl",
+            &[0xFF, 0x0A, 0x01, 0x00],
+            None,
+            "test_user",
+            &vec![0u8; len],
+        );
+        let (status, response_body) = send_upload(&app, &token, &boundary, body).await;
+        assert_eq!(status, expected, "signature length {len}: {response_body}");
+    }
 }
 
 /// Audit log chain integrity test
@@ -8072,6 +8199,126 @@ async fn test_logout_revokes_refresh_family() {
     assert_eq!(active, 0);
 }
 
+/// back-channel logout の sub 失効は、失効前に発行された未使用 refresh token
+/// も DB 上で消費するため、そのトークンからの refresh は 401 になる。
+#[tokio::test]
+async fn test_backchannel_logout_consumes_unused_refresh_tokens() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let sub = login["user_hash"].as_str().unwrap().to_string();
+
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        login["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let logout_token = mock.logout_token_for_sub(&claims.sub);
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // 未使用トークンが DB に残っていないこと（再起動後も効く永続状態）。
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE sub = ? AND used_at IS NULL",
+            [sub.clone()],
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        active, 0,
+        "logout must consume every unused token for the sub"
+    );
+
+    let (status, _, _) = post_refresh(&app, &refresh).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a token issued before logout must not refresh the session"
+    );
+}
+
+/// 再起動相当（in-memory の失効閾値が空）でも、DB の sub 失効閾値が残っていれば
+/// refresh を拒否する。未使用トークンが競合で残った場合の多層防御。
+#[tokio::test]
+async fn test_refresh_rejects_revoked_sub_with_empty_in_memory_state() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (login, _refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        login["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let logout_token = mock.logout_token_for_sub(&claims.sub);
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // 失効と競合して未使用のまま残ったトークンを模擬する。
+    let escaped = "escaped-refresh-token";
+    let hash = hex::encode(Sha2Sha256::digest(escaped.as_bytes()));
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES (?, ?, ?, '2999-01-01T00:00:00Z')",
+        (hash, claims.sub.clone(), "escaped-family"),
+    )
+    .await
+    .unwrap();
+
+    // プロセス再起動相当: メモリの失効表は空だが DB は同じものを共有する。
+    let state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: Some(oidc.clone()),
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let restarted = build_router(state);
+
+    let (status, _, _) = post_refresh(&restarted, escaped).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "DB-persisted sub revocation must block refresh after restart"
+    );
+}
+
 #[tokio::test]
 async fn test_refresh_rejects_missing_cookie() {
     let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
@@ -8954,7 +9201,7 @@ fn multipart_upload_body_with_metadata(
         file_bytes,
         None,
         "test_user",
-        &[0u8; 16],
+        &[0u8; 256],
     );
     body.truncate(body.len() - closing.len());
     for (name, value) in [

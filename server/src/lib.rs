@@ -2609,7 +2609,11 @@ pub async fn mod_vote(
     // 1. Verify Signature (Auditability)
     let message = moderation_vote_message(vote.report_id, &vote.result);
 
-    let mock_sig = state.allow_mock_auth && vote.signature.iter().all(|&b| b == 0);
+    // 空署名は長さ検証前にモックとして受理されないよう明示的に拒否する。
+    if vote.signature.is_empty() {
+        return Err(AppError::BadRequest("Signature is empty".to_string()));
+    }
+    let mock_sig = state.allow_mock_auth && is_mock_signature(&vote.signature);
 
     if !mock_sig
         && !verify_user_signature(
@@ -2705,6 +2709,16 @@ pub async fn mod_vote(
 }
 
 use serde_json::json;
+
+/// 開発用モック署名として受理する RSA-2048 署名のバイト長。
+/// 空配列や不正長の全ゼロ列が `iter().all(|&b| b == 0)` で真になるため、
+/// 長さも明示的に検証する（`ALLOW_MOCK_AUTH=1` のときのみ受理）。
+pub(crate) const MOCK_SIGNATURE_LEN: usize = 256;
+
+/// 256 バイトの全ゼロ署名だけを開発用モックとして扱う。
+pub(crate) fn is_mock_signature(signature: &[u8]) -> bool {
+    signature.len() == MOCK_SIGNATURE_LEN && signature.iter().all(|&b| b == 0)
+}
 
 pub async fn verify_user_signature(
     state: &AppState,
@@ -2974,8 +2988,11 @@ pub async fn upload_content(
     validate_content_metadata(&title, &description, &parsed_tags)?;
     let stored_tags = parsed_tags.join(",");
 
-    // 1. Verify Signature (dev mock: all-zero signature when ALLOW_MOCK_AUTH)
-    let mock_sig = state.allow_mock_auth && signature.iter().all(|&b| b == 0);
+    // 1. Verify Signature (dev mock: 256-byte all-zero signature when ALLOW_MOCK_AUTH)
+    if signature.is_empty() {
+        return Err(AppError::BadRequest("Signature is empty".to_string()));
+    }
+    let mock_sig = state.allow_mock_auth && is_mock_signature(&signature);
     if !mock_sig && !verify_user_signature(&state, &owner_hash, &data, &signature).await? {
         return Err(AppError::Unauthorized(
             "Invalid digital signature".to_string(),

@@ -93,6 +93,22 @@ async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), 
     Ok(())
 }
 
+/// 指定 `sub` に紐づく未使用リフレッシュトークンをすべて消費する。
+///
+/// back-channel logout の `sub` 失効後も古いトークンから refresh できると、
+/// 新しい `iat` を付けた JWT で失効閾値を迂回できてしまう。消費状態は DB に
+/// 永続化されるため、プロセス再起動後も失効が維持される。
+async fn revoke_refresh_tokens_for_sub(state: &AppState, sub: &str) -> Result<(), AppError> {
+    state
+        .db
+        .execute(
+            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE sub = ? AND used_at IS NULL",
+            [sub],
+        )
+        .await?;
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct OidcConfig {
     pub issuer: String,
@@ -788,6 +804,20 @@ pub async fn refresh(
         return Err(AppError::Unauthorized("refresh token expired".to_string()));
     }
 
+    // sub の失効閾値が DB に残っている間は refresh を許可しない。
+    // back-channel logout と refresh が競合して未使用トークンが残っても、
+    // 再認証前にセッションを延長できないようにする（再起動後も DB で効く）。
+    let mut revoked_rows = state
+        .db
+        .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub.clone()])
+        .await?;
+    if revoked_rows.next().await?.is_some() {
+        revoke_refresh_tokens_for_sub(&state, &sub).await?;
+        return Err(AppError::Unauthorized(
+            "session for this subject has been revoked".to_string(),
+        ));
+    }
+
     // 消費済みへ更新（Concurrent な再利用は UPDATE の影響件数で検出する）。
     let updated = state
         .db
@@ -869,6 +899,9 @@ pub async fn backchannel_logout(
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
             .insert(sub.clone(), revoked_at);
+        // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
+        // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
+        revoke_refresh_tokens_for_sub(&state, &sub).await?;
         // プロセス再起動後も失効を維持するため DB にも記録する。
         state
             .db
