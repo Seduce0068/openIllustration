@@ -165,6 +165,8 @@ status: current
   `reasons_masked=false` の署名対象は旧形式を維持し、既存 v3 スナップショットの検証も後方互換。
 - [対応済み] `unsafe` 禁止の CI enforcement: グローバル指示に従い clippy に `-D clippy::undocumented_unsafe_blocks` を追加。テストの環境変数操作4箇所を
   safe ヘルパー2関数へ集約し、`ENV_LOCK` による直列化を安全性根拠として文書化（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+- [対応済み] 未使用依存の削除: clippy の `unused_dependencies` 警告で検出された `common` の `uuid` と
+  `client` の `leptos_router` を削除。全クレートの警告が 0 になり、攻撃面を縮小。
 - [対応済み] E2E 失敗アーカイブの Git 管理外化: 生成先 `e2e-artifacts/` を `.gitignore` へ追加（`git check-ignore` で確認）。トレース等の機微情報を含む成果物の誤コミットを防止。
 - [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
  共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。
