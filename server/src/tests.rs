@@ -273,6 +273,39 @@ impl PaymentVerifier for RacingVerifier {
     }
 }
 
+/// 2 段目 CAS の回帰テスト用 verifier。
+///
+/// `verify()` 自体は状態を書き換えず（1 段目の CAS を必ず成功させるため）、
+/// 代わりに DB トリガを仕込む。トリガは 1 段目が `DETECTED` へ更新された
+/// 直後に発火して status を書き換えるため、2 段目の `WHERE status = 'DETECTED'`
+/// は 0 件更新になる。これは「他ノードが DETECTED を書き換えた」状況を
+/// 1 段目と 2 段目の間だけに閉じて再現するものである。
+struct Stage2RacingVerifier {
+    db: Arc<libsql::Connection>,
+    verification: PaymentVerification,
+}
+
+#[async_trait]
+impl PaymentVerifier for Stage2RacingVerifier {
+    async fn verify(&self, _order: &PaymentOrder) -> Result<PaymentVerification, AppError> {
+        let sql = format!(
+            "CREATE TRIGGER IF NOT EXISTS stage2_race_rewrite
+             AFTER UPDATE OF status ON payment_orders
+             WHEN NEW.status = '{detected}' AND OLD.status <> '{detected}'
+             BEGIN
+                 UPDATE payment_orders
+                    SET status = '{mismatch}'
+                  WHERE order_id = NEW.order_id;
+             END;",
+            detected = crate::payments::STATUS_DETECTED,
+            mismatch = crate::payments::STATUS_MISMATCH,
+        );
+        // 書き換え後の status は DETECTED ではないのでトリガは再帰しない。
+        self.db.execute(&sql, ()).await?;
+        Ok(self.verification.clone())
+    }
+}
+
 async fn setup_app_with_payments(
     receiving_address: &str,
     verifier: Arc<dyn PaymentVerifier>,
@@ -4512,6 +4545,119 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         status,
         crate::payments::STATUS_MISMATCH,
         "stale write must not win"
+    );
+}
+
+/// 2 段目 CAS: 1 段目の DETECTED 遷移後、2 段目の UPDATE 直前に status が
+/// 書き換えられた場合は 409 を返し、2 段目の値で上書きしてはならない。
+#[tokio::test]
+async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
+    let verification = PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xstage2race".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: "1000000000000000000000".to_string(),
+    };
+    let verifier = Arc::new(Stage2RacingVerifier {
+        db: db.clone(),
+        verification,
+    });
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: Some(receiving.to_string()),
+        payment_receiving_xprv: None,
+        payment_verifier: Some(verifier),
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let app = build_router(shared_state);
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+
+    // 他ノードのコミット済み書き換えを模して、先に status を MISMATCH にする。
+    // この値は verify_order のトランザクション外なので 409 後も残る。
+    db.execute(
+        "UPDATE payment_orders SET status = ? WHERE order_id = ?",
+        (crate::payments::STATUS_MISMATCH, order_id.clone()),
+    )
+    .await
+    .unwrap();
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let before: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        before,
+        crate::payments::STATUS_MISMATCH,
+        "1 段目の CAS は読み取った status (MISMATCH) を期待するため、ここから始める"
+    );
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::CONFLICT,
+        "second-stage CAS must reject a 0-row update"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    // 1 段目で DETECTED に遷移した直後にトリガが MISMATCH へ書き換えるため、
+    // 2 段目の `WHERE status = 'DETECTED'` は 0 件になる。CAS 失敗時は
+    // トランザクション全体がロールバックされ、他ノードが書き換えた値が残る。
+    assert_eq!(
+        status,
+        crate::payments::STATUS_MISMATCH,
+        "stage 2 must not overwrite the externally rewritten status (got {status})"
     );
 }
 
@@ -9776,4 +9922,93 @@ async fn list_reports_filters_reported_and_orders_newest_first() {
     );
     assert_eq!(items[0].reason, "new reason");
     assert_eq!(items[1].reason, "old reason");
+}
+
+/// 監査: 再認証時の revoked_subs 削除レース回帰テスト。
+///
+/// callback はメモリの古い閾値を remove した後、
+/// `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= old` を実行する。
+/// その間に back-channel logout が新しい閾値で UPSERT しても直近の失効が消えないこと、
+/// および `revoked_at <= old` 条件を外すと新しい閾値も消えること（mutation 対比）を確認する。
+/// `sub` は PRIMARY KEY のため、同じ sub の行は常に 1 行だけである点に注意。
+#[tokio::test]
+async fn test_reauthentication_delete_keeps_newer_revocation_threshold() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let old_threshold: i64 = 1_700_000_000;
+    let new_threshold: i64 = old_threshold + 100;
+
+    async fn seed(db: &libsql::Connection, sub: &str, old: i64, new: i64) {
+        // 1. 古い閾値を永続化する。
+        db.execute(
+            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)",
+            (sub.to_string(), old),
+        )
+        .await
+        .unwrap();
+        // 2. レースを模擬: 削除の前に back-channel logout が新しい閾値を登録する。
+        //    oidc::backchannel_logout と同じ UPSERT を使う。
+        db.execute(
+            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+             ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
+                 updated_at = CURRENT_TIMESTAMP",
+            (sub.to_string(), new),
+        )
+        .await
+        .unwrap();
+    }
+
+    // 本命ケース: callback が呼ぶ本番関数を使う（SQL をテスト内で複製しない）。
+    seed(&db, "test_user", old_threshold, new_threshold).await;
+    crate::oidc::delete_superseded_revocation(&db, "test_user", old_threshold)
+        .await
+        .unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = ?",
+            ["test_user".to_string()],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect(
+        "newer revocation threshold must survive the re-authentication delete (race regression)",
+    );
+    let stored: i64 = row.get(0).unwrap();
+    assert_eq!(
+        stored, new_threshold,
+        "the newer threshold registered during the race must not be overwritten"
+    );
+    assert!(rows.next().await.unwrap().is_none());
+
+    // mutation 対比: 条件を `WHERE sub = ?` に変えると、新しい閾値も消えることを確認する。
+    // これにより本命アサーションが `revoked_at <= old` 条件に依存していることを示す。
+    // （oidc.rs は書き込み禁止のため、SQL 条件の一時変更は親が別途実施する。）
+    seed(&db, "mutation_control", old_threshold, new_threshold).await;
+    db.execute(
+        "DELETE FROM revoked_subs WHERE sub = ?",
+        ["mutation_control".to_string()],
+    )
+    .await
+    .unwrap();
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM revoked_subs WHERE sub = ?",
+            ["mutation_control".to_string()],
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 0,
+        "control: without the revoked_at condition the newer threshold is deleted"
+    );
 }

@@ -218,6 +218,10 @@ status: current
 - [対応済み] R1-09 / C1: アップロードの file パートへ MIME を設定（ブラウザ判定＋拡張子
   フォールバック）。実サーバーへモックなしで認証・アップロードするスモーク E2E を追加し、
   MIME 指定を外す mutation で失敗することを確認。
+- [対応済み] 回帰テスト追加: verify_order の 2 段目 CAS（DB トリガで DETECTED 直後に状態を書き換え
+  409 と非上書きを検証、mutation で 200 になることを確認）と、再認証時の revoked_subs 削除レース
+  （本番関数 `delete_superseded_revocation` を直接呼び、新しい閾値が残ることを検証、mutation で
+  検出を確認）。
 - [対応済み] 敵対的レビュー対応: レート制限キーを XFF 解決 IP（request extensions）へ変更し、
   信頼プロキシ配下で全ユーザーが同一バケットになる問題を修正。verify_order の 2 段目にも
   変更件数チェックを追加。再認証時の `revoked_subs` 削除を古い閾値以下に限定し、

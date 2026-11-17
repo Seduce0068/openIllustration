@@ -66,6 +66,21 @@ fn refresh_cookie(token: &str, secure: bool) -> Result<HeaderValue, AppError> {
         .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))
 }
 
+/// 再認証で不要になった古い失効閾値だけを DB から削除する。
+/// 新しい閾値が back-channel logout で登録された場合は残す。
+pub(crate) async fn delete_superseded_revocation(
+    db: &libsql::Connection,
+    sub: &str,
+    old_threshold: i64,
+) -> Result<(), AppError> {
+    db.execute(
+        "DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?",
+        libsql::params![sub.to_string(), old_threshold],
+    )
+    .await?;
+    Ok(())
+}
+
 /// ファミリ全体を失効させる（盗用検知時）。
 async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), AppError> {
     state
@@ -655,13 +670,7 @@ pub async fn callback(
     // 古い閾値より新しい値が back-channel logout で登録された場合は残す
     // （メモリ削除と DB 削除の間のレースで直近の失効が消えないようにする）。
     if let Some(old_threshold) = old_threshold {
-        state
-            .db
-            .execute(
-                "DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?",
-                libsql::params![user_hash.clone(), old_threshold as i64],
-            )
-            .await?;
+        delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await?;
     }
     let session_claims = Claims {
         sub: user_hash.clone(),
