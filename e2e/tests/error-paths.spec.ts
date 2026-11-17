@@ -10,13 +10,10 @@ import { test, expect, type Page } from '@playwright/test';
  * - /me/export の通信失敗: L914 `.map_err(|_| "ネットワークエラーが発生しました。")`
  *   → L959 の `<p role="alert" data-testid="export-error">` に表示。
  *
- * 以下の2ケースは、現行実装にエラー表示が無いためテストを追加しない
- * （コード変更は担当外）。詳細はエージェントの報告を参照。
- * - /auth/verify が 500: Login コンポーネント（L664-720）は loading を戻すだけで
- *   エラー signal / role="alert" を持たない。UPLOAD が出ないことは確認できるが
- *   「エラーが表示される」ことを検証できない。
- * - /content/{cid}/audit が 500: ContentViewer（L1081-1088）は if let の
- *   失敗時に何も表示せず、Audit パネルには空の FORENSIC_TIMELINE が出るだけ。
+ * 以下の2ケースは、ログイン/監査のエラー表示が実装済みのため追加している。
+ * - /auth/verify が 500: `<p role="alert" data-testid="login-error">` に
+ *   HTTP 500 を含む文言が表示され、UPLOAD は出ない。
+ * - /content/{cid}/audit が 500: Audit パネル内の role="alert" にエラーが出る。
  */
 test.describe('Error paths (network error / HTTP 500)', () => {
   /** モック認証でログインし、ダッシュボード（BROWSE ナビ）まで進む。 */
@@ -81,5 +78,85 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await expect(page.getByRole('alert')).toHaveText('ネットワークエラーが発生しました。');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
     expect(exportAborted).toBe(true);
+  });
+
+  test('AUTH-500: /auth/verify が HTTP 500 のとき login-error に文言が出て UPLOAD が出ないこと', async ({ page }) => {
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ nonce: 'test-nonce' }),
+      });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'verify failed' }),
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+
+    // 実装文言（client/src/lib.rs, Login の verify 失敗時）:
+    //   "認証に失敗しました (HTTP 500)."
+    await expect(page.getByTestId('login-error'))
+      .toHaveText('認証に失敗しました (HTTP 500).', { timeout: 10000 });
+    await expect(page.getByRole('alert'))
+      .toHaveText('認証に失敗しました (HTTP 500).');
+    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveCount(0);
+  });
+
+  test('AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること', async ({ page }) => {
+    const cid = 'QmErrorPathsAudit500';
+    // ダッシュボードに監査対象のカードを1件だけ出す。
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          cid,
+          checksum: 'mock_checksum',
+          type: 'Novel',
+          status: 'Approved',
+          price: 0,
+          title: 'Audit Error Fixture',
+          description: 'audit 500 fixture',
+          tags: ['audit'],
+          is_favorite: false,
+        }]),
+      });
+    });
+    await page.route(`**/content/${cid}`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/markdown',
+        body: 'Test content',
+      });
+    });
+    await page.route(`**/content/${cid}/audit`, async route => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'audit failed' }),
+      });
+    });
+
+    await loginWithMockAuth(page);
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await expect(page.getByText('Audit Error Fixture')).toBeVisible({ timeout: 20000 });
+
+    await page.locator('button:has-text("Audit")').first().click();
+    await expect(page.locator('text=FORENSIC_TIMELINE')).toBeVisible();
+
+    // 実装文言（client/src/lib.rs, ContentViewer の audit 取得失敗時）:
+    //   "監査ログの取得に失敗しました (HTTP 500)."
+    // FORENSIC_TIMELINE を持つ監査パネル内の role="alert" を検証する。
+    const auditPanel = page.locator('div').filter({ hasText: 'FORENSIC_TIMELINE' }).last();
+    const auditAlert = auditPanel.getByRole('alert');
+    await expect(auditAlert)
+      .toHaveText('監査ログの取得に失敗しました (HTTP 500).', { timeout: 10000 });
+    await expect(auditPanel.getByTestId('audit-error')).toBeVisible();
   });
 });

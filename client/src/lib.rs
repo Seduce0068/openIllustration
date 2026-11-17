@@ -667,18 +667,34 @@ where
     F: Fn(String, String) + 'static + Clone,
 {
     let (loading, set_loading) = signal(false);
+    let (error, set_error) = signal(String::new());
 
     let do_login = move |_| {
         set_loading.set(true);
+        set_error.set(String::new());
         let on_success = on_success.clone();
         spawn_local(async move {
             // 開発用モック認証でも nonce を取得して単回消費のフローを通す。
+            // 失敗しても verify は従来どおり試み、表示するエラーは verify の結果で上書きする。
             let nonce = match Request::post(&format!("{}/auth/login", API_BASE))
                 .send()
                 .await
             {
-                Ok(response) => response.json::<Oid4vpRequest>().await.ok().map(|s| s.nonce),
-                Err(_) => None,
+                Ok(response) if response.ok() => match response.json::<Oid4vpRequest>().await {
+                    Ok(request) => Some(request.nonce),
+                    Err(_) => {
+                        set_error.set("認証要求の解析に失敗しました。".to_string());
+                        None
+                    }
+                },
+                Ok(response) => {
+                    set_error.set(format!("認証に失敗しました (HTTP {}).", response.status()));
+                    None
+                }
+                Err(_) => {
+                    set_error.set("ネットワークエラーが発生しました。".to_string());
+                    None
+                }
             };
             let res = Request::post(&format!("{}/auth/verify", API_BASE))
                 .json(&serde_json::json!({
@@ -691,12 +707,23 @@ where
                 .send()
                 .await;
 
-            if let Ok(response) = res
-                && let Ok(data) = response.json::<VerifyResponse>().await
-                && data.authorized
-                && let (Some(hash), Some(jwt)) = (data.user_hash, data.token)
-            {
-                on_success(hash, jwt);
+            match res {
+                Ok(response) if response.ok() => match response.json::<VerifyResponse>().await {
+                    Ok(data) if data.authorized => {
+                        if let (Some(hash), Some(jwt)) = (data.user_hash, data.token) {
+                            set_error.set(String::new());
+                            on_success(hash, jwt);
+                        } else {
+                            set_error.set("認証情報が不足しています。".to_string());
+                        }
+                    }
+                    Ok(_) => set_error.set("認証が許可されませんでした。".to_string()),
+                    Err(_) => set_error.set("認証結果の解析に失敗しました。".to_string()),
+                },
+                Ok(response) => {
+                    set_error.set(format!("認証に失敗しました (HTTP {}).", response.status()));
+                }
+                Err(_) => set_error.set("ネットワークエラーが発生しました。".to_string()),
             }
             set_loading.set(false);
         });
@@ -715,6 +742,11 @@ where
                 class="w-full py-4 border border-white hover:bg-white hover:text-black transition-all font-bold uppercase tracking-widest disabled:opacity-50">
                 {move || if loading.get() { "VERIFYING..." } else { "CONNECT WITH JPKI" }}
             </button>
+            <Show when=move || !error.get().is_empty() fallback=|| ()>
+                <p role="alert" data-testid="login-error" class="text-xs text-red-500">
+                    {move || error.get()}
+                </p>
+            </Show>
         </div>
     }
 }
@@ -996,6 +1028,7 @@ where
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
+    let (audit_error, set_audit_error) = signal(String::new());
     let (show_audit, set_show_audit) = signal(false);
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
 
@@ -1078,13 +1111,23 @@ where
                 set_verified.set(Some(false));
             }
 
-            if let Ok(audit_res) = Request::get(&format!("{}/content/{}/audit", API_BASE, cid))
+            match Request::get(&format!("{}/content/{}/audit", API_BASE, cid))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await
-                && let Ok(logs) = audit_res.json::<Vec<AuditLog>>().await
             {
-                set_audit_logs.set(logs);
+                Ok(response) if response.ok() => match response.json::<Vec<AuditLog>>().await {
+                    Ok(logs) => {
+                        set_audit_error.set(String::new());
+                        set_audit_logs.set(logs);
+                    }
+                    Err(_) => set_audit_error.set("監査ログの解析に失敗しました。".to_string()),
+                },
+                Ok(response) => set_audit_error.set(format!(
+                    "監査ログの取得に失敗しました (HTTP {}).",
+                    response.status()
+                )),
+                Err(_) => set_audit_error.set("Network error loading audit log.".to_string()),
             }
         });
     });
@@ -1158,6 +1201,11 @@ where
                 <Show when=move || show_audit.get() fallback=|| ()>
                     <div class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
+                        <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
+                            <p role="alert" data-testid="audit-error" class="text-[8px] text-red-500">
+                                {move || audit_error.get()}
+                            </p>
+                        </Show>
                         <div class="space-y-4">
                             <For
                                 each=move || audit_logs.get()
