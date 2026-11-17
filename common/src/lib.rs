@@ -371,6 +371,69 @@ mod tests {
             previous_log_hash: "GENESIS_HASH".into(),
         };
         assert_eq!(entry.calculate_hash(), entry.calculate_hash());
+
+        // 各フィールドを1つずつ変えると両バージョンのハッシュが変わることを検証する。
+        // これにより、あるフィールドが計算から漏れても検出できる。
+        let base_v1 = entry.calculate_hash();
+        let base_v2 = entry.calculate_hash_v2();
+        let mutations = [
+            (
+                "cid",
+                AuditLogEntry {
+                    cid: "QmOther".into(),
+                    ..entry.clone()
+                },
+            ),
+            (
+                "old_status",
+                AuditLogEntry {
+                    old_status: "Reported".into(),
+                    ..entry.clone()
+                },
+            ),
+            (
+                "new_status",
+                AuditLogEntry {
+                    new_status: "Approved".into(),
+                    ..entry.clone()
+                },
+            ),
+            (
+                "changed_by",
+                AuditLogEntry {
+                    changed_by: "user2".into(),
+                    ..entry.clone()
+                },
+            ),
+            (
+                "reason",
+                AuditLogEntry {
+                    reason: "other".into(),
+                    ..entry.clone()
+                },
+            ),
+            (
+                "previous_log_hash",
+                AuditLogEntry {
+                    previous_log_hash: "OTHER_GENESIS".into(),
+                    ..entry.clone()
+                },
+            ),
+            // log_id は entry_hash に意図的に含めない。連続性チェックと
+            // Merkle root の (log_id, entry_hash) タプルで別途カバーする。
+        ];
+        for (name, mutated) in mutations {
+            assert_ne!(
+                base_v1,
+                mutated.calculate_hash(),
+                "v1 must depend on {name}"
+            );
+            assert_ne!(
+                base_v2,
+                mutated.calculate_hash_v2(),
+                "v2 must depend on {name}"
+            );
+        }
     }
 
     fn sample_hashes() -> Vec<(i64, String)> {
