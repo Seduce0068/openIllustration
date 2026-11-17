@@ -179,6 +179,10 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R4-02: `governor` 0.10.4（GCRA・MIT・活発・一次情報確認）で IP 単位レート制限と
+  同時実行上限（`tokio::Semaphore`）を導入。本番相当のみ有効、監視エンドポイントは除外。
+  `RATE_LIMIT_PER_MIN` / `MAX_CONCURRENT_REQUESTS` を追加。境界値・429 テストを追加し、
+  mutation（レートチェック削除）でテスト失敗を確認。
 - [対応済み] R3-01: HTTP カウンタを `AppState` の `Metrics` へ移し、テストから独立
   インスタンスを注入可能化。絶対値アサーションを正確な差分（+2 requests / +1 error）へ変更。
   mutation（エラー加算削除）でテスト失敗を確認。

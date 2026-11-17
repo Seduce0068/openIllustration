@@ -179,6 +179,7 @@ async fn setup_app_with_options(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
 
     let router = build_router(shared_state);
@@ -227,6 +228,7 @@ async fn setup_app_with_jwt_keys(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     (build_router(shared_state), db)
 }
@@ -309,6 +311,7 @@ async fn setup_app_with_payments(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
 
     let router = build_router(shared_state);
@@ -354,6 +357,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
 
     (build_router(shared_state), db)
@@ -659,9 +663,99 @@ async fn setup_app_with_oidc_and_age_policy(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
 
     (build_router(shared_state), oidc, mock, db)
+}
+
+/// R4-02: レート制限設定の境界値。
+#[test]
+fn test_rate_limit_configuration() {
+    assert_eq!(crate::rate_limit_per_min(None), 60);
+    assert_eq!(crate::rate_limit_per_min(Some("2")), 2);
+    assert_eq!(crate::rate_limit_per_min(Some("0")), 60);
+    assert_eq!(crate::rate_limit_per_min(Some("601")), 60);
+    assert_eq!(crate::rate_limit_per_min(Some("bad")), 60);
+    assert_eq!(crate::max_concurrent_requests(None), 16);
+    assert_eq!(crate::max_concurrent_requests(Some("1")), 1);
+    assert_eq!(crate::max_concurrent_requests(Some("0")), 16);
+    assert_eq!(crate::max_concurrent_requests(Some("257")), 16);
+    assert_eq!(crate::max_concurrent_requests(Some("bad")), 16);
+}
+
+/// R4-02: IP 単位のレート制限が 429 で拒否すること。
+#[tokio::test]
+async fn test_rate_limit_rejects_excess_requests() {
+    use std::num::NonZeroU32;
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    let state = Arc::new(AppState {
+        db,
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: Some(Arc::new(crate::RateLimitState {
+            limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
+                NonZeroU32::new(2).unwrap(),
+            )),
+            concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
+        })),
+    });
+    let app = build_router(state);
+
+    // 2 回は成功（404 でもレート制限は通過）、3 回目で 429。
+    let peer = test_ipv6_peer();
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/no-such-path").body(Body::empty()).unwrap(),
+                peer,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    // 監視用エンドポイントは制限対象外。
+    let health = app
+        .oneshot(with_peer(
+            Request::get("/health").body(Body::empty()).unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(health.status(), StatusCode::OK);
 }
 
 /// R1-17: 信頼属性必須モードでは OIDC callback / refresh を年齢ゲートで拒否する。
@@ -2521,6 +2615,7 @@ async fn test_vote_consensus_rejects_content() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -2702,6 +2797,7 @@ async fn test_duplicate_vote_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -2900,6 +2996,7 @@ async fn test_vote_after_conclusion_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -2981,6 +3078,7 @@ async fn test_vote_for_missing_report_returns_404() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -3047,6 +3145,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -3138,6 +3237,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -3205,6 +3305,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
 
@@ -4211,6 +4312,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
@@ -6096,6 +6198,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         ),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     (build_router(state), db)
 }
@@ -7171,6 +7274,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down,
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
     });
     let app = build_router(state);
 

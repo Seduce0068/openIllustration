@@ -9,7 +9,7 @@ mod payments;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{FromRef, Multipart, Path, State},
+    extract::{ConnectInfo, FromRef, Multipart, Path, State},
     http::{HeaderValue, StatusCode, header},
     middleware::from_fn,
     response::{IntoResponse, Response},
@@ -64,6 +64,8 @@ pub struct AppState {
     pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
     /// HTTP カウンタ。テストから独立したインスタンスを注入できる。
     pub metrics: Arc<Metrics>,
+    /// レート制限状態。未設定時は制限を適用しない（開発・テスト用）。
+    pub rate_limit: Option<Arc<RateLimitState>>,
 }
 
 /// `Content-Length` が 10 MiB を超えるリクエストを 413 で拒否する。
@@ -90,11 +92,74 @@ async fn reject_oversized_body(
     next.run(request).await
 }
 
+/// IP 単位のレート制限（GCRA）と同時実行上限の状態。
+/// 開発用モック認証時は `None` とし、テストからは `Some` を注入できる。
+pub struct RateLimitState {
+    pub limiter: governor::RateLimiter<
+        String,
+        governor::state::keyed::DefaultKeyedStateStore<String>,
+        governor::clock::DefaultClock,
+    >,
+    pub concurrency: Arc<tokio::sync::Semaphore>,
+}
+
+/// `RATE_LIMIT_PER_MIN` を解析する。未設定・不正値・範囲外は既定の 60/分。
+pub fn rate_limit_per_min(env_value: Option<&str>) -> u32 {
+    const DEFAULT: u32 = 60;
+    env_value
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|n| (1..=600).contains(n))
+        .unwrap_or(DEFAULT)
+}
+
+/// `MAX_CONCURRENT_REQUESTS` を解析する。未設定・不正値・範囲外は既定の 16。
+pub fn max_concurrent_requests(env_value: Option<&str>) -> usize {
+    const DEFAULT: usize = 16;
+    env_value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|n| (1..=256).contains(n))
+        .unwrap_or(DEFAULT)
+}
+
 /// 軽量メトリクス。テストから注入できるよう `AppState` に保持する。
 #[derive(Default)]
 pub struct Metrics {
     pub requests: std::sync::atomic::AtomicU64,
     pub errors: std::sync::atomic::AtomicU64,
+}
+
+/// IP 単位のレート制限と同時実行上限を適用するミドルウェア。
+/// 監視用の /health, /ready, /metrics は除外する。
+async fn rate_limit_middleware(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let Some(limit) = state.rate_limit.as_ref() else {
+        return next.run(request).await;
+    };
+    let path = request.uri().path();
+    if matches!(path, "/health" | "/ready" | "/metrics") {
+        return next.run(request).await;
+    }
+    if limit.limiter.check_key(&peer.ip().to_string()).is_err() {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "rate limit exceeded" })),
+        )
+            .into_response();
+    }
+    let Ok(permit) = limit.concurrency.clone().try_acquire_owned() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({ "error": "too many concurrent requests" })),
+        )
+            .into_response();
+    };
+    let response = next.run(request).await;
+    drop(permit);
+    response
 }
 
 /// 全レスポンスへ最小限のセキュリティヘッダを付与する。
@@ -654,6 +719,24 @@ pub async fn run() -> anyhow::Result<()> {
         warn!("MODERATION_OPERATOR_HASHES is not set: BAN/unban/unpin endpoints are disabled");
     }
 
+    // 本番相当（モック認証無効）のみ IP 単位のレート制限と同時実行上限を有効化する。
+    let rate_limit = if allow_mock_auth {
+        None
+    } else {
+        use std::num::NonZeroU32;
+        let per_min = rate_limit_per_min(std::env::var("RATE_LIMIT_PER_MIN").ok().as_deref());
+        let quota = governor::Quota::per_minute(
+            NonZeroU32::new(per_min)
+                .unwrap_or_else(|| unreachable!("rate_limit_per_min returns a positive value")),
+        );
+        Some(Arc::new(RateLimitState {
+            limiter: governor::RateLimiter::keyed(quota),
+            concurrency: Arc::new(tokio::sync::Semaphore::new(max_concurrent_requests(
+                std::env::var("MAX_CONCURRENT_REQUESTS").ok().as_deref(),
+            ))),
+        }))
+    };
+
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
         http_client: Client::builder()
@@ -677,6 +760,7 @@ pub async fn run() -> anyhow::Result<()> {
         moderation_operators,
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        rate_limit,
     });
 
     let worker_db = Arc::clone(&shared_state.db);
@@ -1222,6 +1306,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             observe_metrics,
         ))
         .layer(from_fn(reject_oversized_body))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .layer(from_fn(network::ipv6_only_middleware))
         // 最外側に置き、IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
         .layer(from_fn(security_headers))

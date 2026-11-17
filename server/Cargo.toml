@@ -42,6 +42,8 @@ sha2 = "0.11"
 k256 = { version = "0.14", features = ["ecdsa"] }
 sha3 = "0.10"
 coins-bip32 = "0.17"
+# レート制限（GCRA）。活発・MIT・軽量な keyed インメモリ実装を採用。
+governor = "0.10.4"
 
 [dev-dependencies]
 rcgen = "0.14"
