@@ -21,6 +21,8 @@ RS256 JWT 署名鍵（`JWT_RSA_PRIVATE_KEY_PEM`）と検証鍵
 
 ## 前提
 
+- RSA 署名鍵は 2048bit 以上を要求する。未満の PEM は起動時に拒否される
+  （`server/src/jwt.rs` の `RSA_MIN_KEY_BITS`）。
 - `kid` は SPKI DER の SHA-256 先頭16バイトを hex エンコードした値で、
   公開鍵から決定的に導出される（`server/src/jwt.rs`）。
 - 現行署名鍵の `kid` は自動的に検証鍵へ登録される。
@@ -41,7 +43,7 @@ RS256 JWT 署名鍵（`JWT_RSA_PRIVATE_KEY_PEM`）と検証鍵
 1. 新署名鍵を生成する（Kubuntu / 作業ディレクトリ）:
 
 ```bash
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out new-signing-key.pem
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out new-signing-key.pem
 openssl pkey -in new-signing-key.pem -pubout -out new-signing-key.pub.pem
 ```
 
@@ -80,11 +82,14 @@ TOKEN="<新しく発行したアクセストークン>"
 cut -d. -f1 <<<"$TOKEN" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .kid
 ```
 
-1. 旧 `kid` のトークンがまだ検証できることを確認する（無停下の証明）。
+1. 旧 `kid` で署名した事前トークンと新 `kid` で署名した事後トークンを採取し、
+   両方で保護 API が通ることを確認する。結果は時刻付きで外部の監視基盤・
+   署名付きログなどの外部アンカーへ記録し、再起動で消えない証跡として残す。
 
 1. 発行済み旧トークンの有効期限が切れた後、`JWT_RSA_VERIFICATION_KEYS`
-   から旧 `kid` を削除して再起動する。削除前に `/metrics` の
-   `openillustration_http_errors_total` が増えていないことを確認する。
+   から旧 `kid` を削除して再起動する。削除前に外部アンカーの認証エラー
+   時系列が増えていないことを確認する。`/metrics` のカウンタはプロセス内で
+   再起動時にゼロへ戻るため、単独の無停止証明には使わない。
 
 ## 漏えい時対応
 
@@ -102,7 +107,7 @@ cut -d. -f1 <<<"$TOKEN" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .kid
 
 | 症状 | 確認点 | 対応 |
 | --- | --- | --- |
-| 全トークンが 401 | `JWT_RSA_PRIVATE_KEY_PEM` の PEM 形式とビット長（3072以上） | 起動ログの `JWT_RSA_PRIVATE_KEY_PEM is invalid` を確認し鍵を修正 |
+| 全トークンが 401 | `JWT_RSA_PRIVATE_KEY_PEM` の PEM 形式とビット長（2048以上） | 起動ログの `JWT_RSA_PRIVATE_KEY_PEM is invalid` を確認し鍵を修正 |
 | 旧トークンのみ 401 | `JWT_RSA_VERIFICATION_KEYS` に旧 `kid` が登録されているか | 段階1の手順で旧公開鍵を再登録 |
 | 未知 `kid` のエラー | トークンの `kid` と登録済み `kid` の一致 | 署名鍵の導出 `kid` を再計算し登録 |
 | `/auth/oidc/callback` が 401 | `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` と ID トークンのクレーム | 設定値を OP の実際のクレームに合わせる（本番では設定必須） |

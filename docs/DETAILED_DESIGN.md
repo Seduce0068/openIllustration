@@ -19,14 +19,15 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 | Method | Path | 認証 | 用途 |
 | --- | --- | --- | --- |
-| POST | `/auth/login` | 不要 | OID4VP風のnonce応答。完全な認証フローではない |
+| POST | `/auth/login` | 不要 | モック有効時（`ALLOW_MOCK_AUTH=1`）のみ公開。OID4VP風のnonce応答で完全な認証フローではない。無効時は501 |
 | POST | `/auth/verify` | 不要 | 開発用モックまたは証明書入力を処理しJWTを発行 |
 | GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
 | GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
 | POST | `/auth/refresh` | Cookie | リフレッシュトークンを回転し新セッションJWTを発行。再利用検知時はファミリ失効 |
 | POST | `/auth/logout` | Bearer JWT | `sid` を失効させる |
-| POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` はインメモリ失効閾値方式） |
+| POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` は `revoked_subs` テーブルへ永続化し起動時にロード） |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
+| GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
 | GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ（全リクエスト数・4xx/5xx 応答数）。外部クレートなし。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
@@ -42,6 +43,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/report` | Bearer JWT | 通報登録と `Reported` 遷移 |
 | GET | `/mod/reports` | Bearer JWT | `Reported` コンテンツの通報一覧 |
 | POST | `/mod/vote` | Bearer JWT | 投票署名検証、投票登録、閾値判定 |
+| POST | `/mod/reports/{report_id}/finalize` | Bearer JWT | 期限到達済み通報を集計確定（冪等）。期限内・確定済みは変更しない |
+| POST | `/mod/operators/{user_hash}/ban` | Bearer JWT | 運用者特権。`MODERATION_OPERATOR_HASHES` 登録者のみBAN可能。根拠・期間必須、`governance_audit_log` に記録 |
+| POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
+| POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
 
 ### API横断規則
 
@@ -51,6 +56,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - CORSは `ALLOWED_ORIGINS`（カンマ区切り）で設定する。`ALLOW_MOCK_AUTH=1` の開発時のみ、未設定ならローカル開発オリジン（`localhost`/`127.0.0.1`/`[::1]`
   の8080）へフォールバックする。モック認証が無効な本番相当で未設定なら全オリジンを拒否（fail-closed、警告ログ付き）。空エントリと `http(s)://` 形式以外（`null` を除く）は無視する。
   末尾スラッシュは除去し、ワイルドカードは指定できない。本番配信オリジンの決定と値の運用は未決定。
+- 本番相当（`ALLOW_MOCK_AUTH` 無効）のみ、IP 単位のレート制限と同時実行上限を適用する。
+  `RATE_LIMIT_PER_MIN`（既定60/分、有効範囲1〜600）を超過、または `MAX_CONCURRENT_REQUESTS`
+  （既定16、有効範囲1〜256）の同時実行数を超過した場合は 429 を返す。不正値・範囲外は既定値を使う。
+  `/health`・`/ready`・`/metrics` は監視用のため除外し、`ALLOW_MOCK_AUTH=1` の開発時は適用しない。
 - リクエスト本文は最大10 MiB。`Content-Length` が上限を超える場合はミドルウェアが Multipart 解析より先に 413 を返す（単体テストと実サーバーで確認）。`Content-Length`
   が無い／虚偽のチャンクド転送は axum の本文制限と Multipart パーサが守り、その場合は 400 になる（多層防御）。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10
   MiB（超過は 400）。
@@ -96,6 +105,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、
   モック環境を含め本人確認済み属性として信頼しない。詳細は [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) を参照。
+- 年齢ゲートは fail-closed。`AGE_ENFORCEMENT_MODE=trusted_attribute_required` では
+  検証済み属性の入力経路が未実装のため、`/auth/oidc/callback` と `/auth/refresh` を
+  `TrustedAttributeRequired` により 403 で拒否し、年齢判定のバイパスを防ぐ（R1-17）。
 
 ### OIDC認証フロー（実装済み・モックOPで検証）
 
@@ -189,7 +201,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `009_revoked_sessions.sql`）としてバージョン管理され、起動時に
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `010_wallet_bound.sql`）としてバージョン管理され、起動時に
 `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
 適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
 ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。

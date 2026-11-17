@@ -179,6 +179,13 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R5-10: 小説の TOC と見出しアンカー。`collect_headings` を共有し本文 id と TOC
+  アンカーを一致させる。slug は ASCII 英数字/`-`/`_` のみ、重複は連番、TOC 文字列は
+  HTML エスケープ。単体テスト5件を追加（エージェントチーム実装）。
+- [対応済み] R3-09: Playwright に firefox / webkit プロジェクトを追加（オプトイン、
+  `E2E_PROJECTS` で選択）。本ホストは Kubuntu 26.04 で未対応のため既定は chromium 維持。
+- [対応済み] C4 / R2-17〜R2-21 / C6: 設計・ADR・状態ドキュメントを現行実装へ整合
+  （ acr/amr 実装済み、revoked_subs 永続化、レート制限、RS256 本番署名の受容根拠など）。
 - [対応済み] R4-02: `governor` 0.10.4（GCRA・MIT・活発・一次情報確認）で IP 単位レート制限と
   同時実行上限（`tokio::Semaphore`）を導入。本番相当のみ有効、監視エンドポイントは除外。
   `RATE_LIMIT_PER_MIN` / `MAX_CONCURRENT_REQUESTS` を追加。境界値・429 テストを追加し、

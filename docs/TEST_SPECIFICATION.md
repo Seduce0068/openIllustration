@@ -79,6 +79,10 @@ cd e2e && npm test
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
+既定は `chromium`（システム Chrome）のみ。`E2E_PROJECTS=chromium,firefox,webkit`
+で複数ブラウザを選択できるが、firefox / webkit はバイナリ導入と共有ライブラリが
+必要で、本ホスト（Kubuntu 26.04）では Playwright 未対応プラットフォームのため
+未検証（CI 環境での導入は別途検討）。
 開発サーバーとクライアントは `e2e/playwright.config.ts` の `webServer` が
 自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、ローカルでは開発用の
 固定 JWT シークレット。`E2E_JWT_SECRET` で上書きできる）。

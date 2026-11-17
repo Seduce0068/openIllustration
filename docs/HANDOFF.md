@@ -133,7 +133,7 @@ E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 18 以上が�
 `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
-2026-11-15 に trunk 0.22.1・`E2E_CLIENT_PORT=18080` で 9 件成功を確認。
+2026-11-15 に trunk 0.21.14・`E2E_CLIENT_PORT=18080` で 9 件成功を確認。
 
 ```bash
 cd e2e
@@ -251,6 +251,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
 - `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。セッション有効期限(24h)+60s より古いレコードは起動時/ワーカー周期で回収。
+- `server/migrations/010_wallet_bound.sql`: 注文ごとのウォレット所有証明を `wallet_bound` へ永続化（verify の必須条件）。
 - 起動時は `<DB path>.instance.lock` で単一ライターを強制（第二インスタンスは拒否、停止時に削除）。同じ DB を複数プロセスで起動しないこと。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。
