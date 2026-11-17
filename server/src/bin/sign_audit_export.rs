@@ -158,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut snapshot = SignedAuditSnapshot {
         version: common::AUDIT_SNAPSHOT_VERSION,
+        reasons_masked: !args.include_reasons,
         entries,
         governance_entries,
         merkle_root: digest.root_hash,

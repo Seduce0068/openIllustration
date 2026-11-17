@@ -167,6 +167,11 @@ pub const AUDIT_SNAPSHOT_VERSION: u32 = 3;
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct SignedAuditSnapshot {
     pub version: u32,
+    /// reason/details をマスクしたエクスポートか。
+    /// true の場合は entry_hash の再計算をスキップする（元の理由がスナップショットに無いため）。
+    /// 署名が entry_hash 列全体を保護し、連鎖・連番・Merkle root も検証される。
+    #[serde(default)]
+    pub reasons_masked: bool,
     pub entries: Vec<AuditSnapshotEntry>,
     /// BAN / UNBAN / PIN 解除の運用判断（ADR-0004 §10）。
     #[serde(default)]
@@ -242,8 +247,8 @@ impl SignedAuditSnapshot {
         let governance_json = serde_json::to_string(&self.governance_entries)
             .expect("serializing governance entries cannot fail");
         format!(
-            "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}",
-            self.version, entries_json, governance_json, self.merkle_root
+            "OPENILLUSTRATION_AUDIT_EXPORT_V3\0{}\0{}\0{}\0{}\0{}",
+            self.version, self.reasons_masked, entries_json, governance_json, self.merkle_root
         )
         .into_bytes()
     }
@@ -260,7 +265,7 @@ impl SignedAuditSnapshot {
                     entry.log_id
                 )));
             }
-            if !entry.verify_hash() {
+            if !self.reasons_masked && !entry.verify_hash() {
                 return Err(ForensicError::InvalidSignature(format!(
                     "entry_hash mismatch at log_id={}",
                     entry.log_id
@@ -511,18 +516,20 @@ mod tests {
         };
         let mut snapshot = SignedAuditSnapshot {
             version: 3,
+            reasons_masked: false,
             entries: vec![snapshot_entry.clone()],
             governance_entries: vec![governance.clone()],
-            merkle_root: digest.root_hash,
+            merkle_root: digest.root_hash.clone(),
             signature: String::new(),
         };
         snapshot.signature = sign_audit_snapshot(&snapshot, &private_pem).unwrap();
         assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
 
         let tampered = SignedAuditSnapshot {
+            reasons_masked: false,
             entries: vec![AuditSnapshotEntry {
                 reason: "tampered".into(),
-                ..snapshot_entry
+                ..snapshot_entry.clone()
             }],
             ..snapshot.clone()
         };
@@ -532,9 +539,10 @@ mod tests {
         );
 
         let tampered_governance = SignedAuditSnapshot {
+            reasons_masked: false,
             governance_entries: vec![GovernanceAuditEntry {
                 reason: "tampered".into(),
-                ..governance
+                ..governance.clone()
             }],
             ..snapshot
         };
@@ -551,6 +559,25 @@ mod tests {
             verify_audit_snapshot(&unsupported_version, &public_der).is_err(),
             "unsupported snapshot versions must be rejected (fail-closed)"
         );
+
+        // マスク済みスナップショットは元の reason が無いため entry_hash 再計算を
+        // スキップし、署名・連鎖・Merkle root の検証は行う。
+        let mut masked = SignedAuditSnapshot {
+            version: 3,
+            reasons_masked: true,
+            entries: vec![AuditSnapshotEntry {
+                reason: "[redacted:6 bytes]".into(),
+                ..snapshot_entry
+            }],
+            governance_entries: vec![governance.clone()],
+            merkle_root: digest.root_hash.clone(),
+            signature: String::new(),
+        };
+        masked.signature = sign_audit_snapshot(&masked, &private_pem).unwrap();
+        assert!(verify_audit_snapshot(&masked, &public_der).is_ok());
+        // フラグ改ざんは署名検証で検出される。
+        masked.reasons_masked = false;
+        assert!(verify_audit_snapshot(&masked, &public_der).is_err());
     }
 
     #[test]

@@ -159,6 +159,9 @@ status: current
   第三者検証可能な監査方式の代替ではない（AUDIT-01/DEC-04 は未充足）。
 - [対応済み] 署名付き監査スナップショットのバージョン検証: `AUDIT_SNAPSHOT_VERSION=3` を定数化し、署名・検証の両方で不一致を fail-closed 拒否。CLI で未知バージョン 999
   が拒否されることを確認（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
+- [対応済み] マスク済み監査エクスポートの検証不能バグ: 既定の `--include-reasons` 未指定時に理由をマスクすると
+  `entry_hash` 再計算が不一致となり検証が失敗していた。`reasons_masked` フラグ（署名対象）を追加し、
+  マスク時は再計算をスキップ。実 DB で既定エクスポートが検証可能であることを実証。
 - [対応済み] `unsafe` 禁止の CI enforcement: グローバル指示に従い clippy に `-D clippy::undocumented_unsafe_blocks` を追加。テストの環境変数操作4箇所を
   safe ヘルパー2関数へ集約し、`ENV_LOCK` による直列化を安全性根拠として文書化（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] E2E 失敗アーカイブの Git 管理外化: 生成先 `e2e-artifacts/` を `.gitignore` へ追加（`git check-ignore` で確認）。トレース等の機微情報を含む成果物の誤コミットを防止。
