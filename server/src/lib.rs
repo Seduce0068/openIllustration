@@ -92,6 +92,29 @@ async fn reject_oversized_body(
 static METRIC_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static METRIC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// 全レスポンスへ最小限のセキュリティヘッダを付与する。
+/// MIME スニッフィング防止（nosniff）と、ブラウザがユーザー投稿を
+/// フレーム内へ埋め込むことを防ぐ（frame-ancestors 'none'）相当の
+/// X-Frame-Options。CSP はクライアントのリソース読み込みに影響するため
+/// 本番構成確定時に別途設計する。
+async fn security_headers(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    if !headers.contains_key("X-Content-Type-Options") {
+        headers.insert(
+            "X-Content-Type-Options",
+            HeaderValue::from_static("nosniff"),
+        );
+    }
+    if !headers.contains_key("X-Frame-Options") {
+        headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    }
+    response
+}
+
 /// リクエスト数と 4xx/5xx 応答数を記録するミドルウェア。
 async fn observe_metrics(
     request: axum::extract::Request,
@@ -1121,6 +1144,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(from_fn(observe_metrics))
         .layer(from_fn(reject_oversized_body))
         .layer(from_fn(network::ipv6_only_middleware))
+        // 最外側に置き、IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
+        .layer(from_fn(security_headers))
         .with_state(state)
 }
 
@@ -1569,6 +1594,9 @@ pub async fn get_content(
 
             return Response::builder()
                 .header(header::CONTENT_TYPE, response_content_type)
+                // ユーザー管理バイトの MIME スニッフィングを防ぐ（HTML として
+                // 解釈されると XSS になり得る）。
+                .header("X-Content-Type-Options", "nosniff")
                 .header("X-Forensic-Checksum", expected_checksum)
                 .body(Body::from(bytes))
                 .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));

@@ -57,6 +57,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - IPFS 取得時にチェックサム不一致を検出した場合は 401 で拒否し、CID と redact 済みゲートウェイ URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を確認済み。
   ゲートウェイは設定順に試し、ネットワークエラー（接続失敗・タイムアウト）に限り `IPFS_MAX_ATTEMPTS`（既定1、最大5）まで同じゲートウェイを再試行する。HTTP エラー・サイズ超過・不正データは再試行せず、
   不正データは次のゲートウェイへ送らず即拒否する。
+- 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する（最外側ミドルウェア。
+  IP ゲートの 403 を含む）。`/content/{cid}` のユーザー管理バイトが HTML としてスニッフィングされる
+  リスクを防ぐ。CSP はクライアントのリソース読み込みへ影響するため本番構成確定時に別途設計する。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。ログへ
   URL を出す際は `redact_url` で userinfo・query・fragment を除去する（フラグメントの秘密漏えいを防ぐためパース失敗時のフォールバックでも `#` 以降を落とす）。
 - Rust コードの `unsafe` は禁止方針。CI の clippy に `-D clippy::undocumented_unsafe_blocks` を必須化し、やむを得ず使う場合は安全性根拠のコメントを要求する。現行の

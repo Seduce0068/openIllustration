@@ -903,6 +903,22 @@ async fn send_upload(
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// SEC-01: 全レスポンス（エラー含む）へセキュリティヘッダを付与する。
+#[tokio::test]
+async fn test_security_headers_on_error_response() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content").body(Body::empty()).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+    assert_eq!(response.headers()["X-Frame-Options"], "DENY");
+}
+
 /// SEC-01: パブリック IPv4 は 403
 #[tokio::test]
 async fn test_ipv4_public_address_forbidden() {
@@ -3319,6 +3335,8 @@ async fn test_get_content_returns_verified_bytes() {
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "image/jxl");
+    assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+    assert_eq!(response.headers()["X-Frame-Options"], "DENY");
     assert_eq!(response.headers()["x-forensic-checksum"], checksum.as_str());
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], &body[..]);

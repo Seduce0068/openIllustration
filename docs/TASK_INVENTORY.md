@@ -80,6 +80,9 @@ status: current
   を検出できることを実証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 年齢しきい値 0 の拒否: `AGE_DEFAULT_MINIMUM=0` / `AGE_COUNTRY_OVERRIDES=JP=0` が年齢ゲートを無効化していた。1 以上を要求する検証を追加し、設定ドキュメントも修正。
 - [対応済み] WASM JXL デコードの decompression bomb 対策: ヘッダーとレンダ結果の寸法を 8000px / 64M ピクセルで検証し、巨大バッファ確保と usize オーバーフローを防止。境界テスト8ケースを追加。
+- [対応済み] セキュリティヘッダ: 全レスポンスへ `nosniff` / `X-Frame-Options: DENY` を付与。axum の layer は
+  最後追加が最外側のため、ミドルウェア順を修正して IP ゲートの 403 にも適用（単体テスト＋実サーバーで確認）。
+  CSP は未設計。
 - [対応済み] クライアント側アップロードサイズ検証: 10 MiB 超のファイルを選択時に拒否し、サーバーへの無駄な送信と 413 発生を防止（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] WASM JXL のチャンネル数別 RGBA 変換: グレー(1) / グレー+α(2) / RGB(3) / RGBA以上(4+) を正しく変換。
   旧実装は 1/2 チャンネルで隣接ピクセルを RGB として読んでいた。値のクランプと範囲外の 0 埋めもテスト化。
