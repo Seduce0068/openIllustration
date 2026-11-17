@@ -159,7 +159,7 @@ async fn setup_app_with_options(
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTestCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
         (),
     )
     .await
@@ -208,7 +208,7 @@ async fn setup_app_with_jwt_keys(
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTestCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g', 'Illustration', 'test_user', 'mock_checksum', 'Approved');",
         (),
     )
     .await
@@ -324,7 +324,7 @@ async fn setup_app_with_payments(
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
-             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
         (),
     )
     .await
@@ -370,7 +370,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
-             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
         (),
     )
     .await
@@ -1524,19 +1524,52 @@ fn test_redact_url_removes_credentials_and_query() {
     assert_eq!(crate::redact_url("not a url#token=secret"), "not a url");
 }
 
-/// CID の URL パス注入を拒否する。
+/// CID は厳密形式のみ受理し、パス注入文字列と旧ダミー CID を拒否する。
 #[test]
 fn test_cid_validation_rejects_path_characters() {
-    assert!(crate::is_safe_cid("QmTestCID"));
+    // 有効な CIDv0 / CIDv1 は受理する。
+    assert!(crate::is_safe_cid(
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5AXQfD"
+    ));
     assert!(crate::is_safe_cid(
         "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
     ));
+    // 旧ダミー CID は base58 長・文字集合が不正なため拒否する。
+    assert!(!crate::is_safe_cid("QmTestCID"));
+    assert!(!crate::is_safe_cid("QmValid"));
+    assert!(!crate::is_safe_cid("QmPayTest"));
+    assert!(!crate::is_safe_cid(
+        "QmNoSuchContent000000000000000000000000000000"
+    ));
+    // `/`, `..`, `?`, `#` などの注入文字列は厳密形式検証に包含されて拒否される。
     assert!(!crate::is_safe_cid("../etc/passwd"));
     assert!(!crate::is_safe_cid("Qm?x=1"));
     assert!(!crate::is_safe_cid("Qm#fragment"));
     assert!(!crate::is_safe_cid("Qm/extra"));
     assert!(!crate::is_safe_cid(""));
     assert!(!crate::is_safe_cid(&"a".repeat(129)));
+}
+
+/// 開発用モックの pin_to_ipfs が発行する CID が厳密検証を通過することを担保する。
+#[test]
+fn test_mock_pin_cid_is_valid_and_unique() {
+    let first = crate::mock_cid_for_data(b"hello");
+    let second = crate::mock_cid_for_data(b"world");
+    assert_eq!(first.len(), 46);
+    assert!(
+        crate::is_safe_cid(&first),
+        "mock CID must be a valid CIDv0: {first}"
+    );
+    assert!(
+        crate::is_safe_cid(&second),
+        "mock CID must be a valid CIDv0: {second}"
+    );
+    assert_ne!(first, second, "different data must produce different CIDs");
+    assert_eq!(
+        first,
+        crate::mock_cid_for_data(b"hello"),
+        "same data must produce the same CID"
+    );
 }
 
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
@@ -1600,8 +1633,8 @@ async fn test_auth_login_requires_mock_auth() {
 async fn test_read_routes_require_authentication() {
     let paths = [
         "/content",
-        "/content/QmTestCID",
-        "/content/QmTestCID/audit",
+        "/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        "/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g/audit",
         "/transactions",
         "/mod/reports",
     ];
@@ -1923,7 +1956,7 @@ async fn test_mod_report_sets_reported_status() {
     let (app, db) = setup_app_with_db().await;
     let report_body = json!({
         "report_id": 0,
-        "target_cid": "QmTestCID",
+        "target_cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
         "reason": "Illegal content",
         "status": "Pending"
     });
@@ -1948,7 +1981,7 @@ async fn test_mod_report_sets_reported_status() {
     assert_eq!(response.status(), StatusCode::OK);
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmTestCID'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -1961,7 +1994,7 @@ async fn test_duplicate_report_rejected() {
     let (app, db) = setup_app_with_db().await;
     let report_body = json!({
         "report_id": 0,
-        "target_cid": "QmTestCID",
+        "target_cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
         "reason": "First report",
         "status": "Pending"
     });
@@ -2011,7 +2044,7 @@ async fn test_duplicate_report_rejected() {
 
     let mut rows = db
         .query(
-            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmTestCID'",
+            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'",
             (),
         )
         .await
@@ -2026,7 +2059,7 @@ async fn test_report_missing_content_returns_404() {
     let (app, _db) = setup_app_with_db().await;
     let report_body = json!({
         "report_id": 0,
-        "target_cid": "QmMissingContent",
+        "target_cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111S",
         "reason": "No such content",
         "status": "Pending"
     });
@@ -2114,14 +2147,24 @@ async fn post_report(app: &Router, cid: &str, reason: &str) -> Response {
 async fn test_report_duplicate_rejected() {
     let (app, db) = setup_app_with_db().await;
 
-    let first = post_report(&app, "QmTestCID", "first report").await;
+    let first = post_report(
+        &app,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        "first report",
+    )
+    .await;
     assert_eq!(
         first.status(),
         StatusCode::OK,
         "first report must be accepted"
     );
 
-    let second = post_report(&app, "QmTestCID", "second report").await;
+    let second = post_report(
+        &app,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        "second report",
+    )
+    .await;
     assert_eq!(second.status(), StatusCode::BAD_REQUEST);
     let body = to_bytes(second.into_body(), usize::MAX).await.unwrap();
     let text = String::from_utf8_lossy(&body);
@@ -2132,7 +2175,7 @@ async fn test_report_duplicate_rejected() {
 
     let mut rows = db
         .query(
-            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmTestCID'",
+            "SELECT COUNT(*) FROM reports WHERE target_cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'",
             (),
         )
         .await
@@ -2147,7 +2190,12 @@ async fn test_report_reason_validated() {
     let (app, db) = setup_app_with_db().await;
 
     for reason in ["", "   ", &"x".repeat(2001)] {
-        let response = post_report(&app, "QmTestCID", reason).await;
+        let response = post_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+            reason,
+        )
+        .await;
         assert_eq!(
             response.status(),
             StatusCode::BAD_REQUEST,
@@ -2161,7 +2209,12 @@ async fn test_report_reason_validated() {
         );
     }
 
-    let accepted = post_report(&app, "QmTestCID", "  legit concern  ").await;
+    let accepted = post_report(
+        &app,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        "  legit concern  ",
+    )
+    .await;
     assert_eq!(
         accepted.status(),
         StatusCode::OK,
@@ -2170,7 +2223,7 @@ async fn test_report_reason_validated() {
 
     let mut rows = db
         .query(
-            "SELECT reason FROM reports WHERE target_cid = 'QmTestCID'",
+            "SELECT reason FROM reports WHERE target_cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'",
             (),
         )
         .await
@@ -2735,7 +2788,7 @@ async fn test_upload_rejects_owner_mismatch() {
     let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(
         count, 1,
-        "a mismatched owner must not insert content (only QmTestCID exists)"
+        "a mismatched owner must not insert content (only QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g exists)"
     );
 }
 
@@ -2796,13 +2849,13 @@ async fn test_vote_consensus_rejects_content() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmVoteTest', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111o', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmVoteTest', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111o', 'test')",
         (),
     )
     .await
@@ -2883,7 +2936,7 @@ async fn test_vote_consensus_rejects_content() {
 
     // ADR-0004: 3票でも投票期間中は確定しない（即時確定の廃止）
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmVoteTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111o'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -2895,7 +2948,7 @@ async fn test_vote_consensus_rejects_content() {
     force_conclude(&db, 1).await;
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmVoteTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111o'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -2921,13 +2974,13 @@ async fn test_consensus_tie_resolves_to_rejected() {
     }
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTieTest', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111h', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmTieTest', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111h', 'test')",
         (),
     )
     .await
@@ -2952,7 +3005,7 @@ async fn test_consensus_tie_resolves_to_rejected() {
     tx.commit().await.unwrap();
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmTieTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111h'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -2978,13 +3031,13 @@ async fn test_duplicate_vote_rejected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmDupVote', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111J', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmDupVote', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111J', 'test')",
         (),
     )
     .await
@@ -3177,13 +3230,13 @@ async fn test_vote_after_conclusion_rejected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmConcludedVote', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmConcludedVote', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E', 'test')",
         (),
     )
     .await
@@ -3226,7 +3279,7 @@ async fn test_vote_after_conclusion_rejected() {
 
     let mut rows = db
         .query(
-            "SELECT status FROM contents WHERE cid = 'QmConcludedVote'",
+            "SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E'",
             (),
         )
         .await
@@ -3244,7 +3297,7 @@ async fn test_vote_after_conclusion_rejected() {
 
     let mut rows = db
         .query(
-            "SELECT status FROM contents WHERE cid = 'QmConcludedVote'",
+            "SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E'",
             (),
         )
         .await
@@ -3326,13 +3379,13 @@ async fn test_vote_with_invalid_signature_rejected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmBadSig', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1118', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmBadSig', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1118', 'test')",
         (),
     )
     .await
@@ -3418,13 +3471,13 @@ async fn test_vote_with_invalid_payload_rejected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmBadPayload', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1117', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmBadPayload', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1117', 'test')",
         (),
     )
     .await
@@ -3486,13 +3539,13 @@ async fn test_vote_with_sub_mismatch_rejected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmSubMismatch', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111d', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmSubMismatch', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111d', 'test')",
         (),
     )
     .await
@@ -3581,7 +3634,7 @@ async fn test_support_api_disabled_returns_501() {
     let response = app
         .clone()
         .oneshot(with_peer(
-            Request::post("/content/QmSupportTest123/support")
+            Request::post("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111e/support")
                 .header("content-type", "application/json")
                 .body(Body::from(body.clone()))
                 .unwrap(),
@@ -3595,7 +3648,7 @@ async fn test_support_api_disabled_returns_501() {
     let response = app
         .clone()
         .oneshot(with_peer(
-            Request::post("/content/QmSupportTest123/support")
+            Request::post("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111e/support")
                 .header("content-type", "application/json")
                 .header(
                     "Authorization",
@@ -3655,7 +3708,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
         status: StatusCode::OK,
         body: b"tampered content".to_vec(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmTampered".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3664,7 +3717,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTampered', 'Novel', 'test_user', 'correct_hash_123', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f', 'Novel', 'test_user', 'correct_hash_123', 'Approved');",
         (),
     )
     .await
@@ -3672,7 +3725,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmTampered")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3710,7 +3763,7 @@ async fn test_get_content_rejects_truncated_stream() {
         status: StatusCode::OK,
         body: body.clone(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmTruncated".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111j".to_string()),
         inflated_content_length: Some(body.len() as u64 + 100),
     })
     .await;
@@ -3718,7 +3771,7 @@ async fn test_get_content_rejects_truncated_stream() {
         setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(1), true).await;
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTruncated', 'Novel', 'test_user', ?, 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111j', 'Novel', 'test_user', ?, 'Approved');",
         [checksum.clone()],
     )
     .await
@@ -3726,7 +3779,7 @@ async fn test_get_content_rejects_truncated_stream() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmTruncated")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111j")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3759,7 +3812,7 @@ async fn test_get_content_returns_verified_bytes() {
         status: StatusCode::OK,
         body: body.clone(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmValid".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111n".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3768,7 +3821,7 @@ async fn test_get_content_returns_verified_bytes() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmValid', 'Illustration', 'test_user', ?, 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111n', 'Illustration', 'test_user', ?, 'Approved');",
         [checksum.clone()],
     )
     .await
@@ -3776,7 +3829,7 @@ async fn test_get_content_returns_verified_bytes() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmValid")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111n")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3804,7 +3857,7 @@ async fn test_get_content_rejects_oversize_body() {
         status: StatusCode::OK,
         body: vec![0u8; 10 * 1024 * 1024 + 1],
         delay: Duration::ZERO,
-        expected_cid: Some("QmOversize".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Y".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3813,7 +3866,7 @@ async fn test_get_content_rejects_oversize_body() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmOversize', 'Illustration', 'test_user', 'unused', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Y', 'Illustration', 'test_user', 'unused', 'Approved');",
         (),
     )
     .await
@@ -3821,7 +3874,7 @@ async fn test_get_content_rejects_oversize_body() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmOversize")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Y")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3850,7 +3903,7 @@ async fn test_get_content_times_out_gateway() {
         status: StatusCode::OK,
         body: b"late".to_vec(),
         delay: Duration::from_secs(5),
-        expected_cid: Some("QmTimeout".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111i".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3863,7 +3916,7 @@ async fn test_get_content_times_out_gateway() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmTimeout', 'Illustration', 'test_user', 'unused', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111i', 'Illustration', 'test_user', 'unused', 'Approved');",
         (),
     )
     .await
@@ -3871,7 +3924,7 @@ async fn test_get_content_times_out_gateway() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmTimeout")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111i")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3903,7 +3956,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         body: Vec::new(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmFallback".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3913,7 +3966,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
         status: StatusCode::OK,
         body: body.clone(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmFallback".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3926,7 +3979,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmFallback', 'Illustration', 'test_user', ?, 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K', 'Illustration', 'test_user', ?, 'Approved');",
         [checksum],
     )
     .await
@@ -3934,7 +3987,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmFallback")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -3960,7 +4013,7 @@ async fn test_get_content_accepts_exact_size_limit() {
         status: StatusCode::OK,
         body: body.clone(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmBoundary".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111A".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -3969,7 +4022,7 @@ async fn test_get_content_accepts_exact_size_limit() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmBoundary', 'Illustration', 'test_user', ?, 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111A', 'Illustration', 'test_user', ?, 'Approved');",
         [checksum],
     )
     .await
@@ -3977,7 +4030,7 @@ async fn test_get_content_accepts_exact_size_limit() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmBoundary")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111A")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -4001,7 +4054,7 @@ async fn test_get_content_without_gateways_returns_500() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmNoGateway', 'Illustration', 'test_user', 'unused', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111U', 'Illustration', 'test_user', 'unused', 'Approved');",
         (),
     )
     .await
@@ -4009,7 +4062,7 @@ async fn test_get_content_without_gateways_returns_500() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmNoGateway")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111U")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -4032,7 +4085,7 @@ async fn test_get_content_all_gateways_fail() {
         status: StatusCode::INTERNAL_SERVER_ERROR,
         body: b"secret gateway body".to_vec(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmAllFail".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1115".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -4040,7 +4093,7 @@ async fn test_get_content_all_gateways_fail() {
         status: StatusCode::BAD_GATEWAY,
         body: b"another secret".to_vec(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmAllFail".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1115".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -4053,7 +4106,7 @@ async fn test_get_content_all_gateways_fail() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmAllFail', 'Illustration', 'test_user', 'unused', 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1115', 'Illustration', 'test_user', 'unused', 'Approved');",
         (),
     )
     .await
@@ -4061,7 +4114,7 @@ async fn test_get_content_all_gateways_fail() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmAllFail")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1115")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -4096,7 +4149,7 @@ async fn test_get_content_novel_returns_markdown_mime() {
         status: StatusCode::OK,
         body: body.clone(),
         delay: Duration::ZERO,
-        expected_cid: Some("QmNovel".to_string()),
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111W".to_string()),
         inflated_content_length: None,
     })
     .await;
@@ -4105,7 +4158,7 @@ async fn test_get_content_novel_returns_markdown_mime() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmNovel', 'Novel', 'test_user', ?, 'Approved');",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111W', 'Novel', 'test_user', ?, 'Approved');",
         [checksum],
     )
     .await
@@ -4113,7 +4166,7 @@ async fn test_get_content_novel_returns_markdown_mime() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmNovel")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111W")
                 .header(
                     "authorization",
                     format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
@@ -4203,7 +4256,7 @@ async fn test_audit_log_chain_integrity() {
 
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmAuditTest', 'Illustration', 'user1', 'hash1', 'Approved')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1116', 'Illustration', 'user1', 'hash1', 'Approved')",
         (),
     )
     .await
@@ -4211,12 +4264,18 @@ async fn test_audit_log_chain_integrity() {
 
     let tx = db.transaction().await.unwrap();
 
-    update_content_status(&tx, "QmAuditTest", "Reported", "user2", "First report")
-        .await
-        .unwrap();
     update_content_status(
         &tx,
-        "QmAuditTest",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1116",
+        "Reported",
+        "user2",
+        "First report",
+    )
+    .await
+    .unwrap();
+    update_content_status(
+        &tx,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1116",
         "Rejected",
         "SYSTEM",
         "Consensus reached",
@@ -4262,7 +4321,7 @@ async fn test_payment_order_lifecycle() {
                     json!({
                         "chain_id": 137,
                         "wallet_address": wallet,
-                        "cid": "QmPayTest",
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -4351,7 +4410,7 @@ async fn test_payment_order_rejects_unsupported_chain() {
                     json!({
                         "chain_id": 999,
                         "wallet_address": "0x1111111111111111111111111111111111111111",
-                        "cid": "QmPayTest",
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -4385,7 +4444,7 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
                     json!({
                         "chain_id": 137,
                         "wallet_address": wallet,
-                        "cid": "QmPayTest",
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -4442,7 +4501,7 @@ async fn create_payment_order(
                     json!({
                         "chain_id": chain_id,
                         "wallet_address": wallet,
-                        "cid": "QmPayTest",
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": amount_jpy,
                     })
                     .to_string(),
@@ -4485,7 +4544,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
-             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
         (),
     )
     .await
@@ -4569,7 +4628,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
-             VALUES ('QmPayTest', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
         (),
     )
     .await
@@ -6081,7 +6140,7 @@ async fn test_payment_orders_derive_unique_addresses() {
                         json!({
                             "chain_id": 137,
                             "wallet_address": "0x1111111111111111111111111111111111111111",
-                            "cid": "QmPayTest",
+                            "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": 1000,
                         })
                         .to_string(),
@@ -6534,7 +6593,7 @@ async fn test_get_content_missing_cid_returns_404() {
 
     let response = app
         .oneshot(with_peer(
-            Request::get("/content/QmNoSuchContent000000000000000000000000000000")
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111V")
                 .header("authorization", format!("Bearer {token}"))
                 .body(Body::empty())
                 .unwrap(),
@@ -6551,11 +6610,16 @@ async fn test_get_content_missing_cid_returns_404() {
 async fn test_get_content_hides_reported_and_rejected() {
     for status in ["Reported", "Rejected"] {
         let (app, db) = setup_app_with_db().await;
-        let cid = format!("QmHidden{status}");
+        // 厳密形式検証を通過する有効な CIDv0 をステータスごとに使う。
+        let cid = if status == "Reported" {
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111q"
+        } else {
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111r"
+        };
         db.execute(
             "INSERT INTO contents (cid, type, owner_hash, checksum, status)
              VALUES (?, 'Illustration', 'test_user', 'unused', ?)",
-            (cid.clone(), status),
+            (cid, status),
         )
         .await
         .unwrap();
@@ -6620,13 +6684,13 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         .unwrap();
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmModTest', 'Illustration', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Illustration', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmModTest', 'test')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'test')",
         (),
     )
     .await
@@ -6714,7 +6778,7 @@ async fn test_finalize_is_noop_before_deadline() {
     assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -6727,7 +6791,7 @@ async fn test_finalize_is_noop_before_deadline() {
     assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -6750,7 +6814,7 @@ async fn test_quorum_not_met_restores_approved_with_audit_reason() {
     force_conclude(&db, 1).await;
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -6761,7 +6825,7 @@ async fn test_quorum_not_met_restores_approved_with_audit_reason() {
 
     let mut rows = db
         .query(
-            "SELECT reason FROM content_audit_log WHERE cid = 'QmModTest' ORDER BY log_id DESC LIMIT 1",
+            "SELECT reason FROM content_audit_log WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T' ORDER BY log_id DESC LIMIT 1",
             (),
         )
         .await
@@ -6872,7 +6936,13 @@ async fn test_appeal_within_30_days_creates_new_report() {
     force_conclude(&db, 1).await;
 
     assert_eq!(
-        send_report(&app, "QmModTest", "Appeal: new evidence", "appellant").await,
+        send_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
+            "Appeal: new evidence",
+            "appellant"
+        )
+        .await,
         StatusCode::OK,
         "a re-report within 30 days must be accepted as an appeal"
     );
@@ -6900,7 +6970,7 @@ async fn test_appeal_within_30_days_creates_new_report() {
 
     let mut rows = db
         .query(
-            "SELECT reason FROM content_audit_log WHERE cid = 'QmModTest' ORDER BY log_id DESC LIMIT 1",
+            "SELECT reason FROM content_audit_log WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T' ORDER BY log_id DESC LIMIT 1",
             (),
         )
         .await
@@ -6922,14 +6992,20 @@ async fn test_report_after_appeal_window_is_not_an_appeal() {
     .await
     .unwrap();
     db.execute(
-        "UPDATE contents SET status = 'Rejected' WHERE cid = 'QmModTest'",
+        "UPDATE contents SET status = 'Rejected' WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'",
         (),
     )
     .await
     .unwrap();
 
     assert_eq!(
-        send_report(&app, "QmModTest", "Fresh report", "reporter").await,
+        send_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
+            "Fresh report",
+            "reporter"
+        )
+        .await,
         StatusCode::OK
     );
     let mut rows = db
@@ -7190,7 +7266,7 @@ async fn test_unpin_records_decision_with_audit() {
     assert_eq!(
         send_mod_action(
             &app_no_op,
-            "/mod/content/QmModTest/unpin",
+            "/mod/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T/unpin",
             "operator",
             json!({"reason": "concluded illegal content"}),
         )
@@ -7202,7 +7278,7 @@ async fn test_unpin_records_decision_with_audit() {
     assert_eq!(
         send_mod_action(
             &app,
-            "/mod/content/QmModTest/unpin",
+            "/mod/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T/unpin",
             "operator",
             json!({"reason": "concluded illegal content"}),
         )
@@ -7222,7 +7298,7 @@ async fn test_unpin_records_decision_with_audit() {
     assert_eq!(
         send_mod_action(
             &app,
-            "/mod/content/QmUnknown/unpin",
+            "/mod/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111k/unpin",
             "operator",
             json!({"reason": "missing"}),
         )
@@ -7243,7 +7319,7 @@ async fn test_unpin_records_decision_with_audit() {
     let actor: String = row.get(2).unwrap();
     let reason: String = row.get(3).unwrap();
     assert_eq!(action, "UNPIN");
-    assert_eq!(target, "QmModTest");
+    assert_eq!(target, "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T");
     assert_eq!(actor, "operator");
     assert_eq!(reason, "concluded illegal content");
 }
@@ -7308,7 +7384,7 @@ async fn test_finalize_due_reports_skips_before_deadline() {
     assert_eq!(count, 0, "a fresh report must not be auto-finalized");
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -7324,7 +7400,7 @@ async fn test_finalize_due_reports_concludes_expired_report() {
     assert_eq!(count, 1, "the expired report must be auto-finalized");
 
     let mut rows = db
-        .query("SELECT status FROM contents WHERE cid = 'QmModTest'", ())
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
         .await
         .unwrap();
     let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -7349,14 +7425,14 @@ async fn test_finalize_due_reports_handles_multiple_reports() {
     let (_app, db) = setup_mod_app().await;
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmSecond', 'Novel', 'owner', 'def', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111c', 'Novel', 'owner', 'def', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
         "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
-             VALUES (2, 'QmSecond', 'second', datetime('now', '-1 day'))",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111c', 'second', datetime('now', '-1 day'))",
         (),
     )
     .await
@@ -7429,14 +7505,14 @@ async fn concurrent_votes_do_not_conflict_with_finalization() {
     // これにより同一 Connection 上で投票トランザクションと確定トランザクションが競合する。
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-             VALUES ('QmConcurrent', 'Novel', 'owner', 'abc', 'Reported')",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F', 'Novel', 'owner', 'abc', 'Reported')",
         (),
     )
     .await
     .unwrap();
     db.execute(
         "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
-             VALUES (2, 'QmConcurrent', 'due', datetime('now', '-1 day'))",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F', 'due', datetime('now', '-1 day'))",
         (),
     )
     .await
@@ -7976,7 +8052,7 @@ async fn test_order_requires_matching_content_price() {
             json!({
                 "chain_id": 137,
                 "wallet_address": "0x1111111111111111111111111111111111111111",
-                "cid": "QmPayTest",
+                "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                 "amount_jpy": amount,
             }),
         )
@@ -7997,7 +8073,7 @@ async fn test_order_rejects_unknown_or_non_approved_content() {
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
-             VALUES ('QmReported', 'Novel', 'test_user', 'abc', 'Reported', 1000)",
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111b', 'Novel', 'test_user', 'abc', 'Reported', 1000)",
         (),
     )
     .await
@@ -8009,14 +8085,14 @@ async fn test_order_rejects_unknown_or_non_approved_content() {
         "amount_jpy": 1000,
     });
     let mut unknown = base.clone();
-    unknown["cid"] = json!("QmUnknownContent");
+    unknown["cid"] = json!("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111m");
     assert_eq!(
         post_order_json(&app, &token, unknown).await,
         StatusCode::NOT_FOUND
     );
 
     let mut reported = base;
-    reported["cid"] = json!("QmReported");
+    reported["cid"] = json!("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111b");
     assert_eq!(
         post_order_json(&app, &token, reported).await,
         StatusCode::BAD_REQUEST
@@ -8059,7 +8135,7 @@ async fn test_order_records_content_cid() {
                     json!({
                         "chain_id": 137,
                         "wallet_address": "0x1111111111111111111111111111111111111111",
-                        "cid": "QmPayTest",
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
                         "amount_jpy": 1000,
                     })
                     .to_string(),
@@ -8086,7 +8162,10 @@ async fn test_order_records_content_cid() {
         .unwrap();
     let order: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
-    assert_eq!(order["cid"], "QmPayTest");
+    assert_eq!(
+        order["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z"
+    );
 }
 
 // ---- メトリクス ----
@@ -8290,7 +8369,7 @@ async fn test_migration_011_existing_rows_read_as_empty_metadata() {
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO contents (cid, type, checksum) VALUES ('QmLegacy', 'Novel', 'legacy_sum')",
+        "INSERT INTO contents (cid, type, checksum) VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111R', 'Novel', 'legacy_sum')",
         (),
     )
     .await
@@ -8300,7 +8379,7 @@ async fn test_migration_011_existing_rows_read_as_empty_metadata() {
 
     let mut rows = db
         .query(
-            "SELECT title, description, tags FROM contents WHERE cid = 'QmLegacy'",
+            "SELECT title, description, tags FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111R'",
             (),
         )
         .await
@@ -8383,7 +8462,7 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     db.execute("DELETE FROM contents", ()).await.unwrap();
     insert_content_meta(
         &db,
-        "QmCatArt",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111B",
         "Illustration",
         "Cat illustration",
         "A cute cat",
@@ -8393,7 +8472,7 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     .await;
     insert_content_meta(
         &db,
-        "QmDogNovel",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111H",
         "Novel",
         "Dog novel",
         "A brave story",
@@ -8403,7 +8482,7 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     .await;
     insert_content_meta(
         &db,
-        "QmCatTag",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111C",
         "Illustration",
         "Landscape",
         "Nice colors",
@@ -8413,7 +8492,7 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     .await;
     insert_content_meta(
         &db,
-        "QmCatlikeTag",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111D",
         "Novel",
         "Poetry",
         "Verses",
@@ -8426,27 +8505,48 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     // q は title / description の部分一致（tags は検索しない）。
     let (status, items) = get_content_list(&app, &token, "?q=cat").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(listed_cids(&items), vec!["QmCatArt"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111B"]
+    );
 
     // tag はカンマ区切りの各タグの前方一致（先頭・カンマ後ともに該当）。
     let (_, items) = get_content_list(&app, &token, "?tag=cat").await;
-    assert_eq!(listed_cids(&items), vec!["QmCatTag", "QmCatlikeTag"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec![
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111C",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111D"
+        ]
+    );
 
     // type は完全一致。未知の値は 400 ではなく 0 件。
     let (_, items) = get_content_list(&app, &token, "?type=Novel").await;
-    assert_eq!(listed_cids(&items), vec!["QmDogNovel", "QmCatlikeTag"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec![
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111H",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111D"
+        ]
+    );
     let (status, items) = get_content_list(&app, &token, "?type=Unknown").await;
     assert_eq!(status, StatusCode::OK);
     assert!(items.is_empty());
 
     // 複数条件は AND。既定の並び順（新着順）も維持される。
     let (_, items) = get_content_list(&app, &token, "?type=Novel&tag=cat").await;
-    assert_eq!(listed_cids(&items), vec!["QmCatlikeTag"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111D"]
+    );
 
     // 追加メタデータが既存5項目と一緒に JSON で返る。
     let (_, items) = get_content_list(&app, &token, "?q=Landscape").await;
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["cid"], "QmCatTag");
+    assert_eq!(
+        items[0]["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111C"
+    );
     assert_eq!(items[0]["title"], "Landscape");
     assert_eq!(items[0]["description"], "Nice colors");
     assert_eq!(items[0]["tags"], serde_json::json!(["cat", "fantasy"]));
@@ -8459,10 +8559,12 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
 async fn test_list_contents_limit_boundaries_and_offset() {
     let (app, db) = setup_app_with_db().await;
     db.execute("DELETE FROM contents", ()).await.unwrap();
+    // 有効な CIDv0（Qm + base58 44 文字）を day から生成する。
+    let cid_of = |day: u32| format!("Qm{}{day:03}", "1".repeat(41));
     for day in 1..=5 {
         insert_content_meta(
             &db,
-            &format!("Qm{day:03}"),
+            &cid_of(day),
             "Illustration",
             &format!("title {day}"),
             "",
@@ -8488,7 +8590,7 @@ async fn test_list_contents_limit_boundaries_and_offset() {
 
     // 新着順 5,4,3,2,1 の 3 件目以降から 2 件。
     let (_, items) = get_content_list(&app, &token, "?limit=2&offset=2").await;
-    assert_eq!(listed_cids(&items), vec!["Qm003", "Qm002"]);
+    assert_eq!(listed_cids(&items), vec![cid_of(3), cid_of(2)]);
     let (_, items) = get_content_list(&app, &token, "?offset=10").await;
     assert!(items.is_empty());
 }
@@ -8499,7 +8601,7 @@ async fn test_like_wildcards_are_literal() {
     db.execute("DELETE FROM contents", ()).await.unwrap();
     insert_content_meta(
         &db,
-        "QmPlain",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111a",
         "Illustration",
         "plain title",
         "plain description",
@@ -8509,7 +8611,7 @@ async fn test_like_wildcards_are_literal() {
     .await;
     insert_content_meta(
         &db,
-        "QmWild",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111p",
         "Illustration",
         "50%_done",
         "note",
@@ -8519,14 +8621,21 @@ async fn test_like_wildcards_are_literal() {
     .await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
-    // エスケープされていれば "%" / "_" はリテラルとして扱われ、QmWild だけに一致する。
+    // エスケープされていれば "%" / "_" はリテラルとして扱われ、QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111p だけに一致する。
     for query in ["%", "_"] {
         let (_, items) =
             get_content_list(&app, &token, &format!("?q={}", percent_encode(query))).await;
-        assert_eq!(listed_cids(&items), vec!["QmWild"], "query={query}");
+        assert_eq!(
+            listed_cids(&items),
+            vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111p"],
+            "query={query}"
+        );
     }
     let (_, items) = get_content_list(&app, &token, &format!("?tag={}", percent_encode("%"))).await;
-    assert_eq!(listed_cids(&items), vec!["QmWild"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111p"]
+    );
 
     // SQL 断片を入れても全件ヒットせず、リテラル文字列として扱われる。
     let injection = "%' OR 1=1 --";
@@ -8734,28 +8843,67 @@ async fn test_favorite_add_and_remove_are_idempotent() {
 
     // 同じ CID を2回追加しても行は1つだけ（UNIQUE + INSERT OR IGNORE）。
     for _ in 0..2 {
-        let (status, body) = post_favorite(&app, &token, "QmTestCID").await;
+        let (status, body) = post_favorite(
+            &app,
+            &token,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "response: {body}");
         assert_eq!(body, json!({"is_favorite": true}));
         let parsed: FavoriteResponse = serde_json::from_value(body).unwrap();
         assert!(parsed.is_favorite);
-        assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
+        assert_eq!(
+            favorite_count(
+                &db,
+                "test_user",
+                "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+            )
+            .await,
+            1
+        );
     }
 
     // 未登録の削除も冪等で、行が0件のまま成功する。
     for _ in 0..2 {
-        let (status, body) = delete_favorite(&app, &token, "QmTestCID").await;
+        let (status, body) = delete_favorite(
+            &app,
+            &token,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+        )
+        .await;
         assert_eq!(status, StatusCode::OK, "response: {body}");
         assert_eq!(body, json!({"is_favorite": false}));
         let parsed: FavoriteResponse = serde_json::from_value(body).unwrap();
         assert!(!parsed.is_favorite);
-        assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
+        assert_eq!(
+            favorite_count(
+                &db,
+                "test_user",
+                "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+            )
+            .await,
+            0
+        );
     }
 
     // 削除後に再追加できる。
-    let (status, _) = post_favorite(&app, &token, "QmTestCID").await;
+    let (status, _) = post_favorite(
+        &app,
+        &token,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
+    assert_eq!(
+        favorite_count(
+            &db,
+            "test_user",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        1
+    );
 }
 
 #[tokio::test]
@@ -8769,7 +8917,7 @@ async fn test_favorite_requires_auth_and_valid_approved_cid() {
             .oneshot(with_peer(
                 Request::builder()
                     .method(method)
-                    .uri("/content/QmTestCID/favorite")
+                    .uri("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g/favorite")
                     .body(Body::empty())
                     .unwrap(),
                 test_ipv6_peer(),
@@ -8787,14 +8935,27 @@ async fn test_favorite_requires_auth_and_valid_approved_cid() {
     // Approved 以外は対象にできない。
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-         VALUES ('QmReported', 'Illustration', 'test_user', 'sum', 'Reported')",
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111b', 'Illustration', 'test_user', 'sum', 'Reported')",
         (),
     )
     .await
     .unwrap();
-    let (status, _) = post_favorite(&app, &token, "QmReported").await;
+    let (status, _) = post_favorite(
+        &app,
+        &token,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111b",
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(favorite_count(&db, "test_user", "QmReported").await, 0);
+    assert_eq!(
+        favorite_count(
+            &db,
+            "test_user",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111b"
+        )
+        .await,
+        0
+    );
 }
 
 #[tokio::test]
@@ -8814,25 +8975,83 @@ async fn test_favorite_uses_claims_sub_only() {
         &app,
         axum::http::Method::POST,
         &attacker_token,
-        "QmTestCID",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
         body,
     )
     .await;
     assert_eq!(status, StatusCode::OK, "response: {response}");
-    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
-    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 1);
+    assert_eq!(
+        favorite_count(
+            &db,
+            "test_user",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        favorite_count(
+            &db,
+            "attacker",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        1
+    );
 
     // 攻撃者の削除も攻撃者の行にだけ作用する。
-    let (status, _) = delete_favorite(&app, &attacker_token, "QmTestCID").await;
+    let (status, _) = delete_favorite(
+        &app,
+        &attacker_token,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 0);
-    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 0);
+    assert_eq!(
+        favorite_count(
+            &db,
+            "test_user",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        favorite_count(
+            &db,
+            "attacker",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        0
+    );
 
     // 被害者本人の追加は被害者の行だけを作る。
-    let (status, _) = post_favorite(&app, &victim_token, "QmTestCID").await;
+    let (status, _) = post_favorite(
+        &app,
+        &victim_token,
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(favorite_count(&db, "test_user", "QmTestCID").await, 1);
-    assert_eq!(favorite_count(&db, "attacker", "QmTestCID").await, 0);
+    assert_eq!(
+        favorite_count(
+            &db,
+            "test_user",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        favorite_count(
+            &db,
+            "attacker",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g"
+        )
+        .await,
+        0
+    );
 }
 
 #[tokio::test]
@@ -8844,7 +9063,7 @@ async fn test_favorite_only_lists_own_favorites_only() {
         .unwrap();
     insert_content_meta(
         &db,
-        "QmFavMine",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N",
         "Illustration",
         "mine",
         "",
@@ -8854,7 +9073,7 @@ async fn test_favorite_only_lists_own_favorites_only() {
     .await;
     insert_content_meta(
         &db,
-        "QmFavOther",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111P",
         "Illustration",
         "other",
         "",
@@ -8864,7 +9083,7 @@ async fn test_favorite_only_lists_own_favorites_only() {
     .await;
     insert_content_meta(
         &db,
-        "QmPlain",
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111a",
         "Illustration",
         "plain",
         "",
@@ -8873,13 +9092,13 @@ async fn test_favorite_only_lists_own_favorites_only() {
     )
     .await;
     db.execute(
-        "INSERT INTO favorites (user_hash, cid) VALUES ('test_user', 'QmFavMine')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('test_user', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO favorites (user_hash, cid) VALUES ('attacker', 'QmFavOther')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('attacker', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111P')",
         (),
     )
     .await
@@ -8892,7 +9111,11 @@ async fn test_favorite_only_lists_own_favorites_only() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         listed_cids(&items),
-        vec!["QmFavMine", "QmFavOther", "QmPlain"]
+        vec![
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111P",
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111a"
+        ]
     );
     assert_eq!(items[0]["is_favorite"], true);
     assert_eq!(items[1]["is_favorite"], false);
@@ -8910,10 +9133,17 @@ async fn test_favorite_only_lists_own_favorites_only() {
     ] {
         let (status, items) = get_content_list(&app, &token, query).await;
         assert_eq!(status, StatusCode::OK, "query={query}");
-        assert_eq!(listed_cids(&items), vec!["QmFavMine"], "query={query}");
+        assert_eq!(
+            listed_cids(&items),
+            vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N"],
+            "query={query}"
+        );
     }
     let (_, items) = get_content_list(&app, &attacker_token, "?favorite_only=1").await;
-    assert_eq!(listed_cids(&items), vec!["QmFavOther"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111P"]
+    );
 
     // それ以外の値は絞り込みなし（安全側の既定）。
     for query in [
@@ -8932,13 +9162,16 @@ async fn test_favorite_only_lists_own_favorites_only() {
         "?favorite_only=1&q=mine&type=Illustration&limit=1&offset=0",
     )
     .await;
-    assert_eq!(listed_cids(&items), vec!["QmFavMine"]);
+    assert_eq!(
+        listed_cids(&items),
+        vec!["QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N"]
+    );
     let (_, items) = get_content_list(&app, &token, "?favorite_only=1&offset=1").await;
     assert!(items.is_empty());
 
     // Approved 限定は維持。Reported に変えたコンテンツはお気に入り一覧から消える。
     db.execute(
-        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmFavMine'",
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111N'",
         (),
     )
     .await
@@ -8950,7 +9183,7 @@ async fn test_favorite_only_lists_own_favorites_only() {
 #[test]
 fn test_content_meta_backward_compatible_without_is_favorite() {
     let legacy = json!({
-        "cid": "QmLegacy",
+        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111R",
         "checksum": "sum",
         "type": "Illustration",
         "status": "Approved",
@@ -8963,7 +9196,7 @@ fn test_content_meta_backward_compatible_without_is_favorite() {
     assert!(!meta.is_favorite, "旧 JSON は false として読める");
 
     let mut current = json!({
-        "cid": "QmCurrent",
+        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111G",
         "checksum": "sum",
         "type": "Novel",
         "status": "Approved",
@@ -9043,7 +9276,7 @@ async fn test_migration_012_favorites_unique_and_cascade() {
         .await
         .unwrap();
     db.execute(
-        "INSERT INTO contents (cid, checksum) VALUES ('QmFav', 'sum')",
+        "INSERT INTO contents (cid, checksum) VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L', 'sum')",
         (),
     )
     .await
@@ -9051,14 +9284,14 @@ async fn test_migration_012_favorites_unique_and_cascade() {
 
     // UNIQUE(user_hash, cid): 同じ組の2回目の INSERT は失敗する。
     db.execute(
-        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L')",
         (),
     )
     .await
     .unwrap();
     assert!(
         db.execute(
-            "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+            "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L')",
             (),
         )
         .await
@@ -9066,20 +9299,26 @@ async fn test_migration_012_favorites_unique_and_cascade() {
         "duplicate favorite must violate UNIQUE(user_hash, cid)"
     );
     db.execute(
-        "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav')",
+        "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES ('u1', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L')",
         (),
     )
     .await
     .unwrap();
-    assert_eq!(favorite_count(&db, "u1", "QmFav").await, 1);
+    assert_eq!(
+        favorite_count(&db, "u1", "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L").await,
+        1
+    );
     // 別ユーザーなら同じ CID を登録できる。
     db.execute(
-        "INSERT INTO favorites (user_hash, cid) VALUES ('u2', 'QmFav')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u2', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L')",
         (),
     )
     .await
     .unwrap();
-    assert_eq!(favorite_count(&db, "u2", "QmFav").await, 1);
+    assert_eq!(
+        favorite_count(&db, "u2", "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L").await,
+        1
+    );
 
     // 指定のインデックスが作成されている。
     let mut rows = db
@@ -9101,21 +9340,30 @@ async fn test_migration_012_favorites_unique_and_cascade() {
     );
 
     // FK CASCADE: コンテンツを削除すると両ユーザーのお気に入りも消える。
-    db.execute("DELETE FROM contents WHERE cid = 'QmFav'", ())
-        .await
-        .unwrap();
-    assert_eq!(favorite_count(&db, "u1", "QmFav").await, 0);
-    assert_eq!(favorite_count(&db, "u2", "QmFav").await, 0);
+    db.execute(
+        "DELETE FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L'",
+        (),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        favorite_count(&db, "u1", "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L").await,
+        0
+    );
+    assert_eq!(
+        favorite_count(&db, "u2", "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111L").await,
+        0
+    );
 
     // ユーザー削除でも CASCADE する（別のコンテンツで確認）。
     db.execute(
-        "INSERT INTO contents (cid, checksum) VALUES ('QmFav2', 'sum')",
+        "INSERT INTO contents (cid, checksum) VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111M', 'sum')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmFav2')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('u1', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111M')",
         (),
     )
     .await
@@ -9123,7 +9371,10 @@ async fn test_migration_012_favorites_unique_and_cascade() {
     db.execute("DELETE FROM users WHERE user_hash = 'u1'", ())
         .await
         .unwrap();
-    assert_eq!(favorite_count(&db, "u1", "QmFav2").await, 0);
+    assert_eq!(
+        favorite_count(&db, "u1", "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111M").await,
+        0
+    );
 }
 
 // ---- R5-09: 透明性ダッシュボード（運用者限定の認証内集計） ----
@@ -9328,7 +9579,7 @@ async fn test_mod_stats_response_contains_no_sensitive_fields() {
     db.execute(
         "INSERT INTO content_audit_log
              (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
-         VALUES ('QmModTest', 'Approved', 'Reported', 'SECRET_USER_HASH_SENTINEL',
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Approved', 'Reported', 'SECRET_USER_HASH_SENTINEL',
                  'SECRET_REASON_SENTINEL', 'hash1', '2026-01-31 23:59:59')",
         (),
     )
@@ -9425,7 +9676,7 @@ async fn test_mod_stats_aggregates_from_real_db() {
     db.execute(
         "INSERT INTO content_audit_log
              (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
-         VALUES ('QmModTest', 'Approved', 'Reported', 'reporter', 'report reason',
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Approved', 'Reported', 'reporter', 'report reason',
                  'hash1', '2025-12-31 23:59:59')",
         (),
     )
@@ -9434,7 +9685,7 @@ async fn test_mod_stats_aggregates_from_real_db() {
     db.execute(
         "INSERT INTO content_audit_log
              (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
-         VALUES ('QmModTest', 'Reported', 'Rejected', 'SYSTEM_GOVERNANCE', 'tie',
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Reported', 'Rejected', 'SYSTEM_GOVERNANCE', 'tie',
                  'hash2', '2026-01-01 00:00:00')",
         (),
     )
@@ -9443,7 +9694,7 @@ async fn test_mod_stats_aggregates_from_real_db() {
     db.execute(
         "INSERT INTO content_audit_log
              (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
-         VALUES ('QmModTest', 'Rejected', 'Approved', 'SYSTEM_GOVERNANCE', 'quorum not met',
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Rejected', 'Approved', 'SYSTEM_GOVERNANCE', 'quorum not met',
                  'hash3', '2026-01-01 00:00:01')",
         (),
     )
@@ -9466,7 +9717,7 @@ async fn test_mod_stats_aggregates_from_real_db() {
     .unwrap();
     db.execute(
         "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
-         VALUES ('UNPIN', 'QmModTest', 'operator', 'unpin reason', '2026-01-01 00:00:00')",
+         VALUES ('UNPIN', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'operator', 'unpin reason', '2026-01-01 00:00:00')",
         (),
     )
     .await
@@ -9482,13 +9733,13 @@ async fn test_mod_stats_aggregates_from_real_db() {
     // report 2 は定足数未達（2票）の確定。report 3 は未確定で集計対象外。
     db.execute(
         "INSERT INTO reports (report_id, target_cid, reason, concluded_at)
-         VALUES (2, 'QmModTest', 'secret2', '2026-01-01 00:00:00')",
+         VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'secret2', '2026-01-01 00:00:00')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (3, 'QmModTest', 'secret3')",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (3, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'secret3')",
         (),
     )
     .await
@@ -9577,31 +9828,31 @@ async fn setup_me_export_app() -> Router {
         "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('alice', X'0102', 0)",
         "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('bob', X'0304', 0)",
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, created_at, title, description, tags)
-             VALUES ('QmAlice1', 'Illustration', 'alice', 'checksum-alice', 'Approved', 100,
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', 'Illustration', 'alice', 'checksum-alice', 'Approved', 100,
                      '2026-01-01T00:00:00Z', 'alice title', 'alice desc', 'art,alice')",
         "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, created_at, title, description, tags)
-             VALUES ('QmBob1', 'Novel', 'bob', 'checksum-bob', 'Approved', 200,
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', 'Novel', 'bob', 'checksum-bob', 'Approved', 200,
                      '2026-01-02T00:00:00Z', 'bob title', 'bob desc', 'novel,bob')",
-        "INSERT INTO favorites (user_hash, cid) VALUES ('alice', 'QmAlice1')",
-        "INSERT INTO favorites (user_hash, cid) VALUES ('bob', 'QmBob1')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('alice', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('bob', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119')",
         "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
-             VALUES (1, 'QmAlice1', 'alice', 'bob', 500, 'tx-alice-to-bob')",
+             VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', 'alice', 'bob', 500, 'tx-alice-to-bob')",
         "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
-             VALUES (2, 'QmBob1', 'bob', 'alice', 700, 'tx-bob-to-alice')",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', 'bob', 'alice', 700, 'tx-bob-to-alice')",
         "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
-             VALUES (3, 'QmBob1', 'bob', 'bob', 900, 'tx-bob-only')",
+             VALUES (3, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', 'bob', 'bob', 900, 'tx-bob-only')",
         "INSERT INTO signatures (signature_id, target_id, signer_hash, signature_blob, algorithm)
-             VALUES (1, 'QmAlice1', 'alice', X'aa', 'RSASSA-PKCS1-v1_5')",
+             VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', 'alice', X'aa', 'RSASSA-PKCS1-v1_5')",
         "INSERT INTO signatures (signature_id, target_id, signer_hash, signature_blob, algorithm)
-             VALUES (2, 'QmBob1', 'bob', X'bb', 'RSASSA-PKCS1-v1_5')",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', 'bob', X'bb', 'RSASSA-PKCS1-v1_5')",
         "INSERT INTO content_audit_log (log_id, cid, old_status, new_status, changed_by, reason, entry_hash)
-             VALUES (1, 'QmAlice1', NULL, 'Approved', 'alice', 'alice secret reason', 'hash-a1')",
+             VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', NULL, 'Approved', 'alice', 'alice secret reason', 'hash-a1')",
         "INSERT INTO content_audit_log (log_id, cid, old_status, new_status, changed_by, reason, entry_hash)
-             VALUES (2, 'QmBob1', NULL, 'Approved', 'bob', 'bob secret reason', 'hash-b1')",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', NULL, 'Approved', 'bob', 'bob secret reason', 'hash-b1')",
         "INSERT INTO reports (report_id, target_cid, reason)
-             VALUES (1, 'QmAlice1', 'alice private report reason')",
+             VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', 'alice private report reason')",
         "INSERT INTO reports (report_id, target_cid, reason)
-             VALUES (2, 'QmBob1', 'bob private report reason')",
+             VALUES (2, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119', 'bob private report reason')",
         "INSERT INTO votes (vote_id, report_id, voter_hash, vote_result)
              VALUES (1, 1, 'alice', 'Approve')",
         "INSERT INTO votes (vote_id, report_id, voter_hash, vote_result)
@@ -9621,7 +9872,7 @@ async fn setup_me_export_app() -> Router {
         "INSERT INTO governance_audit_log (log_id, action, target, actor_hash, reason, details)
              VALUES (2, 'BAN', 'bob', 'operator', 'bob ban reason', 'bob ban details')",
         "INSERT INTO governance_audit_log (log_id, action, target, actor_hash, reason, details)
-             VALUES (3, 'UNPIN', 'QmAlice1', 'alice', 'self reason', NULL)",
+             VALUES (3, 'UNPIN', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114', 'alice', 'self reason', NULL)",
         "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
              VALUES ('hash-alice-secret', 'alice', 'family-alice-secret', '2027-01-01T00:00:00Z')",
         "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
@@ -9698,9 +9949,15 @@ async fn me_export_returns_only_own_data() {
     assert_eq!(export["users"].as_array().unwrap().len(), 1);
     assert_eq!(export["users"][0]["user_hash"], "alice");
     assert_eq!(export["contents"].as_array().unwrap().len(), 1);
-    assert_eq!(export["contents"][0]["cid"], "QmAlice1");
+    assert_eq!(
+        export["contents"][0]["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114"
+    );
     assert_eq!(export["favorites"].as_array().unwrap().len(), 1);
-    assert_eq!(export["favorites"][0]["cid"], "QmAlice1");
+    assert_eq!(
+        export["favorites"][0]["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114"
+    );
     // alice は sender / receiver のどちらかで 2 件だけ（bob 同士の tx は含まない）。
     assert_eq!(export["transactions"].as_array().unwrap().len(), 2);
     assert_eq!(export["signatures"].as_array().unwrap().len(), 1);
@@ -9725,7 +9982,7 @@ async fn me_export_returns_only_own_data() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|row| row["cid"] != "QmBob1")
+            .all(|row| row["cid"] != "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119")
     );
     let raw = export.to_string();
     for marker in [
@@ -9743,7 +10000,10 @@ async fn me_export_returns_only_own_data() {
     let bob = me_export_body(&app, "bob").await;
     assert_eq!(bob["sub"], "bob");
     assert_eq!(bob["users"][0]["user_hash"], "bob");
-    assert_eq!(bob["contents"][0]["cid"], "QmBob1");
+    assert_eq!(
+        bob["contents"][0]["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1119"
+    );
     // bob は sender / receiver 双方の条件に一致する 3 件すべてを受け取る。
     assert_eq!(bob["transactions"].as_array().unwrap().len(), 3);
     assert_eq!(bob["signatures"][0]["signer_hash"], "bob");
@@ -9759,7 +10019,7 @@ async fn me_export_returns_only_own_data() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|row| row["cid"] != "QmAlice1")
+            .all(|row| row["cid"] != "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1114")
     );
     let bob_raw = bob.to_string();
     for marker in [
@@ -9779,7 +10039,7 @@ async fn me_export_returns_only_own_data() {
 /// R5-04: データが無いユーザーでは 12 配列すべてが空になる。
 #[tokio::test]
 async fn me_export_empty_user_has_empty_arrays() {
-    // setup_app は test_user / QmTestCID のみを投入する。別 sub には行が無い。
+    // setup_app は test_user / QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g のみを投入する。別 sub には行が無い。
     let app = setup_app().await;
     let export = me_export_body(&app, "empty_user").await;
 
@@ -9934,7 +10194,7 @@ async fn me_export_headers() {
 async fn list_reports_returns_summarized_reason() {
     let (app, db) = setup_app_with_db().await;
     db.execute(
-        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmTestCID'",
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'",
         (),
     )
     .await
@@ -9945,7 +10205,7 @@ async fn list_reports_returns_summarized_reason() {
         "x".repeat(130)
     );
     db.execute(
-        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmTestCID', ?)",
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g', ?)",
         [full_reason.clone()],
     )
     .await
@@ -10009,21 +10269,36 @@ async fn list_reports_filters_reported_and_orders_newest_first() {
     let (app, db) = setup_app_with_db().await;
     db.execute(
         "INSERT INTO contents (cid, type, owner_hash, checksum, status)
-         VALUES ('QmOtherCID', 'Illustration', 'test_user', 'mock_checksum', 'Approved')",
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111X', 'Illustration', 'test_user', 'mock_checksum', 'Approved')",
         (),
     )
     .await
     .unwrap();
     db.execute(
-        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmTestCID'",
+        "UPDATE contents SET status = 'Reported' WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g'",
         (),
     )
     .await
     .unwrap();
     for (id, cid, reason, created_at) in [
-        (1, "QmTestCID", "old reason", "2026-01-01 00:00:00"),
-        (2, "QmOtherCID", "should not appear", "2026-01-02 00:00:00"),
-        (3, "QmTestCID", "new reason", "2026-01-03 00:00:00"),
+        (
+            1,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+            "old reason",
+            "2026-01-01 00:00:00",
+        ),
+        (
+            2,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111X",
+            "should not appear",
+            "2026-01-02 00:00:00",
+        ),
+        (
+            3,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g",
+            "new reason",
+            "2026-01-03 00:00:00",
+        ),
     ] {
         db.execute(
             "INSERT INTO reports (report_id, target_cid, reason, created_at)

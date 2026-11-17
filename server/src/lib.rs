@@ -1690,10 +1690,13 @@ fn describe_reqwest_error(error: &reqwest::Error) -> &'static str {
 }
 
 /// CID を URL パスへ埋め込む前の安全検査。
-/// 英数字のみを許可し、`/`、`..`、`?`、`#` などのパス・クエリ注入を拒否する。
-/// 厳密な CID 仕様の検証は別途行う。
+///
+/// `common::is_valid_cid` による厳密形式検証（CIDv0: `Qm` + base58 44 文字、
+/// CIDv1: `b` + base32lower の varint/version/codec/multihash/digest 検証）へ委譲する。
+/// 許可される文字集合と全体長が固定されるため、`/`、`..`、`?`、`#` などの
+/// パス・クエリ・フラグメント注入を試みる文字列は厳密形式検証に包含されて拒否される。
 pub fn is_safe_cid(cid: &str) -> bool {
-    !cid.is_empty() && cid.len() <= 128 && cid.chars().all(|c| c.is_ascii_alphanumeric())
+    common::is_valid_cid(cid)
 }
 
 pub async fn get_content(
@@ -2660,6 +2663,47 @@ pub async fn verify_user_signature(
     }
 }
 
+/// base58btc エンコード。CIDv0 の生成に使う最小実装（外部依存なし）。
+fn base58btc_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 58] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    let leading_zeros = input.iter().take_while(|&&byte| byte == 0).count();
+    let mut bytes = input.to_vec();
+    let mut encoded = Vec::new();
+    let mut start = leading_zeros;
+    while start < bytes.len() {
+        let mut carry = 0u32;
+        for byte in &mut bytes[start..] {
+            let value = carry * 256 + u32::from(*byte);
+            *byte = (value / 58) as u8;
+            carry = value % 58;
+        }
+        encoded.push(ALPHABET[carry as usize]);
+        while start < bytes.len() && bytes[start] == 0 {
+            start += 1;
+        }
+    }
+    let mut result = String::with_capacity(encoded.len() + leading_zeros);
+    for _ in 0..leading_zeros {
+        result.push('1');
+    }
+    for byte in encoded.into_iter().rev() {
+        result.push(byte as char);
+    }
+    result
+}
+
+/// 開発用モック: データの sha256 から厳密形式を満たす CIDv0 を生成する。
+/// multihash = sha2-256(0x12) + 長さ 32(0x20) + digest 32 バイトを base58btc 化する。
+/// 同じデータなら同じ CID、異なるデータなら異なる CID になる。
+fn mock_cid_for_data(data: &[u8]) -> String {
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(data);
+    let mut multihash = Vec::with_capacity(34);
+    multihash.push(0x12);
+    multihash.push(0x20);
+    multihash.extend_from_slice(&digest[..]);
+    base58btc_encode(&multihash)
+}
+
 pub async fn pin_to_ipfs(
     state: &AppState,
     data: Vec<u8>,
@@ -2668,8 +2712,7 @@ pub async fn pin_to_ipfs(
     let pinata_jwt = std::env::var("PINATA_JWT").unwrap_or_else(|_| "mock_jwt".to_string());
 
     if pinata_jwt == "mock_jwt" {
-        let checksum = sha256::digest(&data[..]);
-        return Ok(format!("QmMockPinata{}", &checksum[0..10]));
+        return Ok(mock_cid_for_data(&data));
     }
 
     let form = reqwest::multipart::Form::new().part(
