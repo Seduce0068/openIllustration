@@ -6938,6 +6938,42 @@ async fn post_refresh(app: &Router, token: &str) -> (StatusCode, String, serde_j
     (status, new_refresh, body)
 }
 
+/// R1-18: refresh Cookie の Path は /auth 配下全体を対象にする。
+/// /auth/refresh 固定だと /auth/logout へ Cookie が送られず、
+/// ログアウト時のリフレッシュファミリ失効が到達しない。
+#[tokio::test]
+async fn test_refresh_cookie_path_covers_logout() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (_login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/refresh")
+                .header(header::COOKIE, format!("refresh_token={refresh}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.contains("refresh_token="))
+        .expect("refresh_token cookie must be set");
+    assert!(
+        cookie.contains("Path=/auth;"),
+        "cookie must cover /auth/logout as well: {cookie}"
+    );
+    assert!(
+        !cookie.contains("Path=/auth/refresh"),
+        "cookie must not be scoped to /auth/refresh only: {cookie}"
+    );
+}
+
 #[tokio::test]
 async fn test_refresh_rotates_token_and_issues_new_session() {
     let (app, oidc, mock, db) = setup_app_with_oidc().await;

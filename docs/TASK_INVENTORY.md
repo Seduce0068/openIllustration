@@ -179,6 +179,9 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R1-18: refresh Cookie の `Path` を `/auth/refresh` から `/auth` へ変更。
+  `/auth/logout` でも Cookie が送られ、リフレッシュファミリ失効が到達する。
+  mutation（旧 Path 復元）で新規テストが失敗することを確認。
 - [対応済み] R2-09: `get_content` を `status = 'Approved'` で絞り、通報中/却下コンテンツの直接 CID 取得を 404 化。一覧取得と整合。mutation（条件削除）で新規テストが失敗することを確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
  共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。

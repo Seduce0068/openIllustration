@@ -58,7 +58,8 @@ async fn issue_refresh_token(
 /// HttpOnly のリフレッシュトークン Cookie を構築する。
 fn refresh_cookie(token: &str, secure: bool) -> Result<HeaderValue, AppError> {
     let value = format!(
-        "refresh_token={token}; HttpOnly; Path=/auth/refresh; SameSite=Strict; Max-Age={REFRESH_TTL_SECS}{}",
+        // /auth/logout でも Cookie が送られ、ファミリ失効が到達するようにする。
+        "refresh_token={token}; HttpOnly; Path=/auth; SameSite=Strict; Max-Age={REFRESH_TTL_SECS}{}",
         if secure { "; Secure" } else { "" }
     );
     HeaderValue::from_str(&value)

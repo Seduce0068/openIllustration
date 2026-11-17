@@ -25,7 +25,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 - [ ] 年齢ゲートを OIDC callback / refresh へ配線し、信頼属性必須でフェイルクローズ（R1-17）
 - [x] 通報中・却下コンテンツの直接 CID 取得を 404 化（R2-09、2026-11-17 対応済み）
-- [ ] refresh Cookie の `Path` を `/auth` へ広げ、logout 時のファミリ失効を有効化（R1-18）
+- [x] refresh Cookie の `Path` を `/auth` へ広げ、logout 時のファミリ失効を有効化（R1-18、2026-11-17 対応済み）
 - [ ] ウォレット bind を DB に記録し verify の必須条件にする（R1-24）
 - [ ] 本番起動時に OIDC 必須設定と `PINATA_JWT` を検査し fail-closed 化（R4-01 / R4-04）
 - [ ] アップロード UI の file パートへ MIME を設定（R1-09）
