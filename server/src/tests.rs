@@ -8903,8 +8903,11 @@ fn test_build_mod_stats_empty() {
 }
 
 #[test]
-fn test_build_mod_stats_tie_maps_to_rejected() {
-    // ADR-0004: 同数（Reject >= Approve）は Rejected に倒る。
+fn test_build_mod_stats_counts_rejected_status() {
+    // ADR-0004 の同数判定（Reject >= Approve を Rejected に倒す）は
+    // process_report_conclusion の責務。build_mod_stats は確定済みの監査行を
+    // ステータス別に数えるだけなので、実同数は test_consensus_tie_resolves_to_rejected
+    // で検証する。ここでは Rejected の監査行が集計から漏れないことを検証する。
     let stats = build_mod_stats(
         STATS_GENERATED_AT,
         &[audit_count("2026-11", "Rejected", 1)],
