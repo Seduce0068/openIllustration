@@ -110,6 +110,14 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 認証が必要な読み取りルートは `AuthClaims` によりJWTを検証する。未認証アクセスを拒否するが、本人確認の真正性を確立するものではない。
 - `/auth/login` と `/auth/verify` は開発用モック経路。`ALLOW_MOCK_AUTH=1` の場合のみ有効で、login が発行する nonce を verify で必須化し、5分 TTL
   の単回消費（リプレイ拒否）とする。VP 署名検証は未実装であり、本番では OIDC 経路を使用する。
+- クライアントの `Login` は `error` シグナルを保持し、失敗を `<p role="alert" data-testid="login-error">` に
+  表示する（サイレント失敗しない）。成功時にのみ error をクリアして認証済み画面へ進む。内部詳細は出さない。
+- `Login` の error 文言は `/auth/login` と `/auth/verify` の失敗種別で次を区別する。
+  - HTTP エラー: `認証に失敗しました (HTTP <status>).`
+  - 通信失敗: `ネットワークエラーが発生しました。`
+  - JSON 解析失敗: `認証要求の解析に失敗しました。` / `認証結果の解析に失敗しました。`
+  - `authorized=false`: `認証が許可されませんでした。`
+  - `user_hash` / `token` の欠落（情報不足）: `認証情報が不足しています。`
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、
@@ -220,6 +228,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   この検査は描画境界のクライアントでのみ実施し、サーバーはMarkdownを描画せず原本バイト列を保持する。
 - パブリックゲートウェイ依存（候補は `IPFS_GATEWAYS` で変更できるが、既定はパブリックで廃止・劣化に応じた見直しが必要）、CIDのURLパス注入拒否は実装済み。厳密なCID仕様検証、リトライ/キャッシュ方針、
   単一ゲートウェイ異常時の運用手順は未確定。
+- クライアントの `ContentViewer` は監査ログ（`/content/{cid}/audit`）の取得失敗を `audit_error` シグナルへ
+  保持し、`FORENSIC_TIMELINE` パネル内の `<p role="alert" data-testid="audit-error">` に表示する。
+  HTTP エラーは `監査ログの取得に失敗しました (HTTP <status>).`、通信失敗は
+  `Network error loading audit log.`、JSON 解析失敗は `監査ログの解析に失敗しました。` と区別する。
+  成功時に `audit_error` をクリアし、過去のエラーが残らないようにする。内部詳細は表示しない。
 
 ## 4. モデレーション
 

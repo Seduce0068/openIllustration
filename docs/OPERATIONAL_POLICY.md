@@ -95,7 +95,15 @@ generated:
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
 - IPv6のみの制御をプロキシ経由で使う場合、`TRUSTED_PROXY_CIDRS` に信頼済みプロキシの範囲のみを設定し、プロキシは `X-Forwarded-For` を上書きまたは追記する。信頼済みピアで解決できない場合は
   403 となる。ネットワーク層でも許可方針を実装する。
-- ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現在のエラー応答・観測性は本番要件を満たすか別途検証する。
+- ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現状のエラー応答は500系の内部詳細を
+  ログのみに保ち、クライアントへは固定文言 `Internal server error` を返す（開発時は
+  `EXPOSE_INTERNAL_ERRORS=1` で詳細を公開）。観測性は `LOG_FORMAT=json` と `/metrics` で提供し、
+  アラート通知先は導入環境で選定する。
+- クライアント側のエラー表示方針: サイレント失敗を禁止し、HTTP 通信の失敗は必ず `role="alert"` で
+  利用者へ告知する。`Login` は `data-testid="login-error"`、エクスポートは `data-testid="export-error"`、
+  ContentViewer の監査は `data-testid="audit-error"`、モデレーション集計は
+  `data-testid="moderation-stats-error"` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
+  成功時にエラー表示をクリアする。内部例外・スタックトレース・署名やトークン等の内部詳細は画面へ出さない。
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。drain は
   `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）を上限とし、超過時は警告を出して残接続を切断する。
 - 本番起動前の設定診断は `cargo run -p server --bin doctor -- [--strict]` で行う。

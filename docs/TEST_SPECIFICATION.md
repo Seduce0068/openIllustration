@@ -19,9 +19,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全20件（auth 2 / economy 1 /
-  export 2 / favorites 1 / integrity 2 / moderation 4 / real-api 4 / search 1 /
-  upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全24件（auth 2 / economy 1 /
+  error-paths 4 / export 2 / favorites 1 / integrity 2 / moderation 4 / real-api 4 /
+  search 1 / upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
 
 ## 2. 実装済みテストの概要
 
@@ -76,7 +76,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全10件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc`。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート20件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート24件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
@@ -94,10 +94,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ） | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装 |
-| PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。実チェーンRPCは未実装 |
+| PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
-| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。外部アンカー・HSM 鍵管理は未実装、必須 |
+| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス8件は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
@@ -183,7 +183,36 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
   `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?` で古い閾値以下のみ削除する。
   これにより削除前に back-channel logout が登録した新しい失効が残る。既存の関連テストは
   `test_backchannel_logout_for_sub_allows_reauthentication` と `test_purge_stale_revoked_subs`。
-- これら2項目の専用テスト名は実装側で確定次第、本表へ反映する（現時点では推測しない）。
+- 専用テスト名は確定済みで、PAY-04 は `test_payment_verify_stage2_cas_rejects_race_after_detected`、
+  ID-05 は `test_reauthentication_delete_keeps_newer_revocation_threshold` が検証する。
+
+### 暗号検証エラーパスの検証（AUDIT-01）
+
+`common/src/lib.rs` の8テストで、公開鍵 DER・署名バイト・監査スナップショットのエラーパスを
+検証する（3a6bd64）。テスト名は次のとおり。
+
+- `verify_rsa_signature_rejects_invalid_public_key_der`: 空・不正 ASN.1・ゴミ DER を拒否。
+- `verify_rsa_signature_rejects_wrong_key`: 別鍵は `InvalidSignature`、正鍵は受理（対照付き）。
+- `verify_rsa_signature_rejects_invalid_signature_bytes`: 欠落・反転・ゼロ埋め署名を拒否。
+- `verify_audit_snapshot_rejects_invalid_base64_signature`: 不正 base64 署名を検証前に拒否。
+- `verify_audit_snapshot_rejects_wrong_key`: 正しい署名も別公開鍵では検証失敗。
+- `sign_audit_snapshot_rejects_unsupported_version`: 未サポート version を fail-closed で拒否。
+- `audit_snapshot_entry_verify_hash_accepts_match_and_rejects_mismatch`: 保存済みハッシュと
+  v2 再計算値の一致判定。改変値・v1 ハッシュは拒否。
+- `public_key_der_from_private_pem_rejects_invalid_pem`: 不正 PEM を拒否。
+
+### 決済ユーティリティの境界の検証（PAY-01〜03）
+
+`server/src/tests.rs` の5テストで、換算・確認数・署名復元・期限の境界を検証する（7821611）。
+テスト名は次のとおり。
+
+- `test_jpy_to_wei_bounds`: 0 / 上限超 / i64・u64 境界を拒否し上限値まで正確に換算。
+- `test_required_confirmations_by_chain`: 4チェーンの確認数と未対応チェーンの `i64::MAX`。
+- `test_recover_ethereum_address_rejects_invalid_signatures`: 非 hex・長さ不正・
+  recovery id 不正・復元失敗の拒否。
+- `test_recover_ethereum_address_accepts_hex_variants`: 0x 有無と recovery id の
+  27/28 形式を同じアドレスへ復元。
+- `test_order_expiry_boundary_is_inclusive`: `expires_at == now` も期限切れ（<= 判定）。
 
 ## 4. 実行コマンド
 
@@ -201,6 +230,7 @@ cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
+cd e2e && npm test -- error-paths.spec.ts   # エラーパス E2E（4件）のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -310,6 +340,24 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    エラー表示に焦点を当てる。削除権は未実装のため UI に存在しない。
 4. 実装側で chromium / firefox の2テストが pass していることを確認済み。webkit はホスト側の
    libicu/libxml2 不在で起動不可（環境依存）のため未検証。
+
+### E2E エラーパスシナリオ（DASH-ERR / R5-04 network / AUTH-500 / AUDIT-500）
+
+`e2e/tests/error-paths.spec.ts` は API 自体の挙動ではなく、クライアントが失敗を画面へ告知することを
+検証する（4件）。実行コマンドは `cd e2e && npm test -- error-paths.spec.ts`。
+テスト名は次のとおり。
+
+1. `DASH-ERR: GET /content が network error のときダッシュボードにエラー表示が出ること`:
+   `/content` を abort し、`Network error loading content.` が表示される。
+2. `R5-04: GET /me/export が network error のとき role=alert にネットワークエラー文言が出ること`:
+   `/me/export` を abort し、`data-testid="export-error"` の `role="alert"` に
+   `ネットワークエラーが発生しました。` が表示され、成功ステータスが出ない。
+3. `AUTH-500: /auth/verify が HTTP 500 のとき login-error に文言が出て UPLOAD が出ないこと`:
+   `/auth/verify` を500に差し替え、`data-testid="login-error"` の `role="alert"` に
+   `認証に失敗しました (HTTP 500).` が表示され UPLOAD は出ない。
+4. `AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること`:
+   監査エンドポイントを500に差し替え、監査パネルの `data-testid="audit-error"` の
+   `role="alert"` に `監査ログの取得に失敗しました (HTTP 500).` が表示される。
 
 ## 5. リリース証跡
 

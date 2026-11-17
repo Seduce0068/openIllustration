@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master 3662145, 2026-11-15 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master c766025, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -13,17 +13,27 @@ generated:
   at: "2026-11-18T03:49:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-15T12:39:43+09:00"
+  at: "2026-11-18T06:46:14+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-15T16:05:09+09:00、ブランチ `master` は `origin/master` と同期（`3662145`）、作業ツリー clean。
+- 確認: 2026-11-18T06:46:14+09:00、ブランチ `master` の HEAD は `c766025`（upstream と一致）。
+  作業ツリーには本監査対応の未コミット差分がある。
 - 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、
   法的確定/専門家レビューは未完）と公開レスポンスの非秘密性回帰テスト追加（`3662145`）。
+- 直近4コミットの反映（いずれも `c766025` までに master へ取り込み済みの監査指摘対応）:
+  - [対応済み 3a6bd64] 暗号検証のエラーパス: `common/src/lib.rs` に8テストを追加（不正DER公開鍵・別鍵・
+    改変署名・不正base64署名・未サポートversion・ハッシュ不一致・不正PEM）。AUDIT-01 ゲートの根拠を補強。
+  - [対応済み 7821611] 決済ユーティリティの境界: JPY→Wei 換算、チェーン別必要確認数、署名復元の
+    入力拒否と hex バリエーション、注文期限の包含的境界の5テストを追加（PAY-01〜03 ゲート）。
+  - [対応済み c766025] client のエラー表示: `Login` と `ContentViewer` のサイレント失敗を解消し、
+    `login-error` / `audit-error` の `role="alert"` で HTTP・通信・JSON解析・認可・情報不足を区別表示。
+  - [対応済み 9087955] E2E エラーパス: `e2e/tests/error-paths.spec.ts` に4シナリオ（DASH-ERR /
+    R5-04 network / AUTH-500 / AUDIT-500）を追加。E2E は全24件（`npm test`）で検証。
 - 方針: `ALLOW_MOCK_AUTH=1` は開発専用。未実装機能を本番対応済みと扱わない。模擬支援APIは 501 で無効（JPYC送金検証の実装まで）。DB内ハッシュ連鎖は第三者検証可能な監査ではない。
 - 参照: [HANDOFF.md](HANDOFF.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md),
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [REVIEW_REPORT.md](REVIEW_REPORT.md),
