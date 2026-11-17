@@ -3,6 +3,7 @@
 dist/
 client/dist/
 .e2e-cache/
+e2e-artifacts/
 **/node_modules/
 playwright-report/
 test-results/
