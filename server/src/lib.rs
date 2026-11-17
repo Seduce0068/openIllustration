@@ -170,6 +170,10 @@ async fn rate_limit_middleware(
     let Some(limit) = state.rate_limit.as_ref() else {
         return next.run(request).await;
     };
+    // CORS プリフライトはレートを消費しない（CorsLayer は最外側で処理する）。
+    if request.method() == axum::http::Method::OPTIONS {
+        return next.run(request).await;
+    }
     let path = request.uri().path();
     if matches!(path, "/health" | "/ready" | "/metrics") {
         return next.run(request).await;
@@ -277,6 +281,7 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
 ///
 /// URL 本文や利用者識別子は受け取らず、`event` と `count` だけを扱う。
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ClientEventPayload {
     event: String,
     #[serde(default = "default_client_event_count")]
@@ -1392,15 +1397,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/policy/age", get(get_age_policy))
         .route("/me/export", get(me_export))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(allowed_origins(
-                    allowed_origins_env.as_deref(),
-                    state.allow_mock_auth,
-                ))
-                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
-        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             observe_metrics,
@@ -1413,6 +1409,17 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(from_fn(network::ipv6_only_middleware))
         // 最外側に置き、IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
         .layer(from_fn(security_headers))
+        // CORS を最外側に置く。レート/403 の応答にも ACAO が付き、
+        // プリフライトが内側のミドルウェアを通過しないようにする。
+        .layer(
+            CorsLayer::new()
+                .allow_origin(allowed_origins(
+                    allowed_origins_env.as_deref(),
+                    state.allow_mock_auth,
+                ))
+                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+        )
         .with_state(state)
 }
 

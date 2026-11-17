@@ -721,6 +721,71 @@ fn test_rate_limit_configuration() {
     assert_eq!(crate::max_concurrent_requests(Some("bad")), 16);
 }
 
+/// CORS プリフライト（OPTIONS）はレート制限のクォータを消費しない。
+#[tokio::test]
+async fn test_rate_limit_ignores_preflight() {
+    use std::num::NonZeroU32;
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    let state = Arc::new(AppState {
+        db,
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: Some(Arc::new(crate::RateLimitState {
+            limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
+                NonZeroU32::new(1).unwrap(),
+            )),
+            concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
+        })),
+    });
+    let app = build_router(state);
+    let peer = test_ipv6_peer();
+
+    // 3 回の OPTIONS はクォータを消費せず、その後の GET が通る。
+    for _ in 0..3 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::options("/metrics/client-events")
+                    .body(Body::empty())
+                    .unwrap(),
+                peer,
+            ))
+            .await
+            .unwrap();
+        assert_ne!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// R4-02: IP 単位のレート制限が 429 で拒否すること。
 #[tokio::test]
 async fn test_rate_limit_rejects_excess_requests() {
@@ -8338,6 +8403,9 @@ async fn test_client_events_rejects_invalid_payloads() {
         r#"{"event":"neutralized_url","count":"1"}"#,
         r#"{"event":"neutralized_url","count":null}"#,
         r#"{"event":123,"count":1}"#,
+        r#"{"event":"neutralized_url","count":1,"url":"https://example.com/secret"}"#,
+        r#"{"event":"neutralized_url","count":1,"ip":"203.0.113.1"}"#,
+        r#"{"event":"neutralized_url","count":1,"user_agent":"ua"}"#,
         r#"{}"#,
         r#"[]"#,
         r#"not json"#,
@@ -8367,13 +8435,12 @@ async fn test_client_events_rejects_oversized_body() {
     let app = setup_app().await;
     let before = read_neutralized_metric(&app).await;
 
-    let prefix = br#"{"event":"neutralized_url","count":1,"pad":""#;
-    let suffix = br#""}"#;
-    let padding = 1024 - prefix.len() - suffix.len();
+    // JSON の末尾空白でパディングする（未知キーは deny_unknown_fields で拒否される）。
+    let base = br#"{"event":"neutralized_url","count":1}"#;
+    let padding = 1024 - base.len();
 
-    let mut exact_body = prefix.to_vec();
-    exact_body.extend(vec![b'x'; padding]);
-    exact_body.extend_from_slice(suffix);
+    let mut exact_body = base.to_vec();
+    exact_body.extend(vec![b' '; padding]);
     assert_eq!(exact_body.len(), 1024);
     let response = app
         .clone()
@@ -8384,9 +8451,8 @@ async fn test_client_events_rejects_oversized_body() {
     assert_eq!(read_neutralized_metric(&app).await, before + 1);
 
     // Content-Length なしの 1025 バイト（to_bytes 側の上限で拒否される経路）。
-    let mut too_large = prefix.to_vec();
-    too_large.extend(vec![b'x'; padding + 1]);
-    too_large.extend_from_slice(suffix);
+    let mut too_large = base.to_vec();
+    too_large.extend(vec![b' '; padding + 1]);
     assert_eq!(too_large.len(), 1025);
     let response = app
         .clone()
