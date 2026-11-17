@@ -416,7 +416,32 @@ pub async fn bind_wallet(
         ));
     }
 
+    // 所有証明を DB へ記録する。再起動後も verify の必須条件として残る。
+    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    tx.execute(
+        "UPDATE payment_orders
+         SET wallet_bound = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE order_id = ?",
+        [order.order_id.as_str()],
+    )
+    .await?;
+    tx.commit().await?;
+
     Ok(Json(true))
+}
+
+/// ウォレット所有証明が記録済みか。未記録なら決済検証を許可しない。
+async fn is_wallet_bound(db: &libsql::Connection, order_id: &str) -> Result<bool, AppError> {
+    let mut rows = db
+        .query(
+            "SELECT wallet_bound FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await?;
+    match rows.next().await? {
+        Some(row) => Ok(row.get::<i64>(0)? != 0),
+        None => Err(AppError::NotFound),
+    }
 }
 
 pub async fn verify_order(
@@ -435,6 +460,13 @@ pub async fn verify_order(
     }
     // status が PENDING のまま expires_at を過ぎた注文も期限切れとして扱う。
     reject_if_expired(state.as_ref(), &order).await?;
+
+    // 所有証明の記録が無い注文は検証を許可しない（再起動後も維持される）。
+    if !is_wallet_bound(&state.db, &order.order_id).await? {
+        return Err(AppError::BadRequest(
+            "wallet ownership is not bound for this order".to_string(),
+        ));
+    }
 
     let verifier = state.payment_verifier.clone().ok_or_else(|| {
         AppError::NotImplemented("chain verification is not configured".to_string())

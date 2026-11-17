@@ -4033,6 +4033,65 @@ async fn create_payment_order(
     )
 }
 
+/// R1-24: ウォレット所有証明の記録が無い注文は verify を拒否する。
+#[tokio::test]
+async fn test_payment_verify_requires_wallet_binding() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xunbound".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: "1000000000000000000000".to_string(),
+    });
+    let (app, _db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("wallet ownership is not bound"));
+
+    // バインド後は受理される（金額は注文と一致させる）。
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// テスト用にウォレット所有証明を記録する（verify の必須条件）。
+async fn bind_payment_order(app: &Router, token: &str, order_id: &str, wallet_key: &SigningKey) {
+    let message = crate::payments::wallet_bind_message(order_id);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "binding must succeed");
+}
+
 /// 支払い注文の verify を実行しレスポンスを返す
 async fn verify_payment_order(app: &Router, token: &str, order_id: &str) -> Response {
     app.clone()
@@ -4057,6 +4116,7 @@ async fn test_payment_verify_rejects_transfer_mismatch() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
 
     // 金額だけが注文と異なる送金検証結果を設定する。
     let wrong_amount = (amount_wei.parse::<u128>().unwrap() + 1).to_string();
@@ -4105,7 +4165,9 @@ async fn test_payment_verify_rejects_reused_transaction() {
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_a, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_a, &wallet_key).await;
     let (order_b, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_b, &wallet_key).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -4141,6 +4203,7 @@ async fn test_bind_wallet_rejects_elapsed_expiry() {
     let (app, db) = setup_app_with_payments(receiving, verifier).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, _amount) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
 
     db.execute(
         "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
@@ -4184,6 +4247,7 @@ async fn test_payment_verify_rejects_elapsed_expiry() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -4234,6 +4298,7 @@ async fn test_payment_verify_rejects_expired_order() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -4273,6 +4338,7 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
 
     // Polygon (chain 137) の必要確認数は 256。1 不足の状態を再現する。
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
