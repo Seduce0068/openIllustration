@@ -268,11 +268,58 @@ fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
     headings
 }
 
-fn render_markdown(markdown: &str) -> String {
+/// `POST /metrics/client-events` に送る JSON 本文を組み立てる（純粋関数）。
+///
+/// サーバーの共通インターフェースに合わせ、`event` 名と `count` 以外は一切含めない。
+/// URL 本文・IP・User-Agent は送らない。件数は 1..=1000 に収め、
+/// 0 件のときは送信しない（`None`）ため `spawn_local` を起こさない。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn client_event_payload(count: usize) -> Option<String> {
+    if count == 0 {
+        return None;
+    }
+    // サーバー側の受け入れ範囲は 1..=1000。超過分は丸めて送る。
+    let count = count.min(1000);
+    Some(format!(r#"{{"event":"neutralized_url","count":{count}}}"#))
+}
+
+/// 中立化した件数を監視用に 1 回だけ送信する。
+///
+/// 描画をブロックしないよう `spawn_local` で非同期に送る。認証ヘッダは付けず、
+/// 失敗しても画面にもコンソールにも何も出さない（機微情報をログに残さない）。
+fn report_neutralized_urls(count: usize) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(payload) = client_event_payload(count) else {
+            return;
+        };
+        spawn_local(async move {
+            if let Ok(request) = Request::post(&format!("{API_BASE}/metrics/client-events"))
+                .header("Content-Type", "application/json")
+                .body(payload)
+            {
+                // 監視用の副作用なので、HTTP エラーもネットワークエラーも握りつぶす。
+                let _ = request.send().await;
+            }
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // ネイティブの単体テストでは副作用を発生させない。
+        let _ = count;
+    }
+}
+
+/// Markdown を HTML に変換し、中立化した URL の件数も返す（副作用のない純粋関数）。
+///
+/// 件数は同期的な描画の中で `Cell` に集約する。送信は `render_markdown` 側で
+/// 描画完了後に 1 回だけ行うため、リンク/img ごとに POST することはない。
+fn render_markdown_with_neutralized_count(markdown: &str) -> (String, usize) {
     // 先に見出しを収集し、Start(Heading) の順に id を割り当てる。
     // id は pulldown-cmark の HTML レンダラがエスケープするため安全。
     let headings = collect_headings(markdown);
     let mut next_heading = 0usize;
+    let neutralized = std::cell::Cell::new(0usize);
     let events = Parser::new(markdown).map(|event| match event {
         Event::Start(Tag::Heading {
             level,
@@ -301,6 +348,7 @@ fn render_markdown(markdown: &str) -> String {
             dest_url: if is_safe_markdown_url(&dest_url, false) {
                 dest_url
             } else {
+                neutralized.set(neutralized.get() + 1);
                 "#".into()
             },
             title,
@@ -316,6 +364,7 @@ fn render_markdown(markdown: &str) -> String {
             dest_url: if is_safe_markdown_url(&dest_url, true) {
                 dest_url
             } else {
+                neutralized.set(neutralized.get() + 1);
                 "#".into()
             },
             title,
@@ -326,6 +375,13 @@ fn render_markdown(markdown: &str) -> String {
     });
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, events);
+    (html, neutralized.get())
+}
+
+fn render_markdown(markdown: &str) -> String {
+    let (html, neutralized_count) = render_markdown_with_neutralized_count(markdown);
+    // 集約した件数を描画完了後に 1 回だけ送る（描画はブロックしない）。
+    report_neutralized_urls(neutralized_count);
     html
 }
 
@@ -1872,6 +1928,78 @@ mod tests {
         assert!(!rendered.contains("src=\"javascript:"));
         assert!(rendered.contains("href=\"#\""));
         assert!(rendered.contains("src=\"#\""));
+    }
+
+    /// 監視イベントは event 名と count だけを持ち、サーバーの範囲 1..=1000 を守る。
+    #[test]
+    fn client_event_payload_is_minimal_and_clamped() {
+        // 0 件は送信しない。
+        assert_eq!(super::client_event_payload(0), None);
+        assert_eq!(
+            super::client_event_payload(1).as_deref(),
+            Some(r#"{"event":"neutralized_url","count":1}"#)
+        );
+        assert_eq!(
+            super::client_event_payload(7).as_deref(),
+            Some(r#"{"event":"neutralized_url","count":7}"#)
+        );
+        // 上限を超えた分はクランプして送る。
+        assert_eq!(
+            super::client_event_payload(1000).as_deref(),
+            Some(r#"{"event":"neutralized_url","count":1000}"#)
+        );
+        assert_eq!(
+            super::client_event_payload(1001).as_deref(),
+            Some(r#"{"event":"neutralized_url","count":1000}"#)
+        );
+        assert_eq!(
+            super::client_event_payload(usize::MAX).as_deref(),
+            Some(r#"{"event":"neutralized_url","count":1000}"#)
+        );
+
+        // URL 本文・IP・User-Agent 等の機微情報は一切含めない。
+        let payload = super::client_event_payload(2).expect("nonzero count");
+        let value: serde_json::Value = serde_json::from_str(&payload).expect("valid json");
+        assert_eq!(value.as_object().map(|obj| obj.len()), Some(2));
+        assert_eq!(value["event"], "neutralized_url");
+        assert_eq!(value["count"], 2);
+        for key in [
+            "url",
+            "destination",
+            "ip",
+            "ip_address",
+            "user_agent",
+            "user-agent",
+        ] {
+            assert!(value.get(key).is_none(), "{key} must not be sent");
+        }
+    }
+
+    /// 危険 URL の件数が描画と同じパスで正しく集約されること。
+    #[test]
+    fn render_markdown_counts_neutralized_urls() {
+        let (html, count) = super::render_markdown_with_neutralized_count(
+            "[ok](https://example.com) [bad](javascript:alert(1)) ![img](data:text/html,alert) [rel](/chapter/1)",
+        );
+        assert_eq!(count, 2);
+        assert!(html.contains("href=\"https://example.com\""));
+        assert!(html.contains("href=\"/chapter/1\""));
+        assert!(!html.contains("href=\"javascript:"));
+        assert!(!html.contains("src=\"data:"));
+        assert_eq!(html.matches("href=\"#\"").count(), 1);
+        assert_eq!(html.matches("src=\"#\"").count(), 1);
+
+        // 安全なリンク/img だけなら件数は 0（POST しない）。
+        let (_, count) = super::render_markdown_with_neutralized_count(
+            "[a](https://example.com) [b](../chapter/1) ![c](/img.png)",
+        );
+        assert_eq!(count, 0);
+
+        // 参照リンク・実体参照・自動リンクも同じ経路で数える。
+        let (_, count) = super::render_markdown_with_neutralized_count(
+            "[ref][target] ![badge][badge-src] [entity](javascript&#58;alert%281%29)\n\n<data:text/html,alert>\n\n[target]: javascript:alert(1)\n[badge-src]: data:image/svg+xml,%3Csvg%20onload=alert%281%29%3E\n",
+        );
+        assert_eq!(count, 4);
     }
 
     #[test]
