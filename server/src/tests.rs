@@ -9100,3 +9100,371 @@ async fn test_mod_stats_aggregates_from_real_db() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// R5-04: GET /me/export（データのエクスポートのみ。削除権は対象外）
+// ---------------------------------------------------------------------------
+
+/// `alice`（データ主体）と `bob`（他ユーザー）の両方に全表のデータを投入したアプリ。
+async fn setup_me_export_app() -> Router {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let seed = [
+        "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('alice', X'0102', 0)",
+        "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('bob', X'0304', 0)",
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, created_at, title, description, tags)
+             VALUES ('QmAlice1', 'Illustration', 'alice', 'checksum-alice', 'Approved', 100,
+                     '2026-01-01T00:00:00Z', 'alice title', 'alice desc', 'art,alice')",
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, created_at, title, description, tags)
+             VALUES ('QmBob1', 'Novel', 'bob', 'checksum-bob', 'Approved', 200,
+                     '2026-01-02T00:00:00Z', 'bob title', 'bob desc', 'novel,bob')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('alice', 'QmAlice1')",
+        "INSERT INTO favorites (user_hash, cid) VALUES ('bob', 'QmBob1')",
+        "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
+             VALUES (1, 'QmAlice1', 'alice', 'bob', 500, 'tx-alice-to-bob')",
+        "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
+             VALUES (2, 'QmBob1', 'bob', 'alice', 700, 'tx-bob-to-alice')",
+        "INSERT INTO transactions (tx_id, cid, sender_hash, receiver_hash, amount, tx_hash)
+             VALUES (3, 'QmBob1', 'bob', 'bob', 900, 'tx-bob-only')",
+        "INSERT INTO signatures (signature_id, target_id, signer_hash, signature_blob, algorithm)
+             VALUES (1, 'QmAlice1', 'alice', X'aa', 'RSASSA-PKCS1-v1_5')",
+        "INSERT INTO signatures (signature_id, target_id, signer_hash, signature_blob, algorithm)
+             VALUES (2, 'QmBob1', 'bob', X'bb', 'RSASSA-PKCS1-v1_5')",
+        "INSERT INTO content_audit_log (log_id, cid, old_status, new_status, changed_by, reason, entry_hash)
+             VALUES (1, 'QmAlice1', NULL, 'Approved', 'alice', 'alice secret reason', 'hash-a1')",
+        "INSERT INTO content_audit_log (log_id, cid, old_status, new_status, changed_by, reason, entry_hash)
+             VALUES (2, 'QmBob1', NULL, 'Approved', 'bob', 'bob secret reason', 'hash-b1')",
+        "INSERT INTO reports (report_id, target_cid, reason)
+             VALUES (1, 'QmAlice1', 'alice private report reason')",
+        "INSERT INTO reports (report_id, target_cid, reason)
+             VALUES (2, 'QmBob1', 'bob private report reason')",
+        "INSERT INTO votes (vote_id, report_id, voter_hash, vote_result)
+             VALUES (1, 1, 'alice', 'Approve')",
+        "INSERT INTO votes (vote_id, report_id, voter_hash, vote_result)
+             VALUES (2, 1, 'bob', 'Reject')",
+        "INSERT INTO votes (vote_id, report_id, voter_hash, vote_result)
+             VALUES (3, 2, 'bob', 'Approve')",
+        "INSERT INTO payment_orders (order_id, ppid, chain_id, wallet_address, recipient_address,
+                                     amount_wei, status, expires_at)
+             VALUES ('order-alice', 'alice', 1, '0xAAA', '0xRECIPIENT', '1000000000000000000',
+                     'PENDING', '2027-01-01T00:00:00.000Z')",
+        "INSERT INTO payment_orders (order_id, ppid, chain_id, wallet_address, recipient_address,
+                                     amount_wei, status, expires_at)
+             VALUES ('order-bob', 'bob', 1, '0xBBB', '0xRECIPIENT', '2000000000000000000',
+                     'PENDING', '2027-01-02T00:00:00.000Z')",
+        "INSERT INTO governance_audit_log (log_id, action, target, actor_hash, reason, details)
+             VALUES (1, 'BAN', 'alice', 'operator', 'alice ban reason', 'alice ban details')",
+        "INSERT INTO governance_audit_log (log_id, action, target, actor_hash, reason, details)
+             VALUES (2, 'BAN', 'bob', 'operator', 'bob ban reason', 'bob ban details')",
+        "INSERT INTO governance_audit_log (log_id, action, target, actor_hash, reason, details)
+             VALUES (3, 'UNPIN', 'QmAlice1', 'alice', 'self reason', NULL)",
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES ('hash-alice-secret', 'alice', 'family-alice-secret', '2027-01-01T00:00:00Z')",
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES ('hash-bob-secret', 'bob', 'family-bob-secret', '2027-01-02T00:00:00Z')",
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('alice', 1000)",
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('bob', 2000)",
+    ];
+    for sql in seed {
+        db.execute(sql, ()).await.unwrap();
+    }
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    build_router(shared_state)
+}
+
+/// `GET /me/export` を送信する。`sub = None` は Authorization ヘッダ無し。
+async fn me_export_request(app: &Router, sub: Option<&str>) -> Response {
+    let mut builder = Request::get("/me/export");
+    if let Some(sub) = sub {
+        let token = generate_token(TEST_JWT_SECRET, sub).await;
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    app.clone()
+        .oneshot(with_peer(
+            builder.body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap()
+}
+
+/// 200 応答を JSON として読み出す。
+async fn me_export_body(app: &Router, sub: &str) -> serde_json::Value {
+    let response = me_export_request(app, Some(sub)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+/// R5-04: 2 ユーザーを用意し、自分のデータのみ返る（他ユーザー非漏えい）ことを検証する。
+#[tokio::test]
+async fn me_export_returns_only_own_data() {
+    let app = setup_me_export_app().await;
+    let export = me_export_body(&app, "alice").await;
+
+    assert_eq!(export["version"], 1);
+    assert_eq!(export["sub"], "alice");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(export["generated_at"].as_str().unwrap()).is_ok(),
+        "generated_at must be RFC3339"
+    );
+
+    assert_eq!(export["users"].as_array().unwrap().len(), 1);
+    assert_eq!(export["users"][0]["user_hash"], "alice");
+    assert_eq!(export["contents"].as_array().unwrap().len(), 1);
+    assert_eq!(export["contents"][0]["cid"], "QmAlice1");
+    assert_eq!(export["favorites"].as_array().unwrap().len(), 1);
+    assert_eq!(export["favorites"][0]["cid"], "QmAlice1");
+    // alice は sender / receiver のどちらかで 2 件だけ（bob 同士の tx は含まない）。
+    assert_eq!(export["transactions"].as_array().unwrap().len(), 2);
+    assert_eq!(export["signatures"].as_array().unwrap().len(), 1);
+    assert_eq!(export["signatures"][0]["signer_hash"], "alice");
+    assert_eq!(export["content_audit_log"].as_array().unwrap().len(), 1);
+    assert_eq!(export["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(export["votes"].as_array().unwrap().len(), 1);
+    assert_eq!(export["votes"][0]["voter_hash"], "alice");
+    assert_eq!(export["payment_orders"].as_array().unwrap().len(), 1);
+    assert_eq!(export["payment_orders"][0]["ppid"], "alice");
+    // target = alice と actor_hash = alice の 2 件（bob 宛だけの行は含まない）。
+    assert_eq!(export["governance_audit_log"].as_array().unwrap().len(), 2);
+    assert_eq!(export["refresh_tokens"].as_array().unwrap().len(), 1);
+    assert_eq!(export["refresh_tokens"][0]["sub"], "alice");
+    assert_eq!(export["revoked_subs"].as_array().unwrap().len(), 1);
+    assert_eq!(export["revoked_subs"][0]["sub"], "alice");
+
+    // 取引の cid には相手側コンテンツの CID が入り得る（alice が受取側の tx2）。
+    // それは仕様どおり本人の取引行なので、コンテンツ行としての漏えいは別途検査する。
+    assert!(
+        export["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["cid"] != "QmBob1")
+    );
+    let raw = export.to_string();
+    for marker in [
+        "checksum-bob",
+        "bob title",
+        "tx-bob-only",
+        "order-bob",
+        "hash-bob-secret",
+        "family-bob-secret",
+    ] {
+        assert!(!raw.contains(marker), "bob-only data leaked: {marker}");
+    }
+
+    // 対称性: bob のエクスポートにも alice 専用のデータは混入しない。
+    let bob = me_export_body(&app, "bob").await;
+    assert_eq!(bob["sub"], "bob");
+    assert_eq!(bob["users"][0]["user_hash"], "bob");
+    assert_eq!(bob["contents"][0]["cid"], "QmBob1");
+    // bob は sender / receiver 双方の条件に一致する 3 件すべてを受け取る。
+    assert_eq!(bob["transactions"].as_array().unwrap().len(), 3);
+    assert_eq!(bob["signatures"][0]["signer_hash"], "bob");
+    assert_eq!(bob["reports"].as_array().unwrap().len(), 1);
+    assert_eq!(bob["votes"].as_array().unwrap().len(), 2);
+    assert_eq!(bob["payment_orders"][0]["ppid"], "bob");
+    assert_eq!(bob["governance_audit_log"].as_array().unwrap().len(), 1);
+    assert_eq!(bob["refresh_tokens"][0]["sub"], "bob");
+    assert_eq!(bob["revoked_subs"][0]["sub"], "bob");
+
+    assert!(
+        bob["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["cid"] != "QmAlice1")
+    );
+    let bob_raw = bob.to_string();
+    for marker in [
+        "checksum-alice",
+        "alice title",
+        "order-alice",
+        "hash-alice-secret",
+        "family-alice-secret",
+    ] {
+        assert!(
+            !bob_raw.contains(marker),
+            "alice-only data leaked: {marker}"
+        );
+    }
+}
+
+/// R5-04: データが無いユーザーでは 12 配列すべてが空になる。
+#[tokio::test]
+async fn me_export_empty_user_has_empty_arrays() {
+    // setup_app は test_user / QmTestCID のみを投入する。別 sub には行が無い。
+    let app = setup_app().await;
+    let export = me_export_body(&app, "empty_user").await;
+
+    assert_eq!(export["version"], 1);
+    assert_eq!(export["sub"], "empty_user");
+    for key in [
+        "users",
+        "contents",
+        "favorites",
+        "transactions",
+        "signatures",
+        "content_audit_log",
+        "reports",
+        "votes",
+        "payment_orders",
+        "governance_audit_log",
+        "refresh_tokens",
+        "revoked_subs",
+    ] {
+        assert_eq!(
+            export[key].as_array().unwrap().len(),
+            0,
+            "{key} must be empty for a user with no data"
+        );
+    }
+}
+
+/// R5-04: token_hash / sid / family_id 等が JSON に含まれない。
+#[tokio::test]
+async fn me_export_excludes_sensitive_fields() {
+    let app = setup_me_export_app().await;
+    let export = me_export_body(&app, "alice").await;
+    let raw = export.to_string();
+
+    for forbidden in [
+        "token_hash",
+        "family_id",
+        "\"sid\"",
+        "revoked_sessions",
+        "xprv",
+        "PINATA_JWT",
+        "private_key",
+        "signing_key",
+    ] {
+        assert!(
+            !raw.contains(forbidden),
+            "export must not contain sensitive field: {forbidden}"
+        );
+    }
+
+    // refresh_tokens 行は sub / expires_at / used_at / created_at の 4 項目のみ。
+    let refresh = export["refresh_tokens"][0].as_object().unwrap();
+    let keys: std::collections::BTreeSet<&str> = refresh.keys().map(String::as_str).collect();
+    assert_eq!(
+        keys,
+        std::collections::BTreeSet::from(["sub", "expires_at", "used_at", "created_at"])
+    );
+}
+
+/// R5-04: reason / details が common::mask_reason の既定（マスク）で返る。
+#[tokio::test]
+async fn me_export_masks_reason_and_details() {
+    let app = setup_me_export_app().await;
+    let export = me_export_body(&app, "alice").await;
+    let raw = export.to_string();
+
+    let audit_reason = export["content_audit_log"][0]["reason"].as_str().unwrap();
+    assert_eq!(
+        audit_reason,
+        format!("[redacted:{} bytes]", "alice secret reason".len())
+    );
+    let report_reason = export["reports"][0]["reason"].as_str().unwrap();
+    assert_eq!(
+        report_reason,
+        format!("[redacted:{} bytes]", "alice private report reason".len())
+    );
+
+    let governance = export["governance_audit_log"].as_array().unwrap();
+    let ban = governance
+        .iter()
+        .find(|row| row["log_id"] == 1)
+        .expect("BAN row targeting alice");
+    assert_eq!(
+        ban["reason"],
+        format!("[redacted:{} bytes]", "alice ban reason".len())
+    );
+    assert_eq!(
+        ban["details"],
+        format!("[redacted:{} bytes]", "alice ban details".len())
+    );
+
+    for secret in [
+        "alice secret reason",
+        "alice private report reason",
+        "alice ban reason",
+        "alice ban details",
+        "bob secret reason",
+        "bob private report reason",
+        "bob ban reason",
+        "bob ban details",
+    ] {
+        assert!(!raw.contains(secret), "raw reason leaked: {secret}");
+    }
+}
+
+/// R5-04: 未認証は 401。
+#[tokio::test]
+async fn me_export_requires_auth() {
+    let app = setup_me_export_app().await;
+
+    let response = me_export_request(&app, None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let req = Request::get("/me/export")
+        .header("authorization", "Bearer invalid.token.value")
+        .body(Body::empty())
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(with_peer(req, test_ipv6_peer()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// R5-04: Content-Disposition / Cache-Control ヘッダを検証する。
+#[tokio::test]
+async fn me_export_headers() {
+    let app = setup_me_export_app().await;
+    let response = me_export_request(&app, Some("alice")).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"openillustration-export.json\""
+    );
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
+}
