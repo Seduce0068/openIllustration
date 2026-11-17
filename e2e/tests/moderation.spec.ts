@@ -80,7 +80,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
           checksum: 'mock_checksum',
           type: 'Novel',
           status: 'Reported',
-          price: 100
+          price: 100,
+          title: 'Audit Fixture',
+          description: 'Content with a forensic timeline',
+          tags: ['audit', 'mock']
         }]),
       });
     });

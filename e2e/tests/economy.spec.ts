@@ -35,7 +35,10 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
           checksum: mockHash,
           type: 'Illustration',
           status: 'Approved',
-          price: mockPrice
+          price: mockPrice,
+          title: 'Gilded Sigil',
+          description: 'Mock illustration for the ledger flow',
+          tags: ['jxl', 'mock']
         }])
       });
     });

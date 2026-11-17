@@ -24,7 +24,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
           checksum: hash,
           type: 'Novel',
           status: 'Approved',
-          price: 0
+          price: 0,
+          title: 'Forensic Evidence Log',
+          description: 'Integrity verification fixture',
+          tags: ['forensic', 'test']
         }])
       });
     });
@@ -80,7 +83,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
           checksum: originalHash,
           type: 'Novel',
           status: 'Approved',
-          price: 0
+          price: 0,
+          title: 'Forensic Evidence Log',
+          description: 'Integrity verification fixture',
+          tags: ['forensic', 'test']
         }])
       });
     });

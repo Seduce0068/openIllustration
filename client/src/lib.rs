@@ -57,6 +57,77 @@ fn escape_html_text(input: &str) -> String {
     out
 }
 
+/// クエリパラメータの値を percent-encode する。
+/// `web-sys` に `UrlSearchParams` を追加せず依存を増やさないため的最小実装。
+fn url_encode(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => {
+                let _ = write!(out, "%{byte:02X}");
+            }
+        }
+    }
+    out
+}
+
+/// 省略可能な絞り込み条件から `/content` のクエリ文字列を組み立てる。
+/// 空の条件は送らず、条件が無い場合は既存と同じ `/content` を返す。
+fn build_content_query(q: &str, tag: &str, content_type: &str) -> String {
+    let mut params = Vec::new();
+    let q = q.trim();
+    let tag = tag.trim();
+    let content_type = content_type.trim();
+    if !q.is_empty() {
+        params.push(format!("q={}", url_encode(q)));
+    }
+    if !tag.is_empty() {
+        params.push(format!("tag={}", url_encode(tag)));
+    }
+    if !content_type.is_empty() {
+        params.push(format!("type={}", url_encode(content_type)));
+    }
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    }
+}
+
+/// 一覧カードに表示するメタデータを組み立てる。
+/// ユーザーが登録した値はすべて `escape_html_text` を通してから
+/// `inner_html` へ渡す（属性・タグとして解釈されないようにする）。
+fn render_content_meta_html(title: &str, description: &str, tags: &[String]) -> String {
+    let mut html = String::new();
+    let _ = writeln!(
+        html,
+        "<h3 class=\"text-sm font-bold tracking-wide text-white break-words\">{}</h3>",
+        escape_html_text(title)
+    );
+    if !description.trim().is_empty() {
+        let _ = writeln!(
+            html,
+            "<p class=\"mt-1 text-[10px] text-gray-400 leading-relaxed whitespace-pre-wrap break-words\">{}</p>",
+            escape_html_text(description)
+        );
+    }
+    if !tags.is_empty() {
+        html.push_str("<div class=\"mt-2 flex flex-wrap gap-1\">");
+        for tag in tags {
+            let _ = write!(
+                html,
+                "<span class=\"text-[8px] border border-white/10 px-1 text-gray-400\">#{}</span>",
+                escape_html_text(tag)
+            );
+        }
+        html.push_str("</div>");
+    }
+    html
+}
+
 /// 見出しテキストから slug を作る。許可するのは ASCII 英数字・`-`・`_` のみで、
 /// それ以外は除去する（属性注入を防ぐ）。大文字は小文字に畳み、
 /// すべて除去された場合は `section` を返す。
@@ -258,6 +329,13 @@ pub struct ContentMeta {
     pub content_type: String,
     pub status: String,
     pub price: i64,
+    /// 以下は後方互換のため、旧サーバーのレスポンスでも空値として受け取る。
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -411,20 +489,26 @@ where
 fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let (items, set_items) = signal(Vec::<ContentMeta>::new());
     let (error, set_error) = signal(String::new());
+    let (q, set_q) = signal(String::new());
+    let (tag, set_tag) = signal(String::new());
+    let (content_type, set_content_type) = signal(String::new());
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
 
     Effect::new(move |_| {
         let token = token_stored.get_value();
+        // 入力 signal をここで読むことで、変化のたびに再取得する。
+        let query = build_content_query(&q.get(), &tag.get(), &content_type.get());
         spawn_local(async move {
-            match Request::get(&format!("{}/content", API_BASE))
+            match Request::get(&format!("{}/content{}", API_BASE, query))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await
             {
                 Ok(res) if res.ok() => {
                     if let Ok(list) = res.json::<Vec<ContentMeta>>().await {
+                        set_error.set(String::new());
                         set_items.set(list);
                     }
                 }
@@ -435,32 +519,101 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     });
 
     view! {
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
-            <For
-                each=move || items.get()
-                key=|item| item.cid.clone()
-                children=move |item| {
-                    view! {
-                        <ContentViewer
-                            cid=item.cid.clone()
-                            expected_checksum=item.checksum.clone()
-                            content_type=item.content_type.clone()
-                            price=item.price
-                            token=token_stored.get_value()
-                            user_hash=user_hash_stored.get_value()
+        <div class="mt-8">
+            <search>
+                <form
+                    on:submit=move |ev| ev.prevent_default()
+                    class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto] gap-4 items-end border border-white/10 p-4"
+                >
+                    <div class="space-y-1">
+                        <label for="content-q" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                            "Search"
+                        </label>
+                        <input
+                            id="content-q"
+                            name="q"
+                            type="search"
+                            autocomplete="off"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            placeholder="TITLE OR DESCRIPTION"
+                            on:input=move |ev| set_q.set(event_target_value(&ev))
+                            prop:value=q
+                            class="w-full bg-black border border-white/20 p-3 text-xs"
                         />
+                    </div>
+                    <div class="space-y-1">
+                        <label for="content-tag" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                            "Tag"
+                        </label>
+                        <input
+                            id="content-tag"
+                            name="tag"
+                            type="search"
+                            autocomplete="off"
+                            autocapitalize="none"
+                            spellcheck="false"
+                            placeholder="TAG"
+                            on:input=move |ev| set_tag.set(event_target_value(&ev))
+                            prop:value=tag
+                            class="w-full bg-black border border-white/20 p-3 text-xs"
+                        />
+                    </div>
+                    <div class="space-y-1">
+                        <label for="content-type" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                            "Type"
+                        </label>
+                        <select
+                            id="content-type"
+                            name="type"
+                            on:change=move |ev| set_content_type.set(event_target_value(&ev))
+                            prop:value=content_type
+                            class="w-full bg-black border border-white/20 p-3 text-xs"
+                        >
+                            <option value="">"ALL"</option>
+                            <option value="Illustration">"Illustration"</option>
+                            <option value="Novel">"Novel"</option>
+                        </select>
+                    </div>
+                    <button type="submit"
+                        class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors">
+                        "Search"
+                    </button>
+                </form>
+            </search>
+            <p role="status" aria-live="polite" class="sr-only">
+                {move || format!("{} content items displayed", items.get().len())}
+            </p>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
+                <For
+                    each=move || items.get()
+                    key=|item| item.cid.clone()
+                    children=move |item| {
+                        view! {
+                            <ContentViewer
+                                cid=item.cid.clone()
+                                expected_checksum=item.checksum.clone()
+                                content_type=item.content_type.clone()
+                                price=item.price
+                                token=token_stored.get_value()
+                                user_hash=user_hash_stored.get_value()
+                                title=item.title.clone()
+                                description=item.description.clone()
+                                tags=item.tags.clone()
+                            />
+                        }
                     }
-                }
-            />
-            <Show when=move || items.get().is_empty() fallback=|| ()>
-                <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
-                    {move || if error.get().is_empty() {
-                        "NO_APPROVED_CONTENT".to_string()
-                    } else {
-                        error.get()
-                    }}
-                </div>
-            </Show>
+                />
+                <Show when=move || items.get().is_empty() fallback=|| ()>
+                    <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
+                        {move || if error.get().is_empty() {
+                            "NO_APPROVED_CONTENT".to_string()
+                        } else {
+                            error.get()
+                        }}
+                    </div>
+                </Show>
+            </div>
         </div>
     }
 }
@@ -475,8 +628,14 @@ fn ContentViewer(
     price: i64,
     token: String,
     #[allow(unused_variables)] user_hash: String,
+    title: String,
+    description: String,
+    tags: Vec<String>,
 ) -> impl IntoView {
     let cid_label = cid.clone();
+    // メタデータは信頼できない入力なので、escape_html_text を通した文字列だけを
+    // inner_html へ渡す（Markdown 本文/TOC の既存レンダリングには触れない）。
+    let meta_html = render_content_meta_html(&title, &description, &tags);
     let (verified, set_verified) = signal(None::<bool>);
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
@@ -549,6 +708,7 @@ fn ContentViewer(
                     </button>
                 </div>
             </div>
+            <div class="border-b border-white/10 pb-3" inner_html=meta_html />
 
             <Show when=move || verified.get() == Some(true) && ct_toc == "Novel" && !novel_toc.get().is_empty() fallback=|| ()>
                 <details class="border border-white/10 bg-white/5 p-3">
@@ -643,6 +803,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (loading, set_loading) = signal(false);
     let (file, set_file) = signal(None::<web_sys::File>);
     let (price, set_price) = signal(100);
+    let (title, set_title) = signal(String::new());
+    let (description, set_description) = signal(String::new());
+    let (tags, set_tags) = signal(String::new());
 
     let on_file_change = move |ev| {
         let input: HtmlInputElement = event_target(&ev);
@@ -668,6 +831,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         let user_hash = user_hash.clone();
         let token = token.clone();
         let price_val = price.get();
+        let title_val = title.get();
+        let description_val = description.get();
+        let tags_val = tags.get();
         set_loading.set(true);
         set_status.set("Generating forensic evidence...".to_string());
 
@@ -695,6 +861,13 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             form_data
                 .append_with_str("price", &price_val.to_string())
                 .unwrap();
+            // 任意メタデータ。未入力でも1フィールド送り、サーバー側で空値として扱う。
+            form_data.append_with_str("title", &title_val).unwrap();
+            form_data
+                .append_with_str("description", &description_val)
+                .unwrap();
+            // tags はカンマ区切り1フィールド（サーバー側の共通インターフェース）。
+            form_data.append_with_str("tags", &tags_val).unwrap();
             let sig_blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
                 &js_sys::Uint8Array::from(&mock_signature[..]).into(),
             ))
@@ -738,6 +911,53 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         on:input=move |ev| set_price.set(event_target_value(&ev).parse().unwrap_or(0))
                         prop:value=price
                         class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />
+                </div>
+
+                <div class="space-y-1">
+                    <label for="upload-title" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                        "Title (optional)"
+                    </label>
+                    <input
+                        id="upload-title"
+                        name="title"
+                        type="text"
+                        maxlength=200
+                        placeholder="TITLE"
+                        on:input=move |ev| set_title.set(event_target_value(&ev))
+                        prop:value=title
+                        class="w-full bg-black border border-white/20 p-3 text-sm"
+                    />
+                </div>
+
+                <div class="space-y-1">
+                    <label for="upload-description" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                        "Description (optional)"
+                    </label>
+                    <textarea
+                        id="upload-description"
+                        name="description"
+                        maxlength=2000
+                        placeholder="DESCRIPTION"
+                        on:input=move |ev| set_description.set(event_target_value(&ev))
+                        prop:value=description
+                        class="w-full bg-black border border-white/20 p-3 text-sm h-24 resize-y"
+                    />
+                </div>
+
+                <div class="space-y-1">
+                    <label for="upload-tags" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                        "Tags (optional, comma separated)"
+                    </label>
+                    <input
+                        id="upload-tags"
+                        name="tags"
+                        type="text"
+                        maxlength=509
+                        placeholder="FANTASY, SCIFI"
+                        on:input=move |ev| set_tags.set(event_target_value(&ev))
+                        prop:value=tags
+                        class="w-full bg-black border border-white/20 p-3 text-sm"
+                    />
                 </div>
 
                 <button on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
@@ -1167,6 +1387,50 @@ mod tests {
         assert_eq!(rendered.matches("href=\"#\"").count(), 3, "{rendered}");
         assert_eq!(rendered.matches("src=\"#\"").count(), 1, "{rendered}");
         assert!(rendered.contains("href=\"/chapter/1\""), "{rendered}");
+    }
+
+    #[test]
+    fn content_query_is_built_from_optional_filters() {
+        assert_eq!(super::build_content_query("", "", ""), "");
+        assert_eq!(
+            super::build_content_query("neon", "", "Novel"),
+            "?q=neon&type=Novel"
+        );
+        assert_eq!(
+            super::build_content_query("a b&c", "日本", ""),
+            "?q=a%20b%26c&tag=%E6%97%A5%E6%9C%AC"
+        );
+    }
+
+    #[test]
+    fn content_meta_html_escapes_user_supplied_fields() {
+        let tags = vec![
+            "<img src=x onerror=alert(1)>".to_string(),
+            "safe & sound".to_string(),
+        ];
+        let html = super::render_content_meta_html(
+            "<script>alert(1)</script>",
+            "A & B \"quoted\" <tag>",
+            &tags,
+        );
+
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(!html.contains("<img"), "{html}");
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+        assert!(html.contains("&lt;img"), "{html}");
+        assert!(html.contains("A &amp; B &quot;quoted&quot;"), "{html}");
+        assert!(html.contains("#safe &amp; sound"), "{html}");
+    }
+
+    #[test]
+    fn content_meta_accepts_legacy_json_without_new_fields() {
+        let meta: super::ContentMeta = serde_json::from_str(
+            r#"{"cid":"c","checksum":"s","type":"Novel","status":"Approved","price":0}"#,
+        )
+        .unwrap();
+        assert_eq!(meta.title, "");
+        assert_eq!(meta.description, "");
+        assert!(meta.tags.is_empty());
     }
 
     #[test]
