@@ -29,12 +29,13 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
-| DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト | ロールバック、複数インスタンス同時起動の排他は未実施 |
+| DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
 | Markdown表示 | raw HTMLのエスケープ、インライン・参照リンク・自動リンク・画像URLの危険スキーム拒否（実体参照による難読化、Unicode 空白/制御文字（ZWSP・NBSP）によるスキーム隠しを含む）と安全スキーム維持をユニットテスト。危険 URL が `render_markdown` を通した後も `href="#"` / `src="#"` に置換される統合検証も実施 | ブラウザ別URL解釈のE2Eは未実施 |
 | 投稿入力 | 許可MIME、JPEG XLシグネチャ、Markdown UTF-8、重複CIDの再投稿拒否、未知フィールド拒否、全フィールド（`price` / `file` / `owner_hash` / `signature`）の重複 400 拒否、WASM 側 JXL デコードの寸法上限（8000px / 64M ピクセル）とチャンネル数別（1/2/3/4以上）RGBA 変換、クライアント選択時の 10 MiB 超過即時拒否（E2E・送信ボタン無効化と未送信も検証）を検証 | 実 JXL デコードの WASM 実行試験は未実施 |
 | モデレーション | 通報状態遷移、重複通報拒否、通報reasonの空/過大拒否とトリム保存、期限前は確定しないこと、期限後確定（同数→`Rejected`、定足数未達→`Approved` 復帰）、期限切れ投票拒否、投稿者投票拒否、BAN済み投票者の拒否、30日以内の異議と30日超の通常通報、finalize エンドポイントの冪等性、重複投票拒否、確定後投票拒否、投票ペイロード検証（report_id/result）とトークンsub不一致401の拒否、投票署名メッセージが report_id と result の両方に束縛されること、運用者未設定時の BAN/UNBAN/UNPIN 拒否、運用者による BAN（根拠・期間）/UNBAN/UNPIN の監査記録、自己BAN・不正期間・空理由・BAN済み運用者の拒否、期限前スキップ・期限後自動確定・複数件処理・冪等性・ワーカー周期の範囲検証 | 同一接続への並行 `BEGIN` が失敗することの再現、書き込みロックによる直列化、並行投票と自動確定の同時実行を検証。ワーカー停止/再起動時の挙動、実運用手続、第三者検証可能な監査（DEC-04）の試験が不足。reason上限値の妥当性はADR-0004の運用で見直し |
 | Upload | Content-Typeのユニット/APIテスト、負価格・非整数価格・64bit範囲外価格・上限超過価格の拒否（拒否理由を検証）、価格0と上限値 `MAX_ORDER_JPY` の受理と保存を検証、必須フィールド欠落・owner不一致・BANユーザーの拒否、実 RSA 鍵で署名したバイト列の受理と別バイト列への署名使い回し401拒否 | 実multipartサイズ境界・実Pinata連携の試験が不足 |
+| ContentMeta / list_contents | `ContentMeta` が `title` / `description` / `tags` を返すこと、`list_contents` が省略可の `q` / `tag` / `type` / `limit` / `offset` を受理し既定値（limit=50、offset=0）と範囲（`1..=100`）へフォールバックすることを API テストで検証。`q` の部分一致、`tag` の前方一致、`type` の完全一致、`created_at DESC` の並びとページングの重複なしも確認 | 長さ上限・LIKE 注入拒否・XSS エスケープは CONTENT-06〜08 で個別に検証。タグの正規化・全文検索は未実装 |
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 
@@ -52,6 +53,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-03 | SHA-256不一致 | コンテンツ描画を拒否 | 実装済み。checksum 一致で 200、不一致で 401、Illustration/Novel の Content-Type をローカルモックで検証 |
 | CONTENT-05 | 通報中/却下コンテンツの直接 CID 取得 | 404 で配信しない | 実装済み。`status = 'Approved'` で絞り、Reported/Rejected が 404 になることを mutation テストで確認 |
 | CONTENT-04 | 小説に `<script>` 等のraw HTML、`javascript:` / `data:` リンク・画像URL | raw HTMLを実行せず、危険なURLスキームを無効化 | 実装済み、回帰テストあり |
+| CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存 |
+| CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
+| CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
 | MOD-01 | 同一ユーザーの同一通報への再投票 | 拒否 | 実装済み（API検査＋DB一意インデックス）、回帰テストあり |
 | MOD-02 | 3人の異なる投票者による結果 | 規則通り状態遷移 | 実装済み（確定後の追加投票は400で拒否）、回帰テストあり |
 | MOD-03 | レビュー中コンテンツへの重複通報 | 拒否 | 実装済み、回帰テストあり |
@@ -76,6 +80,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 cargo test --workspace
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cd e2e && npm test
+cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -108,6 +113,20 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 添付が必要になった場合は、独立した E2E ジョブへの昇格を検討する。
 
 実JPKI実機・JPYCテスト環境の試験計画は、対応仕様を確定した後に作成する。これらの必須ゲートを通過する前に本番利用資格判定・決済を有効化しない。
+
+### E2E 検索シナリオ（R5-01）
+
+`e2e/tests/search.spec.ts` は `/content` を URL predicate でフックし、送信された `q` を記録しながら
+`title` の部分一致で絞り込むモックを返す。各アイテムの `/content/{cid}` と監査エンドポイントも
+モックする。ブラウザ URL は同期せず、入力に応じた AJAX 再取得のみを検証する。
+
+1. 認証モック（`ALLOW_MOCK_AUTH=1`）でログインし、BROWSE 画面へ遷移する。初期表示で
+   `Moonlit Harbor` と `Neon Alley` の2件、および説明 `Cyberpunk city sketch` とタグ
+   `#neon` が表示されることを確認する。
+2. `getByLabel('Search')` に `Neon` を入力する。`/content` へのリクエストから記録した
+   `q` の値に `Neon` が含まれ、`Neon Alley` が残り `Moonlit Harbor` が消えることを確認する。
+3. タグ・種別入力、結果件数告知（`role="status"`）、XSS エスケープ表示は API テスト
+   （CONTENT-06〜08）で担保し、本シナリオは `q` の絞り込みとメタデータ表示に焦点を当てる。
 
 ## 5. リリース証跡
 

@@ -30,10 +30,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
 | GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ（全リクエスト数・4xx/5xx 応答数）。外部クレートなし。 |
-| GET | `/content` | Bearer JWT | `Approved` コンテンツを最大50件返す |
+| GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`） |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |
-| POST | `/content/upload` | Bearer JWT | コンテンツ投稿 |
+| POST | `/content/upload` | Bearer JWT | コンテンツ投稿。任意の `title` / `description` / `tags` も受理し長さ上限を検査 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
 | POST | `/payments/orders` | Bearer JWT | `cid`・`chain_id`・`wallet_address`・`amount_jpy` を受け取り、コンテンツの提示価格と `amount_jpy` を照合して JPYC注文を作成する。不正CID・不存在/レビュー中コンテンツ・価格不一致は拒否。受取アドレス未設定時は501 |
 | GET | `/payments/orders/:order_id` | Bearer JWT | 本人の注文状態を返す |
@@ -69,6 +69,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する（最外側ミドルウェア。
   IP ゲートの 403 を含む）。`/content/{cid}` のユーザー管理バイトが HTML としてスニッフィングされる
   リスクを防ぐ。CSP はクライアントのリソース読み込みへ影響するため本番構成確定時に別途設計する。
+- 一覧検索の `q` / `tag` は SQL `LIKE` のパターンとして扱うため、`\` / `%` / `_` をバックスラッシュで
+  エスケープし `ESCAPE '\'` 句で照合する（値はすべてバインドパラメータで渡し、SQL 文字列へ埋め込まない）。
+  ユーザーが登録したメタデータ（タイトル・説明・タグ）はサーバーでエスケープせず原文を保持・返却し、
+  描画境界のクライアントが `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化してから
+  `inner_html` へ渡す（XSS 対策は表示側の責務）。
 - 500系エラーの内部詳細（DB・IO・内部メッセージ）はログのみに出し、クライアントには `Internal server error` を返す。開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を返す。ログへ
   URL を出す際は `redact_url` で userinfo・query・fragment を除去する（フラグメントの秘密漏えいを防ぐためパース失敗時のフォールバックでも `#` 以降を落とす）。
 - Rust コードの `unsafe` は禁止方針。CI の clippy に `-D clippy::undocumented_unsafe_blocks` を必須化し、やむを得ず使う場合は安全性根拠のコメントを要求する。現行の
@@ -145,7 +150,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ### 投稿 `POST /content/upload`
 
-- 入力: `multipart/form-data` の `file`、`owner_hash`、`signature`、任意の `price`。
+- 入力: `multipart/form-data` の `file`、`owner_hash`、`signature`、任意の `price`、
+  および任意のメタデータ `title` / `description` / `tags`（省略時は空文字）。
 - JWT主体と `owner_hash` の一致を確認する。
 - Content-Typeを検査し、IllustrationまたはNovelに分類する。
 - `price` は64bit整数で `0..=MAX_ORDER_JPY`（1,000,000）。注文側 `jpy_to_wei` と同じ上限をアップロード時にも適用し、注文不可能な価格の登録を拒否する。
@@ -155,8 +161,29 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 同一バイト列を再投稿すると同一CIDとなるため、既存CIDとの衝突は400で拒否する（主キー衝突による500を返さない）。
 - Content-Typeは `image/jxl` または `text/markdown` のみ許可し、JPEG XLシグネチャまたはMarkdownのUTF-8を検査する。既知フィールドの重複と未知フィールドは拒否する。
 - 価格は `0..=MAX_ORDER_JPY` に制限し、注文上限と整合させる。IPFS 保存名はハンドラ側で `upload.jxl` / `upload.md` に固定し、利用者入力を使わない。
+- `title` / `description` / `tags` は省略可で、UTF-8 バイト数（`str::len()`）で `title` は200 B、
+  `description` は2000 B、`tags` は10個まで・各タグは50 B を上限とする。超過は400で拒否し、
+  空文字は受理し、空ベクトル（保存時は空文字）として扱う。`tags` はカンマ区切りの1フィールドで、
+  未知フィールド・重複フィールドは既存どおり400で拒否する。
 - **未実装**: 完全なJPEG XLデコード検証、画像デコード前検査。技術選定は [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録済み（第一候補 `jxl-oxide`、
   現時点では依存追加しない判断）。
+
+### 一覧 `GET /content`
+
+- `status = 'Approved'` のみを対象とし、`created_at DESC` で返す（既存の並び順を維持）。
+- 省略可のクエリパラメータ: `q` は `title` / `description` への `LIKE` 部分一致（OR 条件、
+  SQLite 既定の大小文字非区別）、`tag` はカンマ区切り `tags` の前方一致（先頭タグまたは
+  カンマ直後のタグが対象）、`type` は `Illustration` / `Novel` の完全一致。
+  `type` にそれ以外の値を渡しても400にはせず0件を返す。
+- `limit` は既定50・範囲 `1..=100`、`offset` は既定0。範囲外・非数値の `limit` は既定50へ、
+  負・非数値の `offset` は0へフォールバックする（エラーにはしない）。
+- `q` / `tag` から `LIKE` パターンを生成する際は `\` / `%` / `_` をバックスラッシュで
+  エスケープし `ESCAPE '\'` 句を付ける。`q` は `%...%`、`tag` は `...%` または `%,...%` とし、
+  全パラメータをバインド引数として渡す（SQL 文字列への直接埋め込み禁止）。
+- レスポンスの `ContentMeta` は `cid` / `checksum` / `type` / `status` / `price` に加えて
+  `title` / `description` / `tags`（文字列配列）を含む。旧サーバー互換のため欠落時は空値。
+- サーバーは保存・JSON 返却ともに生テキストを扱い、HTML エスケープは行わない。
+  XSS 対策は一覧カードを描画するクライアントの `escape_html_text` が担う（API横断規則を参照）。
 
 ### 取得 `GET /content/:cid`
 
@@ -192,7 +219,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |Table|主な列|用途・制約|
 |---|---|---|
 |`users`|`user_hash`, `public_key_der`, `is_banned`, `banned_at`|利用者識別・公開鍵・BAN状態|
-|`contents`|`cid`, `type`, `owner_hash`, `checksum`, `status`, `price`, `created_at`|CIDを主キーとするコンテンツメタデータ|
+|`contents`|`cid`, `type`, `owner_hash`, `checksum`, `status`, `price`, `created_at`, `title`, `description`, `tags`|CIDを主キーとするコンテンツメタデータ。メタデータ3列は migration 011 で追加、`tags` はカンマ区切りで `idx_contents_tags` インデックス付き|
 |`reports`|`report_id`, `target_cid`, `reason`, `created_at`, `deadline_at`, `concluded_at`, `appeal_of`|通報記録（7日期限・確定時刻・異議の連鎖）|
 |`votes`|`vote_id`, `report_id`, `voter_hash`, `vote_result`, `voted_at`|投票記録。現行DDLに複合一意制約なし|
 |`signatures`|`target_id`, `signer_hash`, `signature_blob`, `algorithm`|投稿・投票署名の保存|
@@ -201,9 +228,12 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `010_wallet_bound.sql`）としてバージョン管理され、起動時に
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `011_content_metadata.sql`）としてバージョン管理され、起動時に
 `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
 適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
+migration 011 は `contents` へ `title` / `description` / `tags`（いずれも `TEXT NOT NULL DEFAULT ''`）を追加し、
+`tags` に `idx_contents_tags` インデックスを作成する。既存行のメタデータは空文字として読み出され、
+適用済みマイグレーションの改変は従来どおり起動時に検出される。
 ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ
@@ -256,3 +286,5 @@ DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql
   migration は未採用）。
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。
+- メタデータ検索は `LIKE` による部分一致・前方一致の簡易実装。正規化したタグテーブル、
+  全文検索、あいまい一致、スコアリング、およびブラウザ URL との検索条件同期は未実装。
