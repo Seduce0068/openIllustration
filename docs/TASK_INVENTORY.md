@@ -179,6 +179,9 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R1-09 / C1: アップロードの file パートへ MIME を設定（ブラウザ判定＋拡張子
+  フォールバック）。実サーバーへモックなしで認証・アップロードするスモーク E2E を追加し、
+  MIME 指定を外す mutation で失敗することを確認。
 - [対応済み] R1-18: refresh Cookie の `Path` を `/auth/refresh` から `/auth` へ変更。
   `/auth/logout` でも Cookie が送られ、リフレッシュファミリ失効が到達する。
   mutation（旧 Path 復元）で新規テストが失敗することを確認。

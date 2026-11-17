@@ -3,7 +3,28 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use web_sys::{Blob, FormData, HtmlInputElement};
+use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement};
+
+/// サーバーが受理する MIME を、ブラウザの判定とファイル名拡張子から決める。
+/// ブラウザが `image/jxl` を認識しない環境でもアップロードできるようにする。
+fn upload_media_type(browser_type: &str, filename: &str) -> &'static str {
+    let lower = browser_type.trim().to_ascii_lowercase();
+    if lower == "image/jxl" {
+        return "image/jxl";
+    }
+    if lower == "text/markdown" || lower == "text/x-markdown" {
+        return "text/markdown";
+    }
+    let name = filename.to_ascii_lowercase();
+    if name.ends_with(".jxl") {
+        "image/jxl"
+    } else if name.ends_with(".md") || name.ends_with(".markdown") || name.ends_with(".txt") {
+        "text/markdown"
+    } else {
+        // サーバーが fail-closed で拒否する値を送る（既定で受理させない）。
+        ""
+    }
+}
 
 const API_BASE: &str = "http://localhost:3000";
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
@@ -516,12 +537,16 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             let mock_signature = vec![0u8; 256];
 
             let form_data = FormData::new().unwrap();
-            let blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
-                &js_sys::Uint8Array::from(&bytes[..]).into(),
-            ))
+            let media_type = upload_media_type(&f.type_(), &f.name());
+            let options = BlobPropertyBag::new();
+            options.set_type(media_type);
+            let blob = Blob::new_with_u8_array_sequence_and_options(
+                &js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]).into()),
+                &options,
+            )
             .unwrap();
             form_data
-                .append_with_blob_and_filename("file", &blob, "upload.jxl")
+                .append_with_blob_and_filename("file", &blob, &f.name())
                 .unwrap();
             form_data.append_with_str("owner_hash", &user_hash).unwrap();
             form_data
@@ -798,6 +823,30 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upload_media_type_prefers_browser_type_then_extension() {
+        assert_eq!(super::upload_media_type("image/jxl", "a.bin"), "image/jxl");
+        assert_eq!(
+            super::upload_media_type("text/markdown", "a.bin"),
+            "text/markdown"
+        );
+        assert_eq!(
+            super::upload_media_type("text/x-markdown", "a.bin"),
+            "text/markdown"
+        );
+        // ブラウザが JXL を認識しない場合の拡張子フォールバック。
+        assert_eq!(super::upload_media_type("", "a.jxl"), "image/jxl");
+        assert_eq!(
+            super::upload_media_type("application/octet-stream", "a.JXL"),
+            "image/jxl"
+        );
+        assert_eq!(super::upload_media_type("", "a.md"), "text/markdown");
+        assert_eq!(super::upload_media_type("", "a.markdown"), "text/markdown");
+        assert_eq!(super::upload_media_type("", "a.txt"), "text/markdown");
+        // 不明な形式は空を返し、サーバー側で fail-closed に拒否される。
+        assert_eq!(super::upload_media_type("", "a.zip"), "");
+    }
+
     #[test]
     fn markdown_raw_html_is_escaped() {
         let rendered =
