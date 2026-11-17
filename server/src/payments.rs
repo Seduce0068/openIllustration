@@ -552,6 +552,13 @@ pub async fn verify_order(
         ),
     )
     .await?;
+    // 2 段目も CAS なので、他ノードが DETECTED を書き換えていた場合は
+    // 0 件更新のまま成功応答しないようにする。
+    if tx.changes() != 1 {
+        return Err(AppError::Conflict(
+            "order status changed during finalization".to_string(),
+        ));
+    }
 
     tx.commit()
         .await

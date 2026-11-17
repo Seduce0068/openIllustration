@@ -638,27 +638,31 @@ pub async fn callback(
         .checked_add_signed(Duration::seconds(SESSION_TTL_SECS))
         .expect("valid timestamp")
         .timestamp() as usize;
-    let iat = {
+    let (iat, old_threshold) = {
         let mut revoked_subs = state
             .revoked_subs_before
             .lock()
             .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?;
-        let issued_at = match revoked_subs.get(&user_hash).copied() {
+        let old = revoked_subs.remove(&user_hash);
+        let issued_at = match old {
             Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
             None => now_ts,
         };
         // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
-        revoked_subs.remove(&user_hash);
-        issued_at
+        (issued_at, old)
     };
     // 再認証で旧セッション拒否の役割を終えた閾値を DB からも削除する。
-    state
-        .db
-        .execute(
-            "DELETE FROM revoked_subs WHERE sub = ?",
-            [user_hash.clone()],
-        )
-        .await?;
+    // 古い閾値より新しい値が back-channel logout で登録された場合は残す
+    // （メモリ削除と DB 削除の間のレースで直近の失効が消えないようにする）。
+    if let Some(old_threshold) = old_threshold {
+        state
+            .db
+            .execute(
+                "DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?",
+                libsql::params![user_hash.clone(), old_threshold as i64],
+            )
+            .await?;
+    }
     let session_claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,

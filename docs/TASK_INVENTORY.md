@@ -134,6 +134,8 @@ status: current
   最大120 Unicode 文字（超過は先頭119文字＋`…`）、メール／4桁以上の数字列／http(s) URL を `[redacted]` に置換。
   DB 全文・監査エクスポートの本文は変更しない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md),
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md) に反映）。
+  敵対的レビューで検出した検出漏れ（括弧付き URL / `www.` / IPv4 / 全角数字）も修正し、
+  5 パターンの mutation でテストが失敗することを確認済み。
   第三者公開範囲（DEC-04）は未決定のまま。
 - [高・要判断] **ADR-0004 の残項目**: 投票者選出・Sybil耐性・オンチェーン記録方針、`governance_audit_log` の第三者検証可能な監査への昇格（DEC-04 と連携）（
   [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md)）。
@@ -216,6 +218,10 @@ status: current
 - [対応済み] R1-09 / C1: アップロードの file パートへ MIME を設定（ブラウザ判定＋拡張子
   フォールバック）。実サーバーへモックなしで認証・アップロードするスモーク E2E を追加し、
   MIME 指定を外す mutation で失敗することを確認。
+- [対応済み] 敵対的レビュー対応: レート制限キーを XFF 解決 IP（request extensions）へ変更し、
+  信頼プロキシ配下で全ユーザーが同一バケットになる問題を修正。verify_order の 2 段目にも
+  変更件数チェックを追加。再認証時の `revoked_subs` 削除を古い閾値以下に限定し、
+  back-channel logout とのレースで直近の失効が消える問題を修正。
 - [対応済み] R1-18: refresh Cookie の `Path` を `/auth/refresh` から `/auth` へ変更。
   `/auth/logout` でも Cookie が送られ、リフレッシュファミリ失効が到達する。
   mutation（旧 Path 復元）で新規テストが失敗することを確認。
