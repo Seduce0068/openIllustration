@@ -132,6 +132,75 @@ fn render_content_meta_html(title: &str, description: &str, tags: &[String]) -> 
     html
 }
 
+/// 透明性ダッシュボードの集計カードと月次表を組み立てる。
+/// サーバー由来の文字列・数値はすべて `escape_html_text` を通してから
+/// `inner_html` へ渡す（属性やタグとして解釈されないようにする）。
+fn render_moderation_stats_html(stats: &ModerationStats) -> String {
+    let mut html = String::new();
+    let _ = writeln!(
+        html,
+        "<p class=\"mb-4 text-[10px] text-gray-500\">GENERATED_AT: {}</p>",
+        escape_html_text(&stats.generated_at)
+    );
+
+    let totals = [
+        ("Reports", stats.totals.reports),
+        ("Concluded", stats.totals.concluded),
+        ("Approved", stats.totals.approved),
+        ("Rejected", stats.totals.rejected),
+        ("Quorum Not Met", stats.totals.quorum_not_met),
+        ("Bans", stats.totals.bans),
+        ("Unbans", stats.totals.unbans),
+        ("Unpins", stats.totals.unpins),
+    ];
+    html.push_str(
+        "<div data-testid=\"moderation-stats-totals\" class=\"grid grid-cols-2 md:grid-cols-4 gap-3\">",
+    );
+    for (label, value) in totals {
+        let _ = writeln!(
+            html,
+            "<div class=\"border border-white/10 p-3\"><p class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
+            escape_html_text(&value.to_string())
+        );
+    }
+    html.push_str("</div>");
+
+    html.push_str(
+        "<table data-testid=\"moderation-stats-monthly\" class=\"w-full mt-6 text-left text-[10px] font-mono\">",
+    );
+    html.push_str(
+        "<thead class=\"border-b border-white/10 text-gray-500 uppercase\"><tr>\
+         <th class=\"py-2 pr-4\">Month</th><th class=\"py-2 pr-4\">Reports</th>\
+         <th class=\"py-2 pr-4\">Concluded</th><th class=\"py-2 pr-4\">Approved</th>\
+         <th class=\"py-2 pr-4\">Rejected</th><th class=\"py-2 pr-4\">Bans</th>\
+         <th class=\"py-2 pr-4\">Unbans</th><th class=\"py-2 pr-4\">Unpins</th></tr></thead>",
+    );
+    html.push_str("<tbody class=\"divide-y divide-white/5\">");
+    for row in &stats.monthly {
+        let _ = writeln!(
+            html,
+            "<tr><td class=\"py-2 pr-4 text-gray-300\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td></tr>",
+            escape_html_text(&row.month),
+            escape_html_text(&row.reports.to_string()),
+            escape_html_text(&row.concluded.to_string()),
+            escape_html_text(&row.approved.to_string()),
+            escape_html_text(&row.rejected.to_string()),
+            escape_html_text(&row.bans.to_string()),
+            escape_html_text(&row.unbans.to_string()),
+            escape_html_text(&row.unpins.to_string()),
+        );
+    }
+    html.push_str("</tbody></table>");
+    if stats.monthly.is_empty() {
+        html.push_str("<p class=\"mt-2 text-[9px] text-gray-600 italic\">NO_MONTHLY_STATS</p>");
+    }
+    html
+}
+
 /// 見出しテキストから slug を作る。許可するのは ASCII 英数字・`-`・`_` のみで、
 /// それ以外は除去する（属性注入を防ぐ）。大文字は小文字に畳み、
 /// すべて除去された場合は `section` を返す。
@@ -373,6 +442,59 @@ pub struct Report {
     pub reason: String,
     pub created_at: String,
     pub status: String,
+}
+
+/// `GET /mod/stats` の合計値。サーバー側の共通インターフェースに合わせる。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ModerationStatsTotals {
+    #[serde(default)]
+    pub reports: i64,
+    #[serde(default)]
+    pub concluded: i64,
+    #[serde(default)]
+    pub approved: i64,
+    #[serde(default)]
+    pub rejected: i64,
+    #[serde(default)]
+    pub quorum_not_met: i64,
+    #[serde(default)]
+    pub bans: i64,
+    #[serde(default)]
+    pub unbans: i64,
+    #[serde(default)]
+    pub unpins: i64,
+}
+
+/// 月次集計の1行（`month` は "YYYY-MM"）。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ModerationStatsMonthly {
+    #[serde(default)]
+    pub month: String,
+    #[serde(default)]
+    pub reports: i64,
+    #[serde(default)]
+    pub concluded: i64,
+    #[serde(default)]
+    pub approved: i64,
+    #[serde(default)]
+    pub rejected: i64,
+    #[serde(default)]
+    pub bans: i64,
+    #[serde(default)]
+    pub unbans: i64,
+    #[serde(default)]
+    pub unpins: i64,
+}
+
+/// `GET /mod/stats` レスポンス（運用者限定の認証内集計）。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ModerationStats {
+    #[serde(default)]
+    pub generated_at: String,
+    #[serde(default)]
+    pub totals: ModerationStatsTotals,
+    #[serde(default)]
+    pub monthly: Vec<ModerationStatsMonthly>,
 }
 
 #[component]
@@ -1137,6 +1259,10 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (reason, set_reason) = signal(String::new());
     let (status, set_status) = signal(String::new());
     let (reports, set_reports) = signal(Vec::<Report>::new());
+    // R5-09: 透明性ダッシュボードの集計表示状態。
+    let (stats_html, set_stats_html) = signal(String::new());
+    let (stats_error, set_stats_error) = signal(String::new());
+    let (stats_loaded, set_stats_loaded) = signal(false);
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
@@ -1158,6 +1284,50 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
     Effect::new(move |_| {
         fetch_reports();
+    });
+
+    // 運用者限定の集計を取得する。403 は権限エラーとして明示し、
+    // それ以外の失敗（HTTP エラー・JSON 解析・ネットワーク）も握りつぶさず表示する。
+    Effect::new(move |_| {
+        let token = token_stored.get_value();
+        spawn_local(async move {
+            match Request::get(&format!("{}/mod/stats", API_BASE))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await
+            {
+                Ok(response) if response.ok() => match response.json::<ModerationStats>().await {
+                    Ok(stats) => {
+                        set_stats_html.set(render_moderation_stats_html(&stats));
+                        set_stats_error.set(String::new());
+                        set_stats_loaded.set(true);
+                    }
+                    Err(err) => {
+                        set_stats_html.set(String::new());
+                        set_stats_loaded.set(false);
+                        set_stats_error.set(format!("集計の解析に失敗しました: {err}"));
+                    }
+                },
+                Ok(response) if response.status() == 403 => {
+                    set_stats_html.set(String::new());
+                    set_stats_loaded.set(false);
+                    set_stats_error.set("運用者権限が必要です".to_string());
+                }
+                Ok(response) => {
+                    set_stats_html.set(String::new());
+                    set_stats_loaded.set(false);
+                    set_stats_error.set(format!(
+                        "集計の取得に失敗しました (HTTP {}).",
+                        response.status()
+                    ));
+                }
+                Err(err) => {
+                    set_stats_html.set(String::new());
+                    set_stats_loaded.set(false);
+                    set_stats_error.set(format!("集計の取得に失敗しました: {err}"));
+                }
+            }
+        });
     });
 
     let submit_report = move |_| {
@@ -1214,6 +1384,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
     view! {
         <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
+            <section data-testid="moderation-stats-section" class="md:col-span-2 border border-white/10 p-8 space-y-4">
+                <h2 class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
+                <Show when=move || !stats_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="moderation-stats-error" class="text-xs text-red-500">
+                        {move || stats_error.get()}
+                    </p>
+                </Show>
+                <Show when=move || stats_loaded.get() fallback=|| ()>
+                    <div data-testid="moderation-stats" inner_html=move || stats_html.get() />
+                </Show>
+            </section>
             <div class="border border-white/10 p-8 space-y-6 h-fit">
                 <h2 class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
                 <p class="text-[10px] text-gray-500">
@@ -1543,6 +1724,53 @@ mod tests {
         )
         .unwrap();
         assert!(meta.is_favorite);
+    }
+
+    #[test]
+    fn moderation_stats_json_matches_server_interface() {
+        let stats: super::ModerationStats = serde_json::from_str(
+            r#"{
+                "generated_at":"2026-11-18T00:00:00Z",
+                "totals":{"reports":3,"concluded":2,"approved":1,"rejected":1,"quorum_not_met":0,"bans":1,"unbans":0,"unpins":0},
+                "monthly":[{"month":"2026-11","reports":3,"concluded":2,"approved":1,"rejected":1,"bans":1,"unbans":0,"unpins":0}]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(stats.generated_at, "2026-11-18T00:00:00Z");
+        assert_eq!(stats.totals.reports, 3);
+        assert_eq!(stats.totals.quorum_not_met, 0);
+        assert_eq!(stats.totals.unpins, 0);
+        assert_eq!(stats.monthly.len(), 1);
+        assert_eq!(stats.monthly[0].month, "2026-11");
+        assert_eq!(stats.monthly[0].bans, 1);
+
+        // 旧サーバー互換と同じく、欠落フィールドは既定値で受け取る。
+        let minimal: super::ModerationStats =
+            serde_json::from_str(r#"{"generated_at":"2026-11-18T00:00:00Z"}"#).unwrap();
+        assert_eq!(minimal.totals.reports, 0);
+        assert!(minimal.monthly.is_empty());
+    }
+
+    #[test]
+    fn moderation_stats_html_escapes_server_supplied_strings() {
+        let stats: super::ModerationStats = serde_json::from_str(
+            r#"{
+                "generated_at":"<img src=x onerror=alert(1)>",
+                "totals":{"reports":1},
+                "monthly":[{"month":"\"><script>alert(1)</script>","reports":1,"concluded":0,"approved":0,"rejected":0,"bans":0,"unbans":0,"unpins":0}]
+            }"#,
+        )
+        .unwrap();
+        let html = super::render_moderation_stats_html(&stats);
+
+        assert!(!html.contains("<img"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("&lt;img"), "{html}");
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+        assert!(html.contains("&quot;&gt;"), "{html}");
+        assert!(html.contains(">1</p>"), "{html}");
+        assert!(html.contains("moderation-stats-totals"), "{html}");
+        assert!(html.contains("moderation-stats-monthly"), "{html}");
     }
 
     #[test]
