@@ -1038,6 +1038,16 @@ fn test_redact_url_removes_credentials_and_query() {
         "https://example.com/path"
     );
     assert_eq!(crate::redact_url("not a url?token=secret"), "not a url");
+    // フラグメント側の秘密も除去する（パース成功・失敗の両経路）。
+    assert_eq!(
+        crate::redact_url("https://example.com/path?token=secret#frag=secret"),
+        "https://example.com/path"
+    );
+    assert_eq!(
+        crate::redact_url("https://example.com/path#frag=secret"),
+        "https://example.com/path"
+    );
+    assert_eq!(crate::redact_url("not a url#token=secret"), "not a url");
 }
 
 /// CID の URL パス注入を拒否する。

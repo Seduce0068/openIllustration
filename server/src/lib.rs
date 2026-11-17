@@ -1411,9 +1411,11 @@ pub fn redact_url(url: &str) -> String {
             let _ = parsed.set_username("");
             let _ = parsed.set_password(None);
             parsed.set_query(None);
+            // フラグメントにもトークン等の秘密が入り得るため除去する。
+            parsed.set_fragment(None);
             parsed.to_string()
         }
-        Err(_) => url.split('?').next().unwrap_or(url).to_string(),
+        Err(_) => url.split(['?', '#']).next().unwrap_or(url).to_string(),
     }
 }
 
