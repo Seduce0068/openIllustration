@@ -133,7 +133,7 @@ status: current
 - [対応済み] IPFS リトライ方針: `IPFS_MAX_ATTEMPTS`（既定1、最大5）でネットワークエラーのみ再試行。HTTP エラー/不正データは即拒否。パーサ回帰テストと実起動確認（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [中] IPFS: 厳密なCID仕様検証、キャッシュ方針、単一ゲートウェイ異常時の運用手順、実ゲートウェイ/Pinata連携検証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実 multipart サイズ境界: `Content-Length` 検査ミドルウェアを追加し、10 MiB 超を 413 で拒否（単体テストと実サーバーで確認）。虚偽/欠落時は axum の本文制限が多層防御（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [対応済み] アップロード重複フィールド: 同一 `price` の二重送信が 400（Duplicate price field）で拒否される回帰テストを追加（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] アップロード重複フィールド: `price` に加え `file` / `owner_hash` / `signature` の二重送信も 400（Duplicate ... field）で拒否される回帰テストを追加（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 実鍵署名試験: 実 RSA 秘密鍵で署名したアップロードの受理と、署名を別バイト列へ使い回した場合の 401 拒否を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] JXL デコード検証の技術選定: `jxl-oxide` 0.12.6 を第一候補とし、現時点では依存追加しない判断を [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録。
 - [低] 本番受入要件確定後の完全なJPEG XLデコード検証の実装（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。

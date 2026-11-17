@@ -1849,6 +1849,82 @@ async fn test_upload_rejects_duplicate_fields() {
     );
 }
 
+/// CONTENT-01: file / owner_hash / signature の重複も 400 で拒否する。
+#[tokio::test]
+async fn test_upload_rejects_duplicate_other_fields() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    // 重複させたいフィールド名と、拒否メッセージに含まれる語。
+    let cases = [
+        ("file", "Duplicate file field"),
+        ("owner_hash", "Duplicate owner_hash field"),
+        ("signature", "Duplicate signature field"),
+    ];
+
+    for (duplicate, expected) in cases {
+        let boundary = "dup-other";
+        let mut body = Vec::new();
+        let part = |name: &str, value: &str| {
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+        };
+        // 対象フィールドを2回、それ以外を1回ずつ送る。
+        for _ in 0..2 {
+            if duplicate == "file" {
+                body.extend_from_slice(
+                    format!(
+                        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.jxl\"\r\nContent-Type: image/jxl\r\n\r\n"
+                    )
+                    .as_bytes(),
+                );
+                body.extend_from_slice(&[0xFF, 0x0A, 0x00, 0x01]);
+                body.extend_from_slice(b"\r\n");
+            } else {
+                body.extend_from_slice(part(duplicate, "x").as_bytes());
+            }
+        }
+        if duplicate != "file" {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"upload.jxl\"\r\nContent-Type: image/jxl\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+            body.extend_from_slice(&[0xFF, 0x0A, 0x00, 0x01]);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(part("owner_hash", "test_user").as_bytes());
+        body.extend_from_slice(part("signature", "sig").as_bytes());
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/content/upload")
+                    .header("authorization", format!("Bearer {token}"))
+                    .header(
+                        "content-type",
+                        format!("multipart/form-data; boundary={boundary}"),
+                    )
+                    .body(Body::from(body))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::BAD_REQUEST,
+            "field={duplicate}"
+        );
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains(expected), "field={duplicate}: {text}");
+    }
+}
+
 /// CONTENT-01: 負価格・非整数・64bit範囲外の価格は保存前に400で拒否する。
 /// 価格以外は正常な multipart 本文で送信し、400 が価格検証そのものに
 /// 由来することを保証する（価格検証を外すと200で保存される）。
