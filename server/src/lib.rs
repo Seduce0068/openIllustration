@@ -128,6 +128,20 @@ pub struct Metrics {
     pub errors: std::sync::atomic::AtomicU64,
 }
 
+/// レート制限キーを決定する。
+///
+/// `network::ipv6_only_middleware`（本ミドルウェアより外側）が
+/// `X-Forwarded-For` を解決して extensions に格納したクライアント IP を優先する。
+/// 未設定時は接続元ピアを使う（network が動かない経路のフォールバック）。
+fn rate_limit_key(peer: std::net::IpAddr, request: &axum::extract::Request) -> String {
+    request
+        .extensions()
+        .get::<std::net::IpAddr>()
+        .copied()
+        .unwrap_or(peer)
+        .to_string()
+}
+
 /// IP 単位のレート制限と同時実行上限を適用するミドルウェア。
 /// 監視用の /health, /ready, /metrics は除外する。
 async fn rate_limit_middleware(
@@ -143,7 +157,11 @@ async fn rate_limit_middleware(
     if matches!(path, "/health" | "/ready" | "/metrics") {
         return next.run(request).await;
     }
-    if limit.limiter.check_key(&peer.ip().to_string()).is_err() {
+    if limit
+        .limiter
+        .check_key(&rate_limit_key(peer.ip(), &request))
+        .is_err()
+    {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({ "error": "rate limit exceeded" })),

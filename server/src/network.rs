@@ -19,10 +19,28 @@ pub async fn ipv6_only_middleware(
     request: Request,
     next: Next,
 ) -> Response {
+    resolve_client_ip_and_run(trusted_proxy_ranges(), ConnectInfo(peer), request, next).await
+}
+
+/// アクセス判定と、解決済みクライアント IP の extension 注入をまとめた実処理。
+///
+/// 本番ミドルウェアは `trusted_proxy_ranges()` を渡す。テストからは信頼済み
+/// プロキシ範囲を明示して呼ぶことで、`TRUSTED_PROXY_CIDRS` の `OnceLock` を
+/// 汚さずに同じ経路を検証できる（`AccessDecision` は private のまま）。
+pub(crate) async fn resolve_client_ip_and_run(
+    ranges: &[String],
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    mut request: Request,
+    next: Next,
+) -> Response {
     let connect_ip = canonical_ip(peer.ip());
-    let trust_forwarded = is_trusted_proxy(connect_ip, trusted_proxy_ranges());
+    let trust_forwarded = is_trusted_proxy(connect_ip, ranges);
     match evaluate_access(request.headers(), connect_ip, trust_forwarded) {
-        AccessDecision::Allowed(_) => next.run(request).await,
+        AccessDecision::Allowed(client_ip) => {
+            // rate_limit_middleware はこの解決済み IP をキーにする（XFF 解決済み）。
+            request.extensions_mut().insert(client_ip);
+            next.run(request).await
+        }
         AccessDecision::UnverifiedClient => {
             tracing::warn!(
                 "Rejected request: client address could not be resolved from the trusted proxy chain"

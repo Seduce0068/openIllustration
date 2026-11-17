@@ -762,6 +762,180 @@ async fn test_rate_limit_rejects_excess_requests() {
     assert_eq!(health.status(), StatusCode::OK);
 }
 
+// ---- レート制限キーが XFF 解決 IP と一致することの検証 ----
+// TRUSTED_PROXY_CIDRS は OnceLock なのでテストでは環境変数を触らず、
+// network の実処理へ明示的な信頼範囲を渡すラッパーを使う。
+
+const RATE_LIMIT_PROXY: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1));
+const RATE_LIMIT_CLIENT_A: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xa));
+const RATE_LIMIT_CLIENT_B: IpAddr = IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0xb));
+const RATE_LIMIT_UNTRUSTED_PEER: IpAddr =
+    IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 9));
+
+/// テスト用: 指定プロキシを信頼する network ミドルウェア。
+async fn trusted_network_middleware(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    crate::network::resolve_client_ip_and_run(
+        &[RATE_LIMIT_PROXY.to_string()],
+        ConnectInfo(peer),
+        request,
+        next,
+    )
+    .await
+}
+
+/// テスト用: 信頼プロキシなし（XFF を無視する）network ミドルウェア。
+async fn untrusted_network_middleware(
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    crate::network::resolve_client_ip_and_run(&[], ConnectInfo(peer), request, next).await
+}
+
+async fn rate_limit_test_state(per_minute: u32) -> Arc<AppState> {
+    use std::num::NonZeroU32;
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    Arc::new(AppState {
+        db,
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: Some(Arc::new(crate::RateLimitState {
+            limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
+                NonZeroU32::new(per_minute).unwrap(),
+            )),
+            concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
+        })),
+    })
+}
+
+async fn rate_limit_request(app: Router, peer: IpAddr, forwarded: Option<IpAddr>) -> StatusCode {
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    if let Some(client) = forwarded {
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            client.to_string().parse::<HeaderValue>().unwrap(),
+        );
+    }
+    app.oneshot(with_peer(req, peer)).await.unwrap().status()
+}
+
+/// レート制限キーは extensions の解決済み IP を優先し、無ければピアを使う。
+#[test]
+fn test_rate_limit_key_prefers_resolved_client_ip() {
+    let peer = test_ipv6_peer();
+    let resolved: IpAddr = "2001:db8::a".parse().unwrap();
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    assert_eq!(crate::rate_limit_key(peer, &req), peer.to_string());
+    req.extensions_mut().insert(resolved);
+    assert_eq!(crate::rate_limit_key(peer, &req), resolved.to_string());
+}
+
+/// 信頼プロキシ配下では XFF 解決済みクライアント IP ごとに独立バケットを持つ。
+/// クライアント A の 2 回目までは成功し 3 回目が 429 でも、
+/// 別バケットのクライアント B は 404 のままである。
+#[tokio::test]
+async fn test_rate_limit_uses_resolved_client_ip_under_trusted_proxy() {
+    let state = rate_limit_test_state(2).await;
+    let app = Router::new()
+        .fallback(|| async { StatusCode::NOT_FOUND })
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn(trusted_network_middleware));
+
+    // A: 2 回通過、3 回目で 429。
+    assert_eq!(
+        rate_limit_request(app.clone(), RATE_LIMIT_PROXY, Some(RATE_LIMIT_CLIENT_A)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        rate_limit_request(app.clone(), RATE_LIMIT_PROXY, Some(RATE_LIMIT_CLIENT_A)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        rate_limit_request(app.clone(), RATE_LIMIT_PROXY, Some(RATE_LIMIT_CLIENT_A)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    // B は独立バケットなので A の 429 の影響を受けない。
+    assert_eq!(
+        rate_limit_request(app, RATE_LIMIT_PROXY, Some(RATE_LIMIT_CLIENT_B)).await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// 回帰: XFF 未設定／信頼プロキシ外ではピア IP がキーになる。
+#[tokio::test]
+async fn test_rate_limit_key_falls_back_to_peer_without_trusted_proxy() {
+    let build_app = |state: Arc<AppState>| {
+        Router::new()
+            .fallback(|| async { StatusCode::NOT_FOUND })
+            .layer(axum::middleware::from_fn_with_state(
+                state,
+                crate::rate_limit_middleware,
+            ))
+            .layer(axum::middleware::from_fn(untrusted_network_middleware))
+    };
+
+    // 信頼プロキシ外からの XFF は無視され、ピア IP バケットで制限される。
+    let app = build_app(rate_limit_test_state(2).await);
+    for _ in 0..2 {
+        assert_eq!(
+            rate_limit_request(
+                app.clone(),
+                RATE_LIMIT_UNTRUSTED_PEER,
+                Some(RATE_LIMIT_CLIENT_B)
+            )
+            .await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        rate_limit_request(app, RATE_LIMIT_UNTRUSTED_PEER, Some(RATE_LIMIT_CLIENT_B)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    // XFF 未設定でも同じくピア IP がキーになる（独立した limiter で確認）。
+    let app = build_app(rate_limit_test_state(2).await);
+    for _ in 0..2 {
+        assert_eq!(
+            rate_limit_request(app.clone(), RATE_LIMIT_UNTRUSTED_PEER, None).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        rate_limit_request(app, RATE_LIMIT_UNTRUSTED_PEER, None).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
 /// R1-17: 信頼属性必須モードでは OIDC callback / refresh を年齢ゲートで拒否する。
 #[tokio::test]
 async fn test_trusted_age_mode_blocks_oidc_callback_and_refresh() {
