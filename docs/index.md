@@ -23,3 +23,4 @@
 * [Documentation status](DOCUMENT_STATUS.md) - 確定済み方針と本番化前の未決事項。
 * [Handoff](HANDOFF.md) - 別端末で再開するための現状と残タスク。
 * [Task inventory](TASK_INVENTORY.md) - 現状を基に洗い出した残タスク・未決事項・検証ギャップ。
+* [Unknown tasks investigation](UNKNOWN_TASKS_INVESTIGATION.md) - エージェントチームによる6パス調査と統合結果。
