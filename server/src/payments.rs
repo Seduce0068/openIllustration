@@ -369,9 +369,15 @@ pub async fn get_order(
     Ok(Json(load_order(&state, &order_id, &claims.sub).await?))
 }
 
+/// 期限切れ判定。RFC3339 文字列の比較であり、`expires_at == now` の境界も期限切れとする。
+/// テストから境界値を直接渡せるよう、時刻取得と比較を分離している。
+pub(crate) fn is_order_expired(expires_at: &str, now: &str) -> bool {
+    expires_at <= now
+}
+
 /// 期限切れ注文を EXPIRED へ更新して拒否する（更新系エンドポイント共通）。
 async fn reject_if_expired(state: &AppState, order: &PaymentOrder) -> Result<(), AppError> {
-    if order.expires_at <= chrono::Utc::now().to_rfc3339() {
+    if is_order_expired(&order.expires_at, &chrono::Utc::now().to_rfc3339()) {
         state
             .db
             .execute(

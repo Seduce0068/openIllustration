@@ -5904,6 +5904,139 @@ fn test_eth_address_normalization_is_case_insensitive() {
     assert!(!crate::payments::is_valid_eth_address("0x1234"));
 }
 
+/// JPYC: 円→Wei 変換の境界。0 / 上限超え / i64・u64 境界を拒否し、上限値まで正確に変換する。
+#[test]
+fn test_jpy_to_wei_bounds() {
+    // 1 円 = 10^18 wei（JPYC_DECIMALS = 18）。
+    assert_eq!(
+        crate::payments::jpy_to_wei(1).unwrap(),
+        10u128.pow(18).to_string()
+    );
+    // 1,000,000 円 = 10^24 wei。u64::MAX (≈1.8e19) を確実に超えるため u128 演算が必要。
+    let max_wei = crate::payments::jpy_to_wei(MAX_ORDER_JPY).unwrap();
+    assert_eq!(
+        max_wei,
+        (u128::from(MAX_ORDER_JPY) * 10u128.pow(18)).to_string()
+    );
+    assert_eq!(max_wei.len(), 25);
+
+    // 0 と上限超えは拒否する。i64::MAX / u64::MAX も乗算前に拒否し、オーバーフローしない。
+    let expected_error = format!("amount_jpy must be between 1 and {MAX_ORDER_JPY}");
+    for invalid in [0u64, MAX_ORDER_JPY + 1, i64::MAX as u64, u64::MAX] {
+        let err = crate::payments::jpy_to_wei(invalid).unwrap_err();
+        assert!(
+            matches!(&err, AppError::BadRequest(msg) if msg == &expected_error),
+            "unexpected error for {invalid}: {err}"
+        );
+    }
+}
+
+/// JPYC: 対応 4 チェーンの必要確認数と、未対応チェーンの i64::MAX 分岐。
+#[test]
+fn test_required_confirmations_by_chain() {
+    assert_eq!(crate::payments::required_confirmations(1), 32);
+    assert_eq!(crate::payments::required_confirmations(137), 256);
+    assert_eq!(crate::payments::required_confirmations(43114), 12);
+    assert_eq!(crate::payments::required_confirmations(8217), 12);
+
+    // 未対応チェーンは i64::MAX を返し、どんな確認数でも FINALIZED に到達できないようにする。
+    for unsupported in [0i64, 2, 10, -1, i64::MAX] {
+        assert_eq!(
+            crate::payments::required_confirmations(unsupported),
+            i64::MAX
+        );
+    }
+}
+
+/// JPYC: 署名復元の入力エラー（非 hex / 65 バイト以外 / 不正 recovery id / 復元失敗）。
+#[test]
+fn test_recover_ethereum_address_rejects_invalid_signatures() {
+    let message = b"openIllustration payment order boundary";
+
+    // 非 hex はデコード前に拒否する。
+    let err = crate::payments::recover_ethereum_address(message, "0xnothex").unwrap_err();
+    assert!(
+        matches!(&err, AppError::BadRequest(msg) if msg == "signature must be hex"),
+        "unexpected error: {err}"
+    );
+
+    // 65 バイト以外（64 / 66 バイト）は拒否する。
+    let short = format!("0x{}", "11".repeat(64));
+    let long = format!("0x{}", "11".repeat(66));
+    for invalid in [short.as_str(), long.as_str()] {
+        let err = crate::payments::recover_ethereum_address(message, invalid).unwrap_err();
+        assert!(
+            matches!(&err, AppError::BadRequest(msg) if msg == "signature must be 65 bytes"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // recovery id が 0/1/27/28 以外は拒否する。
+    let mut signature = vec![0x11u8; 65];
+    for v in [2u8, 26, 29, 255] {
+        signature[64] = v;
+        let encoded = format!("0x{}", hex::encode(&signature));
+        let err = crate::payments::recover_ethereum_address(message, &encoded).unwrap_err();
+        assert!(
+            matches!(&err, AppError::BadRequest(msg) if msg == "invalid signature recovery id"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // r=5 は secp256k1 曲線上に存在しない x 座標なので復元に失敗する（s=1 は有効なスカラー）。
+    let mut signature = [0u8; 65];
+    signature[31] = 5;
+    signature[63] = 1;
+    signature[64] = 0;
+    let encoded = format!("0x{}", hex::encode(signature));
+    let err = crate::payments::recover_ethereum_address(message, &encoded).unwrap_err();
+    assert!(
+        matches!(&err, AppError::Unauthorized(msg) if msg == "signature recovery failed"),
+        "unexpected error: {err}"
+    );
+}
+
+/// JPYC: 0x プレフィックス無しの署名と 27/28 形式の recovery id も同じアドレスへ復元する。
+#[test]
+fn test_recover_ethereum_address_accepts_hex_variants() {
+    let message = b"openIllustration payment order signature variants";
+    let wallet_key = SigningKey::from_slice(&[0x42u8; 32]).expect("valid k256 test scalar");
+    let expected = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message);
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let signature_bytes = signature.to_bytes();
+
+    for recovery_byte in [recovery_id.to_byte(), recovery_id.to_byte() + 27] {
+        let mut raw = signature_bytes.to_vec();
+        raw.push(recovery_byte);
+        let encoded = hex::encode(&raw);
+        // 0x 付き／無しの両方を受け付ける。
+        for candidate in [encoded.as_str(), format!("0x{encoded}").as_str()] {
+            let recovered = crate::payments::recover_ethereum_address(message, candidate).unwrap();
+            assert_eq!(recovered, expected);
+        }
+    }
+}
+
+/// JPYC: expires_at == now の境界も期限切れとして扱う（<= 判定）。
+#[test]
+fn test_order_expiry_boundary_is_inclusive() {
+    let now = "2026-01-01T00:00:00+00:00";
+    assert!(crate::payments::is_order_expired(now, now));
+    assert!(crate::payments::is_order_expired(
+        "2025-12-31T23:59:59+00:00",
+        now
+    ));
+    assert!(!crate::payments::is_order_expired(
+        "2026-01-01T00:00:01+00:00",
+        now
+    ));
+}
+
 /// JPYC: derivation_index の u32 境界を超える値は受取アドレス再利用を防ぐため拒否。
 #[test]
 fn test_derivation_index_bounds() {
