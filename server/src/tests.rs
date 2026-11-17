@@ -1032,6 +1032,29 @@ fn test_jwt_secret_minimum_length() {
     assert!(validate_jwt_secret("short_secret").is_err());
 }
 
+/// R4-01 / R4-04: 本番相当では OIDC と実 PINATA_JWT が必須。
+#[test]
+fn test_production_config_fail_closed() {
+    // モック認証が有効な開発環境では警告のみ（既存の開発フローを壊さない）。
+    assert!(crate::production_config_errors(true, false, None).is_empty());
+
+    // 本番相当では不足を列挙する。
+    let errors = crate::production_config_errors(false, false, None);
+    assert_eq!(errors.len(), 2);
+    assert!(errors.iter().any(|e| e.contains("OIDC")));
+    assert!(errors.iter().any(|e| e.contains("PINATA_JWT")));
+
+    assert_eq!(
+        crate::production_config_errors(false, true, Some("real-jwt")),
+        Vec::<&str>::new()
+    );
+    assert!(!crate::production_config_errors(false, true, Some("")).is_empty());
+    assert!(
+        !crate::production_config_errors(false, true, Some("mock_jwt")).is_empty(),
+        "the development mock JWT must not be accepted in production"
+    );
+}
+
 /// T-01: IPFS ゲートウェイ設定の既定値と無効要素の除外。
 #[test]
 fn test_ipfs_gateway_configuration() {

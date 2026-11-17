@@ -179,6 +179,9 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R4-01 / R4-04: 本番相当（`ALLOW_MOCK_AUTH` 無効）起動時に OIDC 必須設定と実
+  `PINATA_JWT` を検査し、不足/開発用 `mock_jwt` なら起動拒否（fail-closed）。秘密値は
+  エラーへ出さない。単体テストと実プロセスで確認。
 - [対応済み] R1-09 / C1: アップロードの file パートへ MIME を設定（ブラウザ判定＋拡張子
   フォールバック）。実サーバーへモックなしで認証・アップロードするスモーク E2E を追加し、
   MIME 指定を外す mutation で失敗することを確認。

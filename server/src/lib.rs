@@ -450,8 +450,46 @@ fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
     }
 }
 
+/// 本番相当（モック認証無効）で起動する前に必須設定を検査する。
+/// 開発用のフォールバックがそのまま本番へ持ち込まれないようにする（fail-closed）。
+/// 秘密情報の値は返さず、どの設定が不足しているかだけを返す。
+pub fn production_config_errors(
+    allow_mock_auth: bool,
+    oidc_configured: bool,
+    pinata_jwt: Option<&str>,
+) -> Vec<&'static str> {
+    if allow_mock_auth {
+        return Vec::new();
+    }
+    let mut errors = Vec::new();
+    if !oidc_configured {
+        errors.push("OIDC is not configured (OIDC_* environment variables are required)");
+    }
+    match pinata_jwt {
+        None => errors.push("PINATA_JWT is not configured"),
+        Some("") => errors.push("PINATA_JWT is empty"),
+        Some("mock_jwt") => errors.push("PINATA_JWT is the development mock value"),
+        Some(_) => {}
+    }
+    errors
+}
+
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
+
+    let allow_mock_auth = std::env::var("ALLOW_MOCK_AUTH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let oidc = oidc::OidcState::from_env();
+    let pinata_jwt = std::env::var("PINATA_JWT").ok();
+    let config_errors =
+        production_config_errors(allow_mock_auth, oidc.is_some(), pinata_jwt.as_deref());
+    if !config_errors.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Production configuration is incomplete: {}",
+            config_errors.join("; ")
+        ));
+    }
 
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
@@ -528,7 +566,6 @@ pub async fn run() -> anyhow::Result<()> {
             }
         });
 
-    let oidc = oidc::OidcState::from_env();
     if oidc.is_none() {
         tracing::info!("OIDC is not configured; JPKI OIDC endpoints are disabled");
     }
@@ -600,9 +637,7 @@ pub async fn run() -> anyhow::Result<()> {
         db: Arc::new(db),
         http_client: Client::new(),
         jwt_keys: Arc::new(jwt_keys),
-        allow_mock_auth: std::env::var("ALLOW_MOCK_AUTH")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false),
+        allow_mock_auth,
         ipfs_gateways,
         ipfs_timeout,
         ipfs_max_attempts,
