@@ -274,6 +274,26 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
 - E2E: ブラウザ別の URL 解釈、モデレーションの期限・異議。
 
+## 7.1 直近の hardening 到達点（2026-11-17）
+
+複数ラウンドにわたる敵対的レビューとローカル検証で、以下を追加・修正した。
+
+- **実バグ修正**: 期限切れ注文の verify/bind 抜け穴、注文作成時の `index as u32` wrap around、
+  `verify_backup` の integrity_check 欠落、`backup_db` の台帳未検証、
+  マイグレーションディレクトリ欠落の fail-closed 抜け穴、失効 sid の非永続、
+  期限切れ refresh token / 失効 sid の無限増加、`redact_url` のフラグメント漏えい。
+- **fail-closed 設定**: `acr`/`amr`/`auth_time`/`max_age`/`JWT_REQUIRE_KID` 検証、
+  エントリハッシュ・監査スナップショットのバージョン検査。
+- **テストの実効化**: 同語反復だった年齢 proptest と弱いハッシュテストを独立検証へ変更し、
+  mutation で失敗することを実証（mutation 由来の回帰シードは `server/proptest-regressions/` に記録）。
+- **運用自動化**: backup-rotate の設定分岐テスト、監査/鍵ローテーション Runbook、
+  固定版 trunk のローカルキャッシュ、アラート/オフサイト保存フックの回帰テスト。
+- 依存は `uuid` 1.29.2 / `coins-bip32` 0.17.2 へパッチ更新。`sha3` 0.12 は破壊的変更のため保留。
+- 現行のローカルゲート: `cargo test --workspace` 214 件（common 21 / server 183 / client 6 / restore_db 4）、
+  E2E 9 件。いずれも 0 失敗。
+- 残る項目は外部サービス接続・HSM・法務判断・外部アンカー・共通 CI ワークフロー変更であり、
+   ローカルで完結するタスクはほぼ解消している。
+
 ## 8. 注意事項
 
 - `ALLOW_MOCK_AUTH=1` は開発専用。本番では有効化しない。
