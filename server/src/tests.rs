@@ -1343,6 +1343,42 @@ async fn test_auth_verify_rejects_malformed_birth_date() {
     );
 }
 
+/// AUTH-02: 期限切れ JWT と exp 欠落トークンは 401 で拒否される。
+#[tokio::test]
+async fn test_expired_and_missing_exp_tokens_rejected() {
+    let app = setup_app().await;
+
+    // 期限切れ (exp が過去) のトークンを手組みで署名する。
+    let expired = encode(
+        &Header::default(),
+        &json!({"sub": "test_user", "exp": 1u64}),
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    // exp 欠落トークン（Claims の必須フィールドが無い）。
+    let missing_exp = encode(
+        &Header::default(),
+        &json!({"sub": "test_user"}),
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+
+    for (name, token) in [("expired", expired), ("missing_exp", missing_exp)] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/content")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "case={name}");
+    }
+}
+
 /// SEC-02: 無効な JPKI 署名でのアクセス拒否
 #[tokio::test]
 async fn test_invalid_jpki_signature_rejected() {

@@ -58,6 +58,7 @@ status: current
 - [対応済み] **JWT 設定の fail-closed 化**: 不正な `JWT_RSA_PRIVATE_KEY_PEM` は有効な `JWT_SECRET` があってもフォールバックせず起動拒否。短い `JWT_SECRET` が RS256 選択で隠れる場合は警告。
 - [対応済み] **RS256 の `kid` 複数鍵検証**: 署名ヘッダへ `kid` を付与し、`JWT_RSA_VERIFICATION_KEYS` で旧公開鍵を登録可能にした。未知 `kid` 拒否・`kid` 無し旧トークン互換・重複 kid 拒否を回帰テストで確認。
 - [対応済み] `JWT_REQUIRE_KID`: 本番向けに `kid` 無しレガシートークンを拒否するオプションを追加。HS256 併用は起動拒否（fail-closed）。単体テスト2件と実プロセスで確認。
+- [対応済み] AUTH-02 の回帰テスト: 期限切れ（`exp` 過去）と `exp` 欠落の署名済みトークンが保護 API で 401 拒否されることを確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 年齢計算 proptest の実効化: 旧テストは同語反復でバグを検出できなかった。独立参照計算との突き合わせと境界月日（今日と同月日）の明示的サンプリングへ変更し、`<`→`<=` の mutation を検出できることを実証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [中][運用設計] **RS256 運用強化の残項目**: HSM/外部鍵管理、複数プロセス/サービス間の公開鍵配布・ローテーション手順（`JWT_RSA_PRIVATE_KEY_PEM`/`OIDC_CLIENT_SECRET` の秘密管理・ログ非出力を継続）（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [REVIEW_REPORT.md](REVIEW_REPORT.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] 開発用モック認証の nonce: `/auth/login` が発行した nonce を `/auth/verify` で必須化し、5分 TTL の単回消費でリプレイを拒否。クライアントも login→verify のフローへ更新（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
