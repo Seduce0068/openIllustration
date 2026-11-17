@@ -4979,6 +4979,24 @@ async fn test_backchannel_logout_revokes_session_with_sid_and_sub() {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
+/// JPYC: EVM アドレスの大小文字は区別せず、混在ケースも小文字化して照合する。
+#[test]
+fn test_eth_address_normalization_is_case_insensitive() {
+    let lower = "0x52908400098527886e0f7030069857d2e4169ee7";
+    let mixed = "0x52908400098527886E0F7030069857D2E4169EE7";
+    assert!(crate::payments::is_valid_eth_address(lower));
+    assert!(crate::payments::is_valid_eth_address(mixed));
+    assert_eq!(
+        crate::payments::normalize_address(mixed),
+        crate::payments::normalize_address(lower)
+    );
+    // 0x プレフィックス無し／長さ違いは拒否
+    assert!(!crate::payments::is_valid_eth_address(
+        "52908400098527886e0f7030069857d2e4169ee7"
+    ));
+    assert!(!crate::payments::is_valid_eth_address("0x1234"));
+}
+
 /// JPYC: derivation_index の u32 境界を超える値は受取アドレス再利用を防ぐため拒否。
 #[test]
 fn test_derivation_index_bounds() {

@@ -2,6 +2,7 @@
 **/target/
 dist/
 client/dist/
+.e2e-cache/
 **/node_modules/
 playwright-report/
 test-results/

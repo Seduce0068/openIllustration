@@ -18,13 +18,22 @@ trunk_sha256="f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b"
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
 
-echo "==> trunk ${trunk_version} を導入"
-curl -sSfL --connect-timeout 10 --retry 3 --retry-delay 2 \
-	-o "${workdir}/${trunk_tarball}" \
-	"https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
-echo "${trunk_sha256}  ${workdir}/${trunk_tarball}" | sha256sum -c -
-tar -xzf "${workdir}/${trunk_tarball}" -C "${workdir}" trunk
-export PATH="${workdir}:${PATH}"
+# 固定版 trunk は checksum 付きでローカルへキャッシュし、再ダウンロードを避ける。
+# CI のコールド環境ではキャッシュが無いため通常どおりダウンロードする。
+trunk_cache="${repo_root}/.e2e-cache/trunk-${trunk_version}"
+mkdir -p "$trunk_cache"
+if [[ -x "${trunk_cache}/trunk" ]]; then
+	echo "==> trunk ${trunk_version} をキャッシュから利用"
+else
+	echo "==> trunk ${trunk_version} を導入"
+	curl -sSfL --connect-timeout 10 --retry 3 --retry-delay 2 \
+		-o "${workdir}/${trunk_tarball}" \
+		"https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
+	echo "${trunk_sha256}  ${workdir}/${trunk_tarball}" | sha256sum -c -
+	tar -xzf "${workdir}/${trunk_tarball}" -C "${trunk_cache}" trunk
+	chmod +x "${trunk_cache}/trunk"
+fi
+export PATH="${trunk_cache}:${PATH}"
 
 # trunk 0.21.14 は NO_COLOR=1 を --no-color として解釈し、
 # 値が true/false でない場合にエラーになる。固定版では明示的に解除する。

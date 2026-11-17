@@ -76,6 +76,7 @@ status: current
 - [対応済み e87df61] 決済 verify の防御分岐を回帰テストで保護: 金額不一致（`MISMATCH` 遷移）、送金再利用（`"transaction is already used by another order"`）、期限切れ注文（`"order is no longer verifiable"`）、必要確認数未満（`CONFIRMING` 維持）の4ケース（`test_payment_verify_rejects_transfer_mismatch`, `test_payment_verify_rejects_reused_transaction`, `test_payment_verify_rejects_expired_order`, `test_payment_verify_keeps_confirming_until_threshold`）。ハンドラ挙動変更なし。
 - [対応済み] `expires_at` 経過の実質的な期限切れ注文を拒否: 旧実装は `status` が `PENDING` のまま期限を過ぎると verify / bind を通してしまうため、共通ヘルパーで時刻比較と `EXPIRED` 更新を追加。両エンドポイントの回帰テストで確認。
 - [対応済み] BIP44 受取アドレス派生インデックスの境界チェック: 旧実装の `index as u32` は `u32::MAX` 超で wrap around しアドレスを再利用していた。`derivation_index_to_u32` で明示拒否し境界テストを追加。
+- [対応済み] EVM アドレスの正規化照合を明文化: EIP-55 チェックサムは表示用で、照合は小文字化で行う旨のコメントへ修正し、混在ケース／0x 無し／長さ不正の回帰テストを追加。
 
 ### 3.3 モデレーション・コンテンツ
 
@@ -180,6 +181,7 @@ status: current
 - [対応済み] Playwright E2E の起動失敗: `server` クレートに `verify_audit_log` bin があり `cargo run` が曖昧になっていた。`default-run = "server"` を設定して解消（ローカル E2E 9件成功）。
 - [外部要因] 2026-11-16 時点で GitHub Actions のジョブが請求/上限により開始されない。CI 再開までローカル検証ループ（fmt/clippy/test/deny/wasm/E2E）を代替ゲートとする。
 
+- [対応済み] 固定版 trunk のローカルキャッシュ: `.e2e-cache/`（Git 管理外）へ checksum 検証済みバイナリを保存し、再ダウンロードを回避。GitHub の一時 SSL 障害で E2E が止まった問題への対策。キャッシュ利用で E2E 9件成功。
 - [対応済み] E2E 失敗時アーカイブ: `ci-e2e.sh` が `e2e/test-results`（trace/スクリーンショット/error-context）と `e2e/playwright-report`（HTML）をタイムスタンプ付き tar.gz へ保存しパスを表示。`E2E_ARTIFACT_DIR` で出力先を変更可。アーカイブ内容を実確認（[REVIEW_REPORT.md](REVIEW_REPORT.md)）。
 - [対応済み] 年齢拒否 E2E のフレーキー対策: `waitForTimeout(2000)` を廃し、インターセプトした 403 レスポンスの完了を `waitForResponse` で待つ状態ベース検証へ変更。E2E 9件成功を確認。
 - [中] CI 側の artifact アップロードとチェック結果の分離（共通ワークフロー拡張が必要）。

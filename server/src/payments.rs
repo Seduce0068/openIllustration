@@ -114,7 +114,9 @@ pub fn required_confirmations(chain_id: i64) -> i64 {
     }
 }
 
-/// 0x 形式の 20 バイトアドレスか。チェックサムは別途検証する。
+/// 0x 形式の 20 バイトアドレスか。EIP-55 のチェックサムは表示用であり、
+/// EVM のアドレスは大小文字を区別しないため、照合時は `normalize_address` で
+/// 小文字化して比較する（チェックサム不一致は送金先の誤りにならない）。
 pub fn is_valid_eth_address(address: &str) -> bool {
     let Some(hex) = address.strip_prefix("0x") else {
         return false;
