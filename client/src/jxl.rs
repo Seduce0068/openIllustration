@@ -16,6 +16,25 @@ fn dimensions_allowed(width: u64, height: u64) -> bool {
         && width.saturating_mul(height) <= MAX_PIXELS
 }
 
+/// インターリーブされたサンプルを RGBA に変換する。
+/// channels=1 はグレー、2 はグレー＋アルファ、3 は RGB、4 以上は RGBA として扱う。
+fn sample_to_rgba(buf: &[f32], offset: usize, channels: usize) -> [u8; 4] {
+    let to_u8 = |v: f32| (v.clamp(0.0, 1.0) * 255.0) as u8;
+    let at = |i: usize| buf.get(offset + i).copied().unwrap_or(0.0);
+    match channels {
+        1 => {
+            let g = to_u8(at(0));
+            [g, g, g, 255]
+        }
+        2 => {
+            let g = to_u8(at(0));
+            [g, g, g, to_u8(at(1))]
+        }
+        3 => [to_u8(at(0)), to_u8(at(1)), to_u8(at(2)), 255],
+        _ => [to_u8(at(0)), to_u8(at(1)), to_u8(at(2)), to_u8(at(3))],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -33,6 +52,28 @@ mod tests {
         assert!(!dimensions_allowed(8000, 8001));
         // saturating_mul でオーバーフローしても安全に拒否される。
         assert!(!dimensions_allowed(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn jxl_channel_conversion() {
+        let gray = [0.5];
+        assert_eq!(sample_to_rgba(&gray, 0, 1), [127, 127, 127, 255]);
+        let gray_alpha = [0.5, 0.25];
+        assert_eq!(sample_to_rgba(&gray_alpha, 0, 2), [127, 127, 127, 63]);
+        let rgb = [1.0, 0.0, 0.5];
+        assert_eq!(sample_to_rgba(&rgb, 0, 3), [255, 0, 127, 255]);
+        let rgba = [1.0, 0.0, 0.5, 0.8];
+        assert_eq!(sample_to_rgba(&rgba, 0, 4), [255, 0, 127, 204]);
+        // extra channels を含む 5 チャンネルでも先頭 4 つを使う。
+        let extra = [1.0, 0.0, 0.5, 0.8, 0.1];
+        assert_eq!(sample_to_rgba(&extra, 0, 5), [255, 0, 127, 204]);
+        // オフセット指定と範囲外は 0 で埋める（パニックしない）。
+        let multi = [0.1, 0.2, 0.3, 0.4, 0.5];
+        assert_eq!(sample_to_rgba(&multi, 2, 4), [76, 102, 127, 0]);
+        assert_eq!(sample_to_rgba(&[], 0, 4), [0, 0, 0, 0]);
+        // 値は 0..1 にクランプする。
+        let over = [2.0, -1.0, 0.5, 1.0];
+        assert_eq!(sample_to_rgba(&over, 0, 4), [255, 0, 127, 255]);
     }
 }
 
@@ -80,15 +121,7 @@ pub fn decode_jxl_to_canvas(jxl_data: &[u8], canvas: HtmlCanvasElement) -> Resul
     for y in 0..height {
         for x in 0..width {
             let offset = (y * width + x) * channels;
-
-            if offset + 2 < buf.len() {
-                rgba.push((buf[offset] * 255.0) as u8);
-                rgba.push((buf[offset + 1] * 255.0) as u8);
-                rgba.push((buf[offset + 2] * 255.0) as u8);
-                rgba.push(255);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 255]);
-            }
+            rgba.extend_from_slice(&sample_to_rgba(buf, offset, channels));
         }
     }
 
