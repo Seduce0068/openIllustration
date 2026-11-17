@@ -5,7 +5,7 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T03:49:23+09:00"
+  at: "2026-11-18T04:49:38+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -18,6 +18,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Unit**: `common` のチェックサム・年齢計算・監査ハッシュ等。
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
+  実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全20件（auth 2 / economy 1 /
+  export 2 / favorites 1 / integrity 2 / moderation 4 / real-api 4 / search 1 /
+  upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
 
 ## 2. 実装済みテストの概要
 
@@ -40,7 +44,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
-| 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・メール／4桁以上数字列／http(s) URL の `[redacted]` 置換）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
+| 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 
 ## 3. 必須要件のリリースゲート
@@ -72,8 +76,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全10件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc`。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート14件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
-| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。メール／4桁以上の数字列／http(s) URL は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`common` に単体テストを追加） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート20件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
@@ -97,6 +101,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
+| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。下記「設定診断（`doctor`）の検証」を参照 |
+| NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
+| PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -114,14 +122,68 @@ Reported 限定・新着順・運用者非限定）である。設計技法は�
 | 境界内（日本語） | 漢字・かな 120 Unicode 文字 | 変更なし。バイト数ではなく文字数で計数 |
 | 境界超過（日本語） | 漢字・かな 121 Unicode 文字 | 先頭119文字＋`…` |
 | メール | `user@example.com` を含む文字列 | `@` を含むトークンが `[redacted]` |
-| 数字列 | `1234` と `123` | 4桁以上は `[redacted]`、3桁は残る |
-| URL | `https://example.com/path` と `http://example.com` | いずれも `[redacted]` |
-| 複合 PII | 日本語＋メール＋URL＋長文 | 要約後も PII が残らず上限120文字を守る |
+| スキーム付き URL | `https://example.com/path` / `http://example.com` / `url(https://x)` | `://` を含むトークン（括弧で囲まれても）が `[redacted]` |
+| スキーム無し URL | `www.example.com` | `www.` で始まるトークンが `[redacted]` |
+| IPv4 | `10.0.0.1` | IPv4 らしい `\d{1,3}(\.\d{1,3}){3}` 部分列を含むトークンが `[redacted]` |
+| Unicode 数字列 | `1234` / `123` / `０９０１２３４５６７８` | Unicode 数字4連続（全角含む）は `[redacted]`。3桁は残る |
+| 複合 PII | 日本語＋メール＋URL＋IPv4＋全角数字＋長文 | 要約後も PII が残らず上限120文字を守る |
 | 統合 | PII を含む通報を登録し `GET /mod/reports` を呼ぶ | `reason` は要約値のみ。全文・PII がレスポンスへ現れない。未認証401・Reported 限定・新着順・運用者非限定も維持 |
+
+対応する単体テストは `summarize_reason_redacts_additional_pii_patterns`（括弧付き URL /
+`www.` / IPv4 / 全角数字と、非 PII の3桁数字が混在する複合ケース）と
+`summarize_reason_redacts_pii` 内の4桁ちょうど境界アサーション（`1234` → `[redacted]`、
+`123` → 保持。`>=4` を `>=5` にする mutation を弾く）である。いずれも `common` に実装済み。
 
 DB 全文（`reports.reason`）と監査エクスポートの本文は変更しない。エクスポートの
 マスクは EXPORT-04 の既存挙動を維持する。本テストは第三者公開（DEC-04 未決定）を
 証明するものではない。
+
+### 設定診断（`doctor`）の検証
+
+`cargo run -p server --bin doctor -- [--strict]` は秘密値を出力せず、問題を検出しても
+既定では終了コード0、`--strict` のときだけ1を返す。モック認証と本番相当設定の併用は
+次の警告を出す。
+
+```text
+WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration
+```
+
+ダミーの `JWT_SECRET` を設定した5パターンの実出力は次のとおり（秘密値は出力されない）。
+
+| パターン | 環境変数（差分） | 実行 | 実出力（要約） | 終了コード |
+| --- | --- | --- | --- | --- |
+| P1 | `ALLOW_MOCK_AUTH=1` のみ | 既定 | `doctor: 10 check(s), 0 problem(s)` | 0 |
+| P2 | P1 + `PINATA_JWT=<本番相当値>` | 既定 | `10 check(s), 1 problem(s)` + mock 警告 | 0 |
+| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | 既定 | `10 check(s), 1 problem(s)` + mock 警告 | 0 |
+| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM` | `--strict` | `10 check(s), 2 problem(s)` + jwt / mock 警告 | 1 |
+| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `--strict` | `10 check(s), 0 problem(s)` | 0 |
+
+P2 / P3 を `--strict` で実行した場合はいずれも `1 problem(s)` で終了コード1となる。
+P4 の jwt 警告はダミー PEM が無効なことによるもので、mock 警告とは独立している。
+
+### レート制限キーの検証（NET-03）
+
+`server/src/tests.rs` の3テストで、解決済みクライアント IP の優先とピア IP への
+フォールバックを検証する。
+
+- `test_rate_limit_key_prefers_resolved_client_ip`: request extensions に解決済み IP が
+  あればキーとして優先し、無ければピア IP を使う。
+- `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy`: 信頼プロキシ配下で
+  クライアントAは2回通過し3回目が429、別バケットのクライアントBは404のまま。
+- `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy`: XFF 未設定または
+  信頼プロキシ外では XFF を無視し、ピア IP バケットで制限する。
+
+### CAS 2段目と失効閾値レースの検証
+
+- PAY-04: `verify_order` の確定処理は2段目の UPDATE も CAS で、`tx.changes() != 1` のとき
+  `AppError::Conflict`（HTTP 409、`order status changed during finalization`）を返す。
+  1段目の CAS は `test_payment_verify_cas_rejects_stale_status` が検証済みで、
+  古い書き込みが勝たないことを確認している。
+- ID-05: 再認証時に `revoked_subs` の閾値をメモリから取り出し、DB は
+  `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?` で古い閾値以下のみ削除する。
+  これにより削除前に back-channel logout が登録した新しい失効が残る。既存の関連テストは
+  `test_backchannel_logout_for_sub_allows_reauthentication` と `test_purge_stale_revoked_subs`。
+- これら2項目の専用テスト名は実装側で確定次第、本表へ反映する（現時点では推測しない）。
 
 ## 4. 実行コマンド
 
@@ -132,11 +194,13 @@ cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシ
 cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
 cargo test -p common summarize_reason   # 要約の単体テスト（PII除去・境界・日本語）
 cargo test -p server list_reports       # GET /mod/reports の要約適用・全文非漏えいの回帰のみ
+cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
+cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -200,6 +264,12 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 3. お気に入り状態のコンテンツで検索フォームの `Favorites only` チェックボックスをONにし、
    `/content` へ `favorite_only=1` が付与され、該当コンテンツのみが表示されることを確認する。
    既存の `q` / `tag` / `type` との併用はAPIテスト（FAV-04）で担保する。
+4. リクエスト回数と内容を完全一致で検証する。追加後の一覧再取得は `/content` への
+   リクエストがちょうど2回で、クエリは `{ q: null, tag: null, type: null, favorite_only: null }`
+   の2要素に一致する。一連の操作全体では8回で、`favorite_only=1` や `q` の付与順まで
+   配列の完全一致で確認する。お気に入りの POST / DELETE もメソッドとパス
+   （`/content/{cid}/favorite`）の完全一致で検証し、過剰な再フェッチや想定外の
+   クエリ混入を検出する。
 
 ### E2E 透明性ダッシュボードシナリオ（R5-09）
 
@@ -218,6 +288,10 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    レスポンスに CID / reason / `user_hash` は無いため表示されず、サーバー側の
    `test_mod_stats_response_contains_no_sensitive_fields` と合わせて個人情報非含有を担保する。
    本シナリオは認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
+4. `/mod/stats` へのリクエストは初期表示と画面遷移後のちょうど2回で、いずれも
+   メソッド `GET`、パス `/mod/stats`、`Authorization: Bearer mock_jwt_token` であることを
+   配列の完全一致で検証する（回数は `statsRequestCount === 2` も確認）。余計な再フェッチや
+   未認証リクエストを検出する。
 
 ### E2E エクスポートシナリオ（R5-04）
 
