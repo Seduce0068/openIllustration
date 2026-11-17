@@ -45,7 +45,7 @@ openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out new-signing-ke
 openssl pkey -in new-signing-key.pem -pubout -out new-signing-key.pub.pem
 ```
 
-2. 新旧の `kid` を求める:
+1. 新旧の `kid` を求める:
 
 ```bash
 for f in current-signing-key.pub.pem new-signing-key.pub.pem; do
@@ -54,14 +54,14 @@ for f in current-signing-key.pub.pem new-signing-key.pub.pem; do
 done
 ```
 
-3. 現行（旧）公開鍵を `JWT_RSA_VERIFICATION_KEYS` へ追加して再起動する。
+1. 現行（旧）公開鍵を `JWT_RSA_VERIFICATION_KEYS` へ追加して再起動する。
    この時点では署名鍵は旧のままなので、発行トークンは変わらない:
 
 ```bash
 export JWT_RSA_VERIFICATION_KEYS="$(jq -n --arg kid "$OLD_KID" --rawfile pem old-signing-key.pub.pem '{($kid): $pem}')"
 ```
 
-4. `/health` と `/ready` が 200 であることを確認し、既存トークンで
+1. `/health` と `/ready` が 200 であることを確認し、既存トークンで
    保護 API が通ることを確認する。
 
 ### 段階2: 署名鍵を切り替える
@@ -73,16 +73,16 @@ export JWT_RSA_VERIFICATION_KEYS="$(jq -n --arg kid "$OLD_KID" --rawfile pem old
 export JWT_RSA_PRIVATE_KEY_PEM="$(cat new-signing-key.pem)"
 ```
 
-2. 新しいトークンの `kid` が新鍵の値であることを確認する:
+1. 新しいトークンの `kid` が新鍵の値であることを確認する:
 
 ```bash
 TOKEN="<新しく発行したアクセストークン>"
 cut -d. -f1 <<<"$TOKEN" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .kid
 ```
 
-3. 旧 `kid` のトークンがまだ検証できることを確認する（無停下の証明）。
+1. 旧 `kid` のトークンがまだ検証できることを確認する（無停下の証明）。
 
-4. 発行済み旧トークンの有効期限が切れた後、`JWT_RSA_VERIFICATION_KEYS`
+1. 発行済み旧トークンの有効期限が切れた後、`JWT_RSA_VERIFICATION_KEYS`
    から旧 `kid` を削除して再起動する。削除前に `/metrics` の
    `openillustration_http_errors_total` が増えていないことを確認する。
 

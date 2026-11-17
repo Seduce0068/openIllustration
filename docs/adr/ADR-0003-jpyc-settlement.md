@@ -4,7 +4,7 @@ description: JPYC決済の対応チェーン、コントラクト検証、最終
 tags: [adr, payment, jpyc, settlement, proposed]
 ---
 
-# ADR-0003: JPYC決済方式
+## ADR-0003: JPYC決済方式
 
 - Status: Accepted
 - Date: 2026-11-02

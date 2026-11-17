@@ -4,7 +4,7 @@ description: マイナアプリ/JPKI認証の連携方式、検証要件、移�
 tags: [adr, authentication, jpki, oidc, proposed]
 ---
 
-# ADR-0002: JPKI認証連携方式
+## ADR-0002: JPKI認証連携方式
 
 - Status: Accepted
 - Date: 2026-11-02

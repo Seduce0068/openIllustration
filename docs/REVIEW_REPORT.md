@@ -4,7 +4,7 @@ description: 設計文書とコード変更のセキュリティ、構成、運�
 tags: [review, security, architecture, operations]
 ---
 
-# クロスレビューレポート
+## クロスレビューレポート
 
 - 対象: README、`docs/*.md`、`docs/adr/ADR-0001-mvp-trust-boundaries.md`
 - レビュー観点: セキュリティ、アーキテクチャ、運用保守

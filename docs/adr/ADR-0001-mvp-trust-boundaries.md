@@ -4,7 +4,7 @@ description: 必須のプロダクト原則、技術方針、信頼境界を記�
 tags: [adr, product, trust-boundaries]
 ---
 
-# ADR-0001: プロダクト原則と信頼境界
+## ADR-0001: プロダクト原則と信頼境界
 
 - Status: Accepted
 - Date: 2026-10-14

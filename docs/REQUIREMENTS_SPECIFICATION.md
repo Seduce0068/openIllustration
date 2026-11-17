@@ -4,7 +4,7 @@ description: 必須の機能・非機能要件とリリースゲートを定め�
 tags: [requirements, security, compatibility]
 ---
 
-# 要件仕様書 (Requirements Specification)
+## 要件仕様書 (Requirements Specification)
 
 本書は[要求定義書](REQUIREMENTS_DEFINITION.md)と
 [ADR-0001](adr/ADR-0001-mvp-trust-boundaries.md)に基づく必須要件を定める。

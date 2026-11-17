@@ -1,0 +1,18 @@
+{
+  // 成果物ドキュメントは OKF スキル基準（行長 120 文字）に従う。
+  // 表とコードブロックは折り返し不可のため検査対象外。
+  "config": {
+    "MD013": {
+      "line_length": 120,
+      "tables": false,
+      "code_blocks": false
+    },
+    // 章ごとに同じ見出し（例: 「指摘と対応」）を許容する。
+    "MD024": {
+      "siblings_only": true
+    },
+    // OKF では frontmatter の title が H1 相当で、本文は ## から始める。
+    // markdownlint の MD041 はこれと矛盾するため、OKF 検証側で構造を担保する。
+    "MD041": false
+  }
+}

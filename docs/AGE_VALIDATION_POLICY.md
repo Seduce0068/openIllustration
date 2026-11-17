@@ -4,9 +4,10 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 ---
 
-# 年齢判定ポリシー（DEC-02 採用方針・実装制約）
+## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
 
-> **状態:** DEC-02 の決定候補（方針フレームワーク）は採用し、コード/テストに反映済みです。ただし、対象地域・適用法令・属性ソース・保持期間・最終閾値の法的確定および専門家レビューは未完了です。本書および実装を法的助言・各国法の網羅・本人確認済み年齢の証明・本番利用資格判定の完成として扱わないでください。
+> **状態:** DEC-02 の決定候補（方針フレームワーク）は採用し、コード/テストに反映済みです。ただし、対象地域・適用法令・属性ソース・保持期間・最終閾値の法的確定および専門家レビューは未完了です。
+> 本書および実装を法的助言・各国法の網羅・本人確認済み年齢の証明・本番利用資格判定の完成として扱わないでください。
 
 ## 1. 採用した方針（DEC-02）
 
@@ -26,14 +27,17 @@ tags: [age-validation, jpki, privacy, dec-02]
 5. **有効設定値の常時公開（非秘密）**
    - 有効な年齢/地域ポリシー設定値は常に公開可能な非秘密情報として扱う。
    - サーバーは認証不要の `GET /policy/age` で `AgePolicy::public_settings()`（`settings_always_public=true` を含む）を返す。
-   - 公開対象はしきい値・国別上書き・対象地域・適用モード・明示設定状態・注記などのポリシー設定値に限る。`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`, `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン/認証情報その他の秘密情報は公開・ログ出力・応答に含めない。
+   - 公開対象はしきい値・国別上書き・対象地域・適用モード・明示設定状態・注記などのポリシー設定値に限る。`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`, `OIDC_CLIENT_SECRET`,
+     `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン/認証情報その他の秘密情報は公開・ログ出力・応答に含めない。
 
 ## 2. 現行実装
 
 ### 2.1 実装箇所
 
-- [common/src/age.rs](../common/src/age.rs): `AgePolicy`, `AgeEnforcementMode`, `AgeValidationError`, `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`。
-- [server/src/lib.rs](../server/src/lib.rs): 起動時に `AgePolicy::from_env()` を読み込み検証（不正値は起動失敗）、`AppState.age_policy` に保持、`GET /policy/age` を公開、投稿時の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
+- [common/src/age.rs](../common/src/age.rs): `AgePolicy`, `AgeEnforcementMode`, `AgeValidationError`,
+  `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`。
+- [server/src/lib.rs](../server/src/lib.rs): 起動時に `AgePolicy::from_env()` を読み込み検証（不正値は起動失敗）、`AppState.age_policy` に保持、
+  `GET /policy/age` を公開、投稿時の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
 - [server/src/tests.rs](../server/src/tests.rs): `GET /policy/age` の公開応答、明示設定必須/信頼属性必須モードのフェイルクローズ等を検証。
 
 ### 2.2 設定（すべて非秘密）
@@ -52,7 +56,8 @@ tags: [age-validation, jpki, privacy, dec-02]
 ### 2.3 公開エンドポイント
 
 - `GET /policy/age`（認証不要）: 有効な年齢/地域ポリシー設定値を返す。設定値は常に公開される前提のため、秘密情報を含めない。
-- 応答例の主なフィールド: `default_minimum_age`, `country_minimums`, `target_regions`, `operator_configured`, `require_explicit_configuration`, `enforcement_mode`, `settings_always_public`, `notes`。
+- 応答例の主なフィールド: `default_minimum_age`, `country_minimums`, `target_regions`, `operator_configured`,
+  `require_explicit_configuration`, `enforcement_mode`, `settings_always_public`, `notes`。
 
 ## 3. 現行の制約・未完了事項
 

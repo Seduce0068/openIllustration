@@ -107,7 +107,7 @@ gpg --decrypt --output /path/to/restored.db /path/to/backups/openillustration-YY
 cargo run -p server --bin verify_backup -- --input /path/to/restored.db
 ```
 
-2. リストアを実行する（WAL / SHM / journal サイドカーが残っている場合は拒否される）:
+1. リストアを実行する（WAL / SHM / journal サイドカーが残っている場合は拒否される）:
 
 ```bash
 # Kubuntu / リポジトリルート
@@ -121,10 +121,11 @@ cargo run -p server --bin restore_db -- \
 `<target>.pre-restore-<timestamp>` に安全コピーを作成してから原子的に置換する。
 バックアップの `PRAGMA integrity_check` と `_migrations` の存在を検証し、
 置換後にも再検証する。`-journal` サイドカーの拒否も実確認済み。
-3. サーバーを起動し、マイグレーション検証（`_migrations` チェックサム）が通ることを確認する。
-4. `/health` 200、`/ready` 200 を確認する。
-5. `verify_audit_log` を本番 DB に対して実行し、監査連鎖が健全であることを確認する。
-6. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
+
+1. サーバーを起動し、マイグレーション検証（`_migrations` チェックサム）が通ることを確認する。
+1. `/health` 200、`/ready` 200 を確認する。
+1. `verify_audit_log` を本番 DB に対して実行し、監査連鎖が健全であることを確認する。
+1. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
 
 ## マイグレーション失敗時のロールバック判断
 

@@ -4,7 +4,7 @@ description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決
 tags: [adr, moderation, governance, accepted]
 ---
 
-# ADR-0004: モデレーション手続
+## ADR-0004: モデレーション手続
 
 - Status: Accepted
 - Date: 2026-11-02

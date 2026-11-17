@@ -4,7 +4,7 @@ description: 文書の確定範囲と本番公開前に必要な設計判断を�
 tags: [documentation, decisions, release-gates]
 ---
 
-# 文書・設計判断の確定状況
+## 文書・設計判断の確定状況
 
 ## 結論
 

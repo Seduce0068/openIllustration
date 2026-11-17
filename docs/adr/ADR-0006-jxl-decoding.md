@@ -8,7 +8,7 @@ generated:
   at: "2026-11-17T06:15:00+09:00"
 ---
 
-# ADR-0006: JPEG XL デコード検証の技術選定
+## ADR-0006: JPEG XL デコード検証の技術選定
 
 - Status: Accepted（技術選定と現時点の採用判断）
 - Date: 2026-11-17
@@ -17,7 +17,7 @@ generated:
 ## Context
 
 現行の `validate_upload_content` は JXL のシグネチャ（raw codestream の
-`FF 0A` または ISOBMFF の `JXL ` box）のみを検査する。完全なデコード検証は
+`FF 0A` または ISOBMFF の `JXL` box）のみを検査する。完全なデコード検証は
 未実装で、TASK_INVENTORY に残っている。グローバル指示に従い、新規依存を
 追加する前に既存ソリューションを調査した。
 

@@ -4,7 +4,7 @@ description: OpenIllustrationの目的、成功条件、対象範囲を定義す
 tags: [requirements, product]
 ---
 
-# 要求定義書 (Requirements Definition)
+## 要求定義書 (Requirements Definition)
 
 本書はOpenIllustrationの目的・要求を定義する。基本方針は
 [ADR-0001](adr/ADR-0001-mvp-trust-boundaries.md) に記録する。

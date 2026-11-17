@@ -4,7 +4,7 @@ description: 目標構成と現行プロトタイプのシステム境界を示�
 tags: [architecture, system-design]
 ---
 
-# システム構成図 (System Architecture Diagram)
+## システム構成図 (System Architecture Diagram)
 
 本書は必須要件を目指す論理構成と、現行プロトタイプとの差を分けて示す。
 基本方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundaries.md) を参照。

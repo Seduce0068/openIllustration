@@ -17,7 +17,9 @@ generated:
 - 参照コミット: 作業開始時点は `745810e`。以降の変更は `git log` を参照。
 - 作業ツリー: clean（未コミット変更なし）。`client/dist/` 等の生成物はコミット対象外として扱う。
 - 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。以降のローカルコミットは未CI（push済みだがCI結果は別途確認）。
-- 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、`cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
+- 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、
+  `cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、
+  `cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
 
 PC/別端末で再開する場合は以下を実行する。
 
@@ -30,11 +32,16 @@ cargo test --workspace
 
 ### DEC-02 年齢/地域ポリシー方針の採用と実装（本セッション）
 
-- `common/src/age.rs`: `AgePolicy`/`AgeEnforcementMode`/`AgeValidationError` と `from_env()`・`public_settings()`・`is_age_allowed_with_policy()` を実装。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）、国別上書き・対象地域・明示設定必須フェイルクローズ・信頼属性必須モード（現時点フェイルクローズ）をサポート。
-- `server/src/lib.rs`: 起動時に年齢ポリシーを読込/検証し `AppState.age_policy` に保持。認証不要の `GET /policy/age` で有効設定値（非秘密、`settings_always_public=true`）を常時公開。投稿時年齢検証をポリシーベースへ更新。
+- `common/src/age.rs`: `AgePolicy`/`AgeEnforcementMode`/`AgeValidationError` と `from_env()`・`public_settings()`・
+  `is_age_allowed_with_policy()` を実装。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）、
+  国別上書き・対象地域・明示設定必須フェイルクローズ・信頼属性必須モード（現時点フェイルクローズ）をサポート。
+- `server/src/lib.rs`: 起動時に年齢ポリシーを読込/検証し `AppState.age_policy` に保持。認証不要の `GET /policy/age` で有効設定値（非秘密、
+  `settings_always_public=true`）を常時公開。投稿時年齢検証をポリシーベースへ更新。
 - `server/src/tests.rs`, `common/src/age.rs`: ポリシー公開・フェイルクローズ・既定/上書き等のテストを追加/更新。
 - DEC-02関連ドキュメントを採用方針・公開設定要件・制約に合わせて更新（法的確定/専門家レビューは未完）。
-- ローカル検証（touch範囲）: `cargo fmt --all --check`、`cargo clippy -p server -p common --all-targets -- -D warnings -A clippy::module_inception`、`cargo test -p common --quiet`（11件）、`cargo test -p server --quiet`（86件）成功。
+- ローカル検証（touch範囲）: `cargo fmt --all --check`、
+  `cargo clippy -p server -p common --all-targets -- -D warnings -A clippy::module_inception`、
+  `cargo test -p common --quiet`（11件）、`cargo test -p server --quiet`（86件）成功。
 
 ### P0 検証基盤
 
@@ -79,8 +86,11 @@ cargo test --workspace
 
 ### 入力バリデーションの防御的強化（2026-11-15）
 
-- `ad9d2a8`: `server/src/payments.rs` の `load_order` で `order_id` の UUID 形式を検証し、不正形式は `400 Bad Request ("Invalid order id")` を返す（`GET/POST /payments/orders/{order_id}` 系）。回帰テスト `test_payment_order_rejects_invalid_order_id_format` を追加。
-- `00a9176`: `POST /mod/report` で `target_cid` に `is_safe_cid` 検証を追加し、不正 CID を `400 Bad Request ("Invalid CID")` で早期拒否。回帰テスト `test_report_rejects_invalid_cid` を追加（既存の有効 CID・不存在ケース `404` は維持）。
+- `ad9d2a8`: `server/src/payments.rs` の `load_order` で `order_id` の UUID 形式を検証し、不正形式は
+  `400 Bad Request ("Invalid order id")` を返す（`GET/POST /payments/orders/{order_id}` 系）。回帰テスト
+  `test_payment_order_rejects_invalid_order_id_format` を追加。
+- `00a9176`: `POST /mod/report` で `target_cid` に `is_safe_cid` 検証を追加し、不正 CID を `400 Bad Request ("Invalid CID")` で早期拒否。
+  回帰テスト `test_report_rejects_invalid_cid` を追加（既存の有効 CID・不存在ケース `404` は維持）。
 
 ## 3. 検証コマンド
 
@@ -99,7 +109,8 @@ CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジ�
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した。
 
-配布物のライセンス同梱は `bash scripts/prepare-distribution.sh <出力先>` で生成（LICENSE / NOTICE / DEPENDENCIES.tsv / THIRD_PARTY_LICENSES/）。
+配布物のライセンス同梱は `bash scripts/prepare-distribution.sh <出力先>` で生成（LICENSE / NOTICE / DEPENDENCIES.tsv /
+THIRD_PARTY_LICENSES/）。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
 `cargo run` が曖昧にならないよう Cargo.toml に `default-run = "server"` を設定済み。
@@ -113,9 +124,13 @@ cargo run -p server --bin verify_audit_log -- \
   --database-url file:local.db --expect-root <保存した Root>
 ```
 
-CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる（2026-11-17 に9件成功）。固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color` 解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。8080 が他プロセスに占拠されても動くよう `E2E_CLIENT_PORT` の既定値は 18080。
+CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる（2026-11-17 に9件成功）。固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color`
+解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。8080 が他プロセスに占拠されても動くよう `E2E_CLIENT_PORT` の既定値は 18080。
 
-E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 18 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が `MIN_NODE_MAJOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。`MAX_NODE_MAJOR` / `MAX_CHROME_MAJOR` を設定すると、検証済み上限を超えた環境で警告を出す（失敗はしない）。失敗時は `e2e/test-results` と `e2e/playwright-report` を `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
+E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 18 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
+再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が `MIN_NODE_MAJOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。`MAX_NODE_MAJOR` /
+`MAX_CHROME_MAJOR` を設定すると、検証済み上限を超えた環境で警告を出す（失敗はしない）。失敗時は `e2e/test-results` と `e2e/playwright-report` を
+`E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
 2026-11-15 に trunk 0.22.1・`E2E_CLIENT_PORT=18080` で 9 件成功を確認。
@@ -151,9 +166,12 @@ cargo run -p server
 ### 認証
 
 - `JWT_SECRET`: 必須。32バイト以上。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない（短い値が残っている場合は警告）。
-- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。不正な PEM は `JWT_SECRET` が有効でも起動を拒否する。RS256 の署名ヘッダには公開鍵 DER の SHA-256 先頭16バイトを `kid` として付与する。
+- `JWT_RSA_PRIVATE_KEY_PEM`: 任意。PKCS#8 PEM の RSA 秘密鍵（2048bit以上）。不正な PEM は `JWT_SECRET` が有効でも起動を拒否する。RS256 の署名ヘッダには公開鍵
+  DER の SHA-256 先頭16バイトを `kid` として付与する。
 - `JWT_REQUIRE_KID`: `1` で `kid` 無しトークンを拒否（RS256 限定、HS256 併用は起動拒否）。
-- `JWT_RSA_VERIFICATION_KEYS`: 任意。RS256 のみ有効。`{"kid":"SPKI 公開鍵 PEM", ...}` 形式の JSON（`BEGIN PUBLIC KEY`）。鍵ローテーション時に旧公開鍵を検証用として登録する。未知の `kid` は拒否。署名鍵と同じ `kid` は登録不可。`kid` 無しの旧トークンは署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。
+- `JWT_RSA_VERIFICATION_KEYS`: 任意。RS256 のみ有効。`{"kid":"SPKI 公開鍵 PEM", ...}` 形式の JSON（`BEGIN PUBLIC KEY`）。
+  鍵ローテーション時に旧公開鍵を検証用として登録する。未知の `kid` は拒否。署名鍵と同じ `kid` は登録不可。`kid` 無しの旧トークンは署名鍵で検証する。手順は
+  [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。
   設定時は RS256 で署名する。未設定なら HS256。
 - `ALLOW_MOCK_AUTH`: 開発専用。
 - `OIDC_ISSUER`
@@ -228,18 +246,22 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/003_payment_order_index.sql`: 派生 index。
 - `server/migrations/004_moderation_deadlines.sql`: 投票期限・確定時刻・異議の連鎖。
 - `server/migrations/005_governance_audit.sql`: 運用者の BAN/UNBAN/UNPIN 監査。
-- `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。期限切れレコードは起動時と finalizer の周期で自動回収（`Purged N expired refresh token(s)` ログ）。
+- `server/migrations/006_refresh_tokens.sql`: リフレッシュトークン（ハッシュのみ保存）。期限切れレコードは起動時と finalizer の周期で自動回収（
+  `Purged N expired refresh token(s)` ログ）。
 - `server/migrations/007_payment_order_cid.sql`: 注文とコンテンツ CID の紐づけ。
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
 - `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。セッション有効期限(24h)+60s より古いレコードは起動時/ワーカー周期で回収。
 - 起動時は `<DB path>.instance.lock` で単一ライターを強制（第二インスタンスは拒否、停止時に削除）。同じ DB を複数プロセスで起動しないこと。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。
-- `server/src/bin/restore_db.rs`: リストア（整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換）。手順は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
-- `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。`OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
+- `server/src/bin/restore_db.rs`: リストア（整合性検証・WAL ガード・上書き拒否・安全コピー・原子的置換）。手順は
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
+- `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。
+  `OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
 - `scripts/test-backup-rotate.sh`: 上記の設定分岐（fail-closed 5件・正常系5件）を外部サービスなしで検証する回帰テスト。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。
-- `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
+- `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、
+  [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - `docs/adr/ADR-0002-jpki-authentication.md`: JPKI 方式。
 - `docs/adr/ADR-0003-jpyc-settlement.md`: JPYC 方式。
 - `docs/adr/ADR-0004-moderation-procedure.md`: モデレーション手続（Accepted）。
@@ -255,19 +277,25 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   リダイレクトURI登録、民間事業者向け申込と認定。
 - JPYC の実RPCプロバイダ契約、HSM/マルチシグの鍵管理、
   返金・紛争対応、AML/KYC、資金移動業・税務の法的確認。
-- モデレーション: このインスタンスの運用者 user_hash を `MODERATION_OPERATOR_HASHES` に設定する。プロジェクト側で固定された運営主体は存在せず、セルフホストする個人・企業がそれぞれ設定する（未設定なら特権操作は全拒否）。
+- モデレーション: このインスタンスの運用者 user_hash を `MODERATION_OPERATOR_HASHES` に設定する。プロジェクト側で固定された運営主体は存在せず、
+  セルフホストする個人・企業がそれぞれ設定する（未設定なら特権操作は全拒否）。
 - DEC-02（年齢・対象地域）の法務/専門家レビューと最終確定（対象地域・必要属性・最終閾値・保持期間・運用責任）。検証済み年齢/居住地属性の提供方式（DEC-01）と接続条件の確定。
 - 本番ホスティング、TLS、本番CORS、バックアップ、監視。
 
 ### 実装可能な残作業
 
-- DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`)のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
-- JPKI: `acr`/`amr` 保証レベル検証と `auth_time`/`max_age` 検証は実装済み（`OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` 設定時のみ、欠落/不一致は fail-closed）。残るは実OP運用整合。
+- DEC-02: 検証済み年齢/居住地属性入力経路の設計・実装（DEC-01連携）。`trusted_attribute_required` 運用時の検証ロジック拡張。公開設定(`GET /policy/age`
+  )のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
+- JPKI: `acr`/`amr` 保証レベル検証と `auth_time`/`max_age` 検証は実装済み（`OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` /
+  `OIDC_MAX_AUTH_AGE_SECS` 設定時のみ、欠落/不一致は fail-closed）。残るは実OP運用整合。
   リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。残るは失効状態の永続化と実OP運用整合。
-  `sub` 単位の全セッション失効は `iat` 閾値方式で、`revoked_subs` テーブルへ永続化し起動時にロード（マイグレーション 008）。再認証で新しい `iat` を発行し DB の閾値も削除。`sid` 単位の失効も `revoked_sessions` へ永続化し起動時にロード（マイグレーション 009）。実プロセスで再起動後も 401 であることを確認済み。複数プロセス共有・実OP連携/実機検証は残タスク。
+  `sub` 単位の全セッション失効は `iat` 閾値方式で、`revoked_subs` テーブルへ永続化し起動時にロード（マイグレーション 008）。再認証で新しい `iat` を発行し DB の閾値も削除。`sid`
+  単位の失効も `revoked_sessions` へ永続化し起動時にロード（マイグレーション 009）。実プロセスで再起動後も 401 であることを確認済み。複数プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、
   コントラクトの `pause` 監視、再編成の再評価。
-- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（`MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
+- モデレーション: ADR-0004（Accepted, 2026-11-16）の投票期間（7日）・定足数未達復帰・30日以内の異議・投稿者除外・期限切れ投票拒否・同数 `Rejected` を実装済み。BAN/UNBAN/UNPIN
+  は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（
+  `MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
 - 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
   到達可能性と更新案は
