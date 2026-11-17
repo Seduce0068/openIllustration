@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "coins-bip32"
-version = "0.17.1"
+version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfc8f6b87591355b762ca5eace648c2b403a0a96b72021bcc09dae02a1244fa4"
+checksum = "31c4749610cee30c0ee56863a59a88cfb22eb6164d2c9cc5c9fc69edfedafe7b"
 dependencies = [
  "bs58",
  "coins-core",
