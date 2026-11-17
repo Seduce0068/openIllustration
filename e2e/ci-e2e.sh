@@ -95,6 +95,36 @@ export DATABASE_URL="file:${workdir}/e2e.db"
 # 未指定時は代替ポートを使う（CI では環境変数で上書き可能）。
 export E2E_CLIENT_PORT="${E2E_CLIENT_PORT:-18080}"
 
+# 実行対象プロジェクトを E2E_PROJECTS（カンマ区切り）で選択する。
+# 未指定時は既存どおり chromium（システム Chrome）のみを実行する。
+# firefox / webkit はオプトイン（ブラウザ導入と共有ライブラリが必要）。
+all_projects=(chromium firefox webkit)
+if [[ -n "${E2E_PROJECTS:-}" ]]; then
+	IFS=',' read -r -a selected_projects <<<"$E2E_PROJECTS"
+	for project in "${selected_projects[@]}"; do
+		case "$project" in
+		chromium | firefox | webkit) ;;
+		*)
+			echo "unknown E2E project: ${project} (allowed: ${all_projects[*]})" >&2
+			exit 1
+			;;
+		esac
+	done
+else
+	selected_projects=(chromium)
+fi
+
+# --project 引数と、導入が必要なブラウザバイナリを組み立てる。
+# chromium は channel: chrome（システム Chrome）を使うため取得不要。
+project_args=()
+install_browsers=()
+for project in "${selected_projects[@]}"; do
+	project_args+=(--project="$project")
+	case "$project" in
+	firefox | webkit) install_browsers+=("$project") ;;
+	esac
+done
+
 echo "==> サーバーとクライアントを事前ビルド"
 cargo build -p server --locked
 # Tailwind はビルド時 CSS のみを使う（実行時 CDN は禁止）。
@@ -106,14 +136,20 @@ if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' c
 	exit 1
 fi
 
-echo "==> E2E 依存の導入（ブラウザは channel: chrome を使うため取得しない）"
+echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
 (cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci)
+if ((${#install_browsers[@]} > 0)); then
+	# --with-deps は root 権限が必要なため CI では使わない。
+	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
+	echo "==> Playwright ブラウザ導入: ${install_browsers[*]}"
+	(cd e2e && npx playwright install "${install_browsers[@]}")
+fi
 
 echo "==> 型チェック"
 (cd e2e && npm run typecheck)
 
-echo "==> Playwright テスト"
-if ! (cd e2e && npm test); then
+echo "==> Playwright テスト: ${selected_projects[*]}"
+if ! (cd e2e && npm test -- "${project_args[@]}"); then
 	# extra_gates では artifact を回収できないため、失敗時は Playwright が
 	# 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
 	echo "::error::Playwright E2E failed"

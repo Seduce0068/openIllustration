@@ -15,6 +15,9 @@ const clientUrl = `http://127.0.0.1:${clientPort}`;
 const e2eJwtSecret =
   process.env.E2E_JWT_SECRET ?? 'test_secret_for_e2e_0123456789abcdef';
 
+// ブラウザ間で共通のビューポート（既存の chromium 設定を維持）。
+const viewport = { width: 1280, height: 720 };
+
 // ローカルは既存プロセスと `server/local.db` を再利用する。CI は常に
 // 起動し直し、`E2E_REUSE=0` でローカルでも再利用を無効化できる。
 const reuseExistingServer = process.env.E2E_REUSE !== '0' && !process.env.CI;
@@ -44,7 +47,22 @@ export default defineConfig({
       name: 'chromium',
       use: {
         channel: 'chrome',
-        viewport: { width: 1280, height: 720 },
+        viewport,
+      },
+    },
+    {
+      name: 'firefox',
+      use: {
+        // プロジェクト名はラベルにすぎないため browserName を明示する。
+        browserName: 'firefox',
+        viewport,
+      },
+    },
+    {
+      name: 'webkit',
+      use: {
+        browserName: 'webkit',
+        viewport,
       },
     },
   ],
