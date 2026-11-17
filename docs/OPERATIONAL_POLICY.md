@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-18T03:49:23+09:00"
+  at: "2026-11-18T04:50:07+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -36,6 +36,12 @@ generated:
 - ユーザーハッシュは匿名化を保証しない。アクセス制御、保持期間、削除・訂正手続、バックアップ消去方針を本番前に定める。
 - IPFSへの投稿は外部から取得可能になり得る。削除要請・違法コンテンツ対応・ピン解除の運用を整備するまで、永続公開を前提としたデータを安易に登録しない。
 - アップロード形式・10 MiB上限・外部取得10 MiB上限を守り、コンテンツ内容の合法性をハッシュ検証で保証しない。
+- `GET /me/export` は認証必須（`AuthClaims`）。`version:1` / `generated_at` / `sub` と12表
+  （`users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` /
+  `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` /
+  `revoked_subs`）の全行を返し、行数上限・`truncated` フラグは設けない。
+  `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID は除外し、
+  `reason` / `details` はマスクする。未認証は401で拒否する。削除権（`/me/erase`）は未実装。
 
 ## 3. 監査・モデレーション
 
@@ -51,9 +57,15 @@ generated:
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
   通報一覧は認証必須・Reported 限定・新着順を維持し、運用者限定にはしない。理由は `common::summarize_reason` で要約して返す。
-  要約は空文字をそのまま返し、最大120 Unicode 文字（超過は先頭119文字＋`…`）、メール／4桁以上の数字列／http(s) URL を `[redacted]` に置換する。
+  要約は空文字をそのまま返し、`@` を含むトークン / `://` を含むトークン / `www.` で始まるトークン /
+  IPv4 らしい部分列 / 全角を含む Unicode 数字4連続を `[redacted]` に置換する。
+  置換後に最大120 Unicode 文字（超過は先頭119文字+`…`）。
   DB の全文と監査エクスポートの本文は変更せず、要約は API レスポンス時のみ適用する。
   これらはデプロイ内の参加者向けの閲覧機能であり、第三者への公開範囲（DEC-04 未決定）を意図するものではない。本番公開前に公開範囲を確定する。
+- `GET /mod/stats` は運用者限定の集計。`AuthClaims` 必須かつ `require_moderation_operator` で認可し、
+  未認証は401、`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403を返す。
+  `generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返し、CID・reason・`user_hash` は露出しない。
+  これは認証内のデプロイ向け集計であり、第三者への公開を意図するものではない（DEC-04 未決定）。
 - ローカルDBの `content_audit_log` ハッシュ連鎖は
   `cargo run -p server --bin verify_audit_log` に `--database-url` / `--database-token` /
   `--cid` / `--expect-root` の各オプションを付けて実行する。
@@ -86,6 +98,9 @@ generated:
 - ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現在のエラー応答・観測性は本番要件を満たすか別途検証する。
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。drain は
   `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）を上限とし、超過時は警告を出して残接続を切断する。
+- 本番起動前の設定診断は `cargo run -p server --bin doctor -- [--strict]` で行う。
+  既定は問題を警告するのみで終了コード0、`--strict` を付けたときのみ問題があれば終了コード1とする。
+  秘密情報の値は一切出力しない。本番必須設定の判定は既存の fail-closed ロジックへ委譲する。
 - liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503
   を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。
 - readiness の意味は「このインスタンスが API リクエストを受けられるか」に限定する。IPFS / JPKI / チェーンなどの外部依存が壊れても、影響を受けるエンドポイントは個別にエラーを返し、他機能は継続できるため
@@ -101,9 +116,9 @@ generated:
 本番移行には、実JPKI認証の独立検証、JPYC取引確認と手数料・失敗時運用、第三者検証可能な監査、プライバシー・法務レビュー、モデレーション承認、IPFS削除/通報対応、DB復旧訓練、環境別設定とセキュリティ試験を必要とする。
 本書の記載だけで法令適合を保証しない。
 
-## 7. 環境変数リファレンス
+## 7. 環境変数リファレンス（サーバー＋運用スクリプトが読む環境変数）
 
-現行サーバーが読む環境変数の一覧。本番では開発専用の項目を設定しない。
+サーバーと運用スクリプトが読む環境変数の一覧。本番では開発専用の項目を設定しない。
 
 | 変数 | 必須 | 既定 | 説明 |
 | ---- | ---- | ---- | ---- |
@@ -147,6 +162,10 @@ generated:
 | `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | `1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。 |
 | `ALLOW_MOCK_AUTH` | 開発専用 | 無効 | `1`/`true` で模擬JPKI・ゼロ署名を受理する。本番では設定しない。 |
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | `1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。 |
+| `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
+| `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
+| `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | バックアップ運用スクリプトが読む環境ファイル。所有者を固定し権限600で管理する。秘密情報を含むため配布物へ含めない。 |
+| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。`firefox` / `webkit` はオプトインで、バイナリ導入と共有ライブラリに依存するためホスト環境次第。 |
 
 - 真偽値はいずれも `1` または `true`（大文字小文字を問わない）で有効になる。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
