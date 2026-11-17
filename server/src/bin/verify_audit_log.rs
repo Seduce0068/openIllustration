@@ -1,5 +1,5 @@
 use anyhow::{Context, anyhow};
-use common::{AuditLogEntry, compute_audit_chain_digest};
+use common::{AuditLogEntry, compute_audit_chain_digest, mask_reason};
 use libsql::Builder;
 
 #[derive(Debug, Default)]
@@ -8,26 +8,31 @@ struct Args {
     database_token: Option<String>,
     cid: Option<String>,
     expect_root: Option<String>,
+    include_reasons: bool,
     help: bool,
 }
 
 fn print_help() {
     eprintln!(
-        "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX]\n\
+        "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX] [--include-reasons]\n\
          \n\
          Verifies content_audit_log hash-chain integrity (read-only).
          Accepts v2 (length-prefixed) and legacy v1 entry hashes.\n\
          Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
          --expect-root compares the root against a previously recorded value to detect\n\
          truncation or omission (the root must have been published out of band).\n\
+         Reasons are redacted by default; --include-reasons exposes them (opt-in).\n\
          Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
          Exit code: 0 if valid, 1 if invalid or on error."
     );
 }
 
-fn parse_args() -> anyhow::Result<Args> {
+fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut args = Args::default();
-    let mut it = std::env::args().skip(1);
+    let mut it = items.into_iter().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => args.help = true,
@@ -52,10 +57,15 @@ fn parse_args() -> anyhow::Result<Args> {
                         .ok_or_else(|| anyhow!("--expect-root requires a value"))?,
                 );
             }
+            "--include-reasons" => args.include_reasons = true,
             other => return Err(anyhow!("unknown argument: {other}")),
         }
     }
     Ok(args)
+}
+
+fn parse_args() -> anyhow::Result<Args> {
+    parse_args_from(std::env::args())
 }
 
 async fn open_db(
@@ -151,8 +161,9 @@ async fn main() -> anyhow::Result<()> {
         let include = args.cid.as_ref().map(|c| c == &cid).unwrap_or(true);
         if include {
             shown += 1;
+            let display_reason = mask_reason(&reason, args.include_reasons);
             println!(
-                "log_id={log_id} cid={cid} {old_status}->{new_status} by={changed_by} reason={reason} hash_ok={hash_ok} legacy_v1={legacy_v1} chain_ok={chain_ok} entry_hash={entry_hash}"
+                "log_id={log_id} cid={cid} {old_status}->{new_status} by={changed_by} reason={display_reason} hash_ok={hash_ok} legacy_v1={legacy_v1} chain_ok={chain_ok} entry_hash={entry_hash}"
             );
         }
 
@@ -195,5 +206,29 @@ async fn main() -> anyhow::Result<()> {
         }
         eprintln!("audit_log_verification: FAILED ({} error(s))", errors.len());
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasons_are_masked_by_default() {
+        let args = parse_args_from(["verify_audit_log"].map(String::from)).unwrap();
+        assert!(!args.include_reasons);
+    }
+
+    #[test]
+    fn include_reasons_is_opt_in() {
+        let args =
+            parse_args_from(["verify_audit_log", "--include-reasons"].map(String::from)).unwrap();
+        assert!(args.include_reasons);
+    }
+
+    #[test]
+    fn help_flag_is_parsed() {
+        let args = parse_args_from(["verify_audit_log", "--help"].map(String::from)).unwrap();
+        assert!(args.help);
     }
 }

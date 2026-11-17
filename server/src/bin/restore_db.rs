@@ -59,6 +59,22 @@ fn sidecar_of(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// WAL/SHM/journal が残っていると、検証時に WAL が適用されて通っても
+/// stage では `.db` 本体しかコピーされず未適用データが失われる。
+/// backup 側・target 側の両方で同じ suffix を拒否する。
+fn ensure_no_sidecars(path: &Path, side: &str) -> anyhow::Result<()> {
+    for suffix in ["-wal", "-shm", "-journal"] {
+        let sidecar = sidecar_of(path, suffix);
+        if sidecar.exists() {
+            return Err(anyhow!(
+                "{side} has a {} sidecar; stop the server before restoring",
+                sidecar.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn validate_backup(path: &Path) -> anyhow::Result<(i64, i64)> {
     let db = Builder::new_local(path)
         .build()
@@ -111,15 +127,10 @@ async fn main() -> anyhow::Result<()> {
     if !backup.exists() {
         return Err(anyhow!("backup file does not exist: {}", backup.display()));
     }
-    for suffix in ["-wal", "-shm", "-journal"] {
-        let sidecar = sidecar_of(&target, suffix);
-        if sidecar.exists() {
-            return Err(anyhow!(
-                "target has a {} sidecar; stop the server before restoring",
-                sidecar.display()
-            ));
-        }
-    }
+    // validate_backup の前に検査する。libsql が WAL を checkpoint して
+    // サイドカーを消す前に、元の状態を確認するため。
+    ensure_no_sidecars(&backup, "backup")?;
+    ensure_no_sidecars(&target, "target")?;
     if target.exists() && !args.force {
         return Err(anyhow!(
             "target already exists: {} (pass --force to replace with a safety copy)",
@@ -197,6 +208,29 @@ mod tests {
             sidecar_of(path, "-journal"),
             PathBuf::from("/tmp/example.db-journal")
         );
+    }
+
+    #[test]
+    fn sidecars_are_rejected_on_both_sides_with_side_named() {
+        let dir = std::env::temp_dir().join(format!("restore-db-sidecars-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let backup = dir.join("backup.db");
+        let target = dir.join("target.db");
+
+        assert!(ensure_no_sidecars(&backup, "backup").is_ok());
+        assert!(ensure_no_sidecars(&target, "target").is_ok());
+
+        for suffix in ["-wal", "-shm", "-journal"] {
+            for (path, side) in [(&backup, "backup"), (&target, "target")] {
+                let sidecar = sidecar_of(path, suffix);
+                std::fs::write(&sidecar, b"x").unwrap();
+                let error = ensure_no_sidecars(path, side).unwrap_err().to_string();
+                assert!(error.contains(side), "missing side in: {error}");
+                assert!(error.contains(suffix), "missing suffix in: {error}");
+                std::fs::remove_file(&sidecar).unwrap();
+            }
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
