@@ -148,29 +148,39 @@ impl OidcState {
     /// 必須の環境変数が揃っている場合だけ有効化する。
     /// 不完全な設定で中途半端に起動しないよう fail-closed にする。
     pub fn from_env() -> Option<Arc<Self>> {
-        let issuer = std::env::var("OIDC_ISSUER").ok()?;
-        let client_id = std::env::var("OIDC_CLIENT_ID").ok()?;
-        let client_secret = std::env::var("OIDC_CLIENT_SECRET").ok()?;
-        let redirect_uri = std::env::var("OIDC_REDIRECT_URI").ok()?;
-        let authorization_endpoint = std::env::var("OIDC_AUTHORIZATION_ENDPOINT").ok()?;
-        let token_endpoint = std::env::var("OIDC_TOKEN_ENDPOINT").ok()?;
-        let jwks_uri = std::env::var("OIDC_JWKS_URI").ok()?;
-        let scopes = std::env::var("OIDC_SCOPES").unwrap_or_else(|_| "openid".to_string());
-        let cookie_secure = std::env::var("OIDC_COOKIE_SECURE")
+        Self::from_env_with(|name| std::env::var(name).ok())
+    }
+
+    /// 環境変数の読み取りを注入した `from_env` の本体。
+    ///
+    /// 本番は `from_env()` が `std::env::var` を渡す。テストは文字列マップを
+    /// 渡すことでプロセス環境を汚さずに、必須変数の欠落と各オプションの
+    /// 境界値を並列に検証できる。
+    pub(crate) fn from_env_with<F>(lookup: F) -> Option<Arc<Self>>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let issuer = lookup("OIDC_ISSUER")?;
+        let client_id = lookup("OIDC_CLIENT_ID")?;
+        let client_secret = lookup("OIDC_CLIENT_SECRET")?;
+        let redirect_uri = lookup("OIDC_REDIRECT_URI")?;
+        let authorization_endpoint = lookup("OIDC_AUTHORIZATION_ENDPOINT")?;
+        let token_endpoint = lookup("OIDC_TOKEN_ENDPOINT")?;
+        let jwks_uri = lookup("OIDC_JWKS_URI")?;
+        let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
+        let cookie_secure = lookup("OIDC_COOKIE_SECURE")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
-        let clock_skew_secs = std::env::var("OIDC_CLOCK_SKEW_SECS")
-            .ok()
+        let clock_skew_secs = lookup("OIDC_CLOCK_SKEW_SECS")
             .and_then(|value| value.parse().ok())
             .unwrap_or(60);
-        let required_acr = std::env::var("OIDC_REQUIRED_ACR")
+        let required_acr = lookup("OIDC_REQUIRED_ACR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
-        let required_amr = std::env::var("OIDC_REQUIRED_AMR")
+        let required_amr = lookup("OIDC_REQUIRED_AMR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
-        let max_auth_age_secs = std::env::var("OIDC_MAX_AUTH_AGE_SECS")
-            .ok()
+        let max_auth_age_secs = lookup("OIDC_MAX_AUTH_AGE_SECS")
             .and_then(|value| value.parse::<u64>().ok())
             .filter(|seconds| *seconds > 0);
 
@@ -202,6 +212,12 @@ impl OidcState {
     #[cfg(test)]
     pub fn set_max_auth_age(&self, seconds: Option<u64>) {
         *self.config.max_auth_age_secs.lock().unwrap() = seconds;
+    }
+
+    /// テスト用: `from_env_with` が解析した設定を読み取る（本番コードからは使わない）。
+    #[cfg(test)]
+    pub(crate) fn config(&self) -> &OidcConfig {
+        &self.config
     }
 
     fn take_pending(&self, state: &str) -> Result<PendingAuth, AppError> {

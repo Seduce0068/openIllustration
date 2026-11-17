@@ -406,4 +406,60 @@ mod tests {
         let entries = parse_ranges("10.0.0.0/8, 0.0.0.0/0, bogus, 127.0.0.1, ::/0");
         assert_eq!(validated_ranges(entries), vec!["10.0.0.0/8", "127.0.0.1"]);
     }
+
+    /// CIDR 検証を `OnceLock` 非依存の純粋関数として直接検証する（NET-02）。
+    /// IPv4/IPv6 の正規形は受理し、全アドレス範囲・幅超過・不正形式は拒否する。
+    #[test]
+    fn classify_range_accepts_canonical_forms_and_rejects_unsafe_prefixes() {
+        // 前後の空白は trim され、IPv4 / IPv6 ともに正規形で受理される。
+        assert_eq!(
+            classify_range(" 203.0.113.7/24 "),
+            Ok(("203.0.113.7".parse::<IpAddr>().unwrap(), 24))
+        );
+        assert_eq!(
+            classify_range("2001:0db8:0000::/32"),
+            Ok(("2001:db8::".parse::<IpAddr>().unwrap(), 32))
+        );
+        // プレフィックス省略（IP 単体）はアドレス幅いっぱいになる。
+        assert_eq!(
+            classify_range("127.0.0.1"),
+            Ok(("127.0.0.1".parse::<IpAddr>().unwrap(), 32))
+        );
+        assert_eq!(
+            classify_range("::1"),
+            Ok(("::1".parse::<IpAddr>().unwrap(), 128))
+        );
+        // IPv4-mapped IPv6 は IPv4 へ正規化され、幅も 32 に切り替わる。
+        assert_eq!(
+            classify_range("::ffff:10.1.2.3/8"),
+            Ok(("10.1.2.3".parse::<IpAddr>().unwrap(), 8))
+        );
+
+        // fail-closed: 全アドレス範囲・幅超過・不正形式はすべて Err。
+        for invalid in [
+            "0.0.0.0/0",
+            "::/0",
+            "10.0.0.0/33",
+            "2001:db8::/129",
+            "10.0.0.0/x",
+            "not-an-ip/8",
+        ] {
+            assert!(
+                classify_range(invalid).is_err(),
+                "{invalid} must be rejected as an unsafe CIDR"
+            );
+        }
+    }
+
+    /// `validated_ranges` が正規形の安全な CIDR だけを通すことを確認する。
+    #[test]
+    fn validated_ranges_keeps_only_safe_entries() {
+        let entries = parse_ranges(
+            " 203.0.113.0/24 , ::ffff:10.0.0.0/8 , 0.0.0.0/0 , ::/0 , bogus , 10.0.0.0/33 , 2001:db8::/32 ",
+        );
+        assert_eq!(
+            validated_ranges(entries),
+            vec!["203.0.113.0/24", "::ffff:10.0.0.0/8", "2001:db8::/32"]
+        );
+    }
 }

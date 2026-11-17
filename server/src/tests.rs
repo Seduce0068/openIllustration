@@ -10012,3 +10012,184 @@ async fn test_reauthentication_delete_keeps_newer_revocation_threshold() {
         "control: without the revoked_at condition the newer threshold is deleted"
     );
 }
+
+// --- OIDC 起動時設定の fail-closed と境界値（from_env_with による依存注入） ---
+
+/// `OidcState::from_env_with` に渡す必須 7 変数のベースライン。
+fn oidc_required_env() -> std::collections::BTreeMap<String, String> {
+    [
+        ("OIDC_ISSUER", "https://issuer.example.jp"),
+        ("OIDC_CLIENT_ID", "client-123"),
+        ("OIDC_CLIENT_SECRET", "secret-456"),
+        ("OIDC_REDIRECT_URI", "https://app.example.jp/auth/callback"),
+        (
+            "OIDC_AUTHORIZATION_ENDPOINT",
+            "https://issuer.example.jp/authorize",
+        ),
+        ("OIDC_TOKEN_ENDPOINT", "https://issuer.example.jp/token"),
+        ("OIDC_JWKS_URI", "https://issuer.example.jp/jwks"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
+}
+
+/// 必須 7 変数が揃えば OIDC が有効化され、値がそのまま設定へ反映される。
+#[test]
+fn test_oidc_from_env_with_all_required_present() {
+    let env = oidc_required_env();
+    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        .expect("all required OIDC variables present must enable the provider");
+    let config = state.config();
+    assert_eq!(config.issuer, "https://issuer.example.jp");
+    assert_eq!(config.client_id, "client-123");
+    assert_eq!(config.client_secret, "secret-456");
+    assert_eq!(config.redirect_uri, "https://app.example.jp/auth/callback");
+    assert_eq!(
+        config.authorization_endpoint,
+        "https://issuer.example.jp/authorize"
+    );
+    assert_eq!(config.token_endpoint, "https://issuer.example.jp/token");
+    assert_eq!(config.jwks_uri, "https://issuer.example.jp/jwks");
+    assert_eq!(config.scopes, "openid", "scopes の既定値は openid");
+    assert!(config.cookie_secure, "cookie_secure の既定値は true");
+}
+
+/// 必須変数を 1 つでも欠くと None（fail-closed）。7 通りすべてを確認する。
+#[test]
+fn test_oidc_from_env_with_missing_required_variable_fails_closed() {
+    const REQUIRED: [&str; 7] = [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    for missing in REQUIRED {
+        let mut env = oidc_required_env();
+        env.remove(missing);
+        assert!(
+            crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned()).is_none(),
+            "missing {missing} must disable OIDC (fail-closed)"
+        );
+    }
+}
+
+/// ClockSkew: 既定 60、境界値は u64 の範囲で受け付け、不正値は既定へ戻す。
+#[test]
+fn test_oidc_from_env_with_clock_skew_boundaries() {
+    let assert_skew = |value: Option<&str>, expected: u64| {
+        let mut env = oidc_required_env();
+        if let Some(value) = value {
+            env.insert("OIDC_CLOCK_SKEW_SECS".to_string(), value.to_string());
+        }
+        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("required variables are present");
+        assert_eq!(
+            state.config().clock_skew_secs,
+            expected,
+            "OIDC_CLOCK_SKEW_SECS={value:?}"
+        );
+    };
+    assert_skew(None, 60);
+    assert_skew(Some("0"), 0);
+    assert_skew(Some("1"), 1);
+    assert_skew(Some("300"), 300);
+    assert_skew(Some("18446744073709551615"), u64::MAX);
+    // u64 に収まらない / 負数 / 空 / 非数値は既定値へフォールバック。
+    assert_skew(Some("18446744073709551616"), 60);
+    assert_skew(Some("-1"), 60);
+    assert_skew(Some(""), 60);
+    assert_skew(Some("abc"), 60);
+}
+
+/// max_auth_age: 0 と不正値は「検証しない」、正の u64 はそのまま保持する。
+#[test]
+fn test_oidc_from_env_with_max_auth_age_boundaries() {
+    let assert_age = |value: Option<&str>, expected: Option<u64>| {
+        let mut env = oidc_required_env();
+        if let Some(value) = value {
+            env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), value.to_string());
+        }
+        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("required variables are present");
+        assert_eq!(
+            *state.config().max_auth_age_secs.lock().unwrap(),
+            expected,
+            "OIDC_MAX_AUTH_AGE_SECS={value:?}"
+        );
+    };
+    assert_age(None, None);
+    assert_age(Some("0"), None); // 0 秒は「検証しない」扱い
+    assert_age(Some("1"), Some(1));
+    assert_age(Some("900"), Some(900));
+    assert_age(Some("18446744073709551615"), Some(u64::MAX));
+    assert_age(Some("18446744073709551616"), None);
+    assert_age(Some("-1"), None);
+    assert_age(Some("abc"), None);
+}
+
+/// required_acr / required_amr: カンマ区切りを trim し空要素を除く。
+#[test]
+fn test_oidc_from_env_with_required_acr_amr_normalization() {
+    let assert_lists =
+        |acr: Option<&str>, amr: Option<&str>, expected_acr: &[&str], expected_amr: &[&str]| {
+            let mut env = oidc_required_env();
+            if let Some(acr) = acr {
+                env.insert("OIDC_REQUIRED_ACR".to_string(), acr.to_string());
+            }
+            if let Some(amr) = amr {
+                env.insert("OIDC_REQUIRED_AMR".to_string(), amr.to_string());
+            }
+            let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                .expect("required variables are present");
+            let config = state.config();
+            assert_eq!(
+                config.required_acr.lock().unwrap().as_slice(),
+                expected_acr,
+                "OIDC_REQUIRED_ACR={acr:?}"
+            );
+            assert_eq!(
+                config.required_amr.lock().unwrap().as_slice(),
+                expected_amr,
+                "OIDC_REQUIRED_AMR={amr:?}"
+            );
+        };
+    assert_lists(None, None, &[], &[]);
+    assert_lists(Some(""), Some(""), &[], &[]);
+    assert_lists(Some("   "), None, &[], &[]);
+    assert_lists(
+        Some(" urn:acr:1, , urn:acr:2 ,"),
+        Some(" pwd , otp "),
+        &["urn:acr:1", "urn:acr:2"],
+        &["pwd", "otp"],
+    );
+}
+
+/// オプション値の既定と cookie_secure の真偽判定（0 / false 系のみ偽）。
+#[test]
+fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
+    let assert_cookie = |value: Option<&str>, expected: bool| {
+        let mut env = oidc_required_env();
+        env.insert("OIDC_SCOPES".to_string(), "openid profile".to_string());
+        if let Some(value) = value {
+            env.insert("OIDC_COOKIE_SECURE".to_string(), value.to_string());
+        }
+        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("required variables are present");
+        assert_eq!(state.config().scopes, "openid profile");
+        assert_eq!(
+            state.config().cookie_secure,
+            expected,
+            "OIDC_COOKIE_SECURE={value:?}"
+        );
+    };
+    assert_cookie(None, true);
+    assert_cookie(Some("0"), false);
+    assert_cookie(Some("false"), false);
+    assert_cookie(Some("FALSE"), false);
+    assert_cookie(Some("1"), true);
+    assert_cookie(Some(""), true);
+}
