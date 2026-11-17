@@ -513,9 +513,10 @@ mod tests {
     }
     impl rsa::rand_core::TryCryptoRng for TestRng {}
 
-    fn test_key_pair() -> (String, Vec<u8>) {
+    /// シードを指定して決定論的に RSA 鍵ペアを生成する（既存テストと共有）。
+    fn test_key_pair_from_seed(seed: u64) -> (String, Vec<u8>) {
         use rsa::pkcs8::EncodePrivateKey;
-        let mut rng = TestRng(0x9E37_79B9_7F4A_7C15);
+        let mut rng = TestRng(seed);
         let key = PrivateKey::new(&mut rng, 2048).unwrap();
         let private_pem = key
             .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
@@ -523,6 +524,20 @@ mod tests {
             .to_string();
         let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
         (private_pem, public_der)
+    }
+
+    fn test_key_pair() -> (String, Vec<u8>) {
+        test_key_pair_from_seed(0x9E37_79B9_7F4A_7C15)
+    }
+
+    /// 生データへ PKCS#1 v1.5 + SHA-256 署名する（署名検証エラーパスの対照用）。
+    /// rsa::signature::Signer は入力をハッシュするため、verify_rsa_signature と同じ
+    /// ダイジェストが使われる。
+    fn sign_bytes(private_pem: &str, data: &[u8]) -> Vec<u8> {
+        use rsa::signature::{SignatureEncoding, Signer};
+        let key = PrivateKey::from_pkcs8_pem(private_pem).unwrap();
+        let signing_key = rsa::pkcs1v15::SigningKey::<RsaSha256>::new(key);
+        signing_key.sign(data).to_bytes().to_vec()
     }
 
     /// 署名検証だけを独立に行い、連鎖検証と分離して検証できるようにする。
@@ -820,6 +835,215 @@ mod tests {
         // フラグ改ざんは署名検証で検出される。
         masked.reasons_masked = false;
         assert!(verify_audit_snapshot(&masked, &public_der).is_err());
+    }
+
+    // ---- 監査で「中リスク・未テスト」と指摘された暗号検証のエラーパス ----
+
+    /// 監査対象 1: 不正 DER 公開鍵は Crypto("Invalid public key") で拒否される。
+    #[test]
+    fn verify_rsa_signature_rejects_invalid_public_key_der() {
+        let data = b"forensic payload";
+        let signature = b"any signature bytes";
+        // 空、ASN.1 として不正、バイト列だけ与えたゴミ、の 3 系統。
+        let invalid_ders: [&[u8]; 3] = [b"", b"not a DER key", &[0xFF; 256]];
+        for der in invalid_ders {
+            let error = verify_rsa_signature(der, data, signature)
+                .expect_err("invalid DER public key must be rejected");
+            assert!(
+                matches!(&error, ForensicError::Crypto(message) if message.contains("Invalid public key")),
+                "expected Crypto(Invalid public key), got {error:?}"
+            );
+        }
+    }
+
+    /// 監査対象 1: 別鍵で検証すると InvalidSignature になる（正鍵は通る対照付き）。
+    #[test]
+    fn verify_rsa_signature_rejects_wrong_key() {
+        let (private_pem, public_der) = test_key_pair();
+        let (_, wrong_public_der) = test_key_pair_from_seed(0xDEAD_BEEF_0BAD_F00D);
+        assert_ne!(
+            public_der, wrong_public_der,
+            "test precondition: the two key pairs must differ"
+        );
+        let data = b"forensic payload for wrong-key check";
+        let signature = sign_bytes(&private_pem, data);
+
+        assert!(
+            verify_rsa_signature(&public_der, data, &signature).is_ok(),
+            "control: signature must verify with the correct public key"
+        );
+        let error = verify_rsa_signature(&wrong_public_der, data, &signature)
+            .expect_err("signature must not verify with a different public key");
+        assert!(
+            matches!(&error, ForensicError::InvalidSignature(_)),
+            "expected InvalidSignature, got {error:?}"
+        );
+    }
+
+    /// 監査対象 1: 署名バイトの欠落・反転・ゼロ埋めは InvalidSignature になる。
+    #[test]
+    fn verify_rsa_signature_rejects_invalid_signature_bytes() {
+        let (private_pem, public_der) = test_key_pair();
+        let data = b"forensic payload for signature-byte check";
+        let valid = sign_bytes(&private_pem, data);
+        assert!(verify_rsa_signature(&public_der, data, &valid).is_ok());
+
+        let mut bit_flipped = valid.clone();
+        bit_flipped[0] ^= 0x01;
+        let zeroed = vec![0u8; valid.len()];
+        let invalid_signatures: [&[u8]; 4] =
+            [b"", &valid[..valid.len() - 1], &bit_flipped, &zeroed];
+        for signature in invalid_signatures {
+            let error = verify_rsa_signature(&public_der, data, signature)
+                .expect_err("tampered signature bytes must be rejected");
+            assert!(
+                matches!(&error, ForensicError::InvalidSignature(_)),
+                "expected InvalidSignature for {signature:?}, got {error:?}"
+            );
+        }
+    }
+
+    /// 監査対象 2: 不正 base64 署名は署名検証より前に InvalidSignature で拒否される。
+    #[test]
+    fn verify_audit_snapshot_rejects_invalid_base64_signature() {
+        let (private_pem, public_der) = test_key_pair();
+        let entries = build_chained_entries(1);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let valid = resign(entries, merkle_root_of(&hashes), &private_pem);
+        assert!(valid.verify_chain().is_ok(), "control: chain must be valid");
+        assert!(verify_audit_snapshot(&valid, &public_der).is_ok());
+
+        for broken in ["!!!not-base64!!!", "@@@@", "A"] {
+            let mut snapshot = valid.clone();
+            snapshot.signature = broken.into();
+            let error = verify_audit_snapshot(&snapshot, &public_der)
+                .expect_err("invalid base64 signature must be rejected");
+            assert!(
+                matches!(&error, ForensicError::InvalidSignature(message) if message.contains("Invalid base64")),
+                "expected Invalid base64 error for {broken:?}, got {error:?}"
+            );
+        }
+    }
+
+    /// 監査対象 2: 正しい署名でも別鍵の公開鍵では検証に失敗する。
+    #[test]
+    fn verify_audit_snapshot_rejects_wrong_key() {
+        let (private_pem, public_der) = test_key_pair();
+        let (_, wrong_public_der) = test_key_pair_from_seed(0xDEAD_BEEF_0BAD_F00D);
+        assert_ne!(public_der, wrong_public_der);
+
+        let entries = build_chained_entries(2);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let snapshot = resign(entries, merkle_root_of(&hashes), &private_pem);
+
+        assert!(
+            snapshot.verify_chain().is_ok(),
+            "control: chain must be valid"
+        );
+        assert!(verify_audit_snapshot(&snapshot, &public_der).is_ok());
+        let error = verify_audit_snapshot(&snapshot, &wrong_public_der)
+            .expect_err("signature must not verify with a different public key");
+        assert!(
+            matches!(&error, ForensicError::InvalidSignature(_)),
+            "expected InvalidSignature, got {error:?}"
+        );
+    }
+
+    /// 監査対象 3: 未サポートバージョンは署名生成時に拒否される（fail-closed）。
+    #[test]
+    fn sign_audit_snapshot_rejects_unsupported_version() {
+        let (private_pem, _) = test_key_pair();
+        let entries = build_chained_entries(1);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let valid = resign(entries, merkle_root_of(&hashes), &private_pem);
+        assert!(!valid.signature.is_empty(), "control: signing must succeed");
+
+        for version in [0, 2, AUDIT_SNAPSHOT_VERSION + 1, 999] {
+            let mut snapshot = valid.clone();
+            snapshot.version = version;
+            let error = sign_audit_snapshot(&snapshot, &private_pem)
+                .expect_err("unsupported version must be rejected");
+            assert!(
+                matches!(&error, ForensicError::InvalidSignature(message)
+                    if message.contains("unsupported audit snapshot version")
+                        && message.contains(&version.to_string())),
+                "expected version rejection for {version}, got {error:?}"
+            );
+        }
+    }
+
+    /// 監査対象 4: verify_hash は保存済み entry_hash と v2 再計算値の一致だけを判定する。
+    #[test]
+    fn audit_snapshot_entry_verify_hash_accepts_match_and_rejects_mismatch() {
+        let entries = build_chained_entries(1);
+        let entry = &entries[0];
+        assert!(
+            entry.verify_hash(),
+            "control: freshly built entry must match"
+        );
+
+        let mut tampered = entry.clone();
+        tampered.reason = "tampered reason".into();
+        assert!(
+            !tampered.verify_hash(),
+            "changed reason must invalidate the stored hash"
+        );
+
+        let mut wrong_hash = entry.clone();
+        wrong_hash.entry_hash = "0".repeat(64);
+        assert!(
+            !wrong_hash.verify_hash(),
+            "wrong stored hash must be rejected"
+        );
+
+        // v1 ハッシュ（区切りなし連結）を入れても v2 検証では受理されない。
+        let mut v1_hash = entry.clone();
+        let log = AuditLogEntry {
+            log_id: Some(entry.log_id),
+            cid: entry.cid.clone(),
+            old_status: entry.old_status.clone(),
+            new_status: entry.new_status.clone(),
+            changed_by: entry.changed_by.clone(),
+            reason: entry.reason.clone(),
+            previous_log_hash: entry.previous_log_hash.clone(),
+        };
+        v1_hash.entry_hash = log.calculate_hash();
+        assert!(
+            !v1_hash.verify_hash(),
+            "v1 hash must not satisfy v2 verification"
+        );
+    }
+
+    /// 監査対象 5: 不正 PEM は Crypto("Invalid private key") で拒否される。
+    #[test]
+    fn public_key_der_from_private_pem_rejects_invalid_pem() {
+        let (private_pem, public_der) = test_key_pair();
+        assert!(!public_der.is_empty(), "control: valid PEM must yield DER");
+
+        // 正しい PEM の base64 本体を 1 文字だけ壊したものも混入させる。
+        let mut corrupted_lines: Vec<String> = private_pem.lines().map(str::to_string).collect();
+        let first_char = corrupted_lines[1].chars().next().unwrap();
+        let replacement = if first_char == 'A' { 'B' } else { 'A' };
+        corrupted_lines[1].replace_range(0..1, &replacement.to_string());
+        let corrupted_pem = corrupted_lines.join("\n");
+
+        for pem in ["", "not a PEM", corrupted_pem.as_str()] {
+            let error = public_key_der_from_private_pem(pem)
+                .expect_err("invalid private key PEM must be rejected");
+            assert!(
+                matches!(&error, ForensicError::Crypto(message) if message.contains("Invalid private key")),
+                "expected Crypto(Invalid private key) for {pem:?}, got {error:?}"
+            );
+        }
     }
 
     /// 正常系（未マスク版）: 署名・連鎖・連番・Merkle root がすべて有効なら受理する。
