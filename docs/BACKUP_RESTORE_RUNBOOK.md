@@ -61,7 +61,9 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 最小1）件は保持期間を超えていても残す。ファイル名の UTC タイムスタンプ順に
 新しいものから判定し、作成したばかりのバックアップは削除しない。
 
-暗号化は `BACKUP_GPG_RECIPIENT` を設定した場合のみ行う（未設定なら平文のまま）。
+暗号化は `BACKUP_GPG_RECIPIENT` を設定した場合に行う。未設定では平文作成を拒否し、
+ローカル開発のみ `ALLOW_UNENCRYPTED_BACKUP=1` の明示オプトアウトで許可する
+（オフサイト保存が設定されている場合はオプトアウトも拒否）。
 設定時に `gpg`（または `GPG_BIN`）が無ければ失敗する（fail-closed）。平文は
 `verify_backup` 成功後かつ暗号化成功後にのみ削除し、暗号化失敗時は平文を残す。
 成果物は `<timestamp>.db.gpg` となる。ローテーション対象は `.db` と `.db.gpg` の両方。

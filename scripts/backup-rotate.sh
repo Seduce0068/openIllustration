@@ -13,6 +13,9 @@ min_keep="${MIN_KEEP:-3}"
 bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
 gpg_recipient="${BACKUP_GPG_RECIPIENT:-}"
 gpg_bin="${GPG_BIN:-gpg}"
+# 平文バックアップは開発専用。明示的なオプトアウトが無い限り拒否する
+# （オフサイト保存が設定されている場合はオプトアウトも認めない）。
+allow_plaintext="${ALLOW_UNENCRYPTED_BACKUP:-0}"
 # オフサイト保存: 実行ファイルのパスと宛先を指定する（eval は使わない）。
 offsitecopy="${OFFSITE_COPY_CMD:-}"
 offsitedest="${OFFSITE_DEST:-}"
@@ -40,6 +43,17 @@ fi
 if [[ -n "$gpg_recipient" ]] && ! command -v "$gpg_bin" >/dev/null 2>&1; then
 	echo "BACKUP_GPG_RECIPIENT is set but ${gpg_bin} is not available" >&2
 	exit 1
+fi
+if [[ -z "$gpg_recipient" ]]; then
+	if [[ -n "$offsitecopy" || -n "$offsitedest" ]]; then
+		echo "Refusing to copy an unencrypted backup offsite; set BACKUP_GPG_RECIPIENT" >&2
+		exit 1
+	fi
+	if [[ "$allow_plaintext" != "1" ]]; then
+		echo "BACKUP_GPG_RECIPIENT is not set; set ALLOW_UNENCRYPTED_BACKUP=1 for local development only" >&2
+		exit 1
+	fi
+	echo "WARNING: producing an unencrypted backup (ALLOW_UNENCRYPTED_BACKUP=1)" >&2
 fi
 if [[ -n "$offsitecopy" && -z "$offsitedest" ]] || [[ -z "$offsitecopy" && -n "$offsitedest" ]]; then
 	echo "OFFSITE_COPY_CMD and OFFSITE_DEST must be set together" >&2
