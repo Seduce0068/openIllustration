@@ -40,5 +40,6 @@ jobs:
         cargo deny check licenses
         cargo deny check advisories
         bash scripts/test-backup-rotate.sh
+        bash scripts/test-backup-cron-wrapper.sh
         bash scripts/test-prepare-distribution.sh
         bash e2e/ci-e2e.sh
