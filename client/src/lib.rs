@@ -497,6 +497,111 @@ pub struct ModerationStats {
     pub monthly: Vec<ModerationStatsMonthly>,
 }
 
+/// `GET /me/export` レスポンス（R5-04: 自分のデータをエクスポート）。
+///
+/// サーバー側の共通インターフェースと厳密に同じフィールドを持つ。
+/// 画面には件数しか出さないため配列要素は `serde_json::Value` で十分。
+/// 全フィールドに `#[serde(default)]` を付け、旧サーバーのレスポンスや
+/// フィールド追加前の形式でも受け取れるようにする。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct DataExport {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub generated_at: String,
+    #[serde(default)]
+    pub sub: String,
+    #[serde(default)]
+    pub users: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub contents: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub favorites: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub transactions: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub signatures: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub content_audit_log: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub reports: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub votes: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub payment_orders: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub governance_audit_log: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub refresh_tokens: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub revoked_subs: Vec<serde_json::Value>,
+}
+
+impl DataExport {
+    /// 画面に出すのは件数だけなので、個別のレコード内容は一切使わない。
+    fn record_count(&self) -> usize {
+        self.users.len()
+            + self.contents.len()
+            + self.favorites.len()
+            + self.transactions.len()
+            + self.signatures.len()
+            + self.content_audit_log.len()
+            + self.reports.len()
+            + self.votes.len()
+            + self.payment_orders.len()
+            + self.governance_audit_log.len()
+            + self.refresh_tokens.len()
+            + self.revoked_subs.len()
+    }
+}
+
+/// レスポンスの JSON をそのまま（未知のフィールドも含めて）pretty print して
+/// Blob → object URL → `<a download>` で保存する。object URL はダウンロード
+/// 開始後に revoke する（同期的な revoke は一部ブラウザで保存を中断するため）。
+fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(), String> {
+    let text = serde_json::to_string_pretty(payload)
+        .map_err(|_| "エクスポートの JSON 生成に失敗しました。".to_string())?;
+    let parts = js_sys::Array::new();
+    parts.push(&JsValue::from_str(&text));
+    let options = BlobPropertyBag::new();
+    options.set_type("application/json");
+    let blob = Blob::new_with_str_sequence_and_options(&parts, &options)
+        .map_err(|_| "エクスポートの Blob 生成に失敗しました。".to_string())?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| "ダウンロード URL の生成に失敗しました。".to_string())?;
+
+    let window =
+        web_sys::window().ok_or_else(|| "ブラウザの window が利用できません。".to_string())?;
+    let document = window
+        .document()
+        .ok_or_else(|| "ブラウザの document が利用できません。".to_string())?;
+    let anchor = document
+        .create_element("a")
+        .map_err(|_| "ダウンロード要素の生成に失敗しました。".to_string())?
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .map_err(|_| "ダウンロード要素の生成に失敗しました。".to_string())?;
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    // Firefox 等では DOM に繋がっていないアンカーの click が無視されることがある。
+    let body = document.body();
+    if let Some(body) = &body {
+        let _ = body.append_child(&anchor);
+    }
+    anchor.click();
+    if let Some(body) = &body {
+        let _ = body.remove_child(&anchor);
+    }
+
+    let url_to_revoke = url.clone();
+    let revoke = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url_to_revoke);
+    });
+    // 保存が開始される前に revoke するとダウンロードがキャンセルされるため遅延させる。
+    let _ =
+        window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 1_000);
+    Ok(())
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (view, set_view) = signal("login".to_string());
@@ -660,6 +765,15 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
 
     view! {
         <div class="mt-8">
+            <section data-testid="export-section" class="border border-white/10 p-4 mb-8 flex flex-wrap items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-xs font-bold tracking-widest uppercase">"MY DATA"</h2>
+                    <p class="text-[9px] text-gray-500 mt-1">
+                        "DOWNLOAD ALL OF YOUR DATA AS JSON."
+                    </p>
+                </div>
+                <ExportMyData token=token_stored.get_value() />
+            </section>
             <search>
                 <form
                     on:submit=move |ev| ev.prevent_default()
@@ -772,6 +886,85 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                     </div>
                 </Show>
             </div>
+        </div>
+    }
+}
+
+/// R5-04: 認証トークン付きで `GET /me/export` を呼び、レスポンスを JSON ファイルとして保存する。
+/// 401 は「ログインが必要です」、それ以外の HTTP エラーは status だけを表示し、
+/// レスポンス本文（機微情報）は画面へ出さない。
+#[component]
+fn ExportMyData(token: String) -> impl IntoView {
+    let (error, set_error) = signal(String::new());
+    let (status, set_status) = signal(String::new());
+    let (busy, set_busy) = signal(false);
+    let token_stored = StoredValue::new(token);
+
+    let on_export = move |_| {
+        let token = token_stored.get_value();
+        set_error.set(String::new());
+        set_status.set(String::new());
+        set_busy.set(true);
+        spawn_local(async move {
+            let result: Result<String, String> = async {
+                let response = Request::get(&format!("{}/me/export", API_BASE))
+                    .header("Authorization", &format!("Bearer {}", token))
+                    .send()
+                    .await
+                    .map_err(|_| "ネットワークエラーが発生しました。".to_string())?;
+                if response.status() == 401 {
+                    return Err("ログインが必要です".to_string());
+                }
+                if !response.ok() {
+                    return Err(format!(
+                        "エクスポートに失敗しました (HTTP {}).",
+                        response.status()
+                    ));
+                }
+                let payload: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|_| "エクスポートの解析に失敗しました。".to_string())?;
+                // 型定義で後方互換を確認し、画面には件数だけを出す。
+                let count = serde_json::from_value::<DataExport>(payload.clone())
+                    .map(|data| data.record_count())
+                    .unwrap_or(0);
+                download_json_file(&payload, "openillustration-export.json")?;
+                Ok(format!(
+                    "エクスポート完了: {count} 件のレコードをダウンロードしました。"
+                ))
+            }
+            .await;
+            set_busy.set(false);
+            match result {
+                Ok(message) => set_status.set(message),
+                Err(message) => set_error.set(message),
+            }
+        });
+    };
+
+    view! {
+        <div class="space-y-2 text-right">
+            <button
+                type="button"
+                on:click=on_export
+                disabled=busy
+                aria-label="EXPORT MY DATA"
+                data-testid="export-my-data"
+                class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors disabled:opacity-50"
+            >
+                {move || if busy.get() { "EXPORTING..." } else { "EXPORT MY DATA" }}
+            </button>
+            <Show when=move || !error.get().is_empty() fallback=|| ()>
+                <p role="alert" data-testid="export-error" class="text-xs text-red-500">
+                    {move || error.get()}
+                </p>
+            </Show>
+            <Show when=move || !status.get().is_empty() fallback=|| ()>
+                <p role="status" data-testid="export-status" class="text-xs text-gray-400">
+                    {move || status.get()}
+                </p>
+            </Show>
         </div>
     }
 }
@@ -1799,6 +1992,46 @@ mod tests {
 
         // 正しいデータはチェックサムと一致する
         assert!(common::verify_checksum(original_data, &original_checksum));
+    }
+
+    /// R5-04: サーバーの共通インターフェースに合わせた全フィールドが読めること。
+    #[test]
+    fn data_export_deserializes_all_agreed_fields() {
+        let json = r#"{
+            "version": 1,
+            "generated_at": "2026-11-18T00:00:00Z",
+            "sub": "subject-hash",
+            "users": [{"sub": "subject-hash"}],
+            "contents": [{"cid": "c1"}],
+            "favorites": [{"cid": "c1"}],
+            "transactions": [],
+            "signatures": [{}],
+            "content_audit_log": [],
+            "reports": [],
+            "votes": [],
+            "payment_orders": [],
+            "governance_audit_log": [],
+            "refresh_tokens": [{}],
+            "revoked_subs": []
+        }"#;
+        let data: super::DataExport = serde_json::from_str(json).expect("valid export");
+        assert_eq!(data.version, 1);
+        assert_eq!(data.generated_at, "2026-11-18T00:00:00Z");
+        assert_eq!(data.sub, "subject-hash");
+        assert_eq!(data.contents.len(), 1);
+        assert_eq!(data.record_count(), 5);
+    }
+
+    /// R5-04: フィールドが不足した旧レスポンスもデフォルトで受け取れること。
+    #[test]
+    fn data_export_defaults_missing_fields() {
+        let data: super::DataExport = serde_json::from_str(r#"{"version":1,"sub":"s"}"#)
+            .expect("partial export must still deserialize");
+        assert_eq!(data.version, 1);
+        assert_eq!(data.sub, "s");
+        assert_eq!(data.generated_at, "");
+        assert!(data.contents.is_empty());
+        assert_eq!(data.record_count(), 0);
     }
 }
 
