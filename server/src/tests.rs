@@ -5696,6 +5696,38 @@ async fn test_get_content_missing_cid_returns_404() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
+/// GOV-02 / REQ: 通報中・却下コンテンツは CID を知っていても直接取得できない。
+#[tokio::test]
+async fn test_get_content_hides_reported_and_rejected() {
+    for status in ["Reported", "Rejected"] {
+        let (app, db) = setup_app_with_db().await;
+        let cid = format!("QmHidden{status}");
+        db.execute(
+            "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', 'unused', ?)",
+            (cid.clone(), status),
+        )
+        .await
+        .unwrap();
+        let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+        let response = app
+            .oneshot(with_peer(
+                Request::get(format!("/content/{cid}"))
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::NOT_FOUND,
+            "status={status} must not be directly retrievable"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_payment_order_rejects_invalid_order_id_format() {
     let verifier = Arc::new(MockVerifier::default());

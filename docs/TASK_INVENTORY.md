@@ -179,6 +179,7 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R2-09: `get_content` を `status = 'Approved'` で絞り、通報中/却下コンテンツの直接 CID 取得を 404 化。一覧取得と整合。mutation（条件削除）で新規テストが失敗することを確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
  共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。
 - [対応済み] Markdown URL の Unicode 空白バイパス修正: `is_safe_markdown_url` が ASCII 空白のみ拒否し、ZWSP/NBSP を先頭に付けた `javascript:`
@@ -269,9 +270,10 @@ status: current
 
 ### 3.8 依存・セキュリティ衛生
 
-- [中] **既知の脆弱性勧告（受容中）**: `libsql 0.10` 由来 10 件（上流/代替の見直し、特にリモートDB利用前）と `paste` 1 件（RUSTSEC-2024-0436,
-  unmaintained・ビルド時マクロ・既知脆弱性なし・パッチなし、Leptos 側の除去待ち）。CI で `cargo deny check advisories` を通過させつつ四半期/更新時に再評価（
-  [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
+- [中] **既知の脆弱性勧告（受容中・12件）**: `libsql 0.10` 由来 10 件、`paste` 1 件（RUSTSEC-2024-0436）、
+  `chrono` 1 件（RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）。CI で
+  `cargo deny check advisories` を通過させつつ四半期/更新時に再評価。chrono は
+  jiff/time への移行を計画（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
 - [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（452件、TSV 798行）を生成（
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 - [対応済み] 配布時のライセンス再監査: `scripts/prepare-distribution.sh` が `cargo deny check licenses` を事前実行し、不整合なら成果物を生成しない。NOTICE

@@ -173,6 +173,10 @@ stale_after: "2027-02-15T00:00:00+09:00"
     2026-11-17 に crates.io の `max_version` を再確認し、現行版と同一
     （2026-10-13 公開）であることを確認済み。受容判断は変更なし。
     リモート DB 採用前に代替 crate を再評価する。
+  - chrono: 2026-11-17 発行の RUSTSEC-2026-0543 は unmaintained（情報区分）で、
+    修正版なし。一次情報 [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)
+    で確認。`common`/`server`/`libsql` 経由で使用。jiff / time への移行を
+    別タスクとして計画し、現状は理由付きで受容（12 件目）。
 - D3: `cargo deny check advisories` を ignore リスト付きで CI に導入した。
   新しい勧告は CI を失敗させ、不要になった ignore も検出する。
 - D4: 再評価のトリガーは、依存更新時、四半期ごと、本番化判断時。
@@ -211,3 +215,5 @@ cargo deny check advisories
   CI に導入。paste は上流修正がないため受容した。
 - 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
   受容 11 件に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
+- 2026-11-17: 新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を受容。
+  脆弱性ではなく情報区分で修正版なし。受容は 12 件へ増加。jiff/time 移行を計画。

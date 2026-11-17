@@ -56,4 +56,7 @@ ignore = [
   { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 は libsql 経由。リモートDB採用前に解消" },
   # ビルド時のみ使われるマクロ（既知の脆弱性なし）
   { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 は leptos のビルド時マクロ。leptos 更新待ち" },
+  # 2026-11-17 発行: unmaintained（情報区分）で脆弱性ではない。修正版なし。
+  # common/age・server・libsql 経由で使用。jiff/time への移行を別途計画する。
+  { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 は unmaintained 情報勧告。修正版なし。jiff/time 移行を計画中" },
 ]

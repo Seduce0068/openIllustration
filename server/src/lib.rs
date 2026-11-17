@@ -1495,10 +1495,12 @@ pub async fn get_content(
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
 
+    // 一覧と同じく Approve 済みのみ配信する。通報中（Reported）/却下（Rejected）は
+    // CID を知っていても直接取得できないようにする（暫定非表示の実効化）。
     let mut rows = state
         .db
         .query(
-            "SELECT checksum, type FROM contents WHERE cid = ?",
+            "SELECT checksum, type FROM contents WHERE cid = ? AND status = 'Approved'",
             [cid.clone()],
         )
         .await?;
