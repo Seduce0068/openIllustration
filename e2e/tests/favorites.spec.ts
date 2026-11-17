@@ -155,7 +155,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
       card('Plain Story').getByRole('button', { name: 'Add to favorites' }),
     ).toHaveAttribute('aria-pressed', 'false');
 
-    // ☆ → POST が呼ばれ、成功後に一覧が再取得される。
+    // ☆ → POST が呼ばれ、成功後に一覧が「1回だけ」再取得される。
+    // 回数を固定し、かつリクエスト内容も完全一致で検証して過剰再フェッチを検出する。
     await card('Plain Story').getByRole('button', { name: 'Add to favorites' }).click();
     await expect.poll(() => favoriteCalls).toEqual([
       { method: 'POST', path: '/content/QmPlainNovel/favorite' },
@@ -163,7 +164,10 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await expect(
       card('Plain Story').getByRole('button', { name: 'Remove from favorites' }),
     ).toHaveAttribute('aria-pressed', 'true');
-    await expect.poll(() => contentRequests.length).toBeGreaterThanOrEqual(2);
+    await expect.poll(() => contentRequests).toEqual([
+      { q: null, tag: null, type: null, favorite_only: null },
+      { q: null, tag: null, type: null, favorite_only: null },
+    ]);
 
     // ★ → DELETE が呼ばれ、ボタン状態が戻る。
     await card('Fav Story').getByRole('button', { name: 'Remove from favorites' }).click();
@@ -220,5 +224,18 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await expect(
       card('Fav Story').getByRole('button', { name: 'Remove from favorites' }),
     ).toHaveAttribute('aria-pressed', 'true');
+
+    // 一連の操作で飛んだ一覧リクエストはちょうど8件だけ（失敗トグルでは再取得しない）。
+    // 配列を完全一致で検証し、想定外の再フェッチ・クエリ混入を検出する。
+    await expect.poll(() => contentRequests).toEqual([
+      { q: null, tag: null, type: null, favorite_only: null },
+      { q: null, tag: null, type: null, favorite_only: null },
+      { q: null, tag: null, type: null, favorite_only: null },
+      { q: null, tag: null, type: null, favorite_only: '1' },
+      { q: 'Plain', tag: null, type: null, favorite_only: '1' },
+      { q: null, tag: null, type: null, favorite_only: '1' },
+      { q: null, tag: null, type: null, favorite_only: null },
+      { q: null, tag: null, type: null, favorite_only: null },
+    ]);
   });
 });

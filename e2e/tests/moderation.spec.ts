@@ -222,6 +222,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     let forbidStats = false;
     let statsRequestCount = 0;
     let statsAuthHeader: string | undefined;
+    // 再フェッチ回数とリクエスト内容を完全一致で検証し、過剰リクエストを検出する。
+    const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
 
     await page.route('**/auth/login', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
@@ -239,6 +241,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.route('**/mod/stats', async route => {
       statsRequestCount += 1;
       statsAuthHeader = route.request().headers()['authorization'];
+      statsRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: statsAuthHeader,
+      });
       if (forbidStats) {
         await route.fulfill({
           status: 403,
@@ -275,6 +282,13 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'MODERATION' }).click();
     await expect(page.getByTestId('moderation-stats-error')).toHaveText('運用者権限が必要です', { timeout: 10000 });
     await expect(page.getByTestId('moderation-stats')).toHaveCount(0);
-    expect(statsRequestCount).toBeGreaterThanOrEqual(2);
+
+    // 集計は初期表示と画面遷移後の2回だけ。メソッド・パス・Authorization も
+    // 完全一致で検証し、余計な再フェッチや未認証リクエストを検出する。
+    expect(statsRequestCount).toBe(2);
+    expect(statsRequests).toEqual([
+      { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+      { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+    ]);
   });
 });
