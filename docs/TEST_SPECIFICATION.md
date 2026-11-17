@@ -105,7 +105,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
-| MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照 |
+| MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -365,6 +365,12 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 
 `POST /metrics/client-events` と `GET /metrics` の `openillustration_neutralized_urls_total` を対象に、
 クライアント送信とサーバー側の集計を分離して検証する。
+
+このカウンタは参考値であり、アラート判定や請求等の意思決定に単独で使わない。
+`POST /metrics/client-events` は認証不要のため `count=1000` の連投でカウンタを汚染でき、
+累積値を不正検知や課金の根拠として扱うアサーションは設けない。
+検証は差分加算・ペイロードの非機微性・レート制限の適用に限定し、
+判断には認証済みデータやサーバー側の独立した記録を突き合わせる。
 
 #### サーバー側差分アサーション
 

@@ -62,6 +62,8 @@ P2（品質・保守・プロダクト拡張）:
 - [x] 中立化URLの件数指標（2026-11-18 対応済み）: POST /metrics/client-events で event/count のみ送信、
   openillustration_neutralized_urls_total を /metrics へ公開。URL本文・IP・UA は送らない。
 - [x] 価格単位の型エイリアス固定（2026-11-18 対応済み）: AmountJpy = u64、wei と明確に区別。
+- [x] 敵対的レビュー対応（2026-11-18）: CIDv0 の multihash prefix 検証、dag-cbor codec 対応、
+  クライアントイベントの未知キー拒否、CORS 最外側化、API オリジンのビルド時注入。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

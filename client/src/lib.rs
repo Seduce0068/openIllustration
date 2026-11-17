@@ -29,7 +29,29 @@ fn upload_media_type(browser_type: &str, filename: &str) -> &'static str {
     }
 }
 
-const API_BASE: &str = "http://localhost:3000";
+/// API オリジン。ビルド時に `OIL_API_BASE` で上書きできる表示用の型。
+///
+/// 値はオリジンのみ（`<scheme>://<host>[:<port>]`）とし、パス・クエリ・
+/// 認証情報・機微情報は含めない。HTTPS 配信では HTTPS オリジンを指定し、
+/// mixed content を避ける。未設定時は開発用ローカルの既定値を使う。
+struct ApiOrigin;
+
+/// 設定値の表記ゆれを吸収するため、末尾の `/` だけを除去する。
+fn normalize_api_origin(origin: &str) -> &str {
+    origin.trim_end_matches('/')
+}
+
+impl std::fmt::Display for ApiOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const DEFAULT: &str = "http://localhost:3000";
+        let origin = option_env!("OIL_API_BASE").unwrap_or(DEFAULT);
+        f.write_str(normalize_api_origin(origin))
+    }
+}
+
+/// 各リクエスト URL の起点。`format!("{API_BASE}/...")` として使う。
+const API_BASE: ApiOrigin = ApiOrigin;
+
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
@@ -1928,6 +1950,30 @@ mod tests {
         assert!(!rendered.contains("src=\"javascript:"));
         assert!(rendered.contains("href=\"#\""));
         assert!(rendered.contains("src=\"#\""));
+    }
+
+    /// ビルド時に注入されたオリジンは末尾スラッシュを除去して URL へ連結される。
+    #[test]
+    fn api_origin_has_no_trailing_slash() {
+        let expected = match option_env!("OIL_API_BASE") {
+            Some(value) => value.trim_end_matches('/'),
+            None => "http://localhost:3000",
+        };
+        let rendered = format!("{}", super::API_BASE);
+        assert_eq!(rendered, expected);
+        assert!(!rendered.ends_with('/'));
+        assert_eq!(
+            super::normalize_api_origin("https://api.example.org"),
+            "https://api.example.org"
+        );
+        assert_eq!(
+            super::normalize_api_origin("https://api.example.org/"),
+            "https://api.example.org"
+        );
+        assert_eq!(
+            super::normalize_api_origin("https://api.example.org///"),
+            "https://api.example.org"
+        );
     }
 
     /// 監視イベントは event 名と count だけを持ち、サーバーの範囲 1..=1000 を守る。
