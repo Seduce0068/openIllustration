@@ -19,7 +19,11 @@ pub const ORDER_TTL_MINUTES: i64 = 30;
 /// JPYC の小数桁。コントラクトの `decimals()` と一致することを本番で確認する。
 pub const JPYC_DECIMALS: u32 = 18;
 /// 1回の注文上限（円）。ADR-0003 の既定値。
-pub const MAX_ORDER_JPY: u64 = 1_000_000;
+/// 価格は日本円の整数（1〜`MAX_ORDER_JPY`）。
+/// チェーン上の送金額は wei（10^18 スケール）で別途保持し、混同しない。
+pub type AmountJpy = u64;
+
+pub const MAX_ORDER_JPY: AmountJpy = 1_000_000;
 
 pub const STATUS_PENDING: &str = "PENDING";
 pub const STATUS_DETECTED: &str = "DETECTED";
@@ -62,7 +66,7 @@ pub struct CreateOrderRequest {
     pub chain_id: i64,
     pub wallet_address: String,
     /// 日本円建ての金額。1〜1,000,000。
-    pub amount_jpy: u64,
+    pub amount_jpy: AmountJpy,
 }
 
 #[derive(Debug, Serialize)]
@@ -145,7 +149,7 @@ pub fn derivation_index_to_u32(index: i64) -> Result<u32, AppError> {
     })
 }
 
-pub fn jpy_to_wei(amount_jpy: u64) -> Result<String, AppError> {
+pub fn jpy_to_wei(amount_jpy: AmountJpy) -> Result<String, AppError> {
     if amount_jpy == 0 || amount_jpy > MAX_ORDER_JPY {
         return Err(AppError::BadRequest(format!(
             "amount_jpy must be between 1 and {MAX_ORDER_JPY}"

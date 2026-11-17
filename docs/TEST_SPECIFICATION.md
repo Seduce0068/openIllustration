@@ -19,9 +19,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全24件（auth 2 / economy 1 /
-  error-paths 4 / export 2 / favorites 1 / integrity 2 / moderation 4 / real-api 4 /
-  search 1 / upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全25件（auth 2 / economy 1 /
+  error-paths 4 / export 2 / favorites 1 / integrity 2 / metrics 1 / moderation 4 /
+  real-api 4 / search 1 / upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
 
 ## 2. 実装済みテストの概要
 
@@ -31,7 +31,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、CORSオリジン解析テスト | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
-| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認 | ログ集約基盤・アラート通知先の選定は未実施 |
+| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
@@ -105,6 +105,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照 |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -229,6 +230,7 @@ cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
+cd e2e && npm test -- metrics.spec.ts   # MET-01 中立化URL件数 E2E のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
 cd e2e && npm test -- error-paths.spec.ts   # エラーパス E2E（4件）のみ
 ```
@@ -358,6 +360,51 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 4. `AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること`:
    監査エンドポイントを500に差し替え、監査パネルの `data-testid="audit-error"` の
    `role="alert"` に `監査ログの取得に失敗しました (HTTP 500).` が表示される。
+
+### 中立化URL件数指標の検証（MET-01）
+
+`POST /metrics/client-events` と `GET /metrics` の `openillustration_neutralized_urls_total` を対象に、
+クライアント送信とサーバー側の集計を分離して検証する。
+
+#### サーバー側差分アサーション
+
+カウンタはプロセス内で他のテストと値を共有するため、絶対値ではなく送信前後の差分（`+N`）で検証する。
+テスト名は実装側と連携して確定した次の値を使う。
+
+- `test_metrics_expose_prometheus_counters`: 既存テストを拡張し、新カウンタが HELP/TYPE 行付きで
+  Prometheus 形式に現れ、POST 前後の差分が送信 count と一致することを確認する。
+- `test_client_events_neutralized_url_increments_counter`: 正常系（count 指定・省略）で 204
+  （本文なし）を返し、カウンタが `count` だけ増えることを確認する。
+- `test_client_events_rejects_invalid_payloads`: 不正 event、count（0 / 1001 / 負 / 小数 /
+  文字列）、不正 JSON を 400 で拒否し、カウンタが増えないことを確認する。
+- `test_client_events_rejects_oversized_body`: 1 KiB 超のボディを 400 で拒否し、
+  カウンタが増えないことを確認する。
+- `test_client_events_is_rate_limited`: レート制限の対象であり、超過時に 429 を返すことを確認する。
+- URL 本文・IP・User-Agent は送らず、サーバーも受信・記録・ログ出力しない。ペイロードのキーは
+  `event` と `count` のみで、成功レスポンスにも本文を返さない。
+
+#### クライアント側単体テスト
+
+- `client_event_payload_is_minimal_and_clamped`: ペイロードが `event` と `count` のみで、
+  0 件は送信せず、上限は 1000 にクランプされることを確認する。
+- `render_markdown_counts_neutralized_urls`: `render_markdown()` 1 回で中和された危険 URL の
+  件数を数え、1 描画につき 1 回の送信へ集約されることを確認する。
+
+#### E2E シナリオ
+
+`e2e/tests/metrics.spec.ts` の
+`MET-01: neutralized URL count is posted once as a minimal client event` が、モック認証
+（`ALLOW_MOCK_AUTH=1`）で次を確認する（chromium、1件）。
+
+1. 危険 URL を 2 件含む Markdown（`[click](javascript:alert(1))` と
+   `![img](data:text/html,alert)`）を Novel 本文として返し、チェックサム一致後に
+   `a[href="#"]` と `img[src="#"]` が描画される。
+2. `page.route('**/metrics/client-events', ...)` で捕捉した POST はちょうど1本で、
+   本文は `{"event":"neutralized_url","count":2}` と JSON deep-equal になる。
+3. 生 JSON に URL 本文（`javascript:alert(1)` / `data:text/html,alert` / タイトル）が含まれず、
+   キーは `count` と `event` のみ。`authorization` / `x-forwarded-for` ヘッダも送らない。
+4. 204（本文なし）のモック応答で画面に `role="alert"` が出ない。API 側のバリデーションと
+   カウンタの差分検証はサーバー側単体テストへ委譲し、本シナリオでは重複して検証しない。
 
 ## 5. リリース証跡
 

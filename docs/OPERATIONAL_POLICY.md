@@ -118,6 +118,14 @@ generated:
   アラート通知先と集約基盤の選定は導入環境に委ねる。
 - `GET /metrics` が Prometheus 形式の `openillustration_http_requests_total` と `openillustration_http_errors_total`
   （4xx/5xx）を公開する。カウンタはプロセス内（単一ライター前提）で、再起動時にゼロへ戻る。個人情報・リクエストパス・クエリは含めない。
+- 中立化URL件数指標: クライアントが Markdown 描画時に危険スキームの URL を中和した件数を
+  `POST /metrics/client-events` へ `{"event":"neutralized_url","count":N}`（`event` は固定値、
+  `count` は 1〜1000 の整数、1 回の描画につき最大 1 回）で送る。認証不要、成功時は 204
+  （本文なし）。URL 本文・IP アドレス・User-Agent・認証情報はペイロードへ含めず、
+  サーバーも受信・記録・ログ出力しない（監視用の `/metrics` とは異なり、IP ゲートと
+  既存レート制限の適用対象）。
+  `GET /metrics` は `openillustration_neutralized_urls_total`（Prometheus counter、
+  送信された count の累積値）を公開する。カウンタはプロセス内で再起動時にゼロへ戻る。
 
 ## 6. 本番移行ゲート
 
