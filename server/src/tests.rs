@@ -178,6 +178,7 @@ async fn setup_app_with_options(
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
 
     let router = build_router(shared_state);
@@ -225,6 +226,7 @@ async fn setup_app_with_jwt_keys(
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     (build_router(shared_state), db)
 }
@@ -306,6 +308,7 @@ async fn setup_app_with_payments(
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
 
     let router = build_router(shared_state);
@@ -350,6 +353,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
 
     (build_router(shared_state), db)
@@ -654,6 +658,7 @@ async fn setup_app_with_oidc_and_age_policy(
         age_policy,
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
 
     (build_router(shared_state), oidc, mock, db)
@@ -2515,6 +2520,7 @@ async fn test_vote_consensus_rejects_content() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -2695,6 +2701,7 @@ async fn test_duplicate_vote_rejected() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -2892,6 +2899,7 @@ async fn test_vote_after_conclusion_rejected() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -2972,6 +2980,7 @@ async fn test_vote_for_missing_report_returns_404() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -3037,6 +3046,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -3127,6 +3137,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -3193,6 +3204,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
 
@@ -4198,6 +4210,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
@@ -6082,6 +6095,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
                 .collect::<std::collections::HashSet<_>>(),
         ),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
     (build_router(state), db)
 }
@@ -7156,6 +7170,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         age_policy: common::age::AgePolicy::default(),
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down,
+        metrics: Arc::new(crate::Metrics::default()),
     });
     let app = build_router(state);
 
@@ -7541,7 +7556,7 @@ async fn test_metrics_expose_prometheus_counters() {
     let before_body =
         String::from_utf8(to_bytes(before.into_body(), 4096).await.unwrap().to_vec()).unwrap();
     let requests_before = read_metric(&before_body, "openillustration_http_requests_total");
-    assert!(read_metric(&before_body, "openillustration_http_errors_total") <= requests_before);
+    let errors_before = read_metric(&before_body, "openillustration_http_errors_total");
 
     // 404 を発生させ、エラーカウンタが進むことを確認する。
     let missing = app
@@ -7565,9 +7580,15 @@ async fn test_metrics_expose_prometheus_counters() {
         String::from_utf8(to_bytes(after.into_body(), 4096).await.unwrap().to_vec()).unwrap();
     let requests_after = read_metric(&after_body, "openillustration_http_requests_total");
     let errors_after = read_metric(&after_body, "openillustration_http_errors_total");
-    assert!(
-        requests_after >= requests_before + 2,
-        "requests must be counted"
+    // 注入されたカウンタは他テストと共有されないため、正確な差分を検証できる。
+    assert_eq!(
+        requests_after,
+        requests_before + 2,
+        "requests must be counted exactly"
     );
-    assert!(errors_after >= 1, "4xx responses must be counted");
+    assert_eq!(
+        errors_after,
+        errors_before + 1,
+        "each 4xx response must increment the error counter exactly once"
+    );
 }

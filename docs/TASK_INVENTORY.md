@@ -179,6 +179,9 @@ status: current
 - [対応済み] OKF 必須フロントマターの補完: 24ファイルに欠けていた `title`（本文の先頭 `##` 見出しを採用）と
   `generated.by` / `generated.at`（RFC 3339 オフセット付き）を追加。全26ファイルで OKF 必須キー
   0 違反、markdownlint 0 issues を検証。
+- [対応済み] R3-01: HTTP カウンタを `AppState` の `Metrics` へ移し、テストから独立
+  インスタンスを注入可能化。絶対値アサーションを正確な差分（+2 requests / +1 error）へ変更。
+  mutation（エラー加算削除）でテスト失敗を確認。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。

@@ -62,6 +62,8 @@ pub struct AppState {
     pub moderation_operators: Arc<HashSet<String>>,
     /// グレースフル停止中フラグ。readiness が 503 を返すために使う。
     pub shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    /// HTTP カウンタ。テストから独立したインスタンスを注入できる。
+    pub metrics: Arc<Metrics>,
 }
 
 /// `Content-Length` が 10 MiB を超えるリクエストを 413 で拒否する。
@@ -88,9 +90,12 @@ async fn reject_oversized_body(
     next.run(request).await
 }
 
-/// プロセス全体の軽量メトリクス。単一ライター運用（1プロセス）を前提とする。
-static METRIC_REQUESTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static METRIC_ERRORS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// 軽量メトリクス。テストから注入できるよう `AppState` に保持する。
+#[derive(Default)]
+pub struct Metrics {
+    pub requests: std::sync::atomic::AtomicU64,
+    pub errors: std::sync::atomic::AtomicU64,
+}
 
 /// 全レスポンスへ最小限のセキュリティヘッダを付与する。
 /// MIME スニッフィング防止（nosniff）と、ブラウザがユーザー投稿を
@@ -117,19 +122,26 @@ async fn security_headers(
 
 /// リクエスト数と 4xx/5xx 応答数を記録するミドルウェア。
 async fn observe_metrics(
+    State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    METRIC_REQUESTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state
+        .metrics
+        .requests
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let response = next.run(request).await;
     if response.status().is_client_error() || response.status().is_server_error() {
-        METRIC_ERRORS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        state
+            .metrics
+            .errors
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     response
 }
 
 /// Prometheus 形式の最小化されたメトリクス（外部クレートなし）。
-pub async fn metrics() -> Response {
+pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
     let body = format!(
         "# HELP openillustration_http_requests_total Total HTTP requests.\n\
          # TYPE openillustration_http_requests_total counter\n\
@@ -137,8 +149,14 @@ pub async fn metrics() -> Response {
          # HELP openillustration_http_errors_total Total 4xx/5xx HTTP responses.\n\
          # TYPE openillustration_http_errors_total counter\n\
          openillustration_http_errors_total {}\n",
-        METRIC_REQUESTS.load(std::sync::atomic::Ordering::Relaxed),
-        METRIC_ERRORS.load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .requests
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .errors
+            .load(std::sync::atomic::Ordering::Relaxed),
     );
     (
         StatusCode::OK,
@@ -658,6 +676,7 @@ pub async fn run() -> anyhow::Result<()> {
         age_policy,
         moderation_operators,
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
     });
 
     let worker_db = Arc::clone(&shared_state.db);
@@ -1198,7 +1217,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
-        .layer(from_fn(observe_metrics))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            observe_metrics,
+        ))
         .layer(from_fn(reject_oversized_body))
         .layer(from_fn(network::ipv6_only_middleware))
         // 最外側に置き、IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
