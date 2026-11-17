@@ -10,6 +10,8 @@ Environment=BIN_DIR=/opt/openIllustration/target/release
 Environment=RETENTION_DAYS=30
 Environment=MIN_KEEP=3
 Environment=DATABASE_URL=file:/var/lib/openillustration/local.db
+# BACKUP_GPG_RECIPIENT（必須）と ALERT_CMD / OFFSITE_* は 600 権限の環境ファイルで管理する。
+EnvironmentFile=-/etc/openillustration/backup.env
 ExecStart=/opt/openIllustration/scripts/backup-rotate.sh
 User=openillustration
 Group=openillustration

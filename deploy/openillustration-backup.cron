@@ -4,4 +4,6 @@ SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 MAILTO=admin@example.com
 
-17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-rotate.sh
+# BACKUP_GPG_RECIPIENT（必須）を含む /etc/openillustration/backup.env を
+# ラッパー経由で読み込む。平文バックアップはスクリプト側で拒否される。
+17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh

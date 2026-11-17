@@ -211,6 +211,9 @@ status: current
 - [対応済み] `backup_db` の取得後検証に `_migrations` 台帳チェックを追加（旧実装はコメントで保証を謳いながら未検証）。`backup_ok ... migrations=9` を実出力で確認。
 - [対応済み] スケジューラ設定例: `deploy/openillustration-backup.{service,timer,cron}` を追加。`backup-rotate.sh` は `BIN_DIR`
   のビルド済みバイナリを優先し、実リリースバイナリで取得・検証・ローテーションを確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+- [対応済み] バックアップ環境ファイルのデプロイ反映: fail-closed 化により既存の systemd/cron サンプルが
+  即失敗する問題を修正。`EnvironmentFile=-/etc/openillustration/backup.env` と cron 用
+  `backup-cron-wrapper.sh`（600 権限・fail-closed）を追加し Runbook へ準備手順を記載。
 - [対応済み] バックアップ暗号化の fail-closed: `BACKUP_GPG_RECIPIENT` 未設定時に平文作成を拒否（ローカル開発は `ALLOW_UNENCRYPTED_BACKUP=1` で明示オプトアウト、オフサイト保存時は不可）。シェル回帰テスト12件で確認。
 - [対応済み] バックアップ暗号化: `BACKUP_GPG_RECIPIENT` 設定時に GPG 暗号化（gpg 不在時は fail-closed）、平文は検証・暗号化成功後に削除。復号→verify_backup まで実確認（
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。

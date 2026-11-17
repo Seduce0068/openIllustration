@@ -54,6 +54,11 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
   `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`）
 - cron: `deploy/openillustration-backup.cron`（`/etc/cron.d/` に配置）
 
+導入前に `/etc/openillustration/backup.env`（所有者 `openillustration`、権限 600）へ
+`BACKUP_GPG_RECIPIENT=<GPG 公開鍵のメール/ID>` を設定する。未設定なら
+`backup-rotate.sh` は平文作成を拒否して失敗する（fail-closed）。systemd は
+`EnvironmentFile=-`、cron は `scripts/backup-cron-wrapper.sh` 経由でこのファイルを読む。
+
 `MAILTO` / `SyslogIdentifier` を実際の通知先へ変更してアラートを受け取る。
 パス・ユーザー・グループは導入環境に合わせて修正する。
 
