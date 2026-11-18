@@ -132,9 +132,57 @@ pub fn normalize_address(address: &str) -> String {
     address.to_ascii_lowercase()
 }
 
-/// 注文IDに対するウォレット所有証明のメッセージ。
+/// 注文IDのみを署名対象にする旧形式。
+/// 金額・送金先・チェーンを確認できない盲署名リスクがあるため、
+/// 新規の署名生成には `wallet_bind_message_v2` を使うこと。
+#[deprecated(
+    note = "use wallet_bind_message_v2 with chain_id, wallet_address, recipient_address and amount_jpy"
+)]
+// 旧クライアントが参照してもコンパイルできるよう API 互換のため残す。
+#[allow(dead_code)]
 pub fn wallet_bind_message(order_id: &str) -> String {
     format!("openIllustration payment order {order_id}")
+}
+
+/// ウォレット所有証明のメッセージ（v2）。
+/// 署名者が送金先・金額・チェーンを確認できるよう、注文IDに加えて
+/// chain_id / wallet_address / recipient_address / amount_jpy を含む。
+/// アドレスは EVM の大小文字無視を前提に小文字化し、表示用チェックサムの
+/// 違いで署名検証が失敗しないようにする。
+pub fn wallet_bind_message_v2(
+    order_id: &str,
+    chain_id: i64,
+    wallet_address: &str,
+    recipient_address: &str,
+    amount_jpy: AmountJpy,
+) -> String {
+    format!(
+        "openIllustration payment order {order_id} chain {chain_id} wallet {} recipient {} amount_jpy {amount_jpy}",
+        normalize_address(wallet_address),
+        normalize_address(recipient_address),
+    )
+}
+
+/// DB に保存された amount_wei から円建て金額を導出する。
+/// amount_wei は常に `jpy_to_wei` の 10^18 スケールで保存されるため、
+/// 割り切れない値はデータ不整合として拒否する。
+pub fn amount_jpy_from_wei(amount_wei: &str) -> Result<AmountJpy, AppError> {
+    let wei = amount_wei
+        .parse::<u128>()
+        .map_err(|_| AppError::Internal(format!("invalid amount_wei in order: {amount_wei}")))?;
+    let scale = 10u128
+        .checked_pow(JPYC_DECIMALS)
+        .ok_or_else(|| AppError::Internal("JPYC decimal scale overflow".to_string()))?;
+    let jpy = wei
+        .checked_div(scale)
+        .filter(|jpy| jpy * scale == wei)
+        .ok_or_else(|| {
+            AppError::Internal(format!(
+                "amount_wei is not a whole JPY amount: {amount_wei}"
+            ))
+        })?;
+    AmountJpy::try_from(jpy)
+        .map_err(|_| AppError::Internal(format!("amount_wei exceeds u64 JPY: {amount_wei}")))
 }
 
 /// 円建て金額を JPYC の最小単位（10^18）へ変換する。
@@ -475,7 +523,15 @@ pub async fn bind_wallet(
         ));
     }
 
-    let message = wallet_bind_message(&order.order_id);
+    // 盲署名を防ぐため、注文IDだけでなく送金先・金額・チェーンも署名対象に含める。
+    let amount_jpy = amount_jpy_from_wei(&order.amount_wei)?;
+    let message = wallet_bind_message_v2(
+        &order.order_id,
+        order.chain_id,
+        &order.wallet_address,
+        &order.recipient_address,
+        amount_jpy,
+    );
     let recovered = recover_ethereum_address(message.as_bytes(), &payload.signature)?;
     if normalize_address(&recovered) != normalize_address(&order.wallet_address) {
         return Err(AppError::Unauthorized(
@@ -605,8 +661,10 @@ pub async fn verify_order(
         ));
     }
 
-    // 確定済みへは 1 回だけ遷移する。DETECTED を期待することで
-    // 並行する別の verify の最終状態を上書きしない。
+    // 1 段目は読み取った status を CAS 条件に DETECTED へ書き換えるため、
+    // CONFIRMING から始まった場合も一度 DETECTED に戻ってから次状態へ進む。
+    // 確定済み(FINALIZED)へは 1 段目の `status <> FINALIZED` で既に除外され、
+    // 2 段目は DETECTED を期待して next_status を書き込む。
     tx.execute(
         "UPDATE payment_orders
          SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
