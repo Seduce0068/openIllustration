@@ -180,6 +180,65 @@ else
 	echo "PASS rotation temp file cleaned up"
 fi
 
+echo "=== 失敗時の一時ディレクトリ・平文 DB の後片付け ==="
+# 失敗注入ごとに専用のバックアップ先を用意し、残留物を確実に検出する。
+new_backup_dir() {
+	local dir="$1"
+	mkdir -p "$dir"
+	chmod 700 "$dir"
+}
+# 作業ディレクトリ（.openillustration-*）と平文 tmp_db（openillustration.db）が残っていないことを検証する。
+cleanup_no_leftovers() {
+	local name="$1" dir="$2"
+	if compgen -G "${dir}/.openillustration-*" >/dev/null; then
+		echo "FAIL ${name}: leftover temp dir/file"
+		failures=$((failures + 1))
+	elif [[ -n "$(find "$dir" -maxdepth 2 -type f -name 'openillustration.db' -print -quit)" ]]; then
+		echo "FAIL ${name}: leftover plaintext temp DB"
+		failures=$((failures + 1))
+	else
+		echo "PASS ${name}: no temp dir / plaintext temp DB left"
+	fi
+}
+
+# verify_backup 失敗: 平文 tmp_db が作業ディレクトリに残っていた問題の回帰テスト。
+mkdir -p "${work}/fail-verify-bin"
+cp "${work}/bin/backup_db" "${work}/fail-verify-bin/backup_db"
+cat >"${work}/fail-verify-bin/verify_backup" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated verify failure" >&2
+exit 9
+EOF
+chmod +x "${work}/fail-verify-bin/verify_backup"
+cleanup_dir="${work}/cleanup-verify"
+new_backup_dir "$cleanup_dir"
+expect_failure "cleanup on verify_backup failure" env BACKUP_DIR="$cleanup_dir" BIN_DIR="${work}/fail-verify-bin" BACKUP_GPG_RECIPIENT=test "$script"
+cleanup_no_leftovers "verify_backup failure" "$cleanup_dir"
+
+# gpg 失敗: 暗号化失敗時も作業ディレクトリは残さない（最終パスの平文は fail-closed で維持）。
+cat >"${work}/fail-gpg" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated gpg failure" >&2
+exit 8
+EOF
+chmod +x "${work}/fail-gpg"
+cleanup_dir="${work}/cleanup-gpg"
+new_backup_dir "$cleanup_dir"
+expect_failure "cleanup on gpg failure" env BACKUP_DIR="$cleanup_dir" GPG_BIN="${work}/fail-gpg" BACKUP_GPG_RECIPIENT=test "$script"
+cleanup_no_leftovers "gpg failure" "$cleanup_dir"
+
+# オフサイト失敗。
+cleanup_dir="${work}/cleanup-offsite"
+new_backup_dir "$cleanup_dir"
+expect_failure "cleanup on offsite failure" env BACKUP_DIR="$cleanup_dir" BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/fail.sh" OFFSITE_DEST="${work}/offsite" "$script"
+cleanup_no_leftovers "offsite failure" "$cleanup_dir"
+
+# find 失敗。
+cleanup_dir="${work}/cleanup-find"
+new_backup_dir "$cleanup_dir"
+expect_failure "cleanup on find failure" env BACKUP_DIR="$cleanup_dir" BACKUP_GPG_RECIPIENT=test FIND_BIN="${work}/failing-find" "$script"
+cleanup_no_leftovers "find failure" "$cleanup_dir"
+
 echo "=== 一時ファイルの権限と後片付け ==="
 mapfile -d '' artifacts < <(find "${work}/backups" -maxdepth 1 -type f \
 	-name 'openillustration-*.db.gpg' -print0)

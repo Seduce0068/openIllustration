@@ -1770,7 +1770,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                     allowed_origins_env.as_deref(),
                     state.allow_mock_auth,
                 ))
-                .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::DELETE,
+                ])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
         // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
@@ -2746,6 +2750,10 @@ pub async fn mod_report(
 /// `users` に該当行がない投票者も BAN 情報がないため票を残す（LEFT JOIN と併用）。
 const VOTE_NOT_FROM_BANNED_VOTER_SQL: &str = "(u.user_hash IS NULL OR COALESCE(u.is_banned, FALSE) = FALSE OR (u.ban_until IS NOT NULL AND u.ban_until <= datetime('now')))";
 
+/// ADR-0004: 確定に必要な実効票数（定足数）。
+/// 確定処理・理由文字列・統計クエリの3箇所で単一の値として使う。
+const QUORUM_VOTES: i64 = 3;
+
 /// ADR-0004: 期限到達済みの通報を集計して確定する。
 ///
 /// - 投票期間（7日。`deadline_at` 未設定時は `created_at + 7 days`）が終わる前は
@@ -2813,7 +2821,7 @@ pub async fn process_report_conclusion(
     }
 
     let total_votes = approve_count + reject_count;
-    let (final_status, reason) = if total_votes >= 3 {
+    let (final_status, reason) = if total_votes >= QUORUM_VOTES {
         // ADR-0004: 同数は公開継続リスクを避けて Rejected 側に倒す。
         let status = if reject_count >= approve_count {
             "Rejected"
@@ -2831,8 +2839,8 @@ pub async fn process_report_conclusion(
         (
             "Approved",
             format!(
-                "ADR-0004 quorum not met: {} votes (need 3); report dismissed",
-                total_votes
+                "ADR-0004 quorum not met: {} votes (need {}); report dismissed",
+                total_votes, QUORUM_VOTES
             ),
         )
     };
@@ -3770,7 +3778,7 @@ async fn load_mod_conclusion_counts(
         .query(
             &format!(
                 "SELECT substr(r.concluded_at, 1, 7) AS month,
-                        CASE WHEN COALESCE(vc.vote_count, 0) < 3 THEN 1 ELSE 0 END AS quorum_not_met,
+                        CASE WHEN COALESCE(vc.vote_count, 0) < ? THEN 1 ELSE 0 END AS quorum_not_met,
                         COUNT(*) AS cnt
                  FROM reports r
                  LEFT JOIN (
@@ -3783,7 +3791,7 @@ async fn load_mod_conclusion_counts(
                  WHERE r.concluded_at IS NOT NULL
                  GROUP BY month, quorum_not_met"
             ),
-            (),
+            [QUORUM_VOTES],
         )
         .await?;
     let mut result = Vec::new();

@@ -1753,6 +1753,45 @@ async fn test_security_headers_on_cors_preflight() {
     assert_security_headers(&response);
 }
 
+/// CORS: `remove_favorite` は DELETE ルート。クロスオリジンのプリフライトで
+/// DELETE が許可され、許可メソッド一覧に含まれることを検証する。
+#[tokio::test]
+async fn test_cors_preflight_allows_delete() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::options("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g/favorite")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "DELETE")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "DELETE preflight must be short-circuited by CorsLayer: {}",
+        response.status()
+    );
+    let allow_methods = response
+        .headers()
+        .get(header::ACCESS_CONTROL_ALLOW_METHODS)
+        .expect("preflight must advertise allowed methods")
+        .to_str()
+        .unwrap();
+    assert!(
+        allow_methods.contains("DELETE"),
+        "allowed methods must include DELETE: {allow_methods}"
+    );
+    assert!(allow_methods.contains("GET"), "{allow_methods}");
+    assert!(allow_methods.contains("POST"), "{allow_methods}");
+    assert!(
+        !allow_methods.contains("PUT") && !allow_methods.contains("PATCH"),
+        "only GET/POST/DELETE must be allowed: {allow_methods}"
+    );
+}
+
 /// SEC-01: レート制限の 429 レスポンスにもセキュリティヘッダを付与する。
 #[tokio::test]
 async fn test_security_headers_on_rate_limited_response() {
@@ -9353,6 +9392,12 @@ async fn test_payment_order_rejects_invalid_order_id_format() {
 }
 
 // ---- ADR-0004: 期限ベース確定・定足数・異議・投票資格 ----
+
+/// 定足数は単一定数へ集約され、値は従来どおり 3（同数 Rejected ルールは不変）。
+#[test]
+fn test_quorum_votes_constant() {
+    assert_eq!(crate::QUORUM_VOTES, 3);
+}
 
 /// モデレーション用の最小アプリ（content は Reviewed 中、report 1 が存在）
 async fn setup_mod_app() -> (Router, libsql::Connection) {

@@ -217,16 +217,16 @@ P2（品質・保守・プロダクト拡張）:
   security_headers は X-Content-Type-Options/X-Frame-Options のみ。CSP は本番構成確定時に別途設計と明記済み。
 - [ ] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。
   libSQL は既定 foreign_keys=OFF。`PRAGMA foreign_keys=ON` と起動時 `foreign_key_check` を追加。
-- [ ] **CORS の allow_methods に DELETE を追加** — 根拠 `server/src/lib.rs:1773` / R1-AP01 / 重大度 high。
-  remove_favorite は DELETE だが許可メソッドは GET/POST のみ。
+- [x] **CORS の allow_methods に DELETE を追加** — 根拠 `server/src/lib.rs:1773` / R1-AP01 / 重大度 high。
+  remove_favorite は DELETE だが許可メソッドは GET/POST のみ。2026-11-19 対応済み。
 - [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
   現状 doctor は警告のみで呼び出し経路が無い。
 - [] **backup-rotate に verify_audit_log と暗号化後復号検証を追加** — 根拠 `scripts/backup-rotate.sh:142-143` / R4-DR01 / 重大度 high。
   Runbook は両方成功を条件とするが自動取得は verify_backup のみ。
-- [ ] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
-  EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。
-- [ ] **定足数を QUORUM_VOTES 定数へ集約** — 根拠 `server/src/lib.rs:2816,2834,3773` / R1-AR01 / 重大度 high。
-  SQL と Rust で `3` が個別ハードコードされ、変更時に確定ロジックと集計が食い違う。
+- [x] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
+  EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。2026-11-19 対応済み。
+- [x] **定足数を QUORUM_VOTES 定数へ集約** — 根拠 `server/src/lib.rs:2816,2834,3773` / R1-AR01 / 重大度 high。
+  SQL と Rust で `3` が個別ハードコードされ、変更時に確定ロジックと集計が食い違う。2026-11-19 対応済み。
 - [ ] **リクエスト相関 ID とアクセスログを追加** — 根拠 `server/src/lib.rs:234-251` / R4-OB01 / 重大度 high。
   x-request-id 生成・伝播と method/path/status/duration ログが無く、Internal エラーの事後調査不可。
 - [ ] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:714-750` / R2-BV01 / 重大度 high。

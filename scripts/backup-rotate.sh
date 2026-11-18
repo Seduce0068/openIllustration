@@ -87,10 +87,16 @@ if [[ -n "$alert_cmd" && ! -x "$alert_cmd" ]]; then
 fi
 
 # 失敗時に通知する。通知自体が失敗しても元の終了コードを維持する。
-# ローテーション列挙の一時ファイルも EXIT 時に必ず削除する。
+# mktemp の作業ディレクトリ（平文 tmp_db を含む）とローテーション列挙の
+# 一時ファイルは、成否にかかわらず EXIT 時に必ず削除する。
 rotation_list=""
+tmp_dir=""
+tmp_db=""
 on_failure() {
 	local code=$?
+	if [[ -n "$tmp_dir" ]]; then
+		rm -rf -- "$tmp_dir" || true
+	fi
 	if [[ -n "$rotation_list" ]]; then
 		rm -f -- "$rotation_list" || true
 	fi
