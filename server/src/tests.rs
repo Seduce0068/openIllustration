@@ -6468,6 +6468,217 @@ async fn test_payment_orders_derive_unique_addresses() {
     assert!(crate::payments::is_valid_eth_address(&addresses[1]));
 }
 
+/// JPYC: 注文作成リクエストを送り、状態コードと JSON 本文を返す（テスト専用）。
+/// 検証対象は並行注文の受取先・index なので、コンテンツと金額は常に同じ値を使う。
+async fn post_order_request(
+    app: &Router,
+    token: &str,
+    chain_id: i64,
+    wallet_address: &str,
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": chain_id,
+                        "wallet_address": wallet_address,
+                        "cid": "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z",
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    (status, body)
+}
+
+/// テスト用: 保存済み注文の `(derivation_index, recipient_address)` を index 順で返す。
+/// NULL（固定受取アドレス）は SQLite の並び順で先に来る。
+async fn stored_order_derivations(db: &libsql::Connection) -> Vec<(Option<i64>, String)> {
+    let mut rows = db
+        .query(
+            "SELECT derivation_index, recipient_address FROM payment_orders
+              ORDER BY derivation_index, order_id",
+            (),
+        )
+        .await
+        .unwrap();
+    let mut out = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        let index: Option<i64> = row.get(0).unwrap();
+        let address: String = row.get(1).unwrap();
+        out.push((index, address));
+    }
+    out
+}
+
+/// R1-26: 同一 xprv・同一 DB への並行注文は連番の derivation_index と、
+/// 異なる受取先アドレスを得る（書き込みトランザクション内の原子的予約）。
+#[tokio::test]
+async fn test_parallel_orders_derive_sequential_indices_and_unique_addresses() {
+    let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+    let (app, db) = setup_app_with_hd_payments(xprv).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(2));
+    let tasks: Vec<_> = (0..2)
+        .map(|_| {
+            let app = app.clone();
+            let token = token.clone();
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                post_order_request(
+                    &app,
+                    &token,
+                    137,
+                    "0x1111111111111111111111111111111111111111",
+                )
+                .await
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    for (status, body) in &results {
+        assert_eq!(*status, StatusCode::OK, "並行注文が失敗した: {body}");
+    }
+
+    let mut returned: Vec<String> = results
+        .iter()
+        .map(|(_, body)| body["recipient_address"].as_str().unwrap().to_string())
+        .collect();
+    returned.sort();
+    assert_ne!(returned[0], returned[1], "受取先アドレスが重複した");
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), 2);
+    assert_eq!(
+        stored.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        vec![Some(0), Some(1)],
+        "derivation_index は 0,1 の連番であること"
+    );
+    let mut addresses: Vec<String> = stored.iter().map(|(_, a)| a.clone()).collect();
+    addresses.sort();
+    assert_eq!(addresses, returned, "応答と保存済みの受取先が一致すること");
+}
+
+/// R1-26: 同じ内容の並行注文は UNIQUE 違反で失敗せず、全件成功する。
+#[tokio::test]
+async fn test_identical_parallel_orders_all_succeed() {
+    const CONCURRENCY: usize = 5;
+    let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+    let (app, db) = setup_app_with_hd_payments(xprv).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(CONCURRENCY));
+    let tasks: Vec<_> = (0..CONCURRENCY)
+        .map(|_| {
+            let app = app.clone();
+            let token = token.clone();
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                post_order_request(
+                    &app,
+                    &token,
+                    137,
+                    "0x1111111111111111111111111111111111111111",
+                )
+                .await
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    for (status, body) in &results {
+        assert_eq!(*status, StatusCode::OK, "UNIQUE 違反で失敗した: {body}");
+    }
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), CONCURRENCY);
+    assert_eq!(
+        stored.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        (0..CONCURRENCY as i64).map(Some).collect::<Vec<_>>(),
+        "全注文に異なる連番が割り当てられること"
+    );
+    let unique: std::collections::HashSet<&String> = stored.iter().map(|(_, a)| a).collect();
+    assert_eq!(unique.len(), CONCURRENCY, "受取先アドレスは全件異なること");
+}
+
+/// R1-26 回帰: 固定受取アドレス設定では derivation_index=NULL のまま複数注文できる。
+#[tokio::test]
+async fn test_fixed_receiving_address_keeps_derivation_index_null() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    for _ in 0..3 {
+        let (status, body) = post_order_request(&app, &token, 137, receiving).await;
+        assert_eq!(status, StatusCode::OK, "固定アドレス注文が失敗した: {body}");
+        assert_eq!(body["recipient_address"].as_str().unwrap(), receiving);
+    }
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), 3);
+    assert!(
+        stored
+            .iter()
+            .all(|(index, address)| index.is_none() && address == receiving),
+        "固定受取アドレスでは index が NULL のまま再利用されること"
+    );
+}
+
+/// R1-26: 不正 chain_id / wallet_address で拒否した注文は derivation_index を消費しない。
+#[tokio::test]
+async fn test_rejected_orders_do_not_consume_derivation_index() {
+    let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+    let (app, db) = setup_app_with_hd_payments(xprv).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let wallet = "0x1111111111111111111111111111111111111111";
+
+    let (status, _) = post_order_request(&app, &token, 999_999, wallet).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "不正 chain_id は拒否される"
+    );
+    let (status, _) = post_order_request(&app, &token, 137, "0xnot-an-address").await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "不正 wallet_address は拒否される"
+    );
+
+    for _ in 0..2 {
+        let (status, body) = post_order_request(&app, &token, 137, wallet).await;
+        assert_eq!(status, StatusCode::OK, "正しい注文が失敗した: {body}");
+    }
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), 2, "拒否された注文は保存されない");
+    assert_eq!(
+        stored.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+        vec![Some(0), Some(1)],
+        "拒否注文で index が飛ばないこと"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // RS256（RSA 秘密鍵演算）のテスト
 // ---------------------------------------------------------------------------

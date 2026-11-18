@@ -265,6 +265,43 @@ async fn load_order(
     }
 }
 
+/// payment_orders へ 1 行挿入する。
+/// HD 分岐は書き込みトランザクション経由、固定アドレス分岐は通常接続経由で同じ SQL を共有する。
+#[allow(clippy::too_many_arguments)]
+async fn insert_payment_order(
+    db: &libsql::Connection,
+    order_id: &str,
+    ppid: &str,
+    cid: &str,
+    chain_id: i64,
+    wallet_address: &str,
+    recipient_address: &str,
+    amount_wei: &str,
+    expires_at: &str,
+    derivation_index: Option<i64>,
+) -> Result<(), AppError> {
+    db.execute(
+        "INSERT INTO payment_orders
+            (order_id, ppid, cid, chain_id, wallet_address, recipient_address,
+             amount_wei, status, expires_at, derivation_index)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            order_id,
+            ppid,
+            cid,
+            chain_id,
+            wallet_address,
+            recipient_address,
+            amount_wei,
+            STATUS_PENDING,
+            expires_at,
+            derivation_index,
+        ),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn create_order(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -285,6 +322,8 @@ pub async fn create_order(
         Some(row) => (row.get(0)?, row.get(1)?),
         None => return Err(AppError::NotFound),
     };
+    drop(content_rows);
+
     if content_status != "Approved" {
         return Err(AppError::BadRequest(
             "Content is not available for purchase".to_string(),
@@ -296,30 +335,7 @@ pub async fn create_order(
         ));
     }
 
-    let (recipient_address, derivation_index) = if let Some(xprv) = &state.payment_receiving_xprv {
-        let mut rows = state
-            .db
-            .query(
-                "SELECT COALESCE(MAX(derivation_index), -1) + 1 FROM payment_orders",
-                (),
-            )
-            .await?;
-        let index: i64 = match rows.next().await? {
-            Some(row) => row.get(0)?,
-            None => 0,
-        };
-        (
-            derive_receiving_address(xprv, derivation_index_to_u32(index)?)?,
-            Some(index),
-        )
-    } else if let Some(address) = &state.payment_receiving_address {
-        (normalize_address(address), None)
-    } else {
-        return Err(AppError::NotImplemented(
-            "JPYC receiving address is not configured".to_string(),
-        ));
-    };
-
+    // index 採番の前に全入力を検証し、無駄な index 消費を防ぐ（R1-26）。
     if !is_allowed_chain(payload.chain_id) {
         return Err(AppError::BadRequest("unsupported chain".to_string()));
     }
@@ -328,41 +344,82 @@ pub async fn create_order(
             "wallet_address must be a 0x-prefixed 20-byte address".to_string(),
         ));
     }
-
     let amount_wei = jpy_to_wei(payload.amount_jpy)?;
+
     let order_id = Uuid::new_v4().to_string();
     let expires_at = (Utc::now() + Duration::minutes(ORDER_TTL_MINUTES)).to_rfc3339();
     let wallet_address = normalize_address(&payload.wallet_address);
 
-    state
-        .db
-        .execute(
-            "INSERT INTO payment_orders
-                (order_id, ppid, cid, chain_id, wallet_address, recipient_address,
-                 amount_wei, status, expires_at, derivation_index)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                order_id.clone(),
-                claims.sub.clone(),
-                payload.cid.clone(),
-                payload.chain_id,
-                wallet_address,
-                recipient_address.clone(),
-                amount_wei.clone(),
-                STATUS_PENDING,
-                expires_at.clone(),
-                derivation_index,
-            ),
+    if let Some(xprv) = &state.payment_receiving_xprv {
+        // 採番・アドレス派生・INSERT を 1 つの書き込みトランザクションで行う。
+        // ライトロックが同一プロセスの並行注文を直列化し、UNIQUE(derivation_index) が
+        // それをすり抜けた場合の受取アドレス再利用も拒否する。
+        let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        let index: i64 = {
+            let mut rows = tx
+                .query(
+                    "SELECT COALESCE(MAX(derivation_index), -1) + 1 FROM payment_orders",
+                    (),
+                )
+                .await?;
+            match rows.next().await? {
+                Some(row) => row.get(0)?,
+                None => 0,
+            }
+        };
+        let recipient_address = derive_receiving_address(xprv, derivation_index_to_u32(index)?)?;
+        insert_payment_order(
+            &tx,
+            &order_id,
+            &claims.sub,
+            &payload.cid,
+            payload.chain_id,
+            &wallet_address,
+            &recipient_address,
+            &amount_wei,
+            &expires_at,
+            Some(index),
+        )
+        .await?;
+        // 失敗時は `?` で早期リターンし、tx の drop でロールバックする（既存パターン）。
+        tx.commit().await?;
+
+        Ok(Json(CreateOrderResponse {
+            order_id,
+            chain_id: payload.chain_id,
+            recipient_address,
+            amount_wei,
+            expires_at,
+        }))
+    } else if let Some(address) = &state.payment_receiving_address {
+        // 固定アドレス分岐は derivation_index=NULL のまま従前どおり。
+        let recipient_address = normalize_address(address);
+        insert_payment_order(
+            &state.db,
+            &order_id,
+            &claims.sub,
+            &payload.cid,
+            payload.chain_id,
+            &wallet_address,
+            &recipient_address,
+            &amount_wei,
+            &expires_at,
+            None,
         )
         .await?;
 
-    Ok(Json(CreateOrderResponse {
-        order_id,
-        chain_id: payload.chain_id,
-        recipient_address,
-        amount_wei,
-        expires_at,
-    }))
+        Ok(Json(CreateOrderResponse {
+            order_id,
+            chain_id: payload.chain_id,
+            recipient_address,
+            amount_wei,
+            expires_at,
+        }))
+    } else {
+        Err(AppError::NotImplemented(
+            "JPYC receiving address is not configured".to_string(),
+        ))
+    }
 }
 
 pub async fn get_order(
