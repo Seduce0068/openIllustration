@@ -7,6 +7,11 @@ use server::{
     oidc_http_timeout, production_config_errors, rate_limit_per_min, validate_jwt_secret,
 };
 
+/// OIDC_CLOCK_SKEW_SECS の許容範囲。oidc.rs のパースと同じ 1..=300 を使う。
+/// doctor は設定値を出力せず、範囲内かどうかだけを診断する。
+const OIDC_CLOCK_SKEW_MIN_SECS: u64 = 1;
+const OIDC_CLOCK_SKEW_MAX_SECS: u64 = 300;
+
 fn print_help() {
     eprintln!(
         "Usage: doctor [--strict]\n\
@@ -195,6 +200,23 @@ where
             Vec::new()
         },
     ));
+
+    // OIDC_CLOCK_SKEW_SECS: 範囲外は既定 60 へフォールバックするため警告する。
+    // 値は出力せず、範囲内かどうかのみを診断する。
+    let oidc_clock_skew_errors = match lookup("OIDC_CLOCK_SKEW_SECS") {
+        None => Vec::new(),
+        Some(value) => match value.parse::<u64>() {
+            Ok(seconds)
+                if (OIDC_CLOCK_SKEW_MIN_SECS..=OIDC_CLOCK_SKEW_MAX_SECS).contains(&seconds) =>
+            {
+                Vec::new()
+            }
+            _ => vec![
+                "OIDC_CLOCK_SKEW_SECS is outside 1..=300; using default 60 seconds".to_string(),
+            ],
+        },
+    };
+    results.push(("oidc_clock_skew", oidc_clock_skew_errors));
 
     // 年齢ポリシー: 不正値は AgePolicy::from_env_with がエラーを返す。
     // プロセス環境を触らず lookup を渡すことで、CLI と同じ分岐をテストできる。
@@ -390,7 +412,7 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_thirteen_categories() {
+    fn check_always_reports_fourteen_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
@@ -407,7 +429,7 @@ mod tests {
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                13,
+                14,
                 "pairs={pairs:?}"
             );
         }
@@ -619,6 +641,35 @@ mod tests {
     fn trusted_proxy_unset_adds_no_warning() {
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "trusted_proxy").is_empty());
+    }
+
+    // --- 2c. OIDC clock skew ----------------------------------------------
+
+    #[test]
+    fn oidc_clock_skew_in_range_and_unset_add_no_warning() {
+        for value in ["1", "60", "300"] {
+            let results = check_all_with(lookup_from(&[("OIDC_CLOCK_SKEW_SECS", value)]));
+            assert!(
+                errors_for(&results, "oidc_clock_skew").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "oidc_clock_skew").is_empty());
+    }
+
+    #[test]
+    fn oidc_clock_skew_out_of_range_warns_without_disclosing_value() {
+        const EXPECTED: &str = "OIDC_CLOCK_SKEW_SECS is outside 1..=300; using default 60 seconds";
+        const LEAKY: &str = "999999999";
+        for value in ["0", "301", "-1", "abc", LEAKY] {
+            let results = check_all_with(lookup_from(&[("OIDC_CLOCK_SKEW_SECS", value)]));
+            let errors = errors_for(&results, "oidc_clock_skew");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
     }
 
     // --- 3. strict 判定 ----------------------------------------------------

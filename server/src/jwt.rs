@@ -110,6 +110,16 @@ impl JwtKeys {
             return Err(format!("duplicate verification key kid: {kid}"));
         }
         Self::kid_from_public_pem(public_pem)?;
+        // 検証用の旧公開鍵にも署名鍵と同じ最小鍵長を要求する。
+        // ローテーション経由で 1024 bit 以下の弱鍵が混入するのを防ぐ。
+        let public_key = rsa::PublicKey::from_public_key_pem(public_pem)
+            .map_err(|e| format!("invalid RSA public key PEM: {e}"))?;
+        let bits = public_key.n().bit_width() as usize;
+        if bits < RSA_MIN_KEY_BITS {
+            return Err(format!(
+                "verification key must be at least {RSA_MIN_KEY_BITS} bits (got {bits} bits)"
+            ));
+        }
         let key = DecodingKey::from_rsa_pem(public_pem.as_bytes())
             .map_err(|e| format!("invalid RSA verification key: {e}"))?;
         self.verification_keys.insert(kid.to_string(), key);

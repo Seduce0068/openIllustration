@@ -30,6 +30,12 @@ const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
 pub(crate) const MAX_PENDING_AUTH: usize = 1024;
 const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
 pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
+/// OIDC_CLOCK_SKEW_SECS の許容範囲（秒）。
+/// 0 や極端に大きな値は exp / nbf / auth_time 検証を実質的に無効化するため、
+/// 範囲外の設定は既定値へフォールバックする（fail-closed）。
+const CLOCK_SKEW_MIN_SECS: u64 = 1;
+const CLOCK_SKEW_MAX_SECS: u64 = 300;
+const DEFAULT_CLOCK_SKEW_SECS: u64 = 60;
 /// リフレッシュトークンの有効期間（30日）。
 const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// OIDC Back-Channel Logout の events クレームに必須のキー。
@@ -234,8 +240,9 @@ impl OidcState {
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
             .unwrap_or(true);
         let clock_skew_secs = lookup("OIDC_CLOCK_SKEW_SECS")
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(60);
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|seconds| (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(seconds))
+            .unwrap_or(DEFAULT_CLOCK_SKEW_SECS);
         let required_acr = lookup("OIDC_REQUIRED_ACR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();

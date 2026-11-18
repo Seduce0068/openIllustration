@@ -2163,6 +2163,35 @@ fn test_mock_pin_cid_is_valid_and_unique() {
     );
 }
 
+/// Pinata の外部レスポンスが不正な `IpfsHash` を返した場合、保存前に拒否する。
+/// mutation で `is_safe_cid` 検証を外すと不正ケースが通って失敗する。
+#[test]
+fn test_pinata_response_rejects_invalid_ipfs_hash() {
+    let valid = crate::mock_cid_for_data(b"valid");
+    assert_eq!(
+        crate::cid_from_pinata_response(&json!({ "IpfsHash": valid.clone() })).unwrap(),
+        valid
+    );
+
+    for bad in ["QmTestCID", "../etc/passwd", "Qm?x=1", ""] {
+        let err = crate::cid_from_pinata_response(&json!({ "IpfsHash": bad }))
+            .expect_err("invalid CID from Pinata must be rejected");
+        assert!(
+            matches!(&err, AppError::Internal(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+    // 欠落・非文字列も Internal（HTTP 側のエラーと同じ扱い）。
+    assert!(matches!(
+        crate::cid_from_pinata_response(&json!({})),
+        Err(AppError::Internal(_))
+    ));
+    assert!(matches!(
+        crate::cid_from_pinata_response(&json!({ "IpfsHash": 42 })),
+        Err(AppError::Internal(_))
+    ));
+}
+
 /// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
@@ -8711,6 +8740,48 @@ fn test_jwt_add_verification_key_rejects_duplicate_and_invalid_pem() {
     assert!(error.contains("invalid RSA public key PEM"), "got: {error}");
 }
 
+/// `add_verification_key` は 1024 bit の弱い公開鍵を拒否する。
+#[test]
+fn test_jwt_add_verification_key_rejects_weak_key() {
+    let mut rng = TestRng::new();
+    let weak = PrivateKey::new(&mut rng, 1024).expect("generate weak RSA key");
+    let weak_public = weak
+        .to_public_key()
+        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("encode weak public key")
+        .to_string();
+
+    let mut keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&test_rsa_private_pem())
+        .expect("signing key");
+    let error = keys
+        .add_verification_key("weak", &weak_public)
+        .expect_err("1024-bit verification key must be rejected");
+    assert!(error.contains("at least 2048 bits"), "got: {error}");
+    assert!(error.contains("1024 bits"), "got: {error}");
+}
+
+/// `JWT_RSA_VERIFICATION_KEYS` に 1024 bit 公開鍵を設定すると起動に失敗する。
+#[test]
+fn test_jwt_keys_from_env_verification_keys_json_rejects_weak_key() {
+    let mut rng = TestRng::new();
+    let weak = PrivateKey::new(&mut rng, 1024).expect("generate weak RSA key");
+    let weak_public = weak
+        .to_public_key()
+        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("encode weak public key")
+        .to_string();
+    let json = json!({ "weak-old": weak_public }).to_string();
+
+    let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
+        .err()
+        .expect("weak verification key must fail startup");
+    assert!(
+        error.contains("JWT_RSA_VERIFICATION_KEYS[weak-old]"),
+        "got: {error}"
+    );
+    assert!(error.contains("at least 2048 bits"), "got: {error}");
+}
+
 /// `JWT_REQUIRE_KID` の env 解析（起動時ロジックを純粋関数化して検証）。
 #[test]
 fn test_jwt_require_kid_from_env_values() {
@@ -14256,7 +14327,7 @@ fn test_oidc_from_env_with_missing_required_variable_fails_closed() {
     }
 }
 
-/// ClockSkew: 既定 60、境界値は u64 の範囲で受け付け、不正値は既定へ戻す。
+/// ClockSkew: 既定 60、1..=300 のみ受け付け、範囲外・不正値は既定へ戻す。
 #[test]
 fn test_oidc_from_env_with_clock_skew_boundaries() {
     let assert_skew = |value: Option<&str>, expected: u64| {
@@ -14273,10 +14344,13 @@ fn test_oidc_from_env_with_clock_skew_boundaries() {
         );
     };
     assert_skew(None, 60);
-    assert_skew(Some("0"), 0);
     assert_skew(Some("1"), 1);
+    assert_skew(Some("60"), 60);
     assert_skew(Some("300"), 300);
-    assert_skew(Some("18446744073709551615"), u64::MAX);
+    // 範囲外（0 / 301 / u64::MAX）は既定値へフォールバック。
+    assert_skew(Some("0"), 60);
+    assert_skew(Some("301"), 60);
+    assert_skew(Some("18446744073709551615"), 60);
     // u64 に収まらない / 負数 / 空 / 非数値は既定値へフォールバック。
     assert_skew(Some("18446744073709551616"), 60);
     assert_skew(Some("-1"), 60);
@@ -14933,6 +15007,115 @@ async fn test_auth_verify_write_waits_for_write_lock() {
         .expect("auth verify must finish after the write transaction commits")
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// `/auth/verify` の再認証で in-memory の失効閾値を消しても DB に残ると、
+/// 再起動後に refresh が塞がる。OIDC callback と同じ順序で
+/// `delete_superseded_revocation` を呼ぶことを担保する回帰テスト。
+/// mutation で DB 削除を外すと refresh が 401 になり失敗する。
+#[tokio::test]
+async fn test_auth_verify_clears_db_revocation_before_restart() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    // public_key_der 無しのモック認証では user_hash = sha256("birth_date:country_code")。
+    let birth_date = "2000-01-01";
+    let country_code = "JP";
+    let sub = sha256::digest(format!("{birth_date}:{country_code}").as_bytes());
+    let old_threshold = chrono::Utc::now().timestamp() as usize;
+
+    // back-channel logout 相当: 閾値を DB と in-memory の両方へ記録する。
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)",
+        (sub.clone(), old_threshold as i64),
+    )
+    .await
+    .unwrap();
+    let revoked_subs_before: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        Arc::new(std::sync::Mutex::new(
+            [(sub.clone(), old_threshold)].into_iter().collect(),
+        ));
+    let state = Arc::new(AppState {
+        db: Arc::clone(&db),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::clone(&revoked_subs_before),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+
+    // 再認証: 新しい iat を発行し、メモリの旧閾値を remove する。
+    let request = VerifyRequest {
+        presentation_token: "mock_token".to_string(),
+        nonce: Some(crate::issue_mock_nonce_for_test()),
+        public_key_der: None,
+        birth_date: Some(birth_date.to_string()),
+        country_code: Some(country_code.to_string()),
+    };
+    let verified = crate::auth_verify(State(Arc::clone(&state)), Json(request))
+        .await
+        .unwrap();
+    assert!(verified.authorized);
+    assert!(revoked_subs_before.lock().unwrap().is_empty());
+
+    // 再起動後を模し、再認証で発行した未使用の refresh token を用意する。
+    // refresh の失効判定は in-memory ではなく DB を見るため、DB 削除漏れは 401 になる。
+    let refresh_token = "post_reauthentication_refresh_token";
+    let hash = hex::encode(Sha2Sha256::digest(refresh_token.as_bytes()));
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES (?, ?, ?, ?)",
+        (
+            hash,
+            sub.clone(),
+            "family".to_string(),
+            (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        header::COOKIE,
+        HeaderValue::from_str(&format!("refresh_token={refresh_token}")).unwrap(),
+    );
+    let response = crate::oidc::refresh(State(Arc::clone(&state)), headers)
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "re-authentication must clear the DB threshold so refresh survives a restart"
+    );
+
+    let mut rows = db
+        .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub])
+        .await
+        .unwrap();
+    assert!(
+        rows.next().await.unwrap().is_none(),
+        "stale revocation threshold must be deleted from DB too"
+    );
 }
 
 /// 起動時の write_lock 待ちに上限があり、ビジーでも warn を出して
