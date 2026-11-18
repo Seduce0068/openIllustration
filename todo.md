@@ -153,6 +153,10 @@ P2（品質・保守・プロダクト拡張）:
   取得後はSQLを完了まで実行、insert_payment_order を &Transaction 引数へ固定。
 - [x] 起動/周期タスクの停止性（2026-11-18）: ロック待機に30秒上限を設定し、
   shutdown watch で即停止、周期finalizeはロック取得後は全件完了（誤報warnを解消）。
+- [x] swarm-coding（mixed, R1〜R6, 2026-11-18）: 認証/CLI/client の10件を修正。
+  JWT検証鍵2048bit、clock skew範囲+doctor、自己署名JPKI拒否、Pinata CID検証、
+  auth_verifyのDB失効削除と自己デッドロック解消、DBトークンargv拒否、
+  restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

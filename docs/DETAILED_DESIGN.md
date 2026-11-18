@@ -205,6 +205,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
    認証要求へ `max_age` を付与し、ID トークンの `auth_time` が
    `現在時刻 - max_age - clock_skew` 以降であることを要求する（欠落も拒否）。
    本番ではこれら3設定を必須とする。
+   `OIDC_CLOCK_SKEW_SECS` は 1..=300 秒のみ受け付け、範囲外・不正値は既定 60 秒へ
+   フォールバックする（`server/src/oidc.rs` の `CLOCK_SKEW_MIN_SECS` / `CLOCK_SKEW_MAX_SECS`）。
+   `doctor` は範囲外設定を `OIDC_CLOCK_SKEW_SECS is outside 1..=300; using default 60 seconds`
+   で警告する（`server/src/bin/doctor.rs`）。
    未実装: 複数プロセス間の失効状態共有・実OP運用整合
    （`sub` 失効の DB 永続化は実装済み）。
 9. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
@@ -403,14 +407,19 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - `VACUUM INTO` はインスタンスロックを取得しないため、サーバー起動時（特にマイグレーション実行中）
   と競合すると BUSY や旧スナップショットになる恐れがある。開始前に生存ロック検査を行う。
-- 検査対象はソース DB（`DATABASE_URL` がローカル DB を指す場合）と出力先 DB の双方で、
+- 検査対象は `backup_db` ではソース DB（`DATABASE_URL` がローカル DB を指す場合）と出力先 DB、
+  `restore_db` ではバックアップ元（`backup`）と復元先（`target`）の双方で、
   それぞれ `<db path>.instance.lock` を調べる。ロックが無い、または PID が存在しない
   stale ロックは続行を許可する。
 - ロック内容の PID とプロセス開始時刻（`/proc/<pid>/stat` の field 22）を照合し、PID 再利用を防ぐ。
   旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
-- 生存サーバーがロックを保持する場合は `refusing backup: a live server instance holds the instance lock`
-  で拒否する。`/proc` が読めない等で判定不能な場合も「生存」として扱い拒否する（fail-closed）。
-  7テストを追加し、実 CLI で拒否を実証済み。
+- 生存サーバーがロックを保持する場合は `backup_db` は
+  `refusing backup: a live server instance holds the instance lock`、`restore_db` は
+  `refusing restore: a live server instance holds the <side> instance lock`（`<side>` は
+  `backup` / `target`）で拒否する。`/proc` が読めない等で判定不能な場合も「生存」として
+  扱い拒否する（fail-closed）。`backup_db` は7テストと実 CLI で拒否を実証済み。
+  `restore_db` は `live_backup_lock_is_rejected` / `live_target_lock_is_rejected`
+  で両側の拒否を確認済み。
 
 ## 6. 監査ハッシュ
 
@@ -585,7 +594,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。
 - `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
-  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（13 check(s) 実測）。
+  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（14 check(s) 実測）。
 - `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`、大小文字不問）のときと `TRUSTED_PROXY_CIDRS`
   が設定されているときは、それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する
   （`doctor --strict` の警告対象）。いずれも設定値は出力せず有無のみを警告する。

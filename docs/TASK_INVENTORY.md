@@ -38,7 +38,7 @@ status: current
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、13カテゴリ固定・秘密値非出力・`--strict` 判定を
     `server/src/bin/doctor.rs` の24テストで検証（CLI-01 / CFG-01、
-    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で13 check(s) を確認。
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で14 check(s) を確認。
   - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
@@ -64,7 +64,7 @@ status: current
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
     検査は11→13カテゴリ、bin テストは20→24件。`env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
-    の実出力で13 check(s) を確認（CLI-01 / CFG-01、
+    の実出力で14 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
   - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
     `/auth/oidc/callback` と `/auth/refresh` の state / Cookie 消費前に適用。`ConfigurationRequired`

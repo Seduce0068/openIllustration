@@ -224,7 +224,7 @@ generated:
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | `1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 任意 | `file:local.db` | libSQL接続先。 |
-| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` は従来どおり `--database-token` も受け付ける。 |
+| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
@@ -254,7 +254,7 @@ generated:
 | `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
 | `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で Cookie の `Secure` を外す。開発時のみ。 |
-| `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数。 |
+| `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
 | `PINATA_JWT` | 任意 | `mock_jwt`（模擬） | IPFSピン用トークン。未設定時は模擬動作となり、本番では使用しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |
 | `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | `1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。 |

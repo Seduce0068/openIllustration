@@ -153,6 +153,9 @@ stale_after: "2027-02-15T00:00:00+09:00"
   鍵長は 2048bit 以上を要求する。秘密鍵は PEM から読み、検証用の公開鍵は
   秘密鍵から導出する。許可アルゴリズムは起動時に確定し、トークンの
   ヘッダからは選ばせない。
+- JPKI リーフ公開鍵も RSA 2048bit 以上のみ受理する（`server/src/jpki.rs` の
+  `JPKI_RSA_MIN_KEY_BITS` / `public_key_meets_policy`）。ECDSA / DSA 等の非 RSA は
+  `JPKI leaf public key must be RSA 2048 bits or stronger` で拒否する。
 
 ### 4.3 クライアント
 

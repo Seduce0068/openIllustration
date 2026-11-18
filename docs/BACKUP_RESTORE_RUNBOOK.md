@@ -110,6 +110,16 @@ refusing backup: a live server instance holds the instance lock (<lock path>, pi
 旧形式（PID のみ）は PID の存在だけで判定する。PID が存在しない stale ロックは続行を許可する。
 `/proc` が読めない等で判定不能な場合も「生存」として扱い拒否する（fail-closed）。
 
+`restore_db` も同じ PID + 開始時刻の判定を、バックアップ元（`backup`）と復元先（`target`）の
+両方の `<db path>.instance.lock` に適用する。いずれかが生存ロックなら次のエラーで復元を
+拒否する（fail-closed）:
+
+```text
+refusing restore: a live server instance holds the <side> instance lock (<lock path>, pid <pid>); stop the server or wait until startup/migration has finished
+```
+
+`<side>` は `backup` または `target`。ロックの読み取り不能・判定不能も拒否する。
+
 対処: サーバーを停止して（SIGTERM、`/ready` が 503 になることを確認して）から
 `backup_db` または `backup-rotate.sh` を再実行する。`scripts/backup-rotate.sh` は
 サーバーを停止しないため、稼働中に cron / systemd から呼ぶと拒否されて失敗する。
@@ -183,7 +193,8 @@ gpg --decrypt --output /path/to/restored.db /path/to/backups/openillustration-YY
 cargo run -p server --bin verify_backup -- --input /path/to/restored.db
 ```
 
-1. リストアを実行する（WAL / SHM / journal サイドカーが残っている場合は拒否される）:
+1. リストアを実行する（WAL / SHM / journal サイドカーが残っている場合、またはバックアップ元・
+   復元先のいずれかに生存 instance lock がある場合は `refusing restore: ...` で拒否される）:
 
 ```bash
 # Kubuntu / リポジトリルート

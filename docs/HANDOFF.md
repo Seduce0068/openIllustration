@@ -183,7 +183,7 @@ cargo run -p server
 - `OIDC_JWKS_URI`
 - `OIDC_SCOPES`: 既定 `openid`。
 - `OIDC_COOKIE_SECURE`: 既定有効。
-- `OIDC_CLOCK_SKEW_SECS`: 既定 60。
+- `OIDC_CLOCK_SKEW_SECS`: 1〜300（既定 60、範囲外は既定へフォールバックし doctor が警告）。
 
 OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 を返す。
 

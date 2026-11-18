@@ -23,6 +23,10 @@ RS256 JWT 署名鍵（`JWT_RSA_PRIVATE_KEY_PEM`）と検証鍵
 
 - RSA 署名鍵は 2048bit 以上を要求する。未満の PEM は起動時に拒否される
   （`server/src/jwt.rs` の `RSA_MIN_KEY_BITS`）。
+- ローテーション用の旧検証鍵（`JWT_RSA_VERIFICATION_KEYS` に登録する旧公開鍵）にも
+  同じ RSA 2048bit 下限を適用する。1024bit などの弱鍵は
+  `verification key must be at least 2048 bits` で起動時に拒否される
+  （`server/src/jwt.rs` の `add_verification_key`）。
 - `kid` は SPKI DER の SHA-256 先頭16バイトを hex エンコードした値で、
   公開鍵から決定的に導出される（`server/src/jwt.rs`）。
 - 現行署名鍵の `kid` は自動的に検証鍵へ登録される。
@@ -57,7 +61,8 @@ done
 ```
 
 1. 現行（旧）公開鍵を `JWT_RSA_VERIFICATION_KEYS` へ追加して再起動する。
-   この時点では署名鍵は旧のままなので、発行トークンは変わらない:
+   この時点では署名鍵は旧のままなので、発行トークンは変わらない。
+   旧公開鍵も RSA 2048bit 以上であることを確認する（未満は起動時に拒否される）:
 
 ```bash
 export JWT_RSA_VERIFICATION_KEYS="$(jq -n --arg kid "$OLD_KID" --rawfile pem old-signing-key.pub.pem '{($kid): $pem}')"

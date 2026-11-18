@@ -64,6 +64,11 @@ const EXPORT_FILENAME: &str = "openillustration-export.json";
 /// 解析エラーの詳細は機微情報を含み得るため画面へ出さない。
 const EXPORT_PARSE_ERROR: &str = "エクスポート結果の解析に失敗しました。";
 
+/// `/content` 一覧の取得失敗時に表示する固定文言。
+/// レスポンス本文や生エラーは機微情報を含み得るため画面へ出さない。
+const CONTENT_INDEX_LOAD_ERROR: &str = "Failed to load content index.";
+const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
+
 /// 本文と TOC で共有する見出し情報。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeadingEntry {
@@ -88,7 +93,7 @@ fn escape_html_text(input: &str) -> String {
     out
 }
 
-/// クエリパラメータの値を percent-encode する。
+/// URL コンポーネント（クエリ値・パス Segment）を percent-encode する。
 /// `web-sys` に `UrlSearchParams` を追加せず依存を増やさないため的最小実装。
 fn url_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
@@ -999,18 +1004,18 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                         // HTTP 成功でも JSON 解析失敗なら無音にせず固定文言を出す。
                         Err(_) => {
                             if should_apply_response(generation_cell.get(), response_generation) {
-                                set_error.set("Failed to load content index.".to_string());
+                                set_error.set(CONTENT_INDEX_LOAD_ERROR.to_string());
                             }
                         }
                     },
                     Ok(_) => {
                         if should_apply_response(generation_cell.get(), response_generation) {
-                            set_error.set("Failed to load content index.".to_string());
+                            set_error.set(CONTENT_INDEX_LOAD_ERROR.to_string());
                         }
                     }
                     Err(_) => {
                         if should_apply_response(generation_cell.get(), response_generation) {
-                            set_error.set("Network error loading content.".to_string());
+                            set_error.set(CONTENT_INDEX_NETWORK_ERROR.to_string());
                         }
                     }
                 }
@@ -1120,6 +1125,13 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             <p role="status" aria-live="polite" class="sr-only">
                 {move || format!("{} content items displayed", items.get().len())}
             </p>
+            // 一覧取得の失敗は items が前回成功値を保持していても常に表示する。
+            // （空状態の中に出すと items が残っているときにエラーが消えていた。）
+            <Show when=move || !error.get().is_empty() fallback=|| ()>
+                <p role="alert" data-testid="dashboard-error" class="text-xs text-red-500 mb-4">
+                    {move || error.get()}
+                </p>
+            </Show>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
                 <For
                     each=move || items.get()
@@ -1144,11 +1156,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                 />
                 <Show when=move || items.get().is_empty() fallback=|| ()>
                     <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
-                        {move || if error.get().is_empty() {
-                            "NO_APPROVED_CONTENT".to_string()
-                        } else {
-                            error.get()
-                        }}
+                        "NO_APPROVED_CONTENT"
                     </div>
                 </Show>
             </div>
@@ -1234,9 +1242,26 @@ fn ExportMyData(token: String) -> impl IntoView {
 
 mod jxl;
 
+/// コンテンツ本文の取得失敗時に表示する固定文言を HTTP ステータスから選ぶ。
+/// `None` はバイナリ読取失敗や通信エラー（ステータスが無い）を表す。
+/// レスポンス本文や生エラーは機微情報を含み得るため一切渡さない。
+fn content_load_error_message(status: Option<u16>) -> String {
+    match status {
+        Some(code) => format!("コンテンツの取得に失敗しました (HTTP {code})."),
+        None => "コンテンツの取得に失敗しました。".to_string(),
+    }
+}
+
 /// 検証状態からバッジ文言を決める（表示ロジックをテスト可能にするため分離）。
-/// チェックサム一致・JXL デコード失敗は「改ざん検知」とは別の状態として扱う。
-fn verification_badge_text(verified: Option<bool>, decode_failed: bool) -> &'static str {
+/// チェックサム不一致・JXL デコード失敗・取得失敗は「改ざん検知」とは別の状態として扱う。
+fn verification_badge_text(
+    verified: Option<bool>,
+    decode_failed: bool,
+    load_failed: bool,
+) -> &'static str {
+    if load_failed {
+        return "× LOAD FAILED";
+    }
     match (verified, decode_failed) {
         (Some(true), _) => "● VERIFIED",
         (Some(false), true) => "× DECODE FAILED",
@@ -1280,6 +1305,8 @@ where
     let (verified, set_verified) = signal(None::<bool>);
     // チェックサムは正常だが JXL のデコードに失敗した場合を改ざん検知と区別する。
     let (decode_error, set_decode_error) = signal(false);
+    // HTTP エラー／バイナリ読取失敗は改ざん検知ではなく取得失敗として扱う。
+    let (content_load_error, set_content_load_error) = signal(String::new());
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
@@ -1297,6 +1324,8 @@ where
 
     let favorite_cid = cid.clone();
     let toggle_favorite = move |_| {
+        // 新しい試行では前回のエラーを消す（do_vote と同一方針）。
+        set_favorite_error.set(String::new());
         // 同期ガード。DOM の disabled 反映より前に届く2回目のクリックもここで止める。
         if favorite_busy.get() {
             return;
@@ -1307,7 +1336,7 @@ where
         let turning_on = !favorite.get();
         let on_favorite_changed = on_favorite_changed.clone();
         spawn_local(async move {
-            let url = format!("{}/content/{}/favorite", API_BASE, cid);
+            let url = format!("{}/content/{}/favorite", API_BASE, url_encode(&cid));
             let res = if turning_on {
                 Request::post(&url)
             } else {
@@ -1343,55 +1372,73 @@ where
         let ct = ct_ef.clone();
         let token = token_stored.get_value();
         spawn_local(async move {
-            // 再取得や cid 切り替えで前回のデコード失敗表示が残らないようにする。
+            // 再取得や cid 切り替えで前回の失敗表示が残らないようにする。
             set_decode_error.set(false);
-            let url = format!("{}/content/{}", API_BASE, cid);
+            set_content_load_error.set(String::new());
+            let url = format!("{}/content/{}", API_BASE, url_encode(&cid));
             let res = Request::get(&url)
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await;
 
-            if let Ok(response) = res {
-                let bytes = response.binary().await.unwrap_or_default();
-                let is_ok = common::verify_checksum(&bytes, &expected_checksum);
-                // チェックサム検証時点の値を入れ、Illustration ではデコード結果で上書きする。
-                set_verified.set(Some(is_ok));
+            match res {
+                Ok(response) if response.ok() => match response.binary().await {
+                    Ok(bytes) => {
+                        let is_ok = common::verify_checksum(&bytes, &expected_checksum);
+                        // チェックサム検証時点の値を入れ、Illustration ではデコード結果で上書きする。
+                        set_verified.set(Some(is_ok));
 
-                if is_ok && !bytes.is_empty() {
-                    if ct == "Illustration" {
-                        if let Some(canvas) = canvas_ref.get() {
-                            use wasm_bindgen::JsCast;
-                            let el: web_sys::HtmlCanvasElement = (*canvas).clone().unchecked_into();
-                            match jxl::decode_jxl_to_canvas(&bytes, el) {
-                                Ok(()) => set_verified.set(Some(true)),
-                                Err(_) => {
-                                    // デコーダのエラー値には内部情報が含まれ得るため表示せず、
-                                    // 固定文言の専用エラーに切り替える。
+                        if is_ok && !bytes.is_empty() {
+                            if ct == "Illustration" {
+                                if let Some(canvas) = canvas_ref.get() {
+                                    use wasm_bindgen::JsCast;
+                                    let el: web_sys::HtmlCanvasElement =
+                                        (*canvas).clone().unchecked_into();
+                                    match jxl::decode_jxl_to_canvas(&bytes, el) {
+                                        Ok(()) => set_verified.set(Some(true)),
+                                        Err(_) => {
+                                            // デコーダのエラー値には内部情報が含まれ得るため表示せず、
+                                            // 固定文言の専用エラーに切り替える。
+                                            set_decode_error.set(true);
+                                            set_verified.set(Some(false));
+                                        }
+                                    }
+                                } else {
+                                    // キャンバスが未取得では描画できず、成功として扱えない。
                                     set_decode_error.set(true);
                                     set_verified.set(Some(false));
                                 }
+                            } else {
+                                let text = String::from_utf8_lossy(&bytes).to_string();
+                                // 本文と TOC は同じテキストから生成し、アンカーの一致を保証する。
+                                set_novel_toc.set(render_toc(&text));
+                                set_novel_html.set(render_markdown(&text));
                             }
-                        } else {
-                            // キャンバスが未取得では描画できず、成功として扱えない。
+                        } else if is_ok && ct == "Illustration" {
+                            // チェックサムが一致しても空バイトでは JXL をデコードできない。
                             set_decode_error.set(true);
                             set_verified.set(Some(false));
                         }
-                    } else {
-                        let text = String::from_utf8_lossy(&bytes).to_string();
-                        // 本文と TOC は同じテキストから生成し、アンカーの一致を保証する。
-                        set_novel_toc.set(render_toc(&text));
-                        set_novel_html.set(render_markdown(&text));
                     }
-                } else if is_ok && ct == "Illustration" {
-                    // チェックサムが一致しても空バイトでは JXL をデコードできない。
-                    set_decode_error.set(true);
+                    // バイナリ読取失敗は改ざんではなく取得失敗として固定文言を出す。
+                    Err(_) => {
+                        set_verified.set(Some(false));
+                        set_content_load_error.set(content_load_error_message(None));
+                    }
+                },
+                // HTTP エラー本文は見ず、ステータス番号だけを固定文言へ埋め込む。
+                Ok(response) => {
                     set_verified.set(Some(false));
+                    let status = response.status();
+                    set_content_load_error.set(content_load_error_message(Some(status)));
                 }
-            } else {
-                set_verified.set(Some(false));
+                Err(_) => {
+                    set_verified.set(Some(false));
+                    set_content_load_error.set(content_load_error_message(None));
+                }
             }
 
-            match Request::get(&format!("{}/content/{}/audit", API_BASE, cid))
+            match Request::get(&format!("{}/content/{}/audit", API_BASE, url_encode(&cid)))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
                 .await
@@ -1473,7 +1520,15 @@ where
                     }.into_any(),
                     Some(false) => view! {
                         <div class="text-center p-4" data-testid="content-verification-error">
-                            <Show when=move || decode_error.get() fallback=|| ()>
+                            <Show when=move || !content_load_error.get().is_empty() fallback=|| ()>
+                                <p role="alert" data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                    "Content Load Failed"
+                                </p>
+                                <p data-testid="content-load-error-detail" class="text-gray-500 text-[8px]">
+                                    {move || content_load_error.get()}
+                                </p>
+                            </Show>
+                            <Show when=move || content_load_error.get().is_empty() && decode_error.get() fallback=|| ()>
                                 <p role="alert" data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "JXL Decode Failed"
                                 </p>
@@ -1481,7 +1536,7 @@ where
                                     "JXL のデコードに失敗しました。"
                                 </p>
                             </Show>
-                            <Show when=move || !decode_error.get() fallback=|| ()>
+                            <Show when=move || content_load_error.get().is_empty() && !decode_error.get() fallback=|| ()>
                                 <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
                                 <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
                             </Show>
@@ -1531,7 +1586,11 @@ where
                         Some(false) => "text-red-500",
                         None => "text-gray-600",
                     }>
-                        {move || verification_badge_text(verified.get(), decode_error.get())}
+                        {move || verification_badge_text(
+                            verified.get(),
+                            decode_error.get(),
+                            !content_load_error.get().is_empty(),
+                        )}
                     </span>
                     <span class="text-gray-500 border border-gray-500/20 px-1">{ct_bad.to_uppercase()}</span>
                 </div>
@@ -2064,7 +2123,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     </p>
                 </Show>
                 <Show when=move || !vote_notice.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="vote-notice" class="text-xs text-green-500">
+                    <p role="status" data-testid="vote-notice" class="text-xs text-green-500">
                         {move || vote_notice.get()}
                     </p>
                 </Show>
@@ -2510,6 +2569,14 @@ mod tests {
         );
     }
 
+    /// cid はパスSegment として使うため `/` や `?` 等を percent-encode する。
+    #[test]
+    fn cid_is_percent_encoded_for_url_paths() {
+        assert_eq!(super::url_encode("plain-cid_1"), "plain-cid_1");
+        assert_eq!(super::url_encode("a/b c?d#e"), "a%2Fb%20c%3Fd%23e");
+        assert_eq!(super::url_encode("日本語"), "%E6%97%A5%E6%9C%AC%E8%AA%9E");
+    }
+
     #[test]
     fn only_latest_generation_response_is_applied() {
         // 現在世代と一致する応答だけを採用する。
@@ -2527,6 +2594,37 @@ mod tests {
     fn search_debounce_delay_is_within_expected_range() {
         // 1 文字ごと GET を防ぐため、200〜300ms の範囲に収める。
         assert!((200..=300).contains(&super::SEARCH_DEBOUNCE_MS));
+    }
+
+    /// 一覧取得失敗の文言は固定値で、レスポンス本文や生エラーを含まないこと。
+    #[test]
+    fn dashboard_error_uses_only_fixed_phrases() {
+        assert_eq!(
+            super::CONTENT_INDEX_LOAD_ERROR,
+            "Failed to load content index."
+        );
+        assert_eq!(
+            super::CONTENT_INDEX_NETWORK_ERROR,
+            "Network error loading content."
+        );
+        for message in [
+            super::CONTENT_INDEX_LOAD_ERROR,
+            super::CONTENT_INDEX_NETWORK_ERROR,
+        ] {
+            for leaked in [
+                "SERVER_DETAIL_MUST_NOT_BE_SHOWN",
+                "reqwest",
+                "serde",
+                "error sending request",
+                "invalid type",
+                "line 1 column",
+            ] {
+                assert!(
+                    !message.contains(leaked),
+                    "fixed phrase must not leak: {leaked}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2693,12 +2791,47 @@ mod tests {
     #[test]
     fn verification_badge_distinguishes_decode_failure_from_checksum_mismatch() {
         let badge = super::verification_badge_text;
-        assert_eq!(badge(None, false), "○ PENDING");
-        assert_eq!(badge(Some(true), false), "● VERIFIED");
+        assert_eq!(badge(None, false, false), "○ PENDING");
+        assert_eq!(badge(Some(true), false, false), "● VERIFIED");
         // デコード成功時は古い失敗フラグが残っていても VERIFIED。
-        assert_eq!(badge(Some(true), true), "● VERIFIED");
-        assert_eq!(badge(Some(false), false), "× COMPROMISED");
-        assert_eq!(badge(Some(false), true), "× DECODE FAILED");
+        assert_eq!(badge(Some(true), true, false), "● VERIFIED");
+        assert_eq!(badge(Some(false), false, false), "× COMPROMISED");
+        assert_eq!(badge(Some(false), true, false), "× DECODE FAILED");
+        // 取得失敗は改ざん検知ではなく専用バッジを出し、COMPROMISED を出さない。
+        assert_eq!(badge(Some(false), false, true), "× LOAD FAILED");
+        assert_eq!(badge(Some(false), true, true), "× LOAD FAILED");
+        assert_eq!(badge(None, false, true), "× LOAD FAILED");
+        assert_ne!(badge(Some(false), false, true), "× COMPROMISED");
+    }
+
+    /// HTTP エラー／バイナリ読取失敗では改ざん検知の文言を出さず、
+    /// 固定文言（＋ステータス番号のみ）を出すこと。
+    #[test]
+    fn content_load_error_uses_only_fixed_phrases() {
+        let http = super::content_load_error_message(Some(404));
+        let network = super::content_load_error_message(None);
+        assert_eq!(http, "コンテンツの取得に失敗しました (HTTP 404).");
+        assert_eq!(network, "コンテンツの取得に失敗しました。");
+
+        for message in [&http, &network] {
+            // 改ざん検知の文言・生エラー・サーバー本文を含まない。
+            for leaked in [
+                "COMPROMISED",
+                "Integrity Breach",
+                "checksum",
+                "SERVER_DETAIL_MUST_NOT_BE_SHOWN",
+                "reqwest",
+                "serde",
+                "invalid type",
+                "error sending request",
+                ": ",
+            ] {
+                assert!(
+                    !message.contains(leaked),
+                    "fixed phrase must not leak: {leaked}"
+                );
+            }
+        }
     }
 
     #[test]
