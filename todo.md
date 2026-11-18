@@ -197,6 +197,9 @@ P2（品質・保守・プロダクト拡張）:
 - [x] fail-closed・設定診断の実効化（2026-11-18/19）: backup find失敗伝播、CDNゲートの
   grep/findエラー、doctorの3カテゴリ死コード、OIDC_MAX_AUTH_AGE不正値起動拒否、
   restore_db必須引数、ライセンス本文コピー、未使用user_hash/allowを整理。
+- [x] 本番設定診断と起動の整合（2026-11-19）: doctorへ5カテゴリ追加(14→19・34テスト)、
+  OIDC起動エラーをpanicからanyhow化、EXPOSE_INTERNAL_ERRORS/ALLOWED_ORIGINS診断、
+  restore_db/verify_audit_exportの--database-token拒否を統一。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
