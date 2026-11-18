@@ -45,18 +45,25 @@ pub fn verify_presentation(
 }
 
 fn decode_certificate_der(token: &str) -> Result<Vec<u8>, AppError> {
-    if let Ok(vp) = serde_json::from_str::<PresentationEnvelope>(token)
-        && let Some(cert_b64) = vp.certificate.or(vp.verifiable_credential)
-    {
-        if cert_b64.len() > MAX_CERT_ENVELOPE_LEN {
-            return Err(AppError::Unauthorized(
-                "JPKI certificate envelope value is too large".into(),
-            ));
+    if let Ok(vp) = serde_json::from_str::<PresentationEnvelope>(token) {
+        // certificate / verifiableCredential の両方を長さ検査する。
+        // 実際に使うのは certificate 優先だが、どちらかが上限超過なら早期拒否する。
+        for envelope in [&vp.certificate, &vp.verifiable_credential] {
+            if let Some(value) = envelope
+                && value.len() > MAX_CERT_ENVELOPE_LEN
+            {
+                return Err(AppError::Unauthorized(
+                    "JPKI certificate envelope value is too large".into(),
+                ));
+            }
         }
-        let der = base64::engine::general_purpose::STANDARD
-            .decode(cert_b64.trim())
-            .map_err(|e| AppError::Unauthorized(format!("Invalid certificate base64: {e}")))?;
-        return ensure_cert_der_len(der);
+
+        if let Some(cert_b64) = vp.certificate.or(vp.verifiable_credential) {
+            let der = base64::engine::general_purpose::STANDARD
+                .decode(cert_b64.trim())
+                .map_err(|e| AppError::Unauthorized(format!("Invalid certificate base64: {e}")))?;
+            return ensure_cert_der_len(der);
+        }
     }
 
     let der = base64::engine::general_purpose::STANDARD
@@ -342,6 +349,67 @@ mod tests {
         );
         let err = decode_certificate_der(&json).unwrap_err();
         assert_unauthorized_contains(err, "certificate envelope value is too large");
+    }
+
+    /// certificate が正しい base64 でも verifiableCredential が 64 KiB 超なら拒否する。
+    /// 旧実装は certificate だけを検査するため、このケースを見落としていた。
+    #[test]
+    fn oversized_verifiable_credential_is_rejected_even_with_valid_certificate() {
+        let json = format!(
+            r#"{{"certificate":"AAECAw==","verifiableCredential":"{}"}}"#,
+            "A".repeat(MAX_CERT_ENVELOPE_LEN + 1)
+        );
+        let err = decode_certificate_der(&json).unwrap_err();
+        assert_unauthorized_contains(err, "certificate envelope value is too large");
+    }
+
+    /// verifiableCredential が正しい base64 でも certificate が 64 KiB 超なら拒否する。
+    #[test]
+    fn oversized_certificate_is_rejected_even_with_valid_verifiable_credential() {
+        let json = format!(
+            r#"{{"certificate":"{}","verifiableCredential":"AAECAw=="}}"#,
+            "A".repeat(MAX_CERT_ENVELOPE_LEN + 1)
+        );
+        let err = decode_certificate_der(&json).unwrap_err();
+        assert_unauthorized_contains(err, "certificate envelope value is too large");
+    }
+
+    /// 両フィールドが有効な base64 の場合、certificate が優先して使われる。
+    /// "AAECAw==" -> 00 01 02 03 / "AAAA" -> 00 00 00 で使われた側を識別する。
+    #[test]
+    fn envelope_with_both_fields_uses_certificate() {
+        let json = r#"{"certificate":"AAECAw==","verifiableCredential":"AAAA"}"#;
+        let der = decode_certificate_der(json).unwrap();
+        assert_eq!(der, vec![0u8, 1, 2, 3]);
+    }
+
+    /// verify_presentation 経由でも両フィールド検査のパスを通す（トークン全体は上限内）。
+    /// verifiableCredential に単体では拒否される自己署名証明書を入れ、
+    /// certificate が優先された場合のみ受理されるようにする。
+    #[test]
+    fn envelope_with_both_fields_is_accepted_via_verify_presentation() {
+        use rcgen::{CertifiedIssuer, IsCa};
+
+        let ca_key = rsa_signing_key();
+        let mut ca_params = named_params("jpki-test-ca-envelope");
+        ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = CertifiedIssuer::self_signed(ca_params, ca_key).unwrap();
+
+        let leaf_key = rsa_signing_key();
+        let leaf_params = named_params("jpki-test-leaf-envelope");
+        let leaf = leaf_params.signed_by(&leaf_key, &ca).unwrap();
+        let cert_b64 = base64::engine::general_purpose::STANDARD.encode(leaf.der());
+
+        let vc_key = rcgen::KeyPair::generate().unwrap();
+        let vc = named_params("jpki-test-vc-envelope")
+            .self_signed(&vc_key)
+            .unwrap();
+        let vc_b64 = base64::engine::general_purpose::STANDARD.encode(vc.der());
+
+        let json = format!(r#"{{"certificate":"{cert_b64}","verifiableCredential":"{vc_b64}"}}"#);
+        assert!(json.len() <= MAX_PRESENTATION_TOKEN_LEN);
+        let pk = verify_presentation(&json, None, false).unwrap();
+        assert!(!pk.is_empty());
     }
 
     /// デコード後の DER が 16 KiB 超なら X.509 パース前に拒否する。

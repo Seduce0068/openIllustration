@@ -1173,6 +1173,111 @@ mod tests {
         );
     }
 
+    // ---- RSA-3072 / RSA-4096 の正当な署名長が誤拒否されないことの担保 ----
+
+    /// 既存の決定論的 RNG を使って、指定ビット数の鍵ペアを生成する（使い回し可能な共通ヘルパー）。
+    fn test_key_pair_from_seed_with_bits(seed: u64, bits: usize) -> (String, Vec<u8>) {
+        use rsa::pkcs8::EncodePrivateKey;
+        let mut rng = TestRng(seed);
+        let key = PrivateKey::new(&mut rng, bits).unwrap();
+        let private_pem = key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap()
+            .to_string();
+        let public_der = public_key_der_from_private_pem(&private_pem).unwrap();
+        (private_pem, public_der)
+    }
+
+    /// テスト専用: RSA 鍵生成なしで構造的に正しい SPKI DER を組み立てる。
+    ///
+    /// n = 2^bits - 1（奇数）, e = 65537 なので `PublicKey::new` の検証を通り、
+    /// `to_public_key_der()` で実際の SPKI DER が得られる。署名検証自体は通らないが、
+    /// 「署名長ガードと DER 上限を通過したか」だけを確認する目的には十分である。
+    /// RSA-4096 の鍵生成が重い場合の代替手段として 4096 bit に使う。
+    fn synthetic_spki_der(bits: usize) -> Vec<u8> {
+        use rsa::pkcs8::EncodePublicKey;
+        let modulus_bytes = vec![0xFF_u8; bits / 8];
+        let modulus = rsa::BoxedUint::from_be_slice(&modulus_bytes, bits as u32)
+            .expect("synthetic modulus must fit its precision");
+        let exponent = rsa::BoxedUint::from(65_537_u64);
+        let public_key = rsa::PublicKey::new(modulus, exponent)
+            .expect("synthetic RSA public key components must be structurally valid");
+        public_key
+            .to_public_key_der()
+            .expect("SPKI DER encoding of the synthetic RSA public key must succeed")
+            .as_ref()
+            .to_vec()
+    }
+
+    /// ダミー署名が「署名長ガード」を通過して暗号検証まで到達したことを確認する。
+    ///
+    /// ダミーなので最終結果は必ず InvalidSignature だが、ガードで拒否された場合は
+    /// メッセージに "signature length must be" が含まれるため、両者を分離できる。
+    fn assert_passes_length_guard(der: &[u8], data: &[u8], signature: &[u8]) {
+        let error = verify_rsa_signature(der, data, signature)
+            .expect_err("dummy signature must reach verification and then fail");
+        assert!(
+            matches!(&error, ForensicError::InvalidSignature(message)
+                if !message.contains("signature length must be")),
+            "signature of {} bytes must pass the length guard, got {error:?}",
+            signature.len()
+        );
+    }
+
+    /// RSA-3072（384 バイト）の正当な署名が受理される。
+    /// 上限を 384 未満に誤変更すると署名長ガードで拒否され、このテストは失敗する。
+    #[test]
+    fn verify_rsa_signature_accepts_3072_bit_signature() {
+        let (private_pem, public_der) = test_key_pair_from_seed_with_bits(0x3072_5EED, 3072);
+        let data = b"rsa-3072 signature length guard check";
+        let signature = sign_bytes(&private_pem, data);
+
+        assert_eq!(signature.len(), 384, "RSA-3072 signature must be 384 bytes");
+        assert!(
+            public_der.len() <= MAX_PUBLIC_KEY_DER_LEN,
+            "RSA-3072 SPKI DER must fit the 2 KiB limit, got {}",
+            public_der.len()
+        );
+        assert!(
+            verify_rsa_signature(&public_der, data, &signature).is_ok(),
+            "legitimate RSA-3072 signature must be accepted"
+        );
+    }
+
+    /// RSA-4096（512 バイト）の署名長が上限 `..=512` で受理される。
+    /// 上限を 511 / 384 に誤変更するとガードエラーへ変わり、このテストは失敗する。
+    #[test]
+    fn verify_rsa_signature_accepts_4096_bit_signature_length() {
+        // ガードの契約そのものも明示する（境界値リテラルの mutation 検出）。
+        assert_eq!((MIN_RSA_SIGNATURE_LEN, MAX_RSA_SIGNATURE_LEN), (256, 512));
+
+        let der = synthetic_spki_der(4096);
+        let signature = vec![0u8; MAX_RSA_SIGNATURE_LEN];
+        assert_eq!(signature.len(), 512, "RSA-4096 signature must be 512 bytes");
+        // 上限が 511 や 384 に下げられていれば、ここでガードエラーになる。
+        assert_passes_length_guard(&der, b"rsa-4096 signature length guard check", &signature);
+    }
+
+    /// RSA-4096 の SPKI 公開鍵 DER は約 550 バイトで、2 KiB 上限に十分収まる。
+    /// 上限を 512 バイト等に誤変更すると、このテストは失敗する。
+    #[test]
+    fn rsa4096_spki_der_fits_under_2kib_limit() {
+        let der = synthetic_spki_der(4096);
+        assert!(
+            (500..=600).contains(&der.len()),
+            "4096-bit SPKI DER should be about 550 bytes, got {}",
+            der.len()
+        );
+        assert!(
+            der.len() <= MAX_PUBLIC_KEY_DER_LEN,
+            "4096-bit SPKI DER must fit the 2 KiB limit, got {}",
+            der.len()
+        );
+
+        // 振る舞いでも確認する。DER 上限が下がっていれば Crypto エラーになる。
+        assert_passes_length_guard(&der, b"rsa-4096 der limit check", &[0u8; 512]);
+    }
+
     /// 監査対象 2: 不正 base64 署名は署名検証より前に InvalidSignature で拒否される。
     #[test]
     fn verify_audit_snapshot_rejects_invalid_base64_signature() {
