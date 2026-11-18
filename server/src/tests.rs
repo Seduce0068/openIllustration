@@ -10572,6 +10572,54 @@ async fn test_order_requires_matching_content_price() {
     }
 }
 
+/// price が NULL の Approved 行は一覧と同じく 0 として扱い、
+/// 価格不正（購入不可）として 400 を返す。生 price を読むと NULL の
+/// i64 変換失敗で 500 になるため、その回帰を検証する。
+#[tokio::test]
+async fn test_order_rejects_null_price_as_bad_request() {
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) =
+        setup_app_with_payments("0x1111111111111111111111111111111111111111", verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z";
+
+    // fixture の Approved 行を NULL price に変更する（一覧側の NULL ケースと同じ状態）。
+    db.execute("UPDATE contents SET price = NULL WHERE cid = ?", [cid])
+        .await
+        .unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/payments/orders")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "chain_id": 137,
+                        "wallet_address": "0x1111111111111111111111111111111111111111",
+                        "cid": cid,
+                        "amount_jpy": 1000,
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    let status = response.status();
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "NULL price must be rejected as a bad request, not 500: {body}"
+    );
+    assert_eq!(body["error"], "amount_jpy must match the content price");
+}
+
 #[tokio::test]
 async fn test_order_rejects_unknown_or_non_approved_content() {
     let verifier = Arc::new(MockVerifier::default());

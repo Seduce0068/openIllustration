@@ -362,7 +362,7 @@ pub async fn create_order(
     let mut content_rows = state
         .db
         .query(
-            "SELECT price, status FROM contents WHERE cid = ?",
+            "SELECT COALESCE(price, 0) AS price, status FROM contents WHERE cid = ?",
             [payload.cid.clone()],
         )
         .await?;
