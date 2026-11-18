@@ -355,16 +355,58 @@ fn client_event_payload(count: usize) -> Option<String> {
     Some(format!(r#"{{"event":"neutralized_url","count":{count}}}"#))
 }
 
+/// 送信済みとして記録する描画ソース（markdown 本文のハッシュ）の集合。
+///
+/// `render_markdown` はリアクティブな owner を持たない自由関数なので
+/// `StoredValue` は使えない。また再マウントをまたいで保持する必要があるため、
+/// ページの寿命で生きる `thread_local` の `HashSet` を用いる（wasm は単一スレッド）。
+#[cfg(any(test, target_arch = "wasm32"))]
+type ReportedSources = std::collections::HashSet<u64>;
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static REPORTED: RefCell<ReportedSources> = RefCell::new(ReportedSources::new());
+}
+
+/// 描画ソース（markdown 本文）を安定したハッシュへ変換する。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn markdown_source_hash(markdown: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    markdown.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// 送信済み記録に対する純粋判定。新規ソースなら `true`、既出なら `false`。
+///
+/// `HashSet::insert` の戻り値（新たに挿入されたか）をそのまま返すだけなので、
+/// 副作用は集合の更新に限られ、実際の fetch は呼び出し側の副作用として扱う。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn claim_report_source(reported: &mut ReportedSources, source_hash: u64) -> bool {
+    reported.insert(source_hash)
+}
+
+/// ページ全体の送信済み記録を参照し、このソースが未送信なら記録して `true` を返す。
+#[cfg(target_arch = "wasm32")]
+fn should_report_source(source_hash: u64) -> bool {
+    REPORTED.with(|reported| claim_report_source(&mut reported.borrow_mut(), source_hash))
+}
+
 /// 中立化した件数を監視用に 1 回だけ送信する。
 ///
+/// 同じ描画ソースが再描画（画面の再マウント等）されたときは送信しない。
 /// 描画をブロックしないよう `spawn_local` で非同期に送る。認証ヘッダは付けず、
 /// 失敗しても画面にもコンソールにも何も出さない（機微情報をログに残さない）。
-fn report_neutralized_urls(count: usize) {
+fn report_neutralized_urls(count: usize, markdown: &str) {
     #[cfg(target_arch = "wasm32")]
     {
         let Some(payload) = client_event_payload(count) else {
             return;
         };
+        let source_hash = markdown_source_hash(markdown);
+        if !should_report_source(source_hash) {
+            return;
+        }
         spawn_local(async move {
             if let Ok(request) = Request::post(&format!("{API_BASE}/metrics/client-events"))
                 .header("Content-Type", "application/json")
@@ -377,8 +419,8 @@ fn report_neutralized_urls(count: usize) {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // ネイティブの単体テストでは副作用を発生させない。
-        let _ = count;
+        // ネイティブの単体テストでは fetch を起こさない。送信判定は純粋関数側で検証する。
+        let _ = (count, markdown);
     }
 }
 
@@ -452,8 +494,9 @@ fn render_markdown_with_neutralized_count(markdown: &str) -> (String, usize) {
 
 fn render_markdown(markdown: &str) -> String {
     let (html, neutralized_count) = render_markdown_with_neutralized_count(markdown);
-    // 集約した件数を描画完了後に 1 回だけ送る（描画はブロックしない）。
-    report_neutralized_urls(neutralized_count);
+    // 集約した件数を描画完了後に送る。同じ本文の再描画は送信側で除外される
+    // （描画はブロックせず、HTML を返す契約は据え置き）。
+    report_neutralized_urls(neutralized_count, markdown);
     html
 }
 
@@ -483,6 +526,15 @@ fn is_safe_markdown_url(destination: &str, image: bool) -> bool {
         .chars()
         .any(|ch| ch.is_control() || ch.is_whitespace())
     {
+        return false;
+    }
+
+    // network-path reference（`//host/path`）や Windows UNC（`\\host\path`）は
+    // スキームが無いため従来は無条件に安全とみなされていたが、ブラウザが
+    // 現在のスキームを補完して外部ホストへ誘導し得るため拒否する。
+    // URL パーサは `\` を `/` に正規化するため、混在形式も併せて拒否する。
+    let mut leading = destination.chars().take(2);
+    if matches!(leading.next(), Some('/' | '\\')) && matches!(leading.next(), Some('/' | '\\')) {
         return false;
     }
 
@@ -1622,6 +1674,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             }
             set_status.set(String::new());
             set_file.set(Some(f));
+        } else {
+            // 選択解除（キャンセル）時は古い File を破棄し、送信ボタンを無効化する。
+            set_file.set(None);
+            set_status.set(String::new());
         }
     };
 
@@ -2444,6 +2500,46 @@ mod tests {
         assert!(rendered.contains("src=\"#\""));
     }
 
+    /// プロトコル相対 URL（`//host/path`）と UNC 形式（`\\host\path`）は
+    /// スキームが無くてもブラウザが現在のスキームを補完して外部ホストへ
+    /// 誘導できるため、安全な相対 URL として扱わず中立化する。
+    #[test]
+    fn markdown_protocol_relative_and_unc_urls_are_neutralized() {
+        for url in [
+            "//evil.example/phish",
+            "\\\\evil.example\\phish",
+            // URL パーサは `\` を `/` に正規化するため混在形式も拒否する。
+            "/\\evil.example/phish",
+            "\\/evil.example/phish",
+        ] {
+            assert!(
+                !super::is_safe_markdown_url(url, false),
+                "unsafe link URL was accepted: {url}"
+            );
+            assert!(
+                !super::is_safe_markdown_url(url, true),
+                "unsafe image URL was accepted: {url}"
+            );
+        }
+
+        // 通常の相対 URL は従来どおり許可される（回帰確認）。
+        assert!(super::is_safe_markdown_url("/chapter/1", false));
+        assert!(super::is_safe_markdown_url("../chapter/1", true));
+
+        let rendered =
+            super::render_markdown("[phish](//evil.example/phish) ![img](//evil.example/img.png)");
+        assert!(!rendered.contains("href=\"//evil.example"), "{rendered}");
+        assert!(!rendered.contains("src=\"//evil.example"), "{rendered}");
+        assert_eq!(rendered.matches("href=\"#\"").count(), 1, "{rendered}");
+        assert_eq!(rendered.matches("src=\"#\"").count(), 1, "{rendered}");
+
+        // 中立化カウントにも含まれること。
+        let (_, count) = super::render_markdown_with_neutralized_count(
+            "[ok](https://example.com) [phish](//evil.example/phish) [phish2](//evil.example/other)",
+        );
+        assert_eq!(count, 2);
+    }
+
     /// ビルド時に注入されたオリジンは末尾スラッシュを除去して URL へ連結される。
     #[test]
     fn api_origin_has_no_trailing_slash() {
@@ -2511,6 +2607,41 @@ mod tests {
         ] {
             assert!(value.get(key).is_none(), "{key} must not be sent");
         }
+    }
+
+    /// 同一の描画ソースは 1 度だけ送信し、別ソースは新たに送信する。
+    /// 実際の fetch は副作用なので、純粋判定の戻り値で送信回数を数える。
+    #[test]
+    fn neutralized_report_is_sent_once_per_render_source() {
+        let markdown = "[bad](javascript:alert(1))";
+        let other = "![img](data:text/html,alert)";
+
+        let hash = super::markdown_source_hash(markdown);
+        let other_hash = super::markdown_source_hash(other);
+        // ハッシュは描画ソースに対して安定し、別ソースとは衝突しない。
+        assert_eq!(hash, super::markdown_source_hash(markdown));
+        assert_ne!(hash, other_hash);
+
+        let mut reported = super::ReportedSources::new();
+
+        // 同じ markdown を2回描画しても件数と HTML は同じ。
+        let (html1, count1) = super::render_markdown_with_neutralized_count(markdown);
+        let (html2, count2) = super::render_markdown_with_neutralized_count(markdown);
+        assert_eq!(count1, 1);
+        assert_eq!(count2, count1);
+        assert_eq!(html2, html1);
+
+        // 初回だけ送信対象になり、2回目は除外される（再マウント相当）。
+        assert!(super::claim_report_source(&mut reported, hash));
+        assert!(!super::claim_report_source(&mut reported, hash));
+        assert_eq!(reported.len(), 1);
+
+        // 別の markdown なら新たに1回送信される（累計2回）。
+        let (_, other_count) = super::render_markdown_with_neutralized_count(other);
+        assert_eq!(other_count, 1);
+        assert!(super::claim_report_source(&mut reported, other_hash));
+        assert_eq!(reported.len(), 2);
+        assert!(!super::claim_report_source(&mut reported, other_hash));
     }
 
     /// 危険 URL の件数が描画と同じパスで正しく集約されること。
