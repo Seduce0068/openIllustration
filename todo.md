@@ -67,8 +67,9 @@ P2（品質・保守・プロダクト拡張）:
 - [x] BAN の `duration_days` を期限判定へ反映（2026-11-18 対応済み）: migration 013 で `users.ban_until` を追加し、
   `ban_user` が 1〜3650日（null=無期限）の期限を設定、`ensure_user_not_banned` が期限切れを判定上のみ解除。
   `unban` で NULL に戻し、`/me/export` の users 行にも含める（回帰テスト6件追加）。
-- [ ] 残指摘 R1-26: payment_orders の derivation_index 採番が書き込みロック外で、
-  並行注文が同一受取アドレスを得る可能性（原子的予約化が必要）。
+- [x] 残指摘 R1-26: payment_orders の derivation_index 採番を書き込みロック＋トランザクション内へ移動し、
+  受取先派生と INSERT を原子的化（2026-11-18 対応済み）。並行注文で連番の index と異なる受取先を
+  割り当てる回帰テスト4件を追加。一意性は migration 003 の既存部分 UNIQUE インデックスで担保。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

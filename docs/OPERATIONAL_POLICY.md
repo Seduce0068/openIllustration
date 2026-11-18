@@ -99,6 +99,14 @@ generated:
   のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。リモート DB ではこの排他が使えないため警告のみとし、
   単一ライター運用を契約とする。バックアップは `backup_db`（`VACUUM INTO`・上書き拒否）で取得し、`verify_backup` と `verify_audit_log` で検証する。手順は
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
+- `payment_orders.derivation_index` には migration 003 の部分 UNIQUE インデックス
+  （`WHERE derivation_index IS NOT NULL`）が適用済みである。固定受取アドレスの注文
+  （`derivation_index IS NULL`）は制約対象外とし、xprv 設定時は注文ごとの受取先
+  再利用を DB 制約でも拒否する。既存 DB に重複した `derivation_index` がある場合は
+  インデックス作成時にマイグレーションが失敗して起動を中止する（fail-closed）。
+  黙ってデータを修正せず、運用側の確認を強制するための動作である。
+  並行注文対策（R1-26）は新規マイグレーションを追加せず、`create_order` が
+  書き込みロックとトランザクション内で採番を直列化することで実現する。
 - IPv6のみの制御をプロキシ経由で使う場合、`TRUSTED_PROXY_CIDRS` に信頼済みプロキシの範囲のみを設定し、プロキシは `X-Forwarded-For` を上書きまたは追記する。信頼済みピアで解決できない場合は
   403 となる。ネットワーク層でも許可方針を実装する。
 - ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現状のエラー応答は500系の内部詳細を

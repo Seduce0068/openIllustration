@@ -293,7 +293,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`content_audit_log`|状態、主体、理由、連鎖ハッシュ、時刻|DB内状態遷移記録|
 |`governance_audit_log`|`action`（BAN/UNBAN/UNPIN）、対象、運用者、根拠、詳細、時刻|運用判断の記録。連鎖・署名なし（DEC-04 未達）|
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
-|`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
+|`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` は migration 003 の部分 UNIQUE（`derivation_index IS NOT NULL`）|
 
 DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `013_ban_until.sql`）としてバージョン管理され、起動時に
 `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
@@ -336,6 +336,16 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
 `PAYMENT_RECEIVING_XPRV` が設定されている場合、注文ごとに BIP44
 （`m/44'/60'/0'/0/{index}`）で受取アドレスを派生し、`derivation_index` を
 一意に記録する。未設定時は `PAYMENT_RECEIVING_ADDRESS` の単一アドレスを使う。
+
+`derivation_index` の採番は `create_order` の書き込みロック＋書き込みトランザクション内で
+行う。ロック取得後に `MAX(derivation_index) + 1` を読み、受取アドレスの派生と注文の
+INSERT を同じトランザクションでコミットする。この原子的予約により、同一 DB への
+並行注文でも連番の index と異なる受取先が割り当てられ、UNIQUE 違反で片方が失敗しない。
+途中で失敗した場合はロールバックして index を消費しない。チェーン ID とウォレット
+アドレスの検証は採番より前に行うため、不正入力で拒否した注文も index を消費しない。
+固定受取アドレス設定では `derivation_index` は NULL のままで、複数注文が同じ
+アドレスを再利用できる。重複の最終防御は migration 003 の部分 UNIQUE インデックス
+（`derivation_index IS NOT NULL`）が担う。
 
 決済要求、利用者ウォレット署名、チェーン送信、トランザクション確認、最終性、失敗・再試行を別状態として扱う。受理対象チェーンとJPYCコントラクトをallowlistで識別し、
 要求ID・金額・受取先に結び付く送金を検証した後だけ有償機能を解放する。成功を確認できた取引だけを決済成立とする。実際の手数料と確認時間を利用者へ提示する。
