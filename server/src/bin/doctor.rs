@@ -218,6 +218,69 @@ where
     };
     results.push(("oidc_clock_skew", oidc_clock_skew_errors));
 
+    // OIDC_MAX_AUTH_AGE_SECS: server::oidc::OidcState::from_env_with は
+    // 0 / 負 / 非数値 / オーバーフローを Err（起動拒否）にして max_age 検証の
+    // 黙った無効化を防ぐ。from_env_with は pub(crate) で doctor から直接呼べない
+    // ため、ここで同一のパース検証を行い Err 相当を警告化する。値は出力しない。
+    // mock 有効時は OIDC を使わないため警告しない。
+    let oidc_max_auth_age_errors = if allow_mock_auth {
+        Vec::new()
+    } else {
+        match lookup("OIDC_MAX_AUTH_AGE_SECS") {
+            None => Vec::new(),
+            Some(value) => match value.parse::<u64>() {
+                Ok(0) => vec!["OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()],
+                Ok(_) => Vec::new(),
+                // 負数・非数値・オーバーフローはすべて Err 相当（起動拒否）。
+                Err(_) => vec!["OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string()],
+            },
+        }
+    };
+    results.push(("oidc_max_auth_age", oidc_max_auth_age_errors));
+
+    // OIDC_COOKIE_SECURE: 既定は Secure 付与（fail-closed）。mock 無効構成で
+    // 偽値（0 / false）が設定されているなら警告する。値はエコーしない。
+    let oidc_cookie_secure_errors = match lookup("OIDC_COOKIE_SECURE") {
+        Some(value) => {
+            let falsy = value == "0" || value.eq_ignore_ascii_case("false");
+            if !allow_mock_auth && falsy {
+                vec![
+                    "OIDC_COOKIE_SECURE is disabled; refresh cookies will lack the Secure attribute"
+                        .to_string(),
+                ]
+            } else {
+                Vec::new()
+            }
+        }
+        None => Vec::new(),
+    };
+    results.push(("oidc_cookie_secure", oidc_cookie_secure_errors));
+
+    // OIDC_REQUIRED_ACR / OIDC_REQUIRED_AMR: mock 無効時に未設定（または空要素
+    // のみ）だと保証レベル（認証コンテキスト／認証方法）が一切強制されないため
+    // 警告する。値は出力しない。
+    let mut oidc_required_assurance_errors = Vec::new();
+    if !allow_mock_auth {
+        for (name, warning) in [
+            (
+                "OIDC_REQUIRED_ACR",
+                "OIDC_REQUIRED_ACR is not set; no required authentication context class is enforced",
+            ),
+            (
+                "OIDC_REQUIRED_AMR",
+                "OIDC_REQUIRED_AMR is not set; no required authentication method is enforced",
+            ),
+        ] {
+            let effective = lookup(name)
+                .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
+                .unwrap_or(false);
+            if !effective {
+                oidc_required_assurance_errors.push(warning.to_string());
+            }
+        }
+    }
+    results.push(("oidc_required_assurance", oidc_required_assurance_errors));
+
     // 年齢ポリシー: 不正値は AgePolicy::from_env_with がエラーを返す。
     // プロセス環境を触らず lookup を渡すことで、CLI と同じ分岐をテストできる。
     let age_errors = match common::age::AgePolicy::from_env_with(&lookup) {
@@ -266,6 +329,44 @@ where
         Vec::new()
     };
     results.push(("trusted_proxy", trusted_proxy_errors));
+
+    // EXPOSE_INTERNAL_ERRORS: 有効時（1 / true, 大小文字不問）は内部エラーの詳細が
+    // クライアントへ露出するため警告する。mock 有効時は開発環境として許容し、
+    // 値（1/true）はエコーしない。
+    let expose_internal_errors_errors = match lookup("EXPOSE_INTERNAL_ERRORS") {
+        Some(value) => {
+            let enabled = value == "1" || value.eq_ignore_ascii_case("true");
+            if !allow_mock_auth && enabled {
+                vec![
+                    "EXPOSE_INTERNAL_ERRORS is enabled; internal error details are exposed to clients"
+                        .to_string(),
+                ]
+            } else {
+                Vec::new()
+            }
+        }
+        None => Vec::new(),
+    };
+    results.push(("expose_internal_errors", expose_internal_errors_errors));
+
+    // ALLOWED_ORIGINS: mock 無効時に未設定／空だと allowed_origins() が空ベクタを
+    // 返し、すべての CORS オリジンが拒否される（fail-closed）。オリジン値は出力しない。
+    let allowed_origins_errors = if !allow_mock_auth {
+        let has_origin = lookup("ALLOWED_ORIGINS")
+            .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
+            .unwrap_or(false);
+        if has_origin {
+            Vec::new()
+        } else {
+            vec![
+                "ALLOWED_ORIGINS is not set or empty while mock auth is disabled; all CORS origins are rejected"
+                    .to_string(),
+            ]
+        }
+    } else {
+        Vec::new()
+    };
+    results.push(("allowed_origins", allowed_origins_errors));
 
     results
 }
@@ -412,8 +513,11 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_fourteen_categories() {
+    fn check_always_reports_nineteen_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
+        // 5 カテゴリ追加（oidc_max_auth_age / oidc_cookie_secure /
+        // oidc_required_assurance / expose_internal_errors / allowed_origins）で
+        // 14 -> 19。シナリオに依存せず常に同じカテゴリ数になることを保証する。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
             &[("ALLOW_MOCK_AUTH", "1")],
@@ -429,7 +533,7 @@ mod tests {
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                14,
+                19,
                 "pairs={pairs:?}"
             );
         }
@@ -739,6 +843,165 @@ mod tests {
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "oidc_http_timeout").is_empty());
+    }
+
+    // --- 2e. 追加の設定診断（R2 監査対応） --------------------------------
+
+    #[test]
+    fn oidc_max_auth_age_invalid_warns_without_disclosing_value() {
+        const GREATER: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
+        const POSITIVE: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+        for (value, expected) in [
+            ("0", GREATER),
+            ("-1", POSITIVE),
+            ("abc", POSITIVE),
+            ("999999999999999999999999999999", POSITIVE),
+        ] {
+            let results = check_all_with(lookup_from(&[("OIDC_MAX_AUTH_AGE_SECS", value)]));
+            let errors = errors_for(&results, "oidc_max_auth_age");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], expected, "value={value}");
+        }
+        for value in ["1", "60", "3600"] {
+            let results = check_all_with(lookup_from(&[("OIDC_MAX_AUTH_AGE_SECS", value)]));
+            assert!(
+                errors_for(&results, "oidc_max_auth_age").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "oidc_max_auth_age").is_empty());
+        // mock 有効時は OIDC を使わないため警告しない。
+        let results = check_all_with(lookup_from(&[
+            ("ALLOW_MOCK_AUTH", "1"),
+            ("OIDC_MAX_AUTH_AGE_SECS", "0"),
+        ]));
+        assert!(errors_for(&results, "oidc_max_auth_age").is_empty());
+    }
+
+    #[test]
+    fn expose_internal_errors_truthy_warns_without_disclosing_value() {
+        const EXPECTED: &str =
+            "EXPOSE_INTERNAL_ERRORS is enabled; internal error details are exposed to clients";
+        for value in ["1", "true", "TRUE", "TrUe"] {
+            let results = check_all_with(lookup_from(&[("EXPOSE_INTERNAL_ERRORS", value)]));
+            let errors = errors_for(&results, "expose_internal_errors");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+        }
+        for value in ["0", "false", "no", ""] {
+            let results = check_all_with(lookup_from(&[("EXPOSE_INTERNAL_ERRORS", value)]));
+            assert!(
+                errors_for(&results, "expose_internal_errors").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "expose_internal_errors").is_empty());
+        // mock 有効時（開発環境）は警告しない。
+        let results = check_all_with(lookup_from(&[
+            ("ALLOW_MOCK_AUTH", "1"),
+            ("EXPOSE_INTERNAL_ERRORS", "1"),
+        ]));
+        assert!(errors_for(&results, "expose_internal_errors").is_empty());
+    }
+
+    #[test]
+    fn allowed_origins_missing_or_empty_warns_without_disclosing_value() {
+        const EXPECTED: &str = "ALLOWED_ORIGINS is not set or empty while mock auth is disabled; all CORS origins are rejected";
+        let scenarios: [&[(&str, &str)]; 3] = [
+            &[],
+            &[("ALLOWED_ORIGINS", "")],
+            &[("ALLOWED_ORIGINS", " , , ")],
+        ];
+        for pairs in scenarios {
+            let results = check_all_with(lookup_from(pairs));
+            let errors = errors_for(&results, "allowed_origins");
+            assert_eq!(errors.len(), 1, "pairs={pairs:?}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "pairs={pairs:?}");
+        }
+        // オリジン値は出力しない。
+        const ORIGIN: &str = "https://allowed-origin.example";
+        let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", ORIGIN)]));
+        let errors = errors_for(&results, "allowed_origins");
+        assert!(errors.is_empty(), "errors={errors:?}");
+        for error in errors {
+            assert!(!error.contains(ORIGIN), "オリジン値が漏洩: {error}");
+        }
+        // mock 有効時は未設定でも警告しない（開発用既定オリジンが使われる）。
+        let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
+        assert!(errors_for(&results, "allowed_origins").is_empty());
+    }
+
+    #[test]
+    fn oidc_cookie_secure_falsy_warns_without_disclosing_value() {
+        const EXPECTED: &str =
+            "OIDC_COOKIE_SECURE is disabled; refresh cookies will lack the Secure attribute";
+        for value in ["0", "false", "FALSE", "FaLsE"] {
+            let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
+            let errors = errors_for(&results, "oidc_cookie_secure");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+        }
+        for value in ["1", "true", "yes", ""] {
+            let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
+            assert!(
+                errors_for(&results, "oidc_cookie_secure").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "oidc_cookie_secure").is_empty());
+        // mock 有効時は警告しない。
+        let results = check_all_with(lookup_from(&[
+            ("ALLOW_MOCK_AUTH", "1"),
+            ("OIDC_COOKIE_SECURE", "0"),
+        ]));
+        assert!(errors_for(&results, "oidc_cookie_secure").is_empty());
+    }
+
+    #[test]
+    fn oidc_required_assurance_unset_warns_without_disclosing_value() {
+        const ACR: &str =
+            "OIDC_REQUIRED_ACR is not set; no required authentication context class is enforced";
+        const AMR: &str =
+            "OIDC_REQUIRED_AMR is not set; no required authentication method is enforced";
+
+        let results = check_all_with(lookup_from(&[]));
+        let errors = errors_for(&results, "oidc_required_assurance");
+        assert_eq!(errors.len(), 2, "errors={errors:?}");
+        assert_eq!(errors[0], ACR);
+        assert_eq!(errors[1], AMR);
+
+        // 空要素のみでも未設定と同じく警告する。
+        let results = check_all_with(lookup_from(&[
+            ("OIDC_REQUIRED_ACR", " , "),
+            ("OIDC_REQUIRED_AMR", "   "),
+        ]));
+        assert_eq!(errors_for(&results, "oidc_required_assurance").len(), 2);
+
+        // 両方設定されていれば警告しない。
+        let results = check_all_with(lookup_from(&[
+            ("OIDC_REQUIRED_ACR", "urn:example:acr"),
+            ("OIDC_REQUIRED_AMR", "pwd,mfa"),
+        ]));
+        assert!(errors_for(&results, "oidc_required_assurance").is_empty());
+
+        // 片方だけ設定なら未設定側のみ警告し、設定値は出力しない。
+        let results = check_all_with(lookup_from(&[("OIDC_REQUIRED_ACR", "urn:example:acr")]));
+        let errors = errors_for(&results, "oidc_required_assurance");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], AMR);
+        assert!(
+            !errors[0].contains("urn:example:acr"),
+            "設定値が漏洩: {}",
+            errors[0]
+        );
+
+        // mock 有効時は警告しない。
+        let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
+        assert!(errors_for(&results, "oidc_required_assurance").is_empty());
     }
 
     // --- 3. strict 判定 ----------------------------------------------------

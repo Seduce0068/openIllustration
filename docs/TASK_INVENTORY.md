@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-19T00:23:03+09:00"
+  at: "2026-11-19T00:57:21+09:00"
 verified:
   by: dsh
-  at: "2026-11-19T00:23:03+09:00"
+  at: "2026-11-19T00:57:21+09:00"
 status: current
 ---
 
@@ -36,9 +36,9 @@ status: current
     上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
-    `check_all_with` / `should_fail` を分離し、14カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の29テスト（既存26件＋境界テスト3件）で検証（CLI-01 / CFG-01、
-    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で14 check(s) を確認。
+    `check_all_with` / `should_fail` を分離し、19カテゴリ固定・秘密値非出力・`--strict` 判定を
+    `server/src/bin/doctor.rs` の34テスト（既存29件＋境界テスト5件）で検証（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で19 check(s) を確認。
   - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
@@ -63,15 +63,15 @@ status: current
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
-    検査は現行14カテゴリ、bin テストは29件（既存26件＋フォールバック境界テスト3件）。
+    検査は現行19カテゴリ、bin テストは29件（既存26件＋フォールバック境界テスト3件）。
     `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
-    の実出力で14 check(s) を確認（CLI-01 / CFG-01、
+    の実出力で19 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
   - [対応済み] `doctor` のタイムアウト/試行回数検査の死コード化を解消:
     `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は不正値を既定へ
     フォールバックするため、正規化後の値が0になる判定は発火しなかった。`rate_limit` と
     同じ方式で生のパース値と正規化後の値を比較し、フォールバック時に当該カテゴリへ
-    警告1件（設定値は非出力）を計上。境界テスト3件を追加し、検査数は14のまま
+    警告1件（設定値は非出力）を計上。境界テスト3件を追加し、検査数は19のまま
     （CLI-01 / CFG-01、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
@@ -193,6 +193,10 @@ status: current
   モックOPで成功/拒否を実証（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] `auth_time`/`max_age` 検証: `OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し、`auth_time` の新鮮さを検証。
   欠落・範囲外は401拒否（fail-closed）。モックOPで3ケース実証。
+- [対応済み R2-oidc-doc] **OIDC 起動時設定エラーを panic から anyhow エラーへ**: `run()` が
+  `OidcState::from_env()`（不正値で `panic!`）の代わりに `from_env_with()` を直接呼び、
+  `Err` を `anyhow::anyhow!("invalid OIDC configuration: {message}")` へ変換して伝播。
+  環境変数の読み取りは `from_env()` と同一で、`oidc.rs` の変更は不要（`server/src/lib.rs`）。
 - [高・要判断] **実JPKI/実OP接続と検証**: 実機・失効確認（`server/src/oidc.rs`, [HANDOFF.md](HANDOFF.md),
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] **`sub` 単位の全セッション失効と永続化**: back-channel logout で `sid`/`sub` を失効対象とし、`iat` 閾値で既存セッションを拒否。マイグレーション 008 の
@@ -532,8 +536,8 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に29テスト（既存26件＋境界テスト3件）を追加。
-  検査は14カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に34テスト（既存29件＋境界テスト5件）を追加。
+  検査は19カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] エクスポート解析失敗の固定文言: `export_status_message` が
@@ -616,6 +620,9 @@ status: current
 - [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
 - [対応済み] `docs/index.md` の索引を全文書（Runbook 含む）へ反映。
 - [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17）。
+- [対応済み R2-oidc-doc] [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) の `OIDC_MAX_AUTH_AGE_SECS`
+  説明を実装へ整合: 「未設定は `auth_time` / `max_age` 検証を行わず、不正値は起動拒否」へ修正し
+  [HANDOFF.md](HANDOFF.md) の表現へ揃えた（`docs/OPERATIONAL_POLICY.md`）。
 
 ## 7. 実施の原則（安全第一）
 
