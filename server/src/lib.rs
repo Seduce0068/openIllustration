@@ -2507,11 +2507,25 @@ pub async fn ban_user(
     if rows.next().await?.is_none() {
         return Err(AppError::NotFound);
     }
-    tx.execute(
-        "UPDATE users SET is_banned = TRUE, banned_at = datetime('now') WHERE user_hash = ?",
-        [user_hash],
-    )
-    .await?;
+    // 期間付き BAN は ban_until に期限を記録する。NULL は無期限を表す。
+    // duration_days は上流で 1..=3650 に検証済みのため文字列連結による SQL 注入はないが、
+    // 引数としてバインドして日数を組み立てる。
+    if let Some(days) = body.duration_days {
+        tx.execute(
+            "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'),
+                    ban_until = datetime('now', '+' || ? || ' days')
+             WHERE user_hash = ?",
+            libsql::params![days, user_hash.to_string()],
+        )
+        .await?;
+    } else {
+        tx.execute(
+            "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'), ban_until = NULL
+             WHERE user_hash = ?",
+            [user_hash],
+        )
+        .await?;
+    }
     let details = match body.duration_days {
         Some(days) => Some(format!("{{\"duration_days\":{days}}}")),
         None => Some("{\"indefinite\":true}".to_string()),
@@ -2545,7 +2559,7 @@ pub async fn unban_user(
         return Err(AppError::NotFound);
     }
     tx.execute(
-        "UPDATE users SET is_banned = FALSE, banned_at = NULL WHERE user_hash = ?",
+        "UPDATE users SET is_banned = FALSE, banned_at = NULL, ban_until = NULL WHERE user_hash = ?",
         [user_hash],
     )
     .await?;
@@ -3051,17 +3065,20 @@ pub async fn upload_content(
 }
 
 pub async fn ensure_user_not_banned(db: &Connection, user_hash: &str) -> Result<(), AppError> {
+    // 期限付き BAN は ban_until が現在時刻を過ぎた時点で通過させる。
+    // NULL は無期限なので従来どおり BAN 継続。時刻比較は SQLite の
+    // datetime('now') に任せ、RFC3339 と SQL datetime の書式差に依存しない。
     let mut rows = db
         .query(
-            "SELECT is_banned FROM users WHERE user_hash = ?",
+            "SELECT is_banned, ban_until FROM users
+             WHERE user_hash = ?
+               AND is_banned = TRUE
+               AND (ban_until IS NULL OR ban_until > datetime('now'))",
             [user_hash],
         )
         .await?;
-    if let Some(row) = rows.next().await? {
-        let banned: bool = row.get(0)?;
-        if banned {
-            return Err(AppError::Forbidden("User is banned".to_string()));
-        }
+    if rows.next().await?.is_some() {
+        return Err(AppError::Forbidden("User is banned".to_string()));
     }
     Ok(())
 }
@@ -3472,6 +3489,8 @@ pub struct ExportedUser {
     pub public_key_der: Option<Vec<u8>>,
     pub is_banned: Option<bool>,
     pub banned_at: Option<String>,
+    /// BAN の期限（SQLite datetime 形式の文字列）。NULL は無期限。
+    pub ban_until: Option<String>,
 }
 
 /// contents 行のエクスポート表現。
@@ -3621,7 +3640,7 @@ fn mask_export_text(value: Option<String>) -> Option<String> {
 async fn export_users(db: &Connection, sub: &str) -> Result<Vec<ExportedUser>, AppError> {
     let mut rows = db
         .query(
-            "SELECT user_hash, public_key_der, is_banned, banned_at
+            "SELECT user_hash, public_key_der, is_banned, banned_at, ban_until
              FROM users WHERE user_hash = ?",
             libsql::params![sub.to_string()],
         )
@@ -3633,6 +3652,7 @@ async fn export_users(db: &Connection, sub: &str) -> Result<Vec<ExportedUser>, A
             public_key_der: row.get(1)?,
             is_banned: row.get(2)?,
             banned_at: row.get(3)?,
+            ban_until: row.get(4)?,
         });
     }
     Ok(items)

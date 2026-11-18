@@ -7452,6 +7452,160 @@ async fn test_unban_restores_user_with_audit() {
     assert_eq!(reason, "appeal accepted");
 }
 
+// ---- BAN 期限（ban_until）: duration_days から期限を設定し、判定側で時刻比較する ----
+
+/// 期限付き BAN の陪審員で投票APIを呼ぶ。`None` は ban_until=NULL（無期限）。
+async fn vote_status_with_ban_deadline(deadline_modifier: Option<&str>) -> StatusCode {
+    let (app, db) = setup_mod_app().await;
+    let (juror, key) = insert_juror(&db).await;
+    match deadline_modifier {
+        Some(modifier) => {
+            db.execute(
+                "UPDATE users SET is_banned = TRUE, ban_until = datetime('now', ?) WHERE user_hash = ?",
+                [modifier.to_string(), juror.clone()],
+            )
+            .await
+            .unwrap();
+        }
+        None => {
+            db.execute(
+                "UPDATE users SET is_banned = TRUE, ban_until = NULL WHERE user_hash = ?",
+                [juror.clone()],
+            )
+            .await
+            .unwrap();
+        }
+    }
+    send_signed_vote(&app, 1, "Reject", &juror, &key).await
+}
+
+/// BAN 期限: duration_days=1 で ban_until が約1日後に設定される（DB確認）。
+#[tokio::test]
+async fn test_ban_sets_ban_until_for_duration() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "timed ban", "duration_days": 1}),
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT is_banned, banned_at, ban_until FROM users WHERE user_hash = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let banned: bool = row.get(0).unwrap();
+    let banned_at: Option<String> = row.get(1).unwrap();
+    let ban_until: Option<String> = row.get(2).unwrap();
+    assert!(banned, "BAN 対象は is_banned=TRUE のまま");
+    assert!(banned_at.is_some(), "banned_at は従来どおり設定される");
+
+    let stored = ban_until.expect("duration_days 指定時は ban_until が設定される");
+    let parsed = chrono::NaiveDateTime::parse_from_str(&stored, "%Y-%m-%d %H:%M:%S")
+        .unwrap_or_else(|error| {
+            panic!("ban_until は SQLite datetime() 形式であるべき: {stored}: {error}")
+        });
+    let expected = chrono::Utc::now().naive_utc() + chrono::Duration::days(1);
+    assert!(
+        (parsed - expected).num_seconds().abs() <= 120,
+        "ban_until は約1日後であるべき: {stored}"
+    );
+}
+
+/// BAN 期限: 期限切れは is_banned=TRUE のままだが API 利用は妨げない。
+#[tokio::test]
+async fn test_expired_ban_does_not_block_user() {
+    assert_eq!(
+        vote_status_with_ban_deadline(Some("-1 day")).await,
+        StatusCode::OK,
+        "期限切れ BAN は判定上のみ解除される"
+    );
+}
+
+/// BAN 期限: 未来の ban_until は従来どおり 403 で拒否される。
+#[tokio::test]
+async fn test_future_ban_until_blocks_user() {
+    assert_eq!(
+        vote_status_with_ban_deadline(Some("+1 day")).await,
+        StatusCode::FORBIDDEN,
+        "未来の ban_until を持つ BAN は有効"
+    );
+}
+
+/// BAN 期限: ban_until=NULL（無期限）の BAN は今も 403（回帰）。
+#[tokio::test]
+async fn test_indefinite_ban_still_blocks_user() {
+    assert_eq!(
+        vote_status_with_ban_deadline(None).await,
+        StatusCode::FORBIDDEN,
+        "ban_until=NULL は無期限 BAN として扱われる"
+    );
+}
+
+/// BAN 期限: UNBAN で ban_until が NULL に戻る。
+#[tokio::test]
+async fn test_unban_clears_ban_until() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "timed ban", "duration_days": 30}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let mut rows = db
+        .query("SELECT ban_until FROM users WHERE user_hash = 'target'", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let before: Option<String> = row.get(0).unwrap();
+    assert!(before.is_some(), "BAN 時に ban_until が設定される");
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/unban",
+            "operator",
+            json!({"reason": "appeal accepted"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let mut rows = db
+        .query(
+            "SELECT is_banned, banned_at, ban_until FROM users WHERE user_hash = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let banned: bool = row.get(0).unwrap();
+    let banned_at: Option<String> = row.get(1).unwrap();
+    let ban_until: Option<String> = row.get(2).unwrap();
+    assert!(!banned);
+    assert!(banned_at.is_none());
+    assert!(ban_until.is_none(), "UNBAN で ban_until もクリアされる");
+}
+
 #[tokio::test]
 async fn test_unpin_records_decision_with_audit() {
     let (app_no_op, _) = setup_mod_app().await;
@@ -10719,6 +10873,29 @@ async fn me_export_headers() {
             .to_str()
             .unwrap()
             .starts_with("application/json")
+    );
+}
+
+/// BAN 期限: /me/export の users 行に ban_until が含まれる。
+#[tokio::test]
+async fn me_export_includes_ban_until() {
+    let (app, db) = setup_app_with_db().await;
+    let stored = "2027-01-02 03:04:05";
+    db.execute(
+        "UPDATE users SET is_banned = TRUE, ban_until = ? WHERE user_hash = 'test_user'",
+        [stored.to_string()],
+    )
+    .await
+    .unwrap();
+
+    let export = me_export_body(&app, "test_user").await;
+    let users = export["users"].as_array().unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0]["user_hash"], "test_user");
+    assert_eq!(users[0]["is_banned"], true);
+    assert_eq!(
+        users[0]["ban_until"], stored,
+        "ban_until は SQLite datetime() 形式の文字列でエクスポートされる"
     );
 }
 
