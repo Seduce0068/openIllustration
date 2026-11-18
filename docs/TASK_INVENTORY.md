@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 status: current
 ---
 
@@ -36,9 +36,9 @@ status: current
     上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み（未コミット）] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
-    `check_all_with` / `should_fail` を分離し、11カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の20テストで検証（CLI-01 / CFG-01、
-    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で11 check(s) を確認。
+    `check_all_with` / `should_fail` を分離し、13カテゴリ固定・秘密値非出力・`--strict` 判定を
+    `server/src/bin/doctor.rs` の24テストで検証（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で13 check(s) を確認。
   - [対応済み（未コミット）] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
@@ -50,6 +50,22 @@ status: current
     `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
     今回の追加は全てサーバー側 bin テストであり、E2E 定義数は35件のまま変更しない。
+  - [対応済み（未コミット）] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
+    `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、IPFS ゲートウェイ /
+    OIDC の 3xx を追従しない。`get_content` は 2xx 以外（3xx を含む）を次のゲートウェイへ
+    フェイルオーバーする。サーバー側テスト2件（NET-05、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] XFF 複数値と IPv4-compatible 形式: 追記型 XFF は末尾のピアを
+    除去して最左のクライアントを採用し、上書き型は末尾を採用、不正エントリは fail-closed。
+    IPv4-compatible IPv6（`::a.b.c.d`）も IPv4 として正規化して拒否し、`::` / `::1` は
+    IPv6 のまま保持。サーバー側テスト11件（NET-06、
+    [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [INFRA_NETWORK.md](INFRA_NETWORK.md),
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
+    ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
+    検査は11→13カテゴリ、bin テストは20→24件。`env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
+    の実出力で13 check(s) を確認（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -401,6 +417,15 @@ status: current
 
 - [対応済み] CORS の fail-closed 化: `ALLOW_MOCK_AUTH=1` の開発時のみ未設定で開発オリジンへフォールバックし、本番相当（mock 無効）で未設定なら全オリジン拒否。実サーバーで ACAO
   ヘッダの有無を確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み（未コミット）] SSRF リダイレクト無効化: `build_http_client` が
+  `reqwest::redirect::Policy::none()` を設定し 3xx を追従しない。2xx 以外（3xx を含む）は
+  次の IPFS ゲートウェイへフェイルオーバー（サーバー側テスト2件、NET-05、
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み（未コミット）] XFF 複数値解釈と IPv4-compatible 形式の拒否: 追記型は末尾のピアを
+  除去して最左のクライアントを採用し、上書き型は末尾を採用、不正エントリは fail-closed。
+  `::a.b.c.d` は IPv4 として正規化して拒否（`::` / `::1` は IPv6 を維持）。サーバー側テスト
+  11件（NET-06、[INFRA_NETWORK.md](INFRA_NETWORK.md),
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [中] 本番配信オリジンの具体値の決定と設定（ローカル開発オリジンを本番に流用しない）。
 - [中] プロキシ/WAF/多段構成下の IP 判定・`TRUSTED_PROXY_CIDRS` 運用の実環境検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md),
   [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
@@ -440,9 +465,10 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み（未コミット）] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に20テストを追加。検査は11カテゴリ固定、
-  秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1
-  （CLI-01 / CFG-01、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に24テストを追加。検査は13カテゴリ固定、
+  秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
+  `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 
 ### 3.8 依存・セキュリティ衛生
 
@@ -526,4 +552,5 @@ status: current
 - 秘密情報（`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`, `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT` 等）を
   commit・ログ・応答・配布物に含めない。
 - 本番設定で `ALLOW_MOCK_AUTH` / `EXPOSE_INTERNAL_ERRORS` / `ALLOW_IPV4_LOCALHOST` を有効化しない。
+  `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` は `doctor --strict` の警告対象でもある。
 - 依存追加や破壊的変更は事前確認を取り、標準検証ループ（fmt/clippy/test/deny/wasm/E2E）で確認する。

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -33,8 +33,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記35件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
-  今回の3CLIへのテスト追加（doctor 20件 / verify_audit_export 17件 / verify_backup 17件）も
+  今回の3CLIへのテスト追加（doctor 24件 / verify_audit_export 17件 / verify_backup 17件）も
   全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は35件のまま変わらない。
+  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は35件のまま。
 
 ## 2. 実装済みテストの概要
 
@@ -42,7 +43,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | --- | --- | --- |
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は未設計 |
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限のエラーパス5件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
-| ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
+| ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
@@ -59,7 +60,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 20件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 24件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 
 ## 3. 必須要件のリリースゲート
@@ -121,9 +122,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
-| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と20テストを追加し、11カテゴリ固定を検証。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
+| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と24テストを追加し、13カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
+| NET-05 | SSRF: IPFSゲートウェイのリダイレクト追従拒否 | 302 + `Location` で内部サービスへ誘導されても追従せず、リダイレクト先へ到達しない。3xx はエラーとして次のゲートウェイへフェイルオーバーする | 実装済み。`build_http_client` が `Policy::none()` を設定。サーバー側テスト2件（`test_get_content_does_not_follow_gateway_redirect` / `test_get_content_redirect_falls_back_to_next_gateway`）。下記「SSRF リダイレクト無効化の検証（NET-05）」を参照 |
+| NET-06 | XFF複数値解釈と IPv4-compatible 形式の拒否 | 追記型は末尾ピアを除去して最左クライアントを採用、上書き型は末尾を採用、不正エントリは fail-closed。`::a.b.c.d` は IPv4 として拒否、`::` / `::1` は IPv6 を維持 | 実装済み。サーバー側テスト11件（`server/src/network.rs` 6件 + `server/src/tests.rs` 5件）。下記「XFF 複数値・IPv4互換形式の検証（NET-06）」を参照 |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
@@ -135,7 +138,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-04 | `prop_summarize_reason_truncates_safe_text_at_char_boundary` | PII を含まない文字（あ / 知 / A / b / 空白 / 改行 / 🍣 / 。、0..=160個）で、120文字以下は等価、超過は先頭119文字＋`…` に切り詰め（Unicode 境界を維持） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
-| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。11カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に20テストを追加。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。13カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に24テストを追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 
@@ -185,17 +188,20 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 | パターン | 環境変数（差分） | 実出力（要約） | 既定 | `--strict` |
 | --- | --- | --- | --- | --- |
-| P1 | `ALLOW_MOCK_AUTH=1` のみ | `doctor: 11 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
-| P2 | P1 + `PINATA_JWT=<本番相当値>` | `11 check(s), 2 problem(s)` + `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
-| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | `11 check(s), 2 problem(s)` + 同上の2警告 | 0 | 1 |
-| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM`（不正ダミー） | `11 check(s), 3 problem(s)` + `jwt` / `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
-| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `11 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
+| P1 | `ALLOW_MOCK_AUTH=1` のみ | `doctor: 13 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
+| P2 | P1 + `PINATA_JWT=<本番相当値>` | `13 check(s), 2 problem(s)` + `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | `13 check(s), 2 problem(s)` + 同上の2警告 | 0 | 1 |
+| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM`（不正ダミー） | `13 check(s), 3 problem(s)` + `jwt` / `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `13 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
 
 いずれもダミーの `JWT_SECRET`（32バイト以上）を設定した実測値である（2026-11-18、ビルド済み
-`target/debug/doctor` で確認）。`mock_auth_enabled` カテゴリの追加により検査数は11となり、
-`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。よって P5 は `--strict` で終了コード1であり
-（旧挙動の0ではない）、`--strict` の判定は `should_fail(strict, problems)` に委譲される。
-P4 の jwt 警告はダミー PEM が無効なことによるもので、mock 警告とは独立している。
+`target/debug/doctor` で確認）。`mock_auth_enabled` / `ipv4_localhost` / `trusted_proxy` の追加に
+より検査数は13となり、`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。
+`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` 未設定なら追加問題は出ない。よって P5 は
+`--strict` で終了コード1であり（旧挙動の0ではない）、`--strict` の判定は
+`should_fail(strict, problems)` に委譲される。P4 の jwt 警告はダミー PEM が無効なことに
+よるもので、mock 警告とは独立している。別途 `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
+の実出力で `13 check(s), 2 problem(s)`（`JWT_SECRET` 未設定による `jwt` 警告を含む）を確認した。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
@@ -203,29 +209,46 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
 変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
 判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 
-#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、20テスト）
+#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、24テスト）
 
 - `parse_args_from<I>(items) -> ParseOutcome`: 引数は `Vec<String>` で受け取り、先頭要素を
   プログラム名として読み飛ばす。`[]` は `Run { strict: false }`、`["--strict"]` は
   `Run { strict: true }`、`-h` / `--help` は `Help`、単一の不明引数は
   `UnknownArgument(String)`、複数引数は `TooManyArguments` を返す（完全一致のみ有効）。
 - `check_all_with<F>(lookup) -> Vec<(&'static str, Vec<String>)>`: 環境変数を `lookup`
-  経由でのみ読み、11カテゴリを固定で返す（`production` /
+  経由でのみ読み、13カテゴリを固定で返す（`production` /
   `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` / `jwt_secret` /
   `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` /
-  `age_policy` / `rate_limit`）。秘密値は問題文へ含めない。`check_all()` は実環境の
-  `env` を渡すだけのラッパーである。
+  `age_policy` / `rate_limit` / `ipv4_localhost` / `trusted_proxy`）。秘密値は問題文へ
+  含めない。`check_all()` は実環境の `env` を渡すだけのラッパーである。
 - `should_fail(strict, problems) -> bool`: `strict && problems > 0` のみ。既定は警告表示で
   exit 0、`--strict` のとき問題が1件以上なら exit 1。
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
 | 引数パース | 6 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` |
-| 設定判定 | 11 | `check_always_reports_eleven_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` |
+| 設定判定 | 15 | `check_always_reports_thirteen_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` |
 | strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
 
 真値は `1` と `true`（大文字小文字不問）のみで、`0` / `false` / `no` / 空文字は偽である。
 `ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に1件計上され、`--strict` で exit 1 になる。
+
+##### doctor のネットワーク設定警告（追加4件）
+
+`ipv4_localhost` と `trusted_proxy` の2カテゴリを追加し、検査数は11→13、bin テストは20→24件へ
+増えた（既存 `check_always_reports_eleven_categories` は
+`check_always_reports_thirteen_categories` へ改称）。追加4件の oracle は次のとおり。
+
+| テスト | 条件 | 期待結果 |
+| --- | --- | --- |
+| `ipv4_localhost_truthy_values_add_a_warning` | `ALLOW_IPV4_LOCALHOST` が `1` / `true` / `TRUE` / `TrUe` | `ipv4_localhost` に警告1件。文言は固定で値をエコーしない |
+| `ipv4_localhost_falsy_and_unset_add_no_warning` | `0` / `false` / `no` / 空 / 未設定 | 警告なし |
+| `trusted_proxy_when_configured_warns_without_disclosing_value` | `TRUSTED_PROXY_CIDRS` 設定 | `trusted_proxy` に警告1件。`X-Forwarded-For` / `XFF` を含むが CIDR 値は漏えいしない |
+| `trusted_proxy_unset_adds_no_warning` | 未設定 | 警告なし |
+
+`should_fail(strict, problems)` の判定は不変で、`--strict` のときのみ問題があれば exit 1 となる。
+実バイナリで `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor` を実行し、
+`doctor: 13 check(s), 2 problem(s)`（`mock_auth_enabled` + `jwt`）を確認した。
 
 #### CLI-02: `verify_audit_export`（`server/src/bin/verify_audit_export.rs`、17テスト）
 
@@ -290,6 +313,44 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
   クライアントAは2回通過し3回目が429、別バケットのクライアントBは404のまま。
 - `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy`: XFF 未設定または
   信頼プロキシ外では XFF を無視し、ピア IP バケットで制限する。
+
+### SSRF リダイレクト無効化の検証（NET-05）
+
+`server/src/lib.rs` の `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、
+テスト用アプリも同じクライアントを使う（`setup_app_with_options`）。ローカルの302ゲートウェイが
+`Location` に内部サービスへ見立てたローカルサーバーを返し、その本文を CID の checksum と
+一致させておく。リダイレクトを追従した場合にだけ検証成功（200）になる仕掛けである。
+
+| テスト | 期待結果 |
+| --- | --- |
+| `test_get_content_does_not_follow_gateway_redirect` | 500。リダイレクト先の hit 数は 0、本文に内部サービスの本文（`metadata from internal service`）が漏れない |
+| `test_get_content_redirect_falls_back_to_next_gateway` | 次の正常ゲートウェイから 200 で本文一致。リダイレクト先の hit 数は 0（Location 先へ接続しない） |
+
+3xx は 2xx 以外の HTTP 応答として扱われ、次ゲートウェイへフェイルオーバーする。これは
+`server/src/lib.rs` の `get_content` の分岐で固定している。
+
+### XFF 複数値・IPv4互換形式の検証（NET-06）
+
+`server/src/network.rs` 6件と `server/src/tests.rs` 5件の計11件で、追記型／上書き型の解釈、
+複数値・不正エントリの fail-closed、IPv4-compatible IPv6（`::a.b.c.d`）の拒否を検証する。
+`::` / `::1` は IPv6 のまま保持し、既存の IPv6 ループバック運用を壊さない。
+
+| テスト（配置） | test model / 期待結果 |
+| --- | --- |
+| `trusted_forwarded_header_drops_trailing_peer_and_uses_original_client`（network.rs） | `client, proxy1, peer` で client。単一ホップ・ピア連続追記・空白・mapped ピア混在でも元クライアントを採用 |
+| `trusted_forwarded_header_overwrite_style_uses_last_entry`（network.rs） | 末尾がピアでなければ末尾を採用。途中にピアが現れても誤判定しない |
+| `forwarded_header_ignored_when_proxy_untrusted_multi_value`（network.rs） | 信頼プロキシ未設定時は複数値 XFF 全体を無視しピアを返す |
+| `trusted_forwarded_header_with_invalid_entry_is_rejected`（network.rs） | 不正 IP・空エントリが1つでもあれば None（fail-closed） |
+| `ipv4_compatible_form_is_canonicalized_to_ipv4`（network.rs） | `::192.0.2.1` は `192.0.2.1` へ正規化。`::` / `::1` / `2001:db8::1` は IPv6 を維持 |
+| `evaluate_access_rejects_ipv4_compatible_form`（network.rs） | ピア・XFF・上書き型 XFF 末尾の compatible 形式を `Ipv4Forbidden` で拒否 |
+| `test_trusted_proxy_append_style_xff_uses_original_client`（tests.rs） | 追記型で IPv4 クライアントを採用し 403（末尾ピア採用の回帰を検出） |
+| `test_trusted_proxy_overwrite_style_xff_uses_last_entry`（tests.rs） | 上書き型は末尾の IPv6 を採用し 200 |
+| `test_untrusted_proxy_ignores_multi_value_xff`（tests.rs） | 信頼プロキシ外は複数値 XFF を無視しピアで 200 |
+| `test_ipv4_compatible_peer_is_rejected`（tests.rs） | `::192.0.2.1` ピアを 403 で拒否 |
+| `test_ipv4_compatible_forwarded_client_is_rejected`（tests.rs） | 信頼プロキシ経由 XFF の `::192.0.2.1` を 403 で拒否 |
+
+設計技法は同値クラス（追記型／上書き型／信頼外）と境界値・不正入力の網羅であり、
+実プロキシ環境・多段構成・WAF は引き続き未検証である。
 
 ### CAS 2段目と失効閾値レースの検証
 
@@ -423,6 +484,12 @@ cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（5件）
 cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
 cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
 cargo test -p server metrics_count   # MET-02 最外側メトリクス4件（429 / IPv4 403 / 413 / OPTIONS）
+cargo test -p server redirect   # NET-05 SSRF リダイレクト2件
+cargo test -p server forwarded   # NET-06 XFF 解釈 4件（network.rs）
+cargo test -p server xff   # NET-06 追記型/上書き型/信頼外 3件（tests.rs）
+cargo test -p server ipv4_compatible   # NET-06 IPv4互換形式 4件
+cargo test -p server --bin doctor ipv4_localhost   # doctor 追加警告 2件
+cargo test -p server --bin doctor trusted_proxy   # doctor 追加警告 2件
 cargo test -p server test_bind_wallet_rejects_legacy_order_only_signature   # PAY-05 旧形式署名の401拒否
 cargo test -p server max_concurrent_requests_defaults_and_bounds   # NET-04 境界値
 cargo test -p server concurrent_request_limit_rejects_second_and_releases_permit   # NET-04 実リクエスト

@@ -8,7 +8,7 @@ tags:
   - tasks
 generated:
   by: dsh (lead)
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 status: current
 ---
 
@@ -51,11 +51,16 @@ P1（本番運用の健全性）:
   `DATABASE_TOKEN` 環境変数限定（`--database-token` 廃止）、出力 `create_new` 上書き拒否
   （2026-11-18 対応済み・未コミット、AUDIT-02。bin 内に9テスト追加済み）
 - [x] 3CLIへ自動テスト追加と契約の明文化（2026-11-18 対応済み・未コミット）:
-  `doctor` の `parse_args_from` / `check_all_with` / `should_fail` を純粋化し20テスト、
+  `doctor` の `parse_args_from` / `check_all_with` / `should_fail` を純粋化し24テスト、
   `verify_audit_export` に `--expect-root` と `VerificationOutcome` / `verify_export` の
   純粋化で17テスト、`verify_backup` は `--database-token` を argv で拒否（
   `DATABASE_TOKEN` 環境変数のみ）＋sidecar fail-closed で17テスト。
   全て `server/src/bin/` のサーバー側 bin テストであり E2E は35件のまま（CLI-01〜03）
+- [x] SSRF リダイレクト無効化と XFF/IPv4-compatible 形式の hardened 解釈
+  （2026-11-18 対応済み・未コミット、SSRF 2件 + XFF 11件のサーバー側テスト、
+  `Policy::none()` で 3xx は追従せずフェイルオーバー、NET-05 / NET-06）
+- [x] `doctor --strict` の警告対象へ `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` を追加
+  （2026-11-18 対応済み・未コミット、11→13カテゴリ・20→24テスト、CLI-01 / CFG-01）
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
@@ -129,6 +134,13 @@ P2（品質・保守・プロダクト拡張）:
   各20/17/17テストを TEST_SPECIFICATION（CLI-01〜03 ゲート）・DETAILED_DESIGN・
   AUDIT_EXPORT_RUNBOOK・BACKUP_RESTORE_RUNBOOK・TASK_INVENTORY へ反映。
   E2E 定義は35件のまま（全てサーバー側 bin テスト）。frontmatter 日時は `date` 実測値へ更新。
+  git commit/push は親エージェントが実施。
+- [x] ネットワーク hardening のドキュメント反映（2026-11-18）: SSRF リダイレクト無効化
+  （`Policy::none()`、3xx フェイルオーバー、2件）、XFF 追記型/上書き型の解釈と
+  IPv4-compatible（`::a.b.c.d`）拒否（11件）、`doctor --strict` の
+  `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` 警告（13カテゴリ・24テスト）を
+  DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / INFRA_NETWORK /
+  TASK_INVENTORY へ記載。E2E は35件のまま。frontmatter 日時は `date` 実測値へ更新。
   git commit/push は親エージェントが実施。
 
 ## メモ

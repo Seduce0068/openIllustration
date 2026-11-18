@@ -218,6 +218,33 @@ where
     }
     results.push(("rate_limit", rate_errors));
 
+    // IPv6-only が既定（SEC-01）。ALLOW_IPV4_LOCALHOST が真なら IPv4 loopback を
+    // 許可するため本番では不適切。値（1/true）は出力せず有無のみ警告する。
+    let allow_ipv4_localhost = lookup("ALLOW_IPV4_LOCALHOST")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let ipv4_localhost_errors = if allow_ipv4_localhost {
+        vec![
+            "ALLOW_IPV4_LOCALHOST is enabled; production should stay IPv6-only (SEC-01)"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    results.push(("ipv4_localhost", ipv4_localhost_errors));
+
+    // TRUSTED_PROXY_CIDRS は X-Forwarded-For（XFF）を信頼する設定。設定自体は
+    // 正当だが本番では意図確認が必要。CIDR 等の設定値は出力せず有無のみ警告する。
+    let trusted_proxy_errors = if lookup("TRUSTED_PROXY_CIDRS").is_some() {
+        vec![
+            "TRUSTED_PROXY_CIDRS is configured; X-Forwarded-For (XFF) is trusted, confirm this is intentional in production"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    results.push(("trusted_proxy", trusted_proxy_errors));
+
     results
 }
 
@@ -363,20 +390,24 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_eleven_categories() {
+    fn check_always_reports_thirteen_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
-        let scenarios: [&[(&str, &str)]; 3] = [
+        let scenarios: [&[(&str, &str)]; 4] = [
             &[],
             &[("ALLOW_MOCK_AUTH", "1")],
             &[
                 ("ALLOW_MOCK_AUTH", "1"),
                 ("OIDC_ISSUER", "https://issuer.example"),
             ],
+            &[
+                ("ALLOW_IPV4_LOCALHOST", "1"),
+                ("TRUSTED_PROXY_CIDRS", "203.0.113.7/32"),
+            ],
         ];
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                11,
+                13,
                 "pairs={pairs:?}"
             );
         }
@@ -536,6 +567,58 @@ mod tests {
                 assert!(!error.contains(OIDC), "OIDC_CLIENT_SECRET が漏洩: {error}");
             }
         }
+    }
+
+    // --- 2b. IPv4 loopback / 信頼済みプロキシ -------------------------------
+
+    #[test]
+    fn ipv4_localhost_truthy_values_add_a_warning() {
+        // network.rs::ipv4_permitted と同じ真偽判定（大小文字無視）。
+        // 値に依らず同じ警告文になることを固定し、値のエコーを防ぐ。
+        const EXPECTED: &str =
+            "ALLOW_IPV4_LOCALHOST is enabled; production should stay IPv6-only (SEC-01)";
+        for value in ["1", "true", "TRUE", "TrUe"] {
+            let results = check_all_with(lookup_from(&[("ALLOW_IPV4_LOCALHOST", value)]));
+            let errors = errors_for(&results, "ipv4_localhost");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+        }
+    }
+
+    #[test]
+    fn ipv4_localhost_falsy_and_unset_add_no_warning() {
+        for value in ["0", "false", "no", ""] {
+            let results = check_all_with(lookup_from(&[("ALLOW_IPV4_LOCALHOST", value)]));
+            assert!(
+                errors_for(&results, "ipv4_localhost").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "ipv4_localhost").is_empty());
+    }
+
+    #[test]
+    fn trusted_proxy_when_configured_warns_without_disclosing_value() {
+        const CIDRS: &str = "203.0.113.7/32,198.51.100.0/24";
+        let results = check_all_with(lookup_from(&[("TRUSTED_PROXY_CIDRS", CIDRS)]));
+        let errors = errors_for(&results, "trusted_proxy");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert!(
+            errors[0].contains("X-Forwarded-For") || errors[0].contains("XFF"),
+            "XFF を信頼する旨の警告であるべき: {errors:?}"
+        );
+        for error in errors {
+            assert!(!error.contains(CIDRS), "CIDR 値が漏洩: {error}");
+            assert!(!error.contains("203.0.113.7"), "CIDR 値が漏洩: {error}");
+            assert!(!error.contains("198.51.100.0"), "CIDR 値が漏洩: {error}");
+        }
+    }
+
+    #[test]
+    fn trusted_proxy_unset_adds_no_warning() {
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "trusted_proxy").is_empty());
     }
 
     // --- 3. strict 判定 ----------------------------------------------------

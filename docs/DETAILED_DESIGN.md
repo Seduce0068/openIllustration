@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-18T15:50:33+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -72,8 +72,22 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   が無い／虚偽のチャンクド転送は axum の本文制限と Multipart パーサが守り、その場合は 400 になる（多層防御）。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10
   MiB（超過は 400）。
 - IPFS 取得時にチェックサム不一致を検出した場合は 401 で拒否し、CID と redact 済みゲートウェイ URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を確認済み。
-  ゲートウェイは設定順に試し、ネットワークエラー（接続失敗・タイムアウト）に限り `IPFS_MAX_ATTEMPTS`（既定1、最大5）まで同じゲートウェイを再試行する。HTTP エラー・サイズ超過・不正データは再試行せず、
-  不正データは次のゲートウェイへ送らず即拒否する。
+  ゲートウェイは設定順に試し、ネットワークエラー（接続失敗・タイムアウト）に限り `IPFS_MAX_ATTEMPTS`（既定1、最大5）まで同じゲートウェイを再試行する。
+  HTTP クライアントは `build_http_client`（`server/src/lib.rs`）で
+  `reqwest::redirect::Policy::none()` を設定し、すべてのリダイレクトを追従しない（SSRF 対策）。
+  3xx は `Location` 先へ接続せずレスポンスとして呼び出し側へ返り、2xx 以外の HTTP 応答
+  （3xx を含む）は次のゲートウェイへフェイルオーバーする。サイズ超過・不正データ
+  （チェックサム不一致等）は次のゲートウェイへ送らず即拒否する。OIDC の HTTP クライアントも
+  同じ `build_http_client` を共有する。
+- 接続元 IP の判定（`server/src/network.rs`）: `TRUSTED_PROXY_CIDRS` 未設定時は XFF ヘッダー
+  全体を無視しピアアドレスのみを使う。設定時は `X-Forwarded-For`（XFF）のカンマ区切り複数値を
+  解釈し、末尾が接続元ピアと一致する「追記型」では末尾のピア（複数ホップで連続し得る）を
+  すべて除去して残ったチェーンの最左値＝元のクライアントを採用する。末尾がピアと一致しない
+  「上書き型」では従来どおり末尾を採用する。1 つでも IP として解釈できないエントリがあれば
+  None を返して fail-closed で拒否する。
+- IPv4 拒否ゲート（SEC-01）: IPv4-mapped IPv6（`::ffff:a.b.c.d`）に加え IPv4-compatible IPv6
+  （`::a.b.c.d`）も IPv4 として正規化して拒否する。ただし `::`（unspecified）と `::1`
+  （loopback）は IPv6 のまま保持し、既存の IPv6 ループバック運用を壊さない（NET-02）。
 - 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する。
   `security_headers` は `CorsLayer` の内側と外側（最外側）の2か所に置く。CORS プリフライト
   （OPTIONS 204）は `CorsLayer` で短絡して内側を通らないため、`CorsLayer` のさらに外側にも
@@ -512,7 +526,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
 | --- | --- | --- | --- |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 20 | CLI-01 / CFG-01 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 24 | CLI-01 / CFG-01 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 17 | CLI-02 / AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 17 | CLI-03 |
 
@@ -521,15 +535,18 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `parse_args_from<I>(items) -> ParseOutcome` は先頭要素をプログラム名として読み飛ばし、
   `Run { strict }` / `Help` / `UnknownArgument(String)` / `TooManyArguments` を返す。
   `--strict` は完全一致のみ有効で、`-h` / `--help` はヘルプ表示（exit 0）へ変換する。
-- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、11カテゴリの検査結果を
+- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、13カテゴリの検査結果を
   返す。`production` / `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` /
   `jwt_secret` / `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` /
-  `oidc_http_timeout` / `age_policy` / `rate_limit`。秘密情報の値は結果へ含めない。
-  実環境用の `check_all()` は `env` を渡すラッパーに留める。
+  `oidc_http_timeout` / `age_policy` / `rate_limit` / `ipv4_localhost` / `trusted_proxy`。
+  秘密情報の値は結果へ含めない。実環境用の `check_all()` は `env` を渡すラッパーに留める。
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。
 - `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
-  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（11 check(s) 実測）。
+  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（13 check(s) 実測）。
+- `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`、大小文字不問）のときと `TRUSTED_PROXY_CIDRS`
+  が設定されているときは、それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する
+  （`doctor --strict` の警告対象）。いずれも設定値は出力せず有無のみを警告する。
 
 ### verify_audit_export（`server/src/bin/verify_audit_export.rs`）
 
