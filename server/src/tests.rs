@@ -6152,6 +6152,11 @@ impl LogMessages {
             .iter()
             .any(|message| message.contains(needle))
     }
+
+    /// 起動時/周期の同名ログを区別するため、完全一致でも探せるようにする。
+    fn contains_exact(&self, message: &str) -> bool {
+        self.0.lock().unwrap().iter().any(|entry| entry == message)
+    }
 }
 
 struct MessageVisitor<'a>(&'a mut String);
@@ -14821,9 +14826,10 @@ async fn test_periodic_purge_skips_without_running_sql_when_lock_is_busy() {
     );
 }
 
-/// 周期 tick の finalize が write_lock 待ちでタイムアウトしたとき、
-/// warn を出して次回 tick に回し、shutdown を遅らせないことを検証する。
-/// mutation で finalize の timeout ラップを外すとスキップ warn が出ず失敗する。
+/// 周期 tick の finalize が write_lock 取得でタイムアウトしたときだけ
+/// "write lock is busy" の warn を出し、次回 tick に回して shutdown を遅らせない。
+/// 2 段構造では SQL の遅延を busy と誤報しないため、warn 文言まで確認する。
+/// mutation でロック取得側の timeout を外すとスキップ warn が出ず失敗する。
 #[tokio::test]
 async fn test_periodic_finalize_lock_wait_is_bounded() {
     let db = Arc::new(
@@ -14865,9 +14871,9 @@ async fn test_periodic_finalize_lock_wait_is_bounded() {
         started.await.unwrap();
 
         // 周期 purge 群（3 × PURGE_LOCK_WAIT）のあと finalize も
-        // PURGE_LOCK_WAIT で諦め、warn が出るまで待つ。
+        // ロック取得だけ PURGE_LOCK_WAIT で諦め、busy の warn が出るまで待つ。
         tokio::time::timeout(Duration::from_secs(12), async {
-            while !logs.contains("Moderation finalization skipped") {
+            while !logs.contains("Moderation finalization skipped: write lock is busy") {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
@@ -14927,4 +14933,185 @@ async fn test_auth_verify_write_waits_for_write_lock() {
         .expect("auth verify must finish after the write transaction commits")
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// 起動時の write_lock 待ちに上限があり、ビジーでも warn を出して
+/// 起動処理（周期ループへの移行）を続行することを検証する。
+/// mutation で上限を None（無期限）に戻すと 5 秒の timeout で失敗する。
+#[tokio::test]
+async fn test_startup_lock_wait_is_bounded_and_startup_continues() {
+    assert_eq!(
+        crate::STARTUP_LOCK_WAIT,
+        Duration::from_secs(30),
+        "production startup lock wait must be capped"
+    );
+
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    // ロックが空けば周期 tick で削除される期限切れトークン。
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES ('startup-expired', 'u', 'f', '2000-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    // 起動中に write_lock を長保持するライター。
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let logs = LogMessages::default();
+    let subscriber = tracing_subscriber::layer::SubscriberExt::with(
+        tracing_subscriber::registry(),
+        logs.clone(),
+    );
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let finalizer = tokio::spawn(crate::run_moderation_finalizer_with_startup_wait(
+        Arc::clone(&db),
+        None,
+        Duration::from_millis(100),
+        Duration::from_millis(300), // テスト用の短い上限
+        shutdown_rx,
+    ));
+
+    // 4 つの起動時回収すべてが上限で打ち切られ、warn が出ること。
+    // 本番上限の 30 秒を待つようなら 5 秒の timeout で失敗する。
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !logs.contains("Moderation finalization skipped on startup: write lock is busy") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("startup lock waits must be aborted at the configured limit");
+    assert!(
+        logs.contains("Refresh token purge skipped on startup: write lock is busy"),
+        "startup purge timeout must emit a busy warning"
+    );
+
+    // ロックを解放すると周期ループへ進み、保留だった回収が走る。
+    release.send(()).unwrap();
+    writer.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !logs.contains_exact("Purged 1 expired refresh token(s)") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("finalizer must continue to periodic ticks after startup lock timeout");
+
+    shutdown_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), finalizer)
+        .await
+        .expect("finalizer must stop cleanly")
+        .expect("finalizer task must not panic");
+}
+
+/// 周期 finalize はロック取得後に SELECT/COMMIT をタイムアウトなしで
+/// 件数分すべて完了させることを検証する。
+/// mutation でロック取得＋SQL 全体を PURGE_LOCK_WAIT で包む旧実装に戻すと、
+/// 2 秒の予算を使い切って中途中断され件数ログが出ず失敗する。
+#[tokio::test]
+async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
+    const REPORT_COUNT: usize = 10000;
+    const EXPECTED_LOG: &str = "Auto-finalized 10000 moderation report(s)";
+
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        &format!(
+            "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             SELECT 'QmBulk' || printf('%05d', x), 'Novel', 'owner', 'abc', 'Reported'
+             FROM (WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < {REPORT_COUNT}) SELECT x FROM cnt)"
+        ),
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        &format!(
+            "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
+             SELECT x, 'QmBulk' || printf('%05d', x), 'bulk', datetime('now', '-1 day')
+             FROM (WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < {REPORT_COUNT}) SELECT x FROM cnt)"
+        ),
+        (),
+    )
+    .await
+    .unwrap();
+
+    let logs = LogMessages::default();
+    let subscriber = tracing_subscriber::layer::SubscriberExt::with(
+        tracing_subscriber::registry(),
+        logs.clone(),
+    );
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+
+    // PURGE_LOCK_WAIT(2s) より少し前にロックを解放するライター。
+    // 旧実装ではロック取得後に残った予算では SQL が完了しない。
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let db_writer = Arc::clone(&db);
+    let writer = tokio::spawn(async move {
+        let guard = crate::write_lock(&db_writer).lock_owned().await;
+        started_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(1800)).await;
+        drop(guard);
+    });
+    started_rx.await.unwrap();
+
+    let finalizer = tokio::spawn(crate::run_moderation_finalizer_with_startup_wait(
+        Arc::clone(&db),
+        None,
+        Duration::from_millis(50),
+        Duration::from_millis(100), // 起動時 finalize はビジーでスキップさせる
+        shutdown_rx,
+    ));
+
+    tokio::time::timeout(Duration::from_secs(20), async {
+        while !logs.contains_exact(EXPECTED_LOG) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("periodic finalize must complete every due report after acquiring the lock");
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM reports WHERE concluded_at IS NULL",
+            (),
+        )
+        .await
+        .unwrap();
+    let pending: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(pending, 0, "all due reports must be concluded in one tick");
+
+    shutdown_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(10), finalizer)
+        .await
+        .expect("finalizer must stop cleanly")
+        .expect("finalizer task must not panic");
+    writer.await.unwrap();
 }

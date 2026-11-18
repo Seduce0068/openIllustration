@@ -363,9 +363,10 @@ async fn begin_write_tx_sql_with_guard(
     Ok((guard, tx))
 }
 
-/// 周期 purge 用の write_lock 取得。
+/// purge / 自動確定の共通 write_lock 取得。
 /// `Some(wait)` のときだけロック取得をタイムアウトし、ビジーなら `Ok(None)` でスキップを返す。
-/// `None` は起動時向けで、完了まで待つ。SQL 実行はこの関数の外側でタイムアウトなしで行う。
+/// `None` は呼び出し側が上限を設けない場合（公開 API の通し実行）に限り完了まで待つ。
+/// SQL 実行はこの関数の外側でタイムアウトなしで行う。
 async fn acquire_purge_lock(
     db: &Connection,
     wait: Option<Duration>,
@@ -1356,7 +1357,18 @@ pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
 }
 
 /// 期限到達済みの未確定通報をまとめて確定する。自動ワーカーと手動操作の共通処理。
+/// ロック取得は完了まで待つ（呼び出し側で上限を設けたい場合は `finalize_due_reports_with_wait` を使う）。
 pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
+    let guard = write_lock(db).lock_owned().await;
+    finalize_due_reports_with_guard(db, guard).await
+}
+
+/// 取得済みの write_lock ガードで期限切れ通報を確定する。
+/// 一件ごとの BEGIN/COMMIT はガードを保持したまま回し、SQL はタイムアウトなしで完了まで待つ。
+async fn finalize_due_reports_with_guard(
+    db: &Connection,
+    guard: tokio::sync::OwnedMutexGuard<()>,
+) -> Result<usize, AppError> {
     let mut rows = db
         .query(
             "SELECT r.report_id FROM reports r
@@ -1374,21 +1386,42 @@ pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
     }
 
     let mut finalized = 0;
+    let mut guard = guard;
     for report_id in report_ids {
-        let (_write_guard, tx) = begin_write_tx(db).await?;
+        let (next_guard, tx) = begin_write_tx_sql_with_guard(db, guard).await?;
+        guard = next_guard;
         process_report_conclusion(&tx, report_id).await?;
         tx.commit().await?;
         finalized += 1;
+        // 多数の通報をまとめて確定する間も executor を譲り、停止通知や
+        // タイマーが進めるようにする（ロックガードは保持したまま）。
+        tokio::task::yield_now().await;
     }
     Ok(finalized)
 }
 
+/// purge と同じ 2 段構造で自動確定する。
+/// `lock_wait` は write_lock 取得だけに適用し、取得後の SQL は完了まで待つ。
+/// `Ok(None)` はロックがビジーでスキップしたことを表す（SELECT や COMMIT の遅延ではない）。
+async fn finalize_due_reports_with_wait(
+    db: &Connection,
+    lock_wait: Option<Duration>,
+) -> Result<Option<usize>, AppError> {
+    let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
+        return Ok(None);
+    };
+    finalize_due_reports_with_guard(db, guard).await.map(Some)
+}
+
 /// 周期タスクが書き込みロックの取得で待ち続けると、後続の書き込みも
 /// ロック待ちのキューに並んで詰まるため、周期回収だけは短時間で諦める。
-/// 起動時の回収は従来どおり完了まで待つ。
 const PURGE_LOCK_WAIT: Duration = Duration::from_secs(2);
 
-/// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
+/// 起動時の回収も無期限に write_lock を待つと、同じプロセスのロック保持中に
+/// `finalizer.await` が止まり起動・停止が固まるため上限を設ける。
+/// タイムアウト時は warn を出して回収をスキップし起動を続行する。
+const STARTUP_LOCK_WAIT: Duration = Duration::from_secs(30);
+
 /// 期限切れリフレッシュトークンを削除する。期限切れレコードは認証に使えず、
 /// 保持しても盗用検知の意味がないため、定期的に回収してDBの増大を防ぐ。
 /// `lock_wait` は write_lock 取得だけに適用し、取得後の SQL は完了まで待つ。
@@ -1465,40 +1498,141 @@ async fn purge_stale_revoked_subs(db: &Connection) -> Result<Option<u64>, libsql
     purge_stale_revoked_subs_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
+/// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     oidc: Option<Arc<oidc::OidcState>>,
     interval: Duration,
+    shutdown: tokio::sync::watch::Receiver<()>,
+) {
+    run_moderation_finalizer_with_startup_wait(db, oidc, interval, STARTUP_LOCK_WAIT, shutdown)
+        .await;
+}
+
+/// 本体。起動時ロック待ちの上限を差し替えられるようにしてある（テストは短い値で呼ぶ）。
+async fn run_moderation_finalizer_with_startup_wait(
+    db: Arc<Connection>,
+    oidc: Option<Arc<oidc::OidcState>>,
+    interval: Duration,
+    startup_lock_wait: Duration,
     mut shutdown: tokio::sync::watch::Receiver<()>,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     ticker.tick().await; // 起動直後の即時 tick は消費する
 
-    // 起動時に一度、期限切れリフレッシュトークンを回収する。
-    // 起動時は従来どおりロック取得も SQL も完了まで待つ（lock_wait = None）。
-    match purge_expired_refresh_tokens_with_wait(db.as_ref(), None).await {
+    // 起動前に既に停止通知が出ていれば、ロック取得を試さずに終了する。
+    if shutdown.borrow().has_changed() {
+        tracing::info!("Moderation finalizer stopped before startup cleanup");
+        return;
+    }
+
+    // 起動時回収は上限付きで待つ。停止通知が来たら待機を打ち切って起動を続行する。
+    // 専用 clone の changed() を使うことで、周期ループが見る shutdown を消費しない。
+    let mut startup_shutdown = shutdown.clone();
+    tokio::select! {
+        _ = startup_shutdown.changed() => {
+            tracing::info!("Moderation finalizer stopped during startup cleanup");
+            return;
+        }
+        _ = run_startup_cleanup(db.as_ref(), oidc.as_ref(), startup_lock_wait) => {}
+    }
+
+    // tick 中のロック待ちでも停止通知があれば即座に打ち切る。
+    // 専用 clone を使い、外側のループが見る shutdown を消費しないようにする。
+    let mut tick_shutdown = shutdown.clone();
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                tokio::select! {
+                    _ = run_periodic_cleanup(db.as_ref(), oidc.as_ref()) => {}
+                    _ = tick_shutdown.changed() => {
+                        tracing::info!("Moderation finalizer stopped");
+                        break;
+                    }
+                }
+            }
+            _ = shutdown.changed() => {
+                tracing::info!("Moderation finalizer stopped");
+                break;
+            }
+        }
+    }
+}
+
+/// 1 tick 分の周期回収。purge 群は既に 2 段構造で、
+/// 自動確定もここで同じ 2 段構造にする。
+async fn run_periodic_cleanup(db: &Connection, oidc: Option<&Arc<oidc::OidcState>>) {
+    // 周期実行は purge 関数側で write_lock 取得だけを短時間待ち、
+    // 取得できたら SQL はタイムアウトなしで完了させる（外側からは timeout で包まない）。
+    match purge_expired_refresh_tokens(db).await {
         Ok(Some(0) | None) => {}
-        Ok(Some(count)) => {
-            tracing::info!("Purged {} expired refresh token(s) on startup", count)
+        Ok(Some(count)) => tracing::info!("Purged {} expired refresh token(s)", count),
+        Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
+    }
+    match purge_stale_revoked_sessions(db).await {
+        Ok(Some(0) | None) => {}
+        Ok(Some(count)) => tracing::info!("Purged {} stale revoked session(s)", count),
+        Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
+    }
+    match purge_stale_revoked_subs(db).await {
+        Ok(Some(0) | None) => {}
+        Ok(Some(count)) => tracing::info!("Purged {} stale revoked sub(s)", count),
+        Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
+    }
+    // 認証リクエストが来ないままだと register/take の掃除が走らないため、
+    // 周期 tick でも期限切れ pending を回収する。
+    if let Some(oidc) = oidc {
+        let count = oidc.sweep_expired_pending();
+        if count > 0 {
+            tracing::info!("Purged {} expired OIDC pending authorization(s)", count);
+        }
+    }
+    // 周期の自動確定も purge 群と同じ 2 段構造:
+    // ロック取得だけ PURGE_LOCK_WAIT で待ち、取得後は SELECT/COMMIT を
+    // タイムアウトなしで件数分すべて完了させる。
+    // "busy" はロック取得を諦めたときだけ警告し、SQL の遅延を誤報しない。
+    match finalize_due_reports_with_wait(db, Some(PURGE_LOCK_WAIT)).await {
+        Ok(Some(0)) => {}
+        Ok(Some(count)) => tracing::info!("Auto-finalized {} moderation report(s)", count),
+        Ok(None) => tracing::warn!("Moderation finalization skipped: write lock is busy"),
+        Err(error) => tracing::warn!("Moderation finalization failed: {}", error),
+    }
+}
+
+/// 起動時だけの回収。ロック取得は `lock_wait` で上限を設け、
+/// ビジーなら warn を出して次へ進み、起動を止めない。
+async fn run_startup_cleanup(
+    db: &Connection,
+    oidc: Option<&Arc<oidc::OidcState>>,
+    lock_wait: Duration,
+) {
+    // 起動時に一度、期限切れリフレッシュトークンを回収する。
+    match purge_expired_refresh_tokens_with_wait(db, Some(lock_wait)).await {
+        Ok(Some(0)) => {}
+        Ok(Some(count)) => tracing::info!("Purged {} expired refresh token(s) on startup", count),
+        Ok(None) => {
+            tracing::warn!("Refresh token purge skipped on startup: write lock is busy")
         }
         Err(error) => tracing::warn!("Refresh token purge failed on startup: {}", error),
     }
-    match purge_stale_revoked_sessions_with_wait(db.as_ref(), None).await {
-        Ok(Some(0) | None) => {}
-        Ok(Some(count)) => {
-            tracing::info!("Purged {} stale revoked session(s) on startup", count)
+    match purge_stale_revoked_sessions_with_wait(db, Some(lock_wait)).await {
+        Ok(Some(0)) => {}
+        Ok(Some(count)) => tracing::info!("Purged {} stale revoked session(s) on startup", count),
+        Ok(None) => {
+            tracing::warn!("Revoked session purge skipped on startup: write lock is busy")
         }
         Err(error) => tracing::warn!("Revoked session purge failed on startup: {}", error),
     }
-    match purge_stale_revoked_subs_with_wait(db.as_ref(), None).await {
-        Ok(Some(0) | None) => {}
+    match purge_stale_revoked_subs_with_wait(db, Some(lock_wait)).await {
+        Ok(Some(0)) => {}
         Ok(Some(count)) => tracing::info!("Purged {} stale revoked sub(s) on startup", count),
+        Ok(None) => tracing::warn!("Revoked sub purge skipped on startup: write lock is busy"),
         Err(error) => tracing::warn!("Revoked sub purge failed on startup: {}", error),
     }
     // pending はメモリ上にあり再起動時は空だが、register/take 以外の経路でも
     // 期限切れを回収できるよう起動時にも sweep しておく。
-    if let Some(oidc) = &oidc {
+    if let Some(oidc) = oidc {
         let count = oidc.sweep_expired_pending();
         if count > 0 {
             tracing::info!(
@@ -1510,68 +1644,16 @@ async fn run_moderation_finalizer(
 
     // 最初の tick まで待つと再起動直後の期限切れ通報が最大 interval のあいだ
     // 未確定のまま残るため、起動時にも一度だけ確定処理を走らせる。
-    // シャットダウンが既に通知されている（watch の初期値から変化した）場合は
-    // 停止中の余計な書き込みを避けるため実行しない。
-    if !shutdown.borrow().has_changed() {
-        match finalize_due_reports(db.as_ref()).await {
-            Ok(0) => {}
-            Ok(count) => tracing::info!("Auto-finalized {} moderation report(s) on startup", count),
-            Err(error) => tracing::warn!("Moderation finalization failed on startup: {}", error),
+    // ロック待ちは上限付きで、取得後は件数分を完了まで処理する。
+    match finalize_due_reports_with_wait(db, Some(lock_wait)).await {
+        Ok(Some(0)) => {}
+        Ok(Some(count)) => {
+            tracing::info!("Auto-finalized {} moderation report(s) on startup", count)
         }
-    }
-
-    loop {
-        tokio::select! {
-            _ = ticker.tick() => {
-                // 周期実行は purge 関数側で write_lock 取得だけを短時間待ち、
-                // 取得できたら SQL はタイムアウトなしで完了させる（外側からは timeout で包まない）。
-                // 起動時の回収は完了まで待つため、初回の回収漏れは起きない。
-                match purge_expired_refresh_tokens(db.as_ref()).await {
-                    Ok(Some(0) | None) => {}
-                    Ok(Some(count)) => {
-                        tracing::info!("Purged {} expired refresh token(s)", count)
-                    }
-                    Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
-                }
-                match purge_stale_revoked_sessions(db.as_ref()).await {
-                    Ok(Some(0) | None) => {}
-                    Ok(Some(count)) => {
-                        tracing::info!("Purged {} stale revoked session(s)", count)
-                    }
-                    Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
-                }
-                match purge_stale_revoked_subs(db.as_ref()).await {
-                    Ok(Some(0) | None) => {}
-                    Ok(Some(count)) => tracing::info!("Purged {} stale revoked sub(s)", count),
-                    Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
-                }
-                // 認証リクエストが来ないままだと register/take の掃除が走らないため、
-                // 周期 tick でも期限切れ pending を回収する。
-                if let Some(oidc) = &oidc {
-                    let count = oidc.sweep_expired_pending();
-                    if count > 0 {
-                        tracing::info!("Purged {} expired OIDC pending authorization(s)", count);
-                    }
-                }
-                // 周期の自動確定も purge 群と同じくロック取得を短時間だけ待つ。
-                // タイムアウトしたら次回 tick に回し、shutdown 分岐を遅らせない。
-                match tokio::time::timeout(
-                    PURGE_LOCK_WAIT,
-                    finalize_due_reports(db.as_ref()),
-                )
-                .await
-                {
-                    Ok(Ok(0)) => {}
-                    Ok(Ok(count)) => tracing::info!("Auto-finalized {} moderation report(s)", count),
-                    Ok(Err(error)) => tracing::warn!("Moderation finalization failed: {}", error),
-                    Err(_) => tracing::warn!("Moderation finalization skipped: write lock is busy"),
-                }
-            }
-            _ = shutdown.changed() => {
-                tracing::info!("Moderation finalizer stopped");
-                break;
-            }
+        Ok(None) => {
+            tracing::warn!("Moderation finalization skipped on startup: write lock is busy")
         }
+        Err(error) => tracing::warn!("Moderation finalization failed on startup: {}", error),
     }
 }
 
