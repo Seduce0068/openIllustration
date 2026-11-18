@@ -63,13 +63,21 @@ async fn issue_refresh_token(
     let token = URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes());
     let token_hash = hash_refresh_token(&token);
     let expires_at = (Utc::now() + Duration::seconds(REFRESH_TTL_SECS)).to_rfc3339();
-    state
-        .db
-        .execute(
-            "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at) VALUES (?, ?, ?, ?)",
-            (token_hash, sub.to_string(), family_id.to_string(), expires_at),
-        )
-        .await?;
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    tx.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at) VALUES (?, ?, ?, ?)",
+        (
+            token_hash,
+            sub.to_string(),
+            family_id.to_string(),
+            expires_at,
+        ),
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
     Ok(token)
 }
 
@@ -91,23 +99,31 @@ pub(crate) async fn delete_superseded_revocation(
     sub: &str,
     old_threshold: i64,
 ) -> Result<(), AppError> {
-    db.execute(
+    let (write_guard, tx) = crate::begin_write_tx(db).await?;
+    tx.execute(
         "DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?",
         libsql::params![sub.to_string(), old_threshold],
     )
     .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
     Ok(())
 }
 
 /// ファミリ全体を失効させる（盗用検知時）。
 async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), AppError> {
-    state
-        .db
-        .execute(
-            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
-            [family_id],
-        )
-        .await?;
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    tx.execute(
+        "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
+        [family_id],
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
     Ok(())
 }
 
@@ -117,13 +133,16 @@ async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), 
 /// 新しい `iat` を付けた JWT で失効閾値を迂回できてしまう。消費状態は DB に
 /// 永続化されるため、プロセス再起動後も失効が維持される。
 async fn revoke_refresh_tokens_for_sub(state: &AppState, sub: &str) -> Result<(), AppError> {
-    state
-        .db
-        .execute(
-            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE sub = ? AND used_at IS NULL",
-            [sub],
-        )
-        .await?;
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    tx.execute(
+        "UPDATE refresh_tokens SET used_at = datetime('now') WHERE sub = ? AND used_at IS NULL",
+        [sub],
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
     Ok(())
 }
 
@@ -765,13 +784,19 @@ pub async fn callback(
     }
 
     let user_hash = id_claims.sub;
-    state
-        .db
-        .execute(
-            "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
-            [user_hash.clone()],
-        )
-        .await?;
+    // 外部 HTTP（token exchange / JWKS 検証）はすべて上述で完了している。
+    // 書き込みだけを write_lock 配下の tx で行い、HTTP 待ちでロックを保持しない。
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    tx.execute(
+        "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
+        [user_hash.clone()],
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // 後続の delete / refresh token 発行も同じロックを取るため明示解放する。
+    drop(write_guard);
 
     let now = Utc::now();
     let now_ts = now.timestamp() as usize;
@@ -895,11 +920,14 @@ pub async fn refresh(
     // sub の失効閾値が DB に残っている間は refresh を許可しない。
     // back-channel logout と refresh が競合して未使用トークンが残っても、
     // 再認証前にセッションを延長できないようにする（再起動後も DB で効く）。
-    let mut revoked_rows = state
-        .db
-        .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub.clone()])
-        .await?;
-    if revoked_rows.next().await?.is_some() {
+    let sub_revoked = {
+        let mut revoked_rows = state
+            .db
+            .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub.clone()])
+            .await?;
+        revoked_rows.next().await?.is_some()
+    };
+    if sub_revoked {
         revoke_refresh_tokens_for_sub(&state, &sub).await?;
         return Err(AppError::Unauthorized(
             "session for this subject has been revoked".to_string(),
@@ -907,13 +935,19 @@ pub async fn refresh(
     }
 
     // 消費済みへ更新（Concurrent な再利用は UPDATE の影響件数で検出する）。
-    let updated = state
-        .db
+    // 共有 Connection への書き込みは write_lock 配下の tx に閉じ込める。
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    let updated = tx
         .execute(
             "UPDATE refresh_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL",
             [token_hash],
         )
         .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // 直後に別の書き込み tx（ファミリ失効 / 新トークン発行）を開くため明示解放する。
+    drop(write_guard);
     if updated == 0 {
         revoke_refresh_family(&state, &family_id).await?;
         return Err(AppError::Unauthorized(
@@ -991,15 +1025,20 @@ pub async fn backchannel_logout(
         // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
         revoke_refresh_tokens_for_sub(&state, &sub).await?;
         // プロセス再起動後も失効を維持するため DB にも記録する。
-        state
-            .db
-            .execute(
-                "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
-                 ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
-                     updated_at = CURRENT_TIMESTAMP",
-                (sub, revoked_at as i64),
-            )
-            .await?;
+        // logout token の検証（HTTP / JWKS）はすべて上流で完了済みなので、
+        // ロック取得中に外部呼び出しが発生して他書き込みを止めることはない。
+        let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        tx.execute(
+            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+             ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
+                 updated_at = CURRENT_TIMESTAMP",
+            (sub, revoked_at as i64),
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+        drop(write_guard);
     }
 
     Ok(StatusCode::OK)

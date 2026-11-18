@@ -340,17 +340,28 @@ pub fn write_lock(db: &Connection) -> Arc<tokio::sync::Mutex<()>> {
     )
 }
 
-/// ロックを保持したままトランザクションを開始する。
+/// ロックを保持したままトランザクションを開始する（libsql::Error をそのまま返す版）。
+///
+/// すべての書き込みはこの関数を通す。共有 `Connection` で `BEGIN` を保持できるのは
+/// 1 つだけなので、`BEGIN` の前に `write_lock` を取得し、コミット後にガードを
+/// ドロップしてロックを解放する。ガードを先に落とすと次の書き込みが
+/// このトランザクションへ取り込まれるため、順序を逆転させないこと。
+async fn begin_write_tx_sql(
+    db: &Connection,
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), libsql::Error> {
+    let guard = write_lock(db).lock_owned().await;
+    let tx = db.transaction().await?;
+    Ok((guard, tx))
+}
+
+/// `begin_write_tx_sql` を `AppError` 側の API へ変換したラッパー。
 /// ガードは戻り値に保持させ、コミット後にドロップする。
 async fn begin_write_tx(
     db: &Connection,
 ) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
-    let guard = write_lock(db).lock_owned().await;
-    let tx = db
-        .transaction()
+    begin_write_tx_sql(db)
         .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
-    Ok((guard, tx))
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -1345,14 +1356,22 @@ pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
     Ok(finalized)
 }
 
+/// 周期タスクが書き込みロックの取得で待ち続けると、後続の書き込みも
+/// ロック待ちのキューに並んで詰まるため、周期回収だけは短時間で諦める。
+/// 起動時の回収は従来どおり完了まで待つ。
+const PURGE_LOCK_WAIT: Duration = Duration::from_secs(2);
+
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
 /// 期限切れリフレッシュトークンを削除する。期限切れレコードは認証に使えず、
 /// 保持しても盗用検知の意味がないため、定期的に回収してDBの増大を防ぐ。
 async fn purge_expired_refresh_tokens(db: &Connection) -> Result<u64, libsql::Error> {
     let now = chrono::Utc::now().to_rfc3339();
-    db.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", [now])
-        .await
-        .map(|_| db.changes())
+    let (_write_guard, tx) = begin_write_tx_sql(db).await?;
+    tx.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", [now])
+        .await?;
+    let deleted = tx.changes();
+    tx.commit().await?;
+    Ok(deleted)
 }
 
 /// 古い失効 sid を回収する。失効sid を持つ JWT は最大 SESSION_TTL_SECS で
@@ -1360,12 +1379,15 @@ async fn purge_expired_refresh_tokens(db: &Connection) -> Result<u64, libsql::Er
 /// リフレッシュ時は常に新しい sid が発行されるため再利用の心配もない。
 async fn purge_stale_revoked_sessions(db: &Connection) -> Result<u64, libsql::Error> {
     let cutoff = chrono::Utc::now() - chrono::Duration::seconds(oidc::SESSION_TTL_SECS + 60);
-    db.execute(
+    let (_write_guard, tx) = begin_write_tx_sql(db).await?;
+    tx.execute(
         "DELETE FROM revoked_sessions WHERE revoked_at <= ?",
         [cutoff.format("%Y-%m-%d %H:%M:%S").to_string()],
     )
-    .await
-    .map(|_| db.changes())
+    .await?;
+    let deleted = tx.changes();
+    tx.commit().await?;
+    Ok(deleted)
 }
 
 /// 古い sub 失効閾値を回収する。閾値より前に発行された JWT は最大
@@ -1373,9 +1395,12 @@ async fn purge_stale_revoked_sessions(db: &Connection) -> Result<u64, libsql::Er
 /// 新しい JWT は常に現在時刻より後ろの iat を持つため、失効は復活しない。
 async fn purge_stale_revoked_subs(db: &Connection) -> Result<u64, libsql::Error> {
     let cutoff = chrono::Utc::now().timestamp() - oidc::SESSION_TTL_SECS - 60;
-    db.execute("DELETE FROM revoked_subs WHERE revoked_at <= ?", [cutoff])
-        .await
-        .map(|_| db.changes())
+    let (_write_guard, tx) = begin_write_tx_sql(db).await?;
+    tx.execute("DELETE FROM revoked_subs WHERE revoked_at <= ?", [cutoff])
+        .await?;
+    let deleted = tx.changes();
+    tx.commit().await?;
+    Ok(deleted)
 }
 
 async fn run_moderation_finalizer(
@@ -1431,20 +1456,44 @@ async fn run_moderation_finalizer(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                match purge_expired_refresh_tokens(db.as_ref()).await {
-                    Ok(0) => {}
-                    Ok(count) => tracing::info!("Purged {} expired refresh token(s)", count),
-                    Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
+                // 周期実行はロック取得を短時間だけ待ち、ビジーなら次回に回す。
+                // 起動時の回収は完了まで待つため、初回の回収漏れは起きない。
+                match tokio::time::timeout(
+                    PURGE_LOCK_WAIT,
+                    purge_expired_refresh_tokens(db.as_ref()),
+                )
+                .await
+                {
+                    Ok(Ok(0)) => {}
+                    Ok(Ok(count)) => {
+                        tracing::info!("Purged {} expired refresh token(s)", count)
+                    }
+                    Ok(Err(error)) => tracing::warn!("Refresh token purge failed: {}", error),
+                    Err(_) => tracing::warn!("Refresh token purge skipped: write lock is busy"),
                 }
-                match purge_stale_revoked_sessions(db.as_ref()).await {
-                    Ok(0) => {}
-                    Ok(count) => tracing::info!("Purged {} stale revoked session(s)", count),
-                    Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
+                match tokio::time::timeout(
+                    PURGE_LOCK_WAIT,
+                    purge_stale_revoked_sessions(db.as_ref()),
+                )
+                .await
+                {
+                    Ok(Ok(0)) => {}
+                    Ok(Ok(count)) => {
+                        tracing::info!("Purged {} stale revoked session(s)", count)
+                    }
+                    Ok(Err(error)) => tracing::warn!("Revoked session purge failed: {}", error),
+                    Err(_) => tracing::warn!("Revoked session purge skipped: write lock is busy"),
                 }
-                match purge_stale_revoked_subs(db.as_ref()).await {
-                    Ok(0) => {}
-                    Ok(count) => tracing::info!("Purged {} stale revoked sub(s)", count),
-                    Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
+                match tokio::time::timeout(
+                    PURGE_LOCK_WAIT,
+                    purge_stale_revoked_subs(db.as_ref()),
+                )
+                .await
+                {
+                    Ok(Ok(0)) => {}
+                    Ok(Ok(count)) => tracing::info!("Purged {} stale revoked sub(s)", count),
+                    Ok(Err(error)) => tracing::warn!("Revoked sub purge failed: {}", error),
+                    Err(_) => tracing::warn!("Revoked sub purge skipped: write lock is busy"),
                 }
                 // 認証リクエストが来ないままだと register/take の掃除が走らないため、
                 // 周期 tick でも期限切れ pending を回収する。
@@ -1787,20 +1836,25 @@ pub async fn auth_verify(
 
     ensure_user_not_banned(&state.db, &user_hash).await?;
 
+    // 共有 Connection への INSERT は write_lock 配下の tx で行う。
+    // ロック外の autocommit 書き込みは他トランザクションの BEGIN に取り込まれ、
+    // その ROLLBACK でユーザー登録だけ失われる可能性がある。
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     if let Some(der) = verified_key {
-        state.db.execute(
+        tx.execute(
             "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?) ON CONFLICT(user_hash) DO UPDATE SET public_key_der = excluded.public_key_der",
             (user_hash.clone(), der)
         ).await?;
     } else {
-        state
-            .db
-            .execute(
-                "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
-                [user_hash.clone()],
-            )
-            .await?;
+        tx.execute(
+            "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
+            [user_hash.clone()],
+        )
+        .await?;
     }
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
 
     let now = chrono::Utc::now();
     let now_ts = now.timestamp() as usize;
@@ -1846,13 +1900,17 @@ pub async fn auth_verify(
 
 /// セッション ID を失効させ、DB と in-memory の両方へ記録する。
 pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(), AppError> {
-    state
-        .db
-        .execute(
-            "INSERT OR IGNORE INTO revoked_sessions (sid) VALUES (?)",
-            [sid.to_string()],
-        )
-        .await?;
+    // 書き込みは write_lock 配下の tx に閉じ込める。ロックを取らずに
+    // autocommit で INSERT すると、並行する他 tx の BEGIN に取り込まれる。
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+    tx.execute(
+        "INSERT OR IGNORE INTO revoked_sessions (sid) VALUES (?)",
+        [sid.to_string()],
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
     state
         .revoked_sessions
         .lock()
@@ -1882,22 +1940,30 @@ pub async fn logout(
         })
     {
         let token_hash = sha256::digest(token.as_bytes());
-        let mut rows = state
-            .db
-            .query(
-                "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
-                [token_hash],
-            )
-            .await?;
-        if let Some(row) = rows.next().await? {
-            let family_id: String = row.get(0)?;
-            state
+        // 読み取りカーソルを先に閉じてから BEGIN する。
+        let family_id = {
+            let mut rows = state
                 .db
-                .execute(
-                    "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
-                    [family_id],
+                .query(
+                    "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
+                    [token_hash],
                 )
                 .await?;
+            rows.next()
+                .await?
+                .map(|row| -> Result<String, AppError> { Ok(row.get(0)?) })
+                .transpose()?
+        };
+        if let Some(family_id) = family_id {
+            let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+            tx.execute(
+                "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
+                [family_id],
+            )
+            .await?;
+            tx.commit()
+                .await
+                .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
         }
     }
     // DB 側のファミリ失効だけではブラウザの Cookie が 30 日残るため、
@@ -2274,42 +2340,47 @@ async fn change_favorite(
     if !is_safe_cid(cid) {
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
-    let mut rows = state
-        .db
-        .query(
-            "SELECT 1 FROM contents WHERE cid = ? AND status = 'Approved'",
-            [cid.to_string()],
-        )
-        .await
-        .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?;
-    if rows
-        .next()
-        .await
-        .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?
-        .is_none()
-    {
+    // 読み取りは従来どおり。カーソルを閉じてから BEGIN する。
+    let exists = {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT 1 FROM contents WHERE cid = ? AND status = 'Approved'",
+                [cid.to_string()],
+            )
+            .await
+            .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?;
+        rows.next()
+            .await
+            .map_err(|_| AppError::Internal("favorite lookup failed".to_string()))?
+            .is_some()
+    };
+    if !exists {
         // 存在しない / Approved でないコンテンツの有無を識別子で区別しない。
         return Err(AppError::NotFound);
     }
-    if add {
-        state
-            .db
-            .execute(
+    // 書き込みは write_lock 配下の tx に載せる。ロック取得・BEGIN・COMMIT の
+    // いずれが失敗しても、DB 詳細を出さず既存と同じ固定文言で返す。
+    let write_result: Result<(), AppError> = async {
+        let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+        if add {
+            tx.execute(
                 "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES (?, ?)",
                 (sub.to_string(), cid.to_string()),
             )
-            .await
-            .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
-    } else {
-        state
-            .db
-            .execute(
+            .await?;
+        } else {
+            tx.execute(
                 "DELETE FROM favorites WHERE user_hash = ? AND cid = ?",
                 (sub.to_string(), cid.to_string()),
             )
-            .await
-            .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
+    .await;
+    write_result.map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
     Ok(FavoriteResponse { is_favorite: add })
 }
 
@@ -2670,14 +2741,15 @@ async fn require_moderation_operator(state: &AppState, actor: &str) -> Result<()
 
 /// 運用判断の記録。DEC-04 の第三者検証可能な監査ではなく、運用ログである。
 async fn record_governance_action(
-    db: &Connection,
+    tx: &libsql::Transaction,
     action: &str,
     target: &str,
     actor: &str,
     reason: &str,
     details: Option<String>,
 ) -> Result<(), AppError> {
-    db.execute(
+    // 必ず呼び出し側の書き込み tx に載せる（生 Connection は受け取らない）。
+    tx.execute(
         "INSERT INTO governance_audit_log (action, target, actor_hash, reason, details)
          VALUES (?, ?, ?, ?, ?)",
         (action, target, actor, reason, details),

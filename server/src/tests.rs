@@ -261,6 +261,31 @@ impl PaymentVerifier for MockVerifier {
     }
 }
 
+/// 検証中に注文の期限を過ぎさせ、verify 後の再判定を発火させる verifier。
+/// 時刻は進めず、トランザクション外の I/O 中に `expires_at` を過去へ書き換える。
+struct ExpiryAdvancingVerifier {
+    db: std::sync::OnceLock<Arc<libsql::Connection>>,
+    verification: PaymentVerification,
+}
+
+#[async_trait]
+impl PaymentVerifier for ExpiryAdvancingVerifier {
+    async fn verify(&self, order: &PaymentOrder) -> Result<PaymentVerification, AppError> {
+        let db = self.db.get().ok_or_else(|| {
+            AppError::Internal("ExpiryAdvancingVerifier has no database".to_string())
+        })?;
+        db.execute(
+            "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
+            (
+                "2000-01-01T00:00:00+00:00".to_string(),
+                order.order_id.clone(),
+            ),
+        )
+        .await?;
+        Ok(self.verification.clone())
+    }
+}
+
 /// 検証中に注文状態を書き換える verifier（CAS の回帰テスト用）。
 struct RacingVerifier {
     db: Arc<libsql::Connection>,
@@ -5986,6 +6011,65 @@ async fn test_payment_verify_rejects_elapsed_expiry() {
     let row = rows.next().await.unwrap().unwrap();
     let status: String = row.get(0).unwrap();
     assert_eq!(status, crate::payments::STATUS_EXPIRED);
+}
+
+/// 決済: 検証 I/O の間に期限を過ぎた注文は FINALIZED へ進まず 400 で拒否される。
+/// 読み取った古い status を期待する CAS の前に、tx 内の最新 expires_at で再判定する。
+#[tokio::test]
+async fn test_payment_verify_rechecks_expiry_after_verification() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(ExpiryAdvancingVerifier {
+        db: std::sync::OnceLock::new(),
+        verification: PaymentVerification {
+            chain_id: 137,
+            tx_hash: "0xtoctou".to_string(),
+            log_index: 0,
+            block_number: 100,
+            confirmations: 256,
+            from: wallet.clone(),
+            to: receiving.to_string(),
+            amount_wei: "1000000000000000000000".to_string(),
+        },
+    });
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    verifier
+        .db
+        .set(Arc::clone(&db))
+        .expect("test database must be set once");
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "expiry during verification must not reach FINALIZED"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(
+        String::from_utf8_lossy(&body).contains("order has expired"),
+        "rejection must come from the post-verification expiry recheck"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status, tx_hash, confirmations FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let status: String = row.get(0).unwrap();
+    let tx_hash: Option<String> = row.get(1).unwrap();
+    let confirmations: i64 = row.get(2).unwrap();
+    assert_eq!(status, crate::payments::STATUS_EXPIRED);
+    assert!(
+        tx_hash.is_none() && confirmations == 0,
+        "the expired order must not receive the verified transfer"
+    );
 }
 
 /// 決済: status が EXPIRED の注文は拒否される。
@@ -14352,4 +14436,307 @@ mod property_tests {
             prop_assert_eq!(common::summarize_reason(&input), expected);
         }
     }
+}
+
+// ---- write_lock 回帰: 共有 Connection への autocommit 書き込みを禁止する ----
+
+/// 書き込み tx が write_lock を保持している間、お気に入り追加は完了しない。
+/// ロック外の autocommit INSERT だと他 tx の BEGIN に取り込まれ、COMMIT/ROLLBACK
+/// のタイミングが外部ライターに握られるため、この待機が回帰を検出する。
+#[tokio::test]
+async fn test_favorite_write_waits_for_write_lock() {
+    let (app, db) = setup_app_with_db().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g";
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let app_for_task = app.clone();
+    let token_for_task = token.clone();
+    let cid_for_task = cid.to_string();
+    let mut favorite_task =
+        tokio::spawn(
+            async move { post_favorite(&app_for_task, &token_for_task, &cid_for_task).await },
+        );
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut favorite_task)
+            .await
+            .is_err(),
+        "favorite INSERT must wait for the in-flight write transaction"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let (status, body) = tokio::time::timeout(Duration::from_secs(5), &mut favorite_task)
+        .await
+        .expect("favorite must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "response: {body}");
+    assert_eq!(body, json!({"is_favorite": true}));
+    assert_eq!(favorite_count(&db, "test_user", cid).await, 1);
+}
+
+/// `/auth/logout` の sid 失効書き込みも write_lock を取得し、
+/// 他 tx の完了後に成功する（ロック保持中に 200 を返さない）。
+#[tokio::test]
+async fn test_logout_write_waits_for_write_lock() {
+    let (app, db) = setup_app_with_db().await;
+    let sid = "sid-wait-for-write-lock";
+    let claims = Claims {
+        sub: "test_user".to_string(),
+        exp: 10000000000,
+        sid: Some(sid.to_string()),
+        iat: None,
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_ref()).unwrap(),
+    )
+    .unwrap();
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let mut logout_task = tokio::spawn(async move {
+        app.clone()
+            .oneshot(with_peer(
+                Request::post("/auth/logout")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut logout_task)
+            .await
+            .is_err(),
+        "logout must wait for the in-flight write transaction"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut logout_task)
+        .await
+        .expect("logout must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut rows = db
+        .query(
+            "SELECT sid FROM revoked_sessions WHERE sid = ?",
+            [sid.to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        rows.next().await.unwrap().is_some(),
+        "revoked sid must be committed after the lock is released"
+    );
+}
+
+/// back-channel logout の DB 更新（sid / sub / refresh token）も tx 内で行われ、
+/// 外部 HTTP 検証はロック取得より前に完了している。
+#[tokio::test]
+async fn test_backchannel_logout_write_waits_for_write_lock() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        body["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let sid = claims.sid.expect("session id");
+    let logout_token = mock.logout_token_for_sid_and_sub(&sid, &claims.sub);
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let mut logout_task = tokio::spawn(async move {
+        app.clone()
+            .oneshot(with_peer(
+                Request::post("/auth/backchannel-logout")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={logout_token}")))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut logout_task)
+            .await
+            .is_err(),
+        "back-channel logout must wait for the in-flight write transaction"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut logout_task)
+        .await
+        .expect("back-channel logout must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let mut rows = db
+        .query(
+            "SELECT sid FROM revoked_sessions WHERE sid = ?",
+            [sid.clone()],
+        )
+        .await
+        .unwrap();
+    assert!(rows.next().await.unwrap().is_some());
+    let mut rows = db
+        .query(
+            "SELECT sub FROM revoked_subs WHERE sub = ?",
+            [claims.sub.clone()],
+        )
+        .await
+        .unwrap();
+    assert!(rows.next().await.unwrap().is_some());
+}
+
+/// 期限切れレコードの purge（3 種類すべて）も write_lock を取得する。
+/// ロックを外すと他 tx の BEGIN 中に DELETE が取り込まれ、ここで完了してしまう。
+#[tokio::test]
+async fn test_purge_waits_for_write_lock() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES ('expired', 'u', 'f', '2000-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_sessions (sid, revoked_at) VALUES ('old', '2000-01-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('old', ?)",
+        [chrono::Utc::now().timestamp() - 24 * 60 * 60 - 3600],
+    )
+    .await
+    .unwrap();
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let db_refresh = Arc::clone(&db);
+    let db_sessions = Arc::clone(&db);
+    let db_subs = Arc::clone(&db);
+    let mut refresh_task =
+        tokio::spawn(async move { crate::purge_expired_refresh_tokens(&db_refresh).await });
+    let mut sessions_task =
+        tokio::spawn(async move { crate::purge_stale_revoked_sessions(&db_sessions).await });
+    let mut subs_task =
+        tokio::spawn(async move { crate::purge_stale_revoked_subs(&db_subs).await });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut refresh_task)
+            .await
+            .is_err(),
+        "refresh token purge must wait for the in-flight write transaction"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut sessions_task)
+            .await
+            .is_err(),
+        "revoked session purge must wait for the in-flight write transaction"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut subs_task)
+            .await
+            .is_err(),
+        "revoked sub purge must wait for the in-flight write transaction"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let purged = tokio::time::timeout(Duration::from_secs(5), &mut refresh_task)
+        .await
+        .expect("refresh token purge must finish after the write transaction commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(purged, 1);
+    let purged = tokio::time::timeout(Duration::from_secs(5), &mut sessions_task)
+        .await
+        .expect("revoked session purge must finish after the write transaction commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(purged, 1);
+    let purged = tokio::time::timeout(Duration::from_secs(5), &mut subs_task)
+        .await
+        .expect("revoked sub purge must finish after the write transaction commits")
+        .unwrap()
+        .unwrap();
+    assert_eq!(purged, 1);
+}
+
+/// 認証時のユーザー登録 INSERT も write_lock を取得してから実行する。
+#[tokio::test]
+async fn test_auth_verify_write_waits_for_write_lock() {
+    let (app, db) = setup_app_with_db().await;
+    let body = verify_body("2000-01-01", "JP");
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let mut verify_task = tokio::spawn(async move {
+        app.clone()
+            .oneshot(with_peer(
+                Request::post("/auth/verify")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut verify_task)
+            .await
+            .is_err(),
+        "auth verify must wait for the in-flight write transaction"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut verify_task)
+        .await
+        .expect("auth verify must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }

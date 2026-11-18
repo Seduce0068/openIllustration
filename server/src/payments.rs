@@ -492,19 +492,17 @@ pub(crate) fn is_order_expired(expires_at: &str, now: &str) -> bool {
 /// 更新は呼び出し元の書き込みトランザクション内で行い、コミットは呼び出し元が行う。
 /// 期限切れで更新した場合は `true` を返す。呼び出し側はコミット後に既存どおり
 /// `AppError::BadRequest("order has expired")`（400）を返す。
+/// `expires_at` は呼び出し側が読み取った値を渡す（初回は注文読み込み時、
+/// 検証後の再判定ではトランザクション内の最新値）。
 async fn reject_if_expired(
     tx: &libsql::Transaction,
-    order: &PaymentOrder,
+    order_id: &str,
+    expires_at: &str,
 ) -> Result<bool, AppError> {
-    if is_order_expired(&order.expires_at, &chrono::Utc::now().to_rfc3339()) {
+    if is_order_expired(expires_at, &chrono::Utc::now().to_rfc3339()) {
         tx.execute(
             "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
-            (
-                STATUS_EXPIRED,
-                order.order_id.as_str(),
-                STATUS_FINALIZED,
-                STATUS_EXPIRED,
-            ),
+            (STATUS_EXPIRED, order_id, STATUS_FINALIZED, STATUS_EXPIRED),
         )
         .await?;
         return Ok(true);
@@ -527,7 +525,7 @@ pub async fn bind_wallet(
     // 期限切れ判定と EXPIRED 更新は write_lock を取得したトランザクション内で行う。
     // 期限切れなら更新をコミットしてから 400 を返す（旧挙動を維持）。
     let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-    if reject_if_expired(&tx, &order).await? {
+    if reject_if_expired(&tx, &order.order_id, &order.expires_at).await? {
         tx.commit().await?;
         return Err(AppError::BadRequest("order has expired".to_string()));
     }
@@ -601,7 +599,7 @@ pub async fn verify_order(
     // ないため tx の drop でロールバックし、以降の検証 I/O の前にはロックを解放する。
     {
         let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-        if reject_if_expired(&tx, &order).await? {
+        if reject_if_expired(&tx, &order.order_id, &order.expires_at).await? {
             tx.commit().await?;
             return Err(AppError::BadRequest("order has expired".to_string()));
         }
@@ -619,12 +617,34 @@ pub async fn verify_order(
     })?;
     let verification = verifier.verify(&order).await?;
 
+    // 検証（非同期 I/O）の間に現在時刻が期限を過ぎた、あるいは expires_at が
+    // 書き換えられた場合は、読み取った古い status を期待する CAS で FINALIZED へ
+    // 進ませない。最新の expires_at を tx 内で読み直して再判定し、期限切れなら
+    // EXPIRED 更新をコミットして 400 を返す。期限前ならこの tx をそのまま
+    // 不一致判定と CAS 更新へ使う（ロックと BEGIN を再取得しない）。
+    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    let current_expires_at = {
+        let mut rows = tx
+            .query(
+                "SELECT expires_at FROM payment_orders WHERE order_id = ?",
+                [order.order_id.as_str()],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => row.get::<String>(0)?,
+            None => order.expires_at.clone(),
+        }
+    };
+    if reject_if_expired(&tx, &order.order_id, &current_expires_at).await? {
+        tx.commit().await?;
+        return Err(AppError::BadRequest("order has expired".to_string()));
+    }
+
     if verification.chain_id != order.chain_id
         || normalize_address(&verification.from) != order.wallet_address
         || normalize_address(&verification.to) != order.recipient_address
         || verification.amount_wei != order.amount_wei
     {
-        let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
         tx.execute(
             "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
              WHERE order_id = ? AND status = ? AND status <> ?",
@@ -649,9 +669,8 @@ pub async fn verify_order(
     };
 
     // 検証（非同期 I/O）の間に状態が変わっていないことを CAS で担保する。
-    // 書き込みロックも取得し、同一プロセス内の並行 verify を直列化する。
-    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-
+    // 期限再判定で取得した書き込みロックと tx を引き続き使い、
+    // 同一プロセス内の並行 verify を直列化する。
     let update = tx
         .execute(
             "UPDATE payment_orders
