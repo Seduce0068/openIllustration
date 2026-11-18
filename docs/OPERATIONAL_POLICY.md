@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-18T04:50:07+09:00"
+  at: "2026-11-18T10:43:30+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -29,6 +29,10 @@ generated:
   `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン等）を含めない。ポリシー設定変更は運用者の責任で管理し、適用法令・専門家レビューの根拠を記録する。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
 - 実JPKI/マイナアプリの信頼検証が未完成の現行プロトタイプは、本番利用資格判定に使わない。
+- OIDC認証の未完了 `pending`（`state` / `nonce` / `code_verifier`）は10分TTLとし、保持数はコード定数
+  `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
+  上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
+  未認証で呼べる開始エンドポイントからのメモリ枯渇を防ぐ境界であり、環境変数ではない。
 
 ## 2. コンテンツ・個人データ
 
@@ -117,6 +121,13 @@ generated:
   利用者へ告知する。`Login` は `data-testid="login-error"`、エクスポートは `data-testid="export-error"`、
   ContentViewer の監査は `data-testid="audit-error"`、モデレーション集計は
   `data-testid="moderation-stats-error"` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
+  アップロードは `data-testid="upload-status"` に成否を表示し、失敗時は固定文言3種
+  （`アップロードの準備に失敗しました。` / `ネットワークエラーが発生しました。` /
+  `アップロード結果の読み取りに失敗しました。`）を使う。いずれの結果でも `loading` を解除して
+  ボタンを再活性化する。
+  JXL デコード失敗は `content-verification-badge` を `× DECODE FAILED` とし、
+  `data-testid="jxl-decode-error"` に固定文言を表示する（デコーダのエラー値は出さない）。
+  Illustration ではデコード成功時のみ `● VERIFIED` を表示し、サーバー側の完全デコード検証は未実装である。
   成功時にエラー表示をクリアする。内部例外・スタックトレース・署名やトークン等の内部詳細は画面へ出さない。
 - 起動時に設定を検証し、ヘルスチェック、メトリクス、アラート、障害対応・鍵ローテーション手順を整備する。グレースフル停止（SIGTERM/SIGINTで処理中リクエストを完了待ち）は実装済み。drain は
   `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）を上限とし、超過時は警告を出して残接続を切断する。

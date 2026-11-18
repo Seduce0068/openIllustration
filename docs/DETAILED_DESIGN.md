@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-18T10:43:30+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -118,6 +118,13 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   - JSON 解析失敗: `認証要求の解析に失敗しました。` / `認証結果の解析に失敗しました。`
   - `authorized=false`: `認証が許可されませんでした。`
   - `user_hash` / `token` の欠落（情報不足）: `認証情報が不足しています。`
+- クライアントの `Upload` は成否を `data-testid="upload-status"`（`[STATUS]` 接頭辞付き）へ表示し、
+  内部例外や生データを画面へ出さない。準備・通信・レスポンス読み取りの失敗には固定エラー文言3種
+  `アップロードの準備に失敗しました。` / `ネットワークエラーが発生しました。` /
+  `アップロード結果の読み取りに失敗しました。` を使う。ファイル未選択・10 MiB超過・HTTPエラーは
+  それぞれ `ERROR: Select a file first.` / `ERROR: File exceeds the 10 MiB limit.` /
+  `ERROR: Upload failed.` を表示する。成否にかかわらず `finally` 相当で `loading` を解除し、
+  ボタンを再活性化する（パニックで loading が戻らない事故を防ぐ）。
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、
@@ -129,7 +136,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 ### OIDC認証フロー（実装済み・モックOPで検証）
 
 1. `GET /auth/oidc/start` が `state`、`nonce`、`code_verifier` を生成し、
-   サーバー側に10分間保存する。
+   サーバー側に10分間保存する。未完了の `pending` はコード定数
+   `MAX_PENDING_AUTH = 1024`（`server/src/oidc.rs`）を上限とし、登録時・取出時に
+   期限切れ（10分超）エントリを `retain` で一括回収する。上限到達時は新規エントリを
+   追加せず 429 を返す（`/auth/oidc/start` も 429、R1-23）。上限は環境変数ではない。
 2. 認可URLには `response_type=code`、`client_id`、`redirect_uri`、`scope`、
    `state`、`nonce`、`code_challenge`、`code_challenge_method=S256` を含める。
 3. `GET /auth/oidc/callback` は `state` を単回消費し、認可コードと
@@ -177,8 +187,15 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   `description` は2000 B、`tags` は10個まで・各タグは50 B を上限とする。超過は400で拒否し、
   空文字は受理し、空ベクトル（保存時は空文字）として扱う。`tags` はカンマ区切りの1フィールドで、
   未知フィールド・重複フィールドは既存どおり400で拒否する。
-- **未実装**: 完全なJPEG XLデコード検証、画像デコード前検査。技術選定は [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録済み（第一候補 `jxl-oxide`、
-  現時点では依存追加しない判断）。
+- クライアント側の JXL デコード結果による検証は実装済み。`client/src/jxl.rs` の
+  `decode_jxl_to_canvas`（`jxl-oxide`）でデコードし、チェックサム一致でもデコード失敗時は
+  `verified` を `Some(false)` へ切り替えて `× DECODE FAILED` と
+  `data-testid="jxl-decode-error"` の固定文言を表示する（`data-testid="content-verification-badge"`）。
+  Illustration ではデコード成功時のみ `● VERIFIED` を表示し、デコーダのエラー値は画面へ出さない。
+- **未実装**: サーバー側の完全なJPEG XLデコード検証、画像デコード前検査。
+  `validate_upload_content` は JXL シグネチャ検査のみ。技術選定は
+  [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録済み（第一候補 `jxl-oxide`、
+  現時点ではサーバー側へ依存追加しない判断）。
 
 ### 一覧 `GET /content`
 

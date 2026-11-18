@@ -68,7 +68,7 @@ status: current
 | R1-11 | コンテンツ取得の HTTP ステータスを確認せず 403/500 を「完全性侵害」と誤表示 | 中 | `client/src/lib.rs:345-353`（ダッシュボード側 `:275-282` は検査している） | 0.90 |
 | R1-12 | API エンドポイントが `http://localhost:3000` にハードコードされ mixed content | 中 | `client/src/lib.rs:8` の `API_BASE`、`client/Trunk.toml` に差し替え手段が無い | 0.95 |
 | R1-13 | JXL デコード結果を破棄し、失敗時も VERIFIED の空キャンバスになる | 中 | `client/src/lib.rs:355-361,457-466`、`client/src/jxl.rs:81-136` | 0.85 |
-| R1-14 | アップロード処理内の `unwrap` 連鎖で失敗時に「Processing...」のまま固まる | 中 | `client/src/lib.rs:511-539`、`:552` に到達しない | 0.90 |
+| R1-14 | アップロード処理内の `unwrap` 連鎖で失敗時に「Processing...」のまま固まる（**対応済み 2026-11-18**: `5d9f5bd` で `unwrap` 12個を `Result` 伝播へ置換し、成否にかかわらず loading を解除してエラー表示） | 中 | `client/src/lib.rs:511-539`、`:552` に到達しない | 0.90 |
 | R1-15 | ログイン失敗が完全に無音で、拒否理由がユーザーに伝わらない | 中 | `client/src/lib.rs:231-238`、エラー signal 領域が無い | 0.90 |
 | R1-16 | ファイル選択 input が `display:none` でキーボード操作不能 | 中 | `client/src/lib.rs:561-564` | 0.90 |
 
@@ -82,11 +82,11 @@ status: current
 | --- | --- | --- | --- | --- |
 | R1-17 | **年齢ゲートが開発用モック経路にしか配線されず、本番 OIDC が年齢検査をバイパス** | **高** | `server/src/lib.rs:1297` が `validate_age()` の唯一の呼び出し。`oidc.rs:587-800` に判定が無い | 0.95 |
 | R1-18 | **refresh Cookie の `Path=/auth/refresh` 固定で、ログアウト時のファミリ失効が到達不能** | **高** | `server/src/oidc.rs:61` vs `server/src/lib.rs:1418-1447`。テスト `tests.rs:6976-6990` は手動付与 | 0.90 |
-| R1-19 | OIDC ID トークンの `nbf` がデシリアライズのみで検証されていない | 中 | `server/src/oidc.rs:256,408-412`、`DETAILED_DESIGN.md:106` と矛盾 | 0.88 |
+| R1-19 | OIDC ID トークンの `nbf` がデシリアライズのみで検証されていない（**対応済み 2026-11-18**: `d8e1393` で `Validation.validate_nbf=true` を明示有効化） | 中 | `server/src/oidc.rs:256,408-412`、`DETAILED_DESIGN.md:106` と矛盾 | 0.88 |
 | R1-20 | back-channel logout の `sub` 失効が処理時刻を閾値にし、リプレイが後発セッションを誤失効 | 中 | `server/src/oidc.rs:817-833,496-534` | 0.65 |
 | R1-21 | `/auth/login` が `ALLOW_MOCK_AUTH` 未設定時も常時有効 | 低 | `server/src/lib.rs:1266-1283,1100` | 0.90 |
 | R1-22 | OIDC の `state`/`nonce` がユーザーエージェントに束縛されずログイン CSRF の余地（推測） | 中 | `server/src/oidc.rs:536-692` | 0.55 |
-| R1-23 | 未認証で開始できる OIDC pending に上限がなく、TTL 掃除も取出し時のみ | 低 | `server/src/oidc.rs:109,547-557,191-201` | 0.60 |
+| R1-23 | 未認証で開始できる OIDC pending に上限がなく、TTL 掃除も取出し時のみ（**対応済み 2026-11-18**: `57949c3` で上限 1024件・429・期限切れ回収を追加） | 低 | `server/src/oidc.rs:109,547-557,191-201` | 0.60 |
 
 **親の Runtime Proof**: `grep -rn "validate_age" server/src/` は `lib.rs:1297`（呼び出し）と
 `lib.rs:2457`（定義）のみで、`oidc.rs` に呼び出しは無い。Cookie も `oidc.rs:61` で

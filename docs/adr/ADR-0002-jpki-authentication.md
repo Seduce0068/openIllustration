@@ -5,7 +5,7 @@ description: マイナアプリ/JPKI認証の連携方式、検証要件、移�
 tags: [adr, authentication, jpki, oidc, proposed]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-18T10:43:30+09:00"
 ---
 
 ## ADR-0002: JPKI認証連携方式
@@ -123,6 +123,13 @@ generated:
   IPFS ゲートウェイ／タイムアウト／試行回数、OIDC HTTP タイムアウト、年齢ポリシー、
   レート制限・同時実行上限を診断する。既定は警告のみで、`--strict` のときのみ
   問題があれば終了コード 1 とし、秘密値は一切出力しない。
+- （2026-11-18 更新）`jsonwebtoken` 12 は `validate_nbf` の既定が `false` のため、
+  IDトークン検証で `validation.validate_nbf = true` を明示的に有効化した（Decision 4 の
+  `nbf` 検証を実装へ反映）。`leeway` には `OIDC_CLOCK_SKEW_SECS` を流用する。
+  `nbf` は必須クレームに含めないため、クレーム欠落時は受理され、値がある場合のみ検証される。
+- （2026-11-18 更新）未完了の OIDC 認証（`pending`）に `MAX_PENDING_AUTH = 1024` の上限を設けた。
+  登録時・取出時に10分TTLの期限切れを一括回収し、上限到達時は `GET /auth/oidc/start` が 429 を
+  返して新規エントリを追加しない（R1-23）。上限はコード定数であり環境変数ではない。
 - 未実装: 実サービス接続、事業者申込、複数プロセス間の失効状態共有
   （多プロセス共有）、信頼属性の実入力経路（外部 OP 仕様待ち）。
 

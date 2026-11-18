@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master c766025, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master 5d9f5bd, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -13,19 +13,32 @@ generated:
   at: "2026-11-18T03:49:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T06:46:14+09:00"
+  at: "2026-11-18T10:43:24+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-18T06:46:14+09:00、ブランチ `master` の HEAD は `c766025`（upstream と一致）。
-  作業ツリーには本監査対応の未コミット差分がある。
+- 確認: 2026-11-18T10:43:24+09:00、ブランチ `master` の HEAD は `5d9f5bd`（upstream と一致）。
+  前回確認時（`c766025`）には本監査対応の未コミット差分があったが、現時点では master へ反映済み。
 - 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、
   法的確定/専門家レビューは未完）と公開レスポンスの非秘密性回帰テスト追加（`3662145`）。
-- 直近4コミットの反映（いずれも `c766025` までに master へ取り込み済みの監査指摘対応）:
+- 直近6〜7コミットの反映（`5d9f5bd` 時点。いずれも master へ取り込み済みの監査指摘対応。
+  前回確認時点 `c766025` までの4件は履歴として末尾に併記）:
+  - [対応済み 2154741] R1-26 受取先採番の原子的化: `create_order` の `MAX(derivation_index)+1`・受取先導出・
+    INSERT を書き込みロック＋トランザクション内で実行。入力検証を採番前に移し、拒否注文が index を消費しない。
+  - [対応済み 57949c3] OIDC pending の上限・回収: `MAX_PENDING_AUTH=1024`、超過は 429、
+    `register_pending` が同一ロック内で期限切れ掃除と上限判定を実施（回帰テスト4件）。
+  - [対応済み 5d9f5bd] R1-14 アップロード unwrap 排除と Processing 固まり解消: `sign_and_upload` の
+    `unwrap` 12個を `Result` 伝播へ置換し、成否にかかわらず loading を解除してエラー表示。
+  - [対応済み d8e1393] nbf の明示有効化: `Validation.validate_nbf=true`、`nbf` 欠落は受理、
+    未来 `nbf` は 401、skew 内は受理を回帰テストで確認。
+  - [対応済み e2a5510] JXL デコード失敗を VERIFIED にしない: 失敗時に DECODE FAILED バッジと専用エラーを
+    表示し、改ざん検知（COMPROMISED）と分離。デコーダ内部エラー値は非表示。
+  - [対応済み 0beb986 / 5d9f5bd] E2E 27件への拡張: JXL デコード失敗シナリオと R1-14 回帰 E2E を追加し、
+    全27件（`npm test`）で検証。
   - [対応済み 3a6bd64] 暗号検証のエラーパス: `common/src/lib.rs` に8テストを追加（不正DER公開鍵・別鍵・
     改変署名・不正base64署名・未サポートversion・ハッシュ不一致・不正PEM）。AUDIT-01 ゲートの根拠を補強。
   - [対応済み 7821611] 決済ユーティリティの境界: JPY→Wei 換算、チェーン別必要確認数、署名復元の
@@ -33,7 +46,7 @@ status: current
   - [対応済み c766025] client のエラー表示: `Login` と `ContentViewer` のサイレント失敗を解消し、
     `login-error` / `audit-error` の `role="alert"` で HTTP・通信・JSON解析・認可・情報不足を区別表示。
   - [対応済み 9087955] E2E エラーパス: `e2e/tests/error-paths.spec.ts` に4シナリオ（DASH-ERR /
-    R5-04 network / AUTH-500 / AUDIT-500）を追加。E2E は全24件（`npm test`）で検証。
+    R5-04 network / AUTH-500 / AUDIT-500）を追加。E2E は全27件（`npm test`）で検証。
 - 方針: `ALLOW_MOCK_AUTH=1` は開発専用。未実装機能を本番対応済みと扱わない。模擬支援APIは 501 で無効（JPYC送金検証の実装まで）。DB内ハッシュ連鎖は第三者検証可能な監査ではない。
 - 参照: [HANDOFF.md](HANDOFF.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md), [DETAILED_DESIGN.md](DETAILED_DESIGN.md),
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [REVIEW_REPORT.md](REVIEW_REPORT.md),
