@@ -3547,33 +3547,111 @@ pub async fn mod_stats(
     )))
 }
 
+/// `TZ` が固定オフセット形式のときに使うオフセットを解釈する。
+///
+/// 外部依存（chrono-tz）を追加せず、`Etc/GMT±N` のみを FixedOffset に変換する。
+/// POSIX の `Etc/GMT` は符号が直観と逆で、`Etc/GMT-9` が UTC+9（JST）を表す。
+fn policy_fixed_offset(tz: Option<&str>) -> Option<chrono::FixedOffset> {
+    let tz = tz?.trim();
+    if tz.eq_ignore_ascii_case("Asia/Tokyo") {
+        // 例外的に日本の固定オフセット +9 として扱う。日本に夏時間はなく、
+        // オフセットが変化しないため固定値でも「今日」の境界は安全に求められる。
+        return chrono::FixedOffset::east_opt(9 * 3600);
+    }
+    let hours = tz.strip_prefix("Etc/GMT")?.parse::<i32>().ok()?;
+    // POSIX 規約: Etc/GMT-N = UTC+N, Etc/GMT+N = UTC-N。
+    chrono::FixedOffset::east_opt(-hours * 3600)
+}
+
+/// 年齢判定の基準日（ローカル TZ での「今日」）を求める純粋関数。
+///
+/// 既知の固定オフセットが解決できない場合は現在どおり UTC の日付を返す
+/// （未対応 TZ で年齢境界を意図せず早めない fail-safe な既定）。
+pub fn today_for_policy(now: chrono::DateTime<chrono::Utc>, tz: Option<&str>) -> chrono::NaiveDate {
+    match policy_fixed_offset(tz) {
+        Some(offset) => now.with_timezone(&offset).date_naive(),
+        None => now.date_naive(),
+    }
+}
+
+fn age_validation_error_to_app_error(e: common::age::AgeValidationError) -> AppError {
+    match e {
+        common::age::AgeValidationError::UnderAge {
+            country,
+            age,
+            threshold,
+        } => AppError::Forbidden(format!(
+            "Age verification failed for {country}: age {age}, required {threshold}"
+        )),
+        common::age::AgeValidationError::InvalidBirthDate(msg) => {
+            AppError::BadRequest(format!("Invalid birth_date: {msg}"))
+        }
+        common::age::AgeValidationError::ConfigurationRequired => AppError::Forbidden(
+            "Age policy requires explicit operator configuration".to_string(),
+        ),
+        common::age::AgeValidationError::TrustedAttributeRequired => AppError::Forbidden(
+            "Trusted age attribute verification is required by policy, but no verified attribute input is available"
+                .to_string(),
+        ),
+    }
+}
+
+/// 設定由来の年齢ゲート（require_explicit_configuration / enforcement_mode）だけを判定する。
+///
+/// OIDC の callback / refresh は実際の生年月日を保持しないため、ここでは
+/// `is_age_allowed_with_policy` を「有効な大人の生年月日」で呼び出して設定エラー
+/// のみを取り出し、年齢数値の判定は `/auth/verify` の `validate_age` に委ねる。
+/// `is_age_allowed_with_policy` は設定チェックを最初に行うため、設定エラーの
+/// 検出は生年月日の内容に依存しない。すべてのセッション発行経路がこの
+/// 共通ゲートを通ることで、fail-closed 設定のバイパスを防ぐ。
+pub(crate) fn ensure_age_policy_configured(
+    policy: &common::age::AgePolicy,
+) -> Result<(), AppError> {
+    const CONFIG_PROBE_BIRTH_DATE: &str = "1900-01-01";
+    const CONFIG_PROBE_TODAY: chrono::NaiveDate =
+        chrono::NaiveDate::from_ymd_opt(2000, 1, 1).expect("valid probe date");
+
+    match common::age::is_age_allowed_with_policy(
+        policy,
+        CONFIG_PROBE_BIRTH_DATE,
+        "JP",
+        CONFIG_PROBE_TODAY,
+    ) {
+        Err(
+            e @ (common::age::AgeValidationError::ConfigurationRequired
+            | common::age::AgeValidationError::TrustedAttributeRequired),
+        ) => Err(age_validation_error_to_app_error(e)),
+        // Ok / UnderAge / InvalidBirthDate: 設定ゲートは通過している。
+        _ => Ok(()),
+    }
+}
+
+/// 基準時刻と TZ を明示した年齢検証（テストと `validate_age` の共通実装）。
+pub(crate) fn validate_age_at(
+    policy: &common::age::AgePolicy,
+    birth_date: &str,
+    country_code: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    tz: Option<&str>,
+) -> Result<(), AppError> {
+    let today = today_for_policy(now, tz);
+    common::age::is_age_allowed_with_policy(policy, birth_date, country_code, today)
+        .map_err(age_validation_error_to_app_error)
+}
+
 pub fn validate_age(
     policy: &common::age::AgePolicy,
     birth_date: &str,
     country_code: &str,
 ) -> Result<(), AppError> {
-    let today = chrono::Utc::now().date_naive();
-    common::age::is_age_allowed_with_policy(policy, birth_date, country_code, today).map_err(|e| {
-        match e {
-            common::age::AgeValidationError::UnderAge {
-                country,
-                age,
-                threshold,
-            } => AppError::Forbidden(format!(
-                "Age verification failed for {country}: age {age}, required {threshold}"
-            )),
-            common::age::AgeValidationError::InvalidBirthDate(msg) => {
-                AppError::BadRequest(format!("Invalid birth_date: {msg}"))
-            }
-            common::age::AgeValidationError::ConfigurationRequired => AppError::Forbidden(
-                "Age policy requires explicit operator configuration".to_string(),
-            ),
-            common::age::AgeValidationError::TrustedAttributeRequired => AppError::Forbidden(
-                "Trusted age attribute verification is required by policy, but no verified attribute input is available"
-                    .to_string(),
-            ),
-        }
-    })
+    let tz = std::env::var("TZ").ok();
+    validate_age_at(
+        policy,
+        birth_date,
+        country_code,
+        chrono::Utc::now(),
+        tz.as_deref(),
+    )
 }
 
 /// INT-02: JPEG XL / Markdown のみ許可
@@ -4164,18 +4242,17 @@ async fn export_revoked_subs(
     Ok(items)
 }
 
-/// R5-04: `GET /me/export`。認証済みのデータ主体が自身の全データを JSON で取得する。
+/// 12 表を単一のスナップショットで読み切る。
 ///
-/// レスポンス本文はログへ出力しない。ダウンロード用途のため
-/// `Content-Disposition: attachment` と `Cache-Control: no-store` を付与する。
-pub async fn me_export(
-    State(state): State<Arc<AppState>>,
-    claims: AuthClaims,
-) -> Result<Response, AppError> {
-    let sub = claims.sub.as_str();
-    let db = state.db.as_ref();
-
-    let export = DataExport {
+/// `db` には読み取りトランザクション内の接続（`BEGIN DEFERRED` 開始後）を渡す。
+/// 全クエリが同じトランザクションに所属することをデバッグビルドで検証する
+/// （`cargo test` では `debug_assert!` が有効）。
+async fn collect_export_snapshot(db: &Connection, sub: &str) -> Result<DataExport, AppError> {
+    debug_assert!(
+        !db.is_autocommit(),
+        "export queries must run inside a read transaction"
+    );
+    Ok(DataExport {
         version: 1,
         generated_at: chrono::Utc::now().to_rfc3339(),
         sub: sub.to_string(),
@@ -4191,7 +4268,40 @@ pub async fn me_export(
         governance_audit_log: export_governance_audit(db, sub).await?,
         refresh_tokens: export_refresh_tokens(db, sub).await?,
         revoked_subs: export_revoked_subs(db, sub).await?,
-    };
+    })
+}
+
+/// R5-04: `GET /me/export`。認証済みのデータ主体が自身の全データを JSON で取得する。
+///
+/// レスポンス本文はログへ出力しない。ダウンロード用途のため
+/// `Content-Disposition: attachment` と `Cache-Control: no-store` を付与する。
+pub async fn me_export(
+    State(state): State<Arc<AppState>>,
+    claims: AuthClaims,
+) -> Result<Response, AppError> {
+    let sub = claims.sub.as_str();
+    let db = state.db.as_ref();
+
+    // 12 表の読み取りを単一の読み取りトランザクション（libsql の
+    // `Connection::transaction()` = BEGIN DEFERRED）で包む。書き込みロックは
+    // 取得しない: 読み取り専用なので write_lock と競合させず、共有 Connection
+    // 上で別リクエストが書き込んでもエクスポート全体が単一時点の
+    // スナップショットになるようにする。
+    let tx = db
+        .transaction()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+
+    let export = collect_export_snapshot(&tx, sub).await?;
+
+    // 読み取りのみだが明示的にコミットして共有ロックを解放する。
+    // 途中のクエリがエラーを返して `?` で早期 return した場合、
+    // libsql::Transaction の Drop が内側の local::Transaction
+    // （DropBehavior::Rollback）を破棄し、ROLLBACK が実行される。
+    // したがって中途半端なトランザクションや共有ロックは残らない。
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
 
     let mut response = Json(export).into_response();
     let headers = response.headers_mut();

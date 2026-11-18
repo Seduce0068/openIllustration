@@ -6,8 +6,9 @@ use crate::{
     VerifyResponse, allowed_origins, build_content_query, build_mod_stats, build_router,
     ensure_user_not_banned, escape_like, parse_content_query, parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
-    process_report_conclusion, update_content_status, validate_age, validate_content_metadata,
-    validate_jwt_secret, validate_upload_content, validate_upload_content_type,
+    process_report_conclusion, today_for_policy, update_content_status, validate_age,
+    validate_age_at, validate_content_metadata, validate_jwt_secret, validate_upload_content,
+    validate_upload_content_type,
 };
 use async_trait::async_trait;
 use axum::{
@@ -1269,6 +1270,46 @@ async fn test_trusted_age_mode_blocks_oidc_callback_and_refresh() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     // 参照を残さないためのダミー利用（ mock / oidc は拒否経路では未使用）。
+    let _ = (oidc, mock);
+}
+
+/// 敵対的レビュー: 明示設定必須なのに未設定の場合、callback / refresh も 403 にする。
+/// 信頼属性必須モードだけで設定チェックしていた抜け穴の回帰テスト。
+#[tokio::test]
+async fn test_require_explicit_configuration_blocks_oidc_callback_and_refresh() {
+    let policy = common::age::AgePolicy {
+        require_explicit_configuration: true,
+        operator_configured: false,
+        ..common::age::AgePolicy::default()
+    };
+    let (app, oidc, mock, _db) = setup_app_with_oidc_and_age_policy(policy).await;
+
+    // callback は state を消費する前に共通ゲートで拒否される。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/callback?code=test-code&state=any-state")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // refresh もクッキーより先に同じ共通ゲートで拒否される。
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/refresh")
+                .header(header::COOKIE, "refresh_token=anything")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
     let _ = (oidc, mock);
 }
 
@@ -8262,6 +8303,48 @@ fn test_age_policy_fail_closed_modes() {
     assert!(matches!(err, AppError::Forbidden(_)));
 }
 
+/// TZ 解決の純粋関数テスト。UTC 16:00 は JST では翌日 01:00 になる。
+#[test]
+fn test_today_for_policy_uses_configured_local_timezone() {
+    let now = chrono::DateTime::parse_from_rfc3339("2024-01-01T16:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let utc_day = chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+    let jst_next_day = chrono::NaiveDate::from_ymd_opt(2024, 1, 2).unwrap();
+
+    assert_eq!(today_for_policy(now, None), utc_day);
+    assert_eq!(today_for_policy(now, Some("UTC")), utc_day);
+    assert_eq!(today_for_policy(now, Some("Etc/GMT+5")), utc_day);
+    assert_eq!(today_for_policy(now, Some("Etc/GMT-9")), jst_next_day);
+    assert_eq!(today_for_policy(now, Some(" Asia/Tokyo ")), jst_next_day);
+    assert_eq!(today_for_policy(now, Some("Asia/Tokyo")), jst_next_day);
+    // 未対応の TZ 名は現行どおり UTC にフォールバックする。
+    assert_eq!(today_for_policy(now, Some("America/New_York")), utc_day);
+}
+
+/// 年齢境界がローカルの「今日」で判定されることの回帰テスト。
+#[test]
+fn test_validate_age_at_uses_local_today_for_age_boundary() {
+    let now = chrono::DateTime::parse_from_rfc3339("2024-01-01T16:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let policy = common::age::AgePolicy::default(); // 既定の最低年齢は 21 歳
+
+    // 2003-01-02 生まれは JST の 2024-01-02 では 21 歳、UTC の 2024-01-01 では 20 歳。
+    assert!(
+        validate_age_at(&policy, "2003-01-02", "JP", now, Some("Asia/Tokyo")).is_ok(),
+        "JST の翌日基準では成人として受理されること"
+    );
+    assert!(
+        validate_age_at(&policy, "2003-01-02", "JP", now, Some("Etc/GMT-9")).is_ok(),
+        "Etc/GMT-9 (UTC+9) でも同じ境界になること"
+    );
+    assert!(matches!(
+        validate_age_at(&policy, "2003-01-02", "JP", now, Some("UTC")),
+        Err(AppError::Forbidden(_))
+    ));
+}
+
 #[tokio::test]
 async fn test_content_audit_rejects_invalid_cid() {
     let app = setup_app().await;
@@ -12865,6 +12948,151 @@ async fn me_export_includes_ban_until() {
     assert_eq!(
         users[0]["ban_until"], stored,
         "ban_until は SQLite datetime() 形式の文字列でエクスポートされる"
+    );
+}
+
+/// 一時 SQLite ファイル（ドロップ時に削除）。別接続からの書き込みを伴う
+/// スナップショット検証テストで、エクスポート用と書き込み用の
+/// 2 つの Connection を同じ DB に向けるために使う。
+struct TempDbPath(std::path::PathBuf);
+
+impl Drop for TempDbPath {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+        for suffix in ["-journal", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{}", self.0.display(), suffix));
+        }
+    }
+}
+
+/// 12 表の読み取りが単一の読み取りトランザクション内で行われることを検証する。
+/// `collect_export_snapshot` の `debug_assert!(!db.is_autocommit())` が
+/// `me_export` 経由で発火しないことを確認する（cargo test は debug ビルド）。
+#[tokio::test]
+async fn me_export_queries_run_inside_read_transaction() {
+    let app = setup_me_export_app().await;
+    let export = me_export_body(&app, "alice").await;
+    assert_eq!(export["version"], 1);
+
+    // `me_export` から `db.transaction()` / `tx.commit()` を外す mutation を
+    // かけると、autocommit 状態で collect_export_snapshot が呼ばれ、
+    // debug_assert! が失敗してこのテストが落ちる。
+}
+
+/// エクスポート実行中に別接続から BAN 書き込みを試みても、
+/// エクスポート結果が書き込み前の単一時点スナップショットになることを検証する。
+///
+/// 書き込み接続は `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を保持したまま
+/// エクスポートを実行する。未コミットの書き込みは別接続から見えないため、
+/// エクスポートは書き込み前の状態を一貫して返す。全12クエリが同じ読み取り
+/// トランザクションに所属することは
+/// `me_export_queries_run_inside_read_transaction` の debug_assert が担保する。
+#[tokio::test]
+async fn me_export_snapshot_consistent_under_concurrent_ban_write() {
+    static DB_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = TempDbPath(std::env::temp_dir().join(format!(
+        "oi-export-snapshot-{}-{}.db",
+        std::process::id(),
+        DB_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )));
+    let _ = std::fs::remove_file(&path.0);
+    let path_str = path.0.to_string_lossy().into_owned();
+
+    let db_export = Arc::new(
+        Builder::new_local(&path_str)
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    let db_writer = Builder::new_local(&path_str)
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db_export).await;
+    db_export
+        .execute(
+            "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('alice', X'0102', 0)",
+            (),
+        )
+        .await
+        .unwrap();
+
+    // 別接続で BAN を開始する（まだ COMMIT しない）。
+    db_writer.execute("BEGIN IMMEDIATE", ()).await.unwrap();
+    db_writer
+        .execute(
+            "UPDATE users SET is_banned = 1, ban_until = '2027-01-01T00:00:00Z' \
+             WHERE user_hash = 'alice'",
+            (),
+        )
+        .await
+        .unwrap();
+    db_writer
+        .execute(
+            "INSERT INTO governance_audit_log \
+             (log_id, action, target, actor_hash, reason, details) \
+             VALUES (99, 'BAN', 'alice', 'operator', 'ban reason', 'ban details')",
+            (),
+        )
+        .await
+        .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: db_export.clone(),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let app = build_router(shared_state);
+
+    let app_for_task = app.clone();
+    let export_task =
+        tokio::spawn(async move { me_export_request(&app_for_task, Some("alice")).await });
+
+    // エクスポート中、書き込み接続は BAN 更新と監査ログ挿入を未コミットのまま
+    // 保持する。トランザクション内の全クエリが同じスナップショットを読むことは
+    // me_export_queries_run_inside_read_transaction の debug_assert が担保する。
+    // ここでは、別接続の未コミット書き込みに惑わされず書き込み前の値が
+    // 一貫して返ることを検証する。
+    let response = export_task.await.unwrap();
+
+    // エクスポート完了後に書き込みを確定する。
+    db_writer.execute("COMMIT", ()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 10 * 1024 * 1024)
+        .await
+        .unwrap();
+    let export: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    // エクスポートは書き込み前のスナップショットを返す。
+    let users = export["users"].as_array().unwrap();
+    assert_eq!(users.len(), 1);
+    assert_eq!(
+        users[0]["is_banned"], false,
+        "BAN 更新前の users 行が見えること"
+    );
+    let audit = export["governance_audit_log"].as_array().unwrap();
+    assert!(
+        audit.iter().all(|row| row["action"] != "BAN"),
+        "BAN 更新前の governance_audit_log が見えること: {audit:?}"
     );
 }
 

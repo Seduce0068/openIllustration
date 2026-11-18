@@ -740,15 +740,10 @@ pub async fn callback(
         .as_ref()
         .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
 
-    // R1-17: 信頼属性必須モードでは、OIDC 経路に検証済み年齢属性の入力が無いため
-    // 年齢ゲートをバイパスできないよう fail-closed で拒否する。
-    if state.age_policy.enforcement_mode
-        == common::age::AgeEnforcementMode::TrustedAttributeRequired
-    {
-        return Err(AppError::Forbidden(
-            "trusted age attributes are not available on the OIDC path".to_string(),
-        ));
-    }
+    // R1-17: 年齢ゲートの設定チェックは全セッション発行経路で共通化する。
+    // 信頼属性必須モード／明示設定必須モードでは、OIDC 経路に検証済み年齢属性が
+    // 無いため fail-closed で拒否する（数値判定は auth_verify に委ねる）。
+    crate::ensure_age_policy_configured(&state.age_policy)?;
 
     let pending = oidc.take_pending(&query.state)?;
     let token = exchange_code(
@@ -852,14 +847,8 @@ pub async fn refresh(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
-    // R1-17: 信頼属性必須モードではリフレッシュも年齢判定を迂回できないようにする。
-    if state.age_policy.enforcement_mode
-        == common::age::AgeEnforcementMode::TrustedAttributeRequired
-    {
-        return Err(AppError::Forbidden(
-            "trusted age attributes are not available on the OIDC path".to_string(),
-        ));
-    }
+    // R1-17: refresh も callback と同じ共通ゲートを通し、年齢判定を迂回できないようにする。
+    crate::ensure_age_policy_configured(&state.age_policy)?;
     let token = headers
         .get(header::COOKIE)
         .and_then(|value| value.to_str().ok())
