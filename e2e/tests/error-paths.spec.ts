@@ -73,9 +73,11 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await page.getByTestId('export-my-data').click();
 
     // 実装文言（client/src/lib.rs L914）: "ネットワークエラーが発生しました。"
-    await expect(page.getByTestId('export-error'))
+    // 別の role=alert が増えても strict mode 違反にならないよう testid で特定する。
+    const exportAlert = page.getByTestId('export-error');
+    await expect(exportAlert)
       .toHaveText('ネットワークエラーが発生しました。', { timeout: 10000 });
-    await expect(page.getByRole('alert')).toHaveText('ネットワークエラーが発生しました。');
+    await expect(exportAlert).toHaveAttribute('role', 'alert');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
     expect(exportAborted).toBe(true);
   });
@@ -101,10 +103,10 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
     // 実装文言（client/src/lib.rs, Login の verify 失敗時）:
     //   "認証に失敗しました (HTTP 500)."
-    await expect(page.getByTestId('login-error'))
+    const loginAlert = page.getByTestId('login-error');
+    await expect(loginAlert)
       .toHaveText('認証に失敗しました (HTTP 500).', { timeout: 10000 });
-    await expect(page.getByRole('alert'))
-      .toHaveText('認証に失敗しました (HTTP 500).');
+    await expect(loginAlert).toHaveAttribute('role', 'alert');
     await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveCount(0);
   });
 

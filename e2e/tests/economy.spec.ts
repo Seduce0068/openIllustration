@@ -94,7 +94,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await page.getByRole('button', { name: 'BROWSE' }).click();
     
     // Hover over content to see the disabled support affordance
-    const contentArea = page.locator('.group').first();
+    // Tailwind の .group に依存せず、クライアント側の testid で特定する。
+    const contentArea = page.getByTestId('content-card').first();
     await expect(contentArea).toBeVisible({ timeout: 20000 });
     await contentArea.hover();
 

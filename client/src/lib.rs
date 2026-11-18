@@ -1248,7 +1248,7 @@ where
     let ct_toc = content_type.clone();
 
     view! {
-        <div class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
+        <div data-testid="content-card" class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
             <div class="flex justify-between items-start">
                 <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
                 <div class="flex gap-2">
