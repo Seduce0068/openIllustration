@@ -7871,6 +7871,70 @@ fn test_jpy_to_wei_bounds() {
     }
 }
 
+/// JPYC: DB 保存形式の wei 文字列から円建て金額を導出する境界。
+/// 10^18 スケールで割り切れる値のみ受理し、商が u64 を超える値は拒否する。
+#[test]
+fn test_amount_jpy_from_wei_bounds() {
+    const WEI_PER_JPY: u128 = 1_000_000_000_000_000_000;
+
+    // 成功: 1 円 = 10^18 wei。注文上限分の wei も上限の円へ戻る。
+    assert_eq!(
+        crate::payments::amount_jpy_from_wei(&WEI_PER_JPY.to_string()).unwrap(),
+        1u64
+    );
+    let max_wei = (u128::from(MAX_ORDER_JPY) * WEI_PER_JPY).to_string();
+    assert_eq!(
+        crate::payments::amount_jpy_from_wei(&max_wei).unwrap(),
+        MAX_ORDER_JPY
+    );
+    // この関数が検証するのは u64 範囲まで。注文上限の検証は呼び出し側の責務。
+    let u64_max_wei = (u128::from(u64::MAX) * WEI_PER_JPY).to_string();
+    assert_eq!(
+        crate::payments::amount_jpy_from_wei(&u64_max_wei).unwrap(),
+        u64::MAX
+    );
+
+    // 拒否: 商が u64 を超える (u64::MAX + 1 円分)。u128 の範囲内で検証する。
+    let over_u64_wei = (u128::from(u64::MAX) + 1) * WEI_PER_JPY;
+    let err = crate::payments::amount_jpy_from_wei(&over_u64_wei.to_string()).unwrap_err();
+    assert!(
+        matches!(&err, AppError::Internal(msg) if msg.contains("exceeds u64 JPY")),
+        "unexpected error for {over_u64_wei}: {err}"
+    );
+
+    // 拒否: 数値として解析できない文字列 (空文字・非数字・負数・小数・空白混入・16進表記)。
+    for invalid in ["", "abc", "-1", "1.5", " 1", "0x1"] {
+        let err = crate::payments::amount_jpy_from_wei(invalid).unwrap_err();
+        assert!(
+            matches!(&err, AppError::Internal(msg) if msg.contains("invalid amount_wei")),
+            "unexpected error for {invalid:?}: {err}"
+        );
+    }
+}
+
+/// JPYC: `checked_div(scale).filter(|jpy| jpy * scale == wei)` の回帰。
+/// 割り切れない wei を切り捨てて整数円として受理しないことを固定する。
+#[test]
+fn test_amount_jpy_from_wei_rejects_indivisible_wei() {
+    const WEI_PER_JPY: u128 = 1_000_000_000_000_000_000;
+
+    // 1 wei は 0 円、scale/2 は半円、scale±1 も整数円にならない。
+    // 注文上限分に 1 wei を足した値も同じく拒否する。
+    for wei in [
+        1u128,
+        WEI_PER_JPY / 2,
+        WEI_PER_JPY - 1,
+        WEI_PER_JPY + 1,
+        u128::from(MAX_ORDER_JPY) * WEI_PER_JPY + 1,
+    ] {
+        let err = crate::payments::amount_jpy_from_wei(&wei.to_string()).unwrap_err();
+        assert!(
+            matches!(&err, AppError::Internal(msg) if msg.contains("not a whole JPY amount")),
+            "wei {wei} must be rejected as indivisible: {err}"
+        );
+    }
+}
+
 /// JPYC: 対応 4 チェーンの必要確認数と、未対応チェーンの i64::MAX 分岐。
 #[test]
 fn test_required_confirmations_by_chain() {

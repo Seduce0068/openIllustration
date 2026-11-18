@@ -179,6 +179,9 @@ P2（品質・保守・プロダクト拡張）:
   doc-numbers の動的内訳・8進数対策、backup-rotate の先頭ゼロ拒否、AGENTS.md のclippy整合。
 - [x] テスト名の実在照合をゲート化（2026-11-18）: doc-numbers がドキュメント記載の
   Rustテスト名99件を実コードと照合。古い `test_jwt_require_kid_from_env` を検出し修正。
+- [x] fail-open・境界・アクセシビリティ（2026-11-18）: Chromeバージョン抽出ガード、
+  amount_jpy_from_wei境界テスト、監査パネル/ファイル選択/Moderation/upload のARIA、
+  backup-rotate のディレクトリ権限 fail-closed、運用記述を是正。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
