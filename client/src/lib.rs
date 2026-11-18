@@ -1800,21 +1800,39 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     }
 }
 
+/// `/transactions` の取得失敗時に表示する固定文言。
+/// レスポンス本文や生エラー（reqwest / serde_json）は機微情報を含み得るため出さない。
+const LEDGER_ERROR: &str = "取引履歴の取得に失敗しました。";
+
 #[component]
 fn Ledger(token: String) -> impl IntoView {
     let (txs, set_txs) = signal(Vec::<Transaction>::new());
+    // 取得失敗を明示する。失敗時は「NO_TRANSACTIONS_RECORDED」を出さず、
+    // 固定文言のみを表示する。
+    let (ledger_error, set_ledger_error) = signal(String::new());
 
     Effect::new(move |_| {
         let token = token.clone();
         spawn_local(async move {
-            let res = Request::get(&format!("{}/transactions", API_BASE))
+            // 再取得時に前回の失敗表示が残らないようにする。
+            set_ledger_error.set(String::new());
+            match Request::get(&format!("{}/transactions", API_BASE))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
-                .await;
-            if let Ok(response) = res
-                && let Ok(data) = response.json::<Vec<Transaction>>().await
+                .await
             {
-                set_txs.set(data);
+                Ok(response) if response.ok() => match response.json::<Vec<Transaction>>().await {
+                    Ok(data) => {
+                        set_txs.set(data);
+                        set_ledger_error.set(String::new());
+                    }
+                    Err(_) => {
+                        // JSON 解析失敗: 詳細は出さず固定文言のみ表示する。
+                        set_ledger_error.set(LEDGER_ERROR.to_string());
+                    }
+                },
+                // HTTP エラー・ネットワークエラー: ステータスや本文、生エラーは出さない。
+                _ => set_ledger_error.set(LEDGER_ERROR.to_string()),
             }
         });
     });
@@ -1825,6 +1843,11 @@ fn Ledger(token: String) -> impl IntoView {
             <div class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
                 "LEGACY MOCK RECORDS — Written by the disabled mock support API. These entries are not proof of payment; JPYC settlement is not implemented."
             </div>
+            <Show when=move || !ledger_error.get().is_empty() fallback=|| ()>
+                <p role="alert" data-testid="ledger-error" class="text-xs text-red-500 mb-4">
+                    {move || ledger_error.get()}
+                </p>
+            </Show>
             <div class="border border-white/10 overflow-hidden">
                 <table class="w-full text-left text-[10px] font-mono">
                     <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
@@ -1856,7 +1879,7 @@ fn Ledger(token: String) -> impl IntoView {
                         />
                     </tbody>
                 </table>
-                <Show when=move || txs.get().is_empty() fallback=|| ()>
+                <Show when=move || txs.get().is_empty() && ledger_error.get().is_empty() fallback=|| ()>
                     <div class="p-12 text-center text-gray-600 italic">"NO_TRANSACTIONS_RECORDED"</div>
                 </Show>
             </div>

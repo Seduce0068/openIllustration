@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type Route } from '@playwright/test';
 import * as crypto from 'crypto';
 
 test.describe('Support & Ledger Flow (ECO-01)', () => {
@@ -116,5 +116,58 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.locator('text=Record_Hash')).toBeVisible();
     await expect(page.locator('text=500 JPYC')).toBeVisible();
     await expect(page.locator('text=mock_tx_hash_789012345678')).toBeVisible();
+  });
+
+  type TransactionsHandler = (route: Route) => Promise<void>;
+
+  // 台帳の取得失敗ケース用の共通セットアップ。一覧は空にしてカード依存を排除し、
+  // LEDGER タブを開いた時点で /transactions が発行されるようにする。
+  async function setupLedgerFailurePage(page: Page, handleTransactions: TransactionsHandler) {
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' })
+      });
+    });
+    await page.route('**/content', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/transactions', handleTransactions);
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'LEDGER' }).click();
+
+    return {
+      error: page.getByTestId('ledger-error'),
+      noTransactions: page.getByText('NO_TRANSACTIONS_RECORDED'),
+    };
+  }
+
+  test('ledger shows a fixed error and no empty-state on HTTP 500', async ({ page }) => {
+    const { error, noTransactions } = await setupLedgerFailurePage(page, async route => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'ledger unavailable' }),
+      });
+    });
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(error).toContainText('取引履歴の取得に失敗しました。');
+    await expect(noTransactions).toHaveCount(0);
+  });
+
+  test('ledger shows a fixed error and no empty-state on network abort', async ({ page }) => {
+    const { error, noTransactions } = await setupLedgerFailurePage(page, async route => {
+      await route.abort();
+    });
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(error).toContainText('取引履歴の取得に失敗しました。');
+    await expect(noTransactions).toHaveCount(0);
   });
 });

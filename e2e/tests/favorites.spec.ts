@@ -396,4 +396,55 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await expect(toggle).toBeEnabled();
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   });
+
+  // 失敗→再トグルで旧エラーが消えることを検証する独立 test。
+  // 既存のリクエスト回数完全一致アサーション（2回/8回）は壊さない。
+  test('re-toggle after a failure clears the stale favorite-error', async ({ page }) => {
+    let releaseSecondResponse = (): void => {};
+    const secondResponseGate = new Promise<void>(resolve => {
+      releaseSecondResponse = resolve;
+    });
+    let attempt = 0;
+
+    const { favoriteCalls, contentRequests, toggle, card } =
+      await setupFavoriteGuardPage(page, async (route, fixture) => {
+        attempt += 1;
+        if (attempt === 1) {
+          await route.fulfill({
+            status: 500,
+            contentType: 'application/json',
+            body: JSON.stringify({ error: 'favorite update failed' }),
+          });
+          return;
+        }
+        // 2回目はレスポンスを保留し、再トグル開始時点で旧エラーが消えることを確認する。
+        await secondResponseGate;
+        fixture.isFavorite = route.request().method() === 'POST';
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ is_favorite: fixture.isFavorite }),
+        });
+      });
+
+    const error = card.getByTestId('favorite-error');
+    await toggle.click();
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(error).toContainText('Failed to update favorite (HTTP 500).');
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+
+    // 再トグル: レスポンスが返る前でも toggle_favorite 先頭のクリアで旧エラーが消える。
+    await toggle.click();
+    await expect(error).toHaveCount(0);
+    await expect.poll(() => favoriteCalls).toEqual([
+      { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
+      { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
+    ]);
+    // 失敗トグルでは再取得しない（2回目はまだレスポンス保留中）。
+    await expect.poll(() => contentRequests.length).toBe(1);
+
+    releaseSecondResponse();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  });
 });
