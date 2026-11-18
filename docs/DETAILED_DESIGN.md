@@ -46,7 +46,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/mod/reports` | Bearer JWT | `Reported` コンテンツの通報一覧 |
 | POST | `/mod/vote` | Bearer JWT | 投票署名検証、投票登録、閾値判定 |
 | POST | `/mod/reports/{report_id}/finalize` | Bearer JWT | 期限到達済み通報を集計確定（冪等）。期限内・確定済みは変更しない |
-| POST | `/mod/operators/{user_hash}/ban` | Bearer JWT | 運用者特権。`MODERATION_OPERATOR_HASHES` 登録者のみBAN可能。根拠・期間必須、`governance_audit_log` に記録 |
+| POST | `/mod/operators/{user_hash}/ban` | Bearer JWT | 運用者特権。`MODERATION_OPERATOR_HASHES` 登録者のみBAN可能。根拠必須。`duration_days`（1〜3650、null=無期限）から期限を設定し `governance_audit_log` に記録 |
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
 | GET | `/mod/stats` | Bearer JWT + 運用者 | 認証内集計。`AuthClaims` 必須かつ `require_moderation_operator`（未設定・未登録・BAN済みは403）。`generated_at` / `totals` / `monthly` のみをホワイトリスト方式で返し、CID・reason・`user_hash` は返さない |
@@ -251,7 +251,12 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
 - 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
 - 運用者はプロジェクト側で固定せず、各デプロイが `MODERATION_OPERATOR_HASHES` で設定する。未設定・未登録・BAN済みの主体は BAN/UNBAN/UNPIN を拒否する。BAN
-  は根拠と期間（日数）を必須とし、UNPIN は判断と理由のみを記録する（実 Pinata ピン解除は手動）。これらは `governance_audit_log` に保存するが、DEC-04 の第三者検証可能な監査ではない。
+  は根拠を必須とし、リクエストの `duration_days`（1〜3650日、省略または null は無期限）から期限 `users.ban_until` を設定する。
+  期限は SQLite `datetime()` 形式の TEXT（例 `2026-12-18 08:52:18`）で保存し、`UNBAN` で NULL に戻す。
+  利用可否の判定は `is_banned = TRUE` かつ（`ban_until IS NULL` または `ban_until > datetime('now')`）のときのみ拒否する。
+  期限切れでも `is_banned` フラグは TRUE のまま残り、BAN の履歴として扱う（判定上のみ解除される）。
+  UNPIN は判断と理由のみを記録する（実 Pinata ピン解除は手動）。これらは `governance_audit_log` に保存するが、
+  DEC-04 の第三者検証可能な監査ではない。
 - 期限到達は起動時のバックグラウンドワーカーが自動検知し、`MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒、30〜3600秒）ごとに `finalize_due_reports` を実行する。
   停止シグナルでワーカーも終了する。手動の `POST /mod/reports/{report_id}/finalize` も残しており、両者は冪等。手動 finalize は認証済みユーザーなら誰でも呼べるが、
   `process_report_conclusion` が期限到達・`Reported` 状態・未確定を検査し、投票結果を改変できないため、集計の確定という効果しか持たない（BAN/UNBAN/UNPIN
@@ -279,7 +284,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 |Table|主な列|用途・制約|
 |---|---|---|
-|`users`|`user_hash`, `public_key_der`, `is_banned`, `banned_at`|利用者識別・公開鍵・BAN状態|
+|`users`|`user_hash`, `public_key_der`, `is_banned`, `banned_at`, `ban_until`|利用者識別・公開鍵・BAN状態。`ban_until` は期限（NULL=無期限、期限切れでも `is_banned` は履歴として残る）|
 |`contents`|`cid`, `type`, `owner_hash`, `checksum`, `status`, `price`, `created_at`, `title`, `description`, `tags`|CIDを主キーとするコンテンツメタデータ。メタデータ3列は migration 011 で追加、`tags` はカンマ区切りで `idx_contents_tags` インデックス付き|
 |`favorites`|`id`, `user_hash`, `cid`, `created_at`|お気に入り。`(user_hash, cid)` に一意インデックス。`users(user_hash)` / `contents(cid)` へ `ON DELETE CASCADE` のFK|
 |`reports`|`report_id`, `target_cid`, `reason`, `created_at`, `deadline_at`, `concluded_at`, `appeal_of`|通報記録（7日期限・確定時刻・異議の連鎖）|
@@ -290,7 +295,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` も一意|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `012_favorites.sql`）としてバージョン管理され、起動時に
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `013_ban_until.sql`）としてバージョン管理され、起動時に
 `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
 適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
 migration 011 は `contents` へ `title` / `description` / `tags`（いずれも `TEXT NOT NULL DEFAULT ''`）を追加し、
@@ -300,6 +305,8 @@ migration 012 は `favorites` テーブルを作成する。`user_hash` は `use
 `contents(cid)` を参照し、いずれも `ON DELETE CASCADE`。一意性は `idx_favorites_user_cid`
 （`UNIQUE(user_hash, cid)`）で担保し、本人分の新着順参照用に
 `idx_favorites_user_created`（`user_hash, created_at DESC`）を作成する。
+migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_until` インデックスを作成する。既存行は NULL（無期限）として
+読み出され、後方互換。期限切れ判定は判定側の時刻比較で行い、`is_banned` フラグ自体は履歴として保持する。
 ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ## 6. 監査ハッシュ

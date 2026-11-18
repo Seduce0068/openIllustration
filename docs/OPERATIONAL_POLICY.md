@@ -52,7 +52,10 @@ generated:
   現状は単一ライター運用を前提とする。
 - 運用者はプロジェクト側で固定せず、各デプロイの所有者（個人・企業いずれでも可）が `MODERATION_OPERATOR_HASHES` に JPKI 由来の user_hash を設定する。未設定なら
   BAN/UNBAN/UNPIN はすべて拒否される。本番では実 JPKI 由来の hash のみ設定し、`ALLOW_MOCK_AUTH=1` と併用しない。
-- BAN は根拠と期間を必須とし、UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。これは運用ログであり第三者検証可能な監査ではない。
+- BAN は根拠を必須とし、`duration_days` で期間（1〜3650日、省略/null は無期限）を指定する。期限は `users.ban_until` へ SQLite
+  `datetime()` 形式の TEXT で保存し、UNBAN で NULL に戻す。期限切れの BAN は判定上のみ無効化され、`is_banned` フラグは履歴として
+  TRUE のまま残す（自動でフラグを落とさない）。UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。
+  これは運用ログであり第三者検証可能な監査ではない。
   投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。

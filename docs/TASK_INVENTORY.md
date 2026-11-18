@@ -136,6 +136,10 @@ status: current
   `Approved` 復帰、30日以内の異議、投稿者除外、期限切れ投票拒否を実装。回帰テスト7件を追加、既存3件を適応。
 - [対応済み] **ADR-0004 の運用者とBAN/ピン解除監査**: `MODERATION_OPERATOR_HASHES` でセルフホストごとに運用者を設定（未設定なら特権操作を全拒否）。
   BAN（根拠・期間必須）/UNBAN/UNPIN を `governance_audit_log` に記録。
+- [対応済み 2026-11-18] **BAN 期限（`ban_until`）**: migration 013 で `users.ban_until` を追加し、`ban_user` が `duration_days`
+  （1〜3650日、null=無期限）から期限を設定。`ensure_user_not_banned` は期限切れを判定上のみ解除し、`is_banned` は履歴として保持。
+  `unban` で NULL へクリアし、`/me/export` の users 行にも含める。期限設定・期限切れ・未来期限・無期限回帰・UNBAN・エクスポートの
+  6テストを追加（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)、[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) に反映）。
 - [対応済み] **期限到達の自動検知**: 起動時のバックグラウンドワーカーが `MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒・30〜3600秒）ごとに期限超過通報を走査して確定。
   停止シグナルで終了し、手動 finalize と冪等。手動 finalize の権限設計（認証済みなら誰でも可、投票結果は改変不可）を設計書へ明記。
 - [対応済み] BAN 済みユーザーの通報扱いを ADR-0004 へ明記: 投票資格は BAN で喪失するが、通報は有害コンテンツ発見の経路として許可する（現行実装と整合）。
