@@ -47,7 +47,7 @@ generated:
 
 ```bash
 cargo fmt --check
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
 cargo test
 cargo build -p client --target wasm32-unknown-unknown --locked
 ```

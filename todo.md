@@ -175,6 +175,8 @@ P2（品質・保守・プロダクト拡張）:
   設計・テスト仕様へ反映し、FORENSIC_TIMELINEの表示順E2Eを追加（46件）。
 - [x] ドキュメント数値の自動照合（2026-11-18）: scripts/test-doc-numbers.sh を追加し
   E2E件数・内訳・doctor check数・migration範囲を CI ゲート化。8進数解釈バグを修正。
+- [x] ゲートと設定判定の整合（2026-11-18）: EXPOSE_INTERNAL_ERRORS の true 解釈、
+  doc-numbers の動的内訳・8進数対策、backup-rotate の先頭ゼロ拒否、AGENTS.md のclippy整合。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

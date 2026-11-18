@@ -48,8 +48,8 @@ assert_publishable() {
 	fi
 }
 
-if ! [[ "$retention_days" =~ ^[0-9]+$ && "$min_keep" =~ ^[0-9]+$ ]]; then
-	echo "RETENTION_DAYS and MIN_KEEP must be non-negative integers" >&2
+if ! [[ "$retention_days" =~ ^(0|[1-9][0-9]*)$ && "$min_keep" =~ ^(0|[1-9][0-9]*)$ ]]; then
+	echo "RETENTION_DAYS and MIN_KEEP must be non-negative integers without leading zeros" >&2
 	exit 1
 fi
 if ((min_keep < 1)); then

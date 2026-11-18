@@ -79,6 +79,8 @@ echo "=== 設定不整合の fail-closed ==="
 expect_failure "no recipient" env -u BACKUP_GPG_RECIPIENT -u ALLOW_UNENCRYPTED_BACKUP "$script"
 expect_failure "offsite plaintext refused" env -u BACKUP_GPG_RECIPIENT OFFSITE_COPY_CMD=/bin/true OFFSITE_DEST=/tmp "$script"
 expect_failure "invalid retention" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=abc "$script"
+expect_failure "octal retention (08)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=08 "$script"
+expect_failure "octal min_keep (08)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=08 "$script"
 expect_failure "zero min_keep" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=0 "$script"
 expect_failure "alert without dest" env BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD=/bin/true "$script"
 expect_failure "missing gpg" env BACKUP_GPG_RECIPIENT=test GPG_BIN=/no/such/gpg "$script"
@@ -88,6 +90,9 @@ echo "=== 正常系 ==="
 expect_success "plain backup (opt-out)" env -u BACKUP_GPG_RECIPIENT ALLOW_UNENCRYPTED_BACKUP=1 "$script"
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 expect_success "encrypted backup" env BACKUP_GPG_RECIPIENT=test "$script"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+# デフォルト値と同じ 30/3 を明示指定しても受け付けられること（先頭ゼロ除去の回帰防止）。
+expect_success "explicit retention/min_keep (30/3)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=30 MIN_KEEP=3 "$script"
 
 # オフサイト保存の成功と失敗。
 cat >"${work}/copy.sh" <<'EOF'
