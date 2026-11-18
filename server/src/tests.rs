@@ -12231,3 +12231,147 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
     assert_cookie(Some("1"), true);
     assert_cookie(Some(""), true);
 }
+
+// ---- proptest: 入力境界と仕様不変条件の網羅 ----
+//
+// fuzz_test.rs の年齢プロパティに続き、CID 検証・金額変換・通報理由要約の
+// 「任意入力で panic しない」ことと「仕様から導ける独立な判定」を検証する。
+// 実行時間を抑えるため各プロパティの cases は 128 に設定している。
+mod property_tests {
+    use crate::payments::{MAX_ORDER_JPY, jpy_to_wei};
+    use proptest::prelude::*;
+
+    /// CIDv0 の base58btc アルファベット（仕様上の定義をテスト側で持つ）。
+    const BASE58BTC: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    /// CIDv1 の base32lower アルファベット（パディング無し）。
+    const BASE32LOWER: &[u8] = b"abcdefghijklmnopqrstuvwxyz234567";
+    const KNOWN_CIDV0: &str = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5AXQfD";
+    const KNOWN_CIDV1: &str = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// 任意の u64 で panic せず、0 と上限超えは Err、
+        /// 範囲内は 10^18 スケールの独立参照値と一致する。
+        #[test]
+        fn prop_jpy_to_wei_boundaries_and_reference(
+            amount in prop_oneof![
+                Just(0u64),
+                Just(MAX_ORDER_JPY),
+                Just(MAX_ORDER_JPY + 1),
+                Just(u64::MAX),
+                any::<u64>(),
+            ]
+        ) {
+            let result = jpy_to_wei(amount);
+            if amount == 0 || amount > MAX_ORDER_JPY {
+                prop_assert!(result.is_err(), "amount {amount} must be rejected");
+            } else {
+                // ADR-0003: JPYC は 10^18 最小単位。範囲内なら u128 で溢れない。
+                const WEI_PER_JPY: u128 = 1_000_000_000_000_000_000;
+                let expected = (u128::from(amount) * WEI_PER_JPY).to_string();
+                prop_assert_eq!(result.expect("in-range amount"), expected);
+            }
+        }
+
+        /// 任意の文字列（ASCII／Unicode 混入・長さ境界を含む）で panic せず、
+        /// 受理された値は CID 仕様の文字集合と形式を満たす。
+        #[test]
+        fn prop_is_valid_cid_only_accepts_canonical_ascii(
+            input in prop_oneof![
+                Just(KNOWN_CIDV0.to_string()),
+                Just(KNOWN_CIDV1.to_string()),
+                Just(String::new()),
+                Just("🍣".repeat(50)),
+                Just("a".repeat(129)),
+                any::<String>(),
+            ]
+        ) {
+            let accepted = common::is_valid_cid(&input);
+
+            // 空・非 ASCII・128 バイト超は実装の上限ガードで必ず拒否される。
+            if input.is_empty() || !input.is_ascii() || input.len() > 128 {
+                prop_assert!(
+                    !accepted,
+                    "empty / non-ASCII / oversized input must be rejected: {input:?}"
+                );
+            }
+
+            // 受理側の独立 oracle: v0 は Qm + base58btc 44 文字（計 46）、
+            // v1 は b + base32lower（1 文字以上）。それ以外は受理しない。
+            if accepted {
+                let v0 = input.len() == 46
+                    && input.starts_with("Qm")
+                    && input
+                        .as_bytes()[2..]
+                        .iter()
+                        .all(|byte| BASE58BTC.contains(byte));
+                let v1 = input.starts_with('b')
+                    && input.len() > 1
+                    && input
+                        .as_bytes()[1..]
+                        .iter()
+                        .all(|byte| BASE32LOWER.contains(byte));
+                prop_assert!(v0 || v1, "unexpected accepted CID shape: {input:?}");
+            }
+
+            // 既知の正規 CID を落とす always-false 実装を検出する。
+            if input == KNOWN_CIDV0 || input == KNOWN_CIDV1 {
+                prop_assert!(accepted, "known valid CID must be accepted: {input:?}");
+            }
+        }
+
+        /// 任意の Unicode 文字列で panic せず、結果は 120 Unicode 文字以下、
+        /// 空文字の対応と冪等性を保つ。
+        #[test]
+        fn prop_summarize_reason_is_bounded_and_idempotent(input in any::<String>()) {
+            let summarized = common::summarize_reason(&input);
+            prop_assert!(
+                summarized.chars().count() <= 120,
+                "summary must fit in 120 chars: {input:?}"
+            );
+            prop_assert_eq!(
+                summarized.is_empty(),
+                input.is_empty(),
+                "emptiness must be preserved: {:?}",
+                input
+            );
+            prop_assert_eq!(
+                common::summarize_reason(&summarized),
+                summarized,
+                "summarization must be idempotent: {:?}",
+                input
+            );
+        }
+
+        /// PII を含まない文字列は 120 文字まで等価に保たれ、
+        /// 超過時は先頭 119 文字 + `…` に切り詰められる（Unicode 境界を守る）。
+        #[test]
+        fn prop_summarize_reason_truncates_safe_text_at_char_boundary(
+            chars in prop::collection::vec(
+                prop_oneof![
+                    Just('あ'),
+                    Just('知'),
+                    Just('A'),
+                    Just('b'),
+                    Just(' '),
+                    Just('\n'),
+                    Just('🍣'),
+                    Just('。'),
+                ],
+                0..=160usize
+            )
+        ) {
+            // '@' / ':' / '.' / 数字を含まないため PII 置換は発生しない。
+            let input: String = chars.into_iter().collect();
+            let expected = if input.chars().count() <= 120 {
+                input.clone()
+            } else {
+                let mut truncated: String = input.chars().take(119).collect();
+                truncated.push('…');
+                truncated
+            };
+            prop_assert_eq!(common::summarize_reason(&input), expected);
+        }
+    }
+}

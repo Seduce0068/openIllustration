@@ -31,7 +31,6 @@ rsa = { version = "0.10", features = ["pkcs1v15"] }
 tokio = { version = "1.43.0", features = ["full"] }
 tower = { version = "0.5.2", features = ["full"] }
 uuid = { version = "1.23.1", features = ["v4"] }
-proptest = "1.12"
 x509-parser = "0.18"
 base64 = "0.23"
 tower-http = { version = "0.7", features = ["cors"] }
@@ -46,6 +45,9 @@ coins-bip32 = "0.17"
 governor = "0.10.4"
 
 [dev-dependencies]
+# proptest はテスト専用（fuzz_test.rs / tests.rs の property test）なので
+# dev-dependencies に置く。通常依存にすると cargo の unused dependency 警告が出る。
+proptest = "1.12"
 rcgen = "0.14"
 tokio-test = "0.4.5"
 rsa = { version = "0.10", features = ["pkcs1v15", "getrandom"] }
