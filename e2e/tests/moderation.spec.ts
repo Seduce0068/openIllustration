@@ -26,6 +26,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const voteForbiddenText = '投票に失敗しました (HTTP 403).';
   const voteNetworkErrorText = 'Network error submitting vote.';
 
+  // client/src/lib.rs の reports_error_message / REPORTS_PARSE_ERROR を grep して確定した
+  // 固定文言。Vote と同様に、サーバー本文や生エラーは画面へ出さない契約を検証する。
+  const reportsHttpErrorText = (status: number) => `投票一覧の取得に失敗しました (HTTP ${status}).`;
+  const reportsNetworkErrorText = 'Network error loading reports.';
+
   // 投票フィードバック用の共通セットアップ。モック認証でログインし、
   // 投票キューに1件（report_id=42）を表示した状態まで進める。
   const openModerationWithReport = async (page: Page) => {
@@ -53,6 +58,27 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'MODERATION' }).click();
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
+  };
+
+  // 投票一覧の取得失敗を検証するため、認証だけモックして MODERATION 画面へ進む。
+  // /mod/reports の失敗モックは呼び出し側が page.goto 前に登録する。
+  const openModeration = async (page: Page) => {
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'juror_hash', token: 'mock_jwt_token' })
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
   };
 
   test('GOV-01: should report content and transition to Reported status', async ({ page }) => {
@@ -419,5 +445,47 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
       { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
     ]);
+  });
+
+  test('REPORTS-ERR-01: /mod/reports が 500 のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {
+    const reportRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/reports', async route => {
+      reportRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await openModeration(page);
+
+    const reportsError = page.getByTestId('reports-error');
+    await expect(reportsError).toBeVisible({ timeout: 10000 });
+    await expect(reportsError).toHaveAttribute('role', 'alert');
+    await expect(reportsError).toHaveText(reportsHttpErrorText(500));
+    await expect(reportsError).toContainText('HTTP 500');
+    await expect(reportsError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    // 取得失敗を「保留投票なし」と誤表示しない。
+    await expect(page.getByText('NO_PENDING_VOTES')).toHaveCount(0);
+    expect(reportRequests).toEqual([
+      { method: 'GET', path: '/mod/reports', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('REPORTS-ERR-02: /mod/reports が network error のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {
+    await page.route('**/mod/reports', async route => {
+      await route.abort();
+    });
+    await openModeration(page);
+
+    const reportsError = page.getByTestId('reports-error');
+    await expect(reportsError).toBeVisible({ timeout: 10000 });
+    await expect(reportsError).toHaveAttribute('role', 'alert');
+    await expect(reportsError).toHaveText(reportsNetworkErrorText);
+    await expect(page.getByText('NO_PENDING_VOTES')).toHaveCount(0);
   });
 });

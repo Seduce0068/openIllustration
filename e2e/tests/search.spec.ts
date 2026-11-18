@@ -93,10 +93,11 @@ test.describe('Content search and filtering (R5-01)', () => {
     await expect(page.getByText('Cyberpunk city sketch')).toBeVisible();
     await expect(page.getByText('#neon')).toBeVisible();
 
-    // 検索語を入力すると q 付きで再取得される
-    await page.getByLabel('Search').fill('Neon');
+    // 1文字ずつ入力してもデバウンスで1回の GET にまとまること。
+    // 初期表示の q=null と合わせ、q 付きリクエストは最終語 'Neon' の1件だけ。
+    await page.getByLabel('Search').pressSequentially('Neon', { delay: 20 });
 
-    await expect.poll(() => seenQueries).toContain('Neon');
+    await expect.poll(() => seenQueries).toEqual([null, 'Neon']);
     await expect(page.getByText('Neon Alley')).toBeVisible();
     await expect(page.getByText('Moonlit Harbor')).toHaveCount(0);
   });

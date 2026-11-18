@@ -202,6 +202,9 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     // フィルタ解除後、キーボード（Enter）でもトグルできること。
     await page.getByLabel('Search').fill('');
+    // デバウンス後の検索リクエストが飛ぶのを待ってから解除する。
+    // 待たないと解除側の即時 GET にまとまり、リクエスト数が実行タイミング依存になる。
+    await expect.poll(() => contentRequests).toHaveLength(6);
     await page.getByLabel('Favorites only').uncheck();
     await expect(page.getByText('Fav Story')).toBeVisible();
     await card('Fav Story').getByRole('button', { name: 'Add to favorites' }).focus();
@@ -227,6 +230,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     // 一連の操作で飛んだ一覧リクエストはちょうど8件だけ（失敗トグルでは再取得しない）。
     // 配列を完全一致で検証し、想定外の再フェッチ・クエリ混入を検出する。
+    // 検索語クリア→デバウンス取得→お気に入り解除→Enter トグルの順で
+    // 1操作1回の GET になるよう、途中の取得を明示的に待っている。
     await expect.poll(() => contentRequests).toEqual([
       { q: null, tag: null, type: null, favorite_only: null },
       { q: null, tag: null, type: null, favorite_only: null },
