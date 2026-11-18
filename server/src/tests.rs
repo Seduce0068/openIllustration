@@ -7570,6 +7570,37 @@ fn test_jwt_rejects_algorithm_confusion() {
     }
 }
 
+/// RS256: 公開 PEM を HMAC 秘密として署名した HS256 トークンを、
+/// `decode()` の alg 不一致分岐で直接拒否する。
+/// 既存の混同テストは RSA 署名鍵で HS256 署名しようとして署名自体が失敗し、
+/// `decode()` の分岐を通っていなかったため、ここで明示的に通す。
+#[test]
+fn test_jwt_rejects_hs256_token_signed_with_public_pem() {
+    let pem = test_rsa_private_pem();
+    let public_pem = test_rsa_public_pem(&pem);
+    let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    let claims = Claims {
+        sub: "attacker".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+
+    // 公開鍵は誰でも入手できるため、HMAC 秘密として使える。
+    let mut header = Header::new(Algorithm::HS256);
+    header.kid = Some(keys.header().kid.clone().expect("RS256 header kid"));
+    let hmac_key = EncodingKey::from_secret(public_pem.as_bytes()).expect("HS256 encoding key");
+    let token = encode(&header, &claims, &hmac_key).expect("sign HS256 with public PEM");
+
+    let error = keys
+        .decode::<Claims>(&token)
+        .expect_err("RS256 verifier must reject an HS256 token");
+    assert!(
+        error.contains("unexpected JWT algorithm"),
+        "the explicit algorithm check must reject before key selection: {error}"
+    );
+}
+
 /// RS256: 1024 bit の鍵は鍵長要件を満たさず拒否する。
 #[test]
 fn test_jwt_rejects_short_rsa_key() {
@@ -7607,6 +7638,190 @@ fn test_jwt_keys_from_env_prefers_rsa() {
         .is_err(),
         "invalid RSA key must not be silently ignored when JWT_SECRET is present"
     );
+}
+
+/// `JWT_RSA_VERIFICATION_KEYS`（`jwt_keys_from_env` の verification_keys_json）
+/// に旧公開鍵を登録すると、旧 kid 付きトークンが検証できる。
+#[test]
+fn test_jwt_keys_from_env_verification_keys_json_accepts_old_kid() {
+    let new_pem = test_rsa_private_pem();
+    let old_pem = test_rsa_private_pem();
+    let old_public = test_rsa_public_pem(&old_pem);
+    // 実コードと同じ kid -> SPKI 公開鍵 PEM の JSON オブジェクト。
+    let json = json!({ "legacy-key": old_public }).to_string();
+
+    let keys = crate::jwt_keys_from_env(Some(new_pem), None, Some(&json), false)
+        .expect("register old public key from JSON");
+    assert_eq!(keys.algorithm_name(), "RS256");
+
+    let old_keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&old_pem).expect("old key");
+    let claims = Claims {
+        sub: "rotated_user".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: None,
+    };
+    let mut header = old_keys.header();
+    header.kid = Some("legacy-key".to_string());
+    let token = encode(&header, &claims, old_keys.encoding_key()).expect("sign with old key");
+    let decoded: Claims = keys.decode(&token).expect("old kid must verify").claims;
+    assert_eq!(decoded.sub, "rotated_user");
+}
+
+/// verification_keys_json: 不正な JSON / オブジェクト以外は起動時に拒否する。
+#[test]
+fn test_jwt_keys_from_env_verification_keys_json_rejects_invalid_json() {
+    let error =
+        crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some("{not-json"), false)
+            .err()
+            .expect("malformed JSON must be rejected");
+    assert!(
+        error.contains("must be a kid->PEM JSON object"),
+        "got: {error}"
+    );
+
+    let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some("[]"), false)
+        .err()
+        .expect("non-object JSON must be rejected");
+    assert!(
+        error.contains("must be a kid->PEM JSON object"),
+        "got: {error}"
+    );
+}
+
+/// verification_keys_json: 空 kid と 129 文字 kid は拒否する（1..=128）。
+#[test]
+fn test_jwt_keys_from_env_verification_keys_json_rejects_invalid_kid() {
+    let public_pem = test_rsa_public_pem(&test_rsa_private_pem());
+    for (kid, label) in [(String::new(), "empty"), ("k".repeat(129), "too long")] {
+        let map = std::collections::HashMap::from([(kid, public_pem.clone())]);
+        let json = serde_json::to_string(&map).expect("serialize kid->PEM map");
+        let error =
+            crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
+                .err()
+                .expect("invalid kid must be rejected");
+        assert!(
+            error.contains("kid must be 1..=128 characters"),
+            "{label}: {error}"
+        );
+    }
+}
+
+/// verification_keys_json: 不正な PEM は kid 付きエラーで拒否する。
+#[test]
+fn test_jwt_keys_from_env_verification_keys_json_rejects_invalid_pem() {
+    let json = json!({ "bad-pem": "not a PEM" }).to_string();
+    let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
+        .err()
+        .expect("invalid PEM must be rejected");
+    assert!(
+        error.contains("JWT_RSA_VERIFICATION_KEYS[bad-pem]"),
+        "{error}"
+    );
+    assert!(error.contains("invalid RSA public key PEM"), "{error}");
+}
+
+/// verification_keys_json は RS256 専用。HS256 選択時は起動を拒否する。
+#[test]
+fn test_jwt_keys_from_env_rejects_verification_keys_json_with_hmac() {
+    let error =
+        crate::jwt_keys_from_env(None, Some(TEST_JWT_SECRET.to_string()), Some("{}"), false)
+            .err()
+            .expect("RSA verification keys are meaningless with HS256");
+    assert!(error.contains("only valid with RS256"), "got: {error}");
+}
+
+/// `add_verification_key` の kid 長境界（1 / 128 受理、129 / 空 拒否）。
+#[test]
+fn test_jwt_add_verification_key_kid_bounds() {
+    let signing_pem = test_rsa_private_pem();
+    let old_public = test_rsa_public_pem(&test_rsa_private_pem());
+    let mut keys =
+        crate::jwt::JwtKeys::from_rsa_private_key_pem(&signing_pem).expect("signing key");
+
+    assert!(
+        keys.add_verification_key("k", &old_public).is_ok(),
+        "1 char kid"
+    );
+    assert!(
+        keys.add_verification_key(&"k".repeat(128), &old_public)
+            .is_ok(),
+        "128 char kid"
+    );
+
+    let error = keys
+        .add_verification_key(&"k".repeat(129), &old_public)
+        .expect_err("129 char kid");
+    assert!(error.contains("1..=128"), "got: {error}");
+    let error = keys
+        .add_verification_key("", &old_public)
+        .expect_err("empty kid");
+    assert!(error.contains("1..=128"), "got: {error}");
+}
+
+/// `add_verification_key` は重複 kid と不正 PEM を拒否する。
+#[test]
+fn test_jwt_add_verification_key_rejects_duplicate_and_invalid_pem() {
+    let signing_pem = test_rsa_private_pem();
+    let old_public = test_rsa_public_pem(&test_rsa_private_pem());
+    let mut keys =
+        crate::jwt::JwtKeys::from_rsa_private_key_pem(&signing_pem).expect("signing key");
+
+    keys.add_verification_key("old", &old_public)
+        .expect("register once");
+    let error = keys
+        .add_verification_key("old", &old_public)
+        .expect_err("duplicate kid must be rejected");
+    assert!(
+        error.contains("duplicate verification key kid"),
+        "got: {error}"
+    );
+
+    let error = keys
+        .add_verification_key("bad", "not a PEM")
+        .expect_err("invalid PEM must be rejected");
+    assert!(error.contains("invalid RSA public key PEM"), "got: {error}");
+}
+
+/// `JWT_REQUIRE_KID` の env 解析（起動時ロジックを純粋関数化して検証）。
+#[test]
+fn test_jwt_require_kid_from_env_values() {
+    assert!(!crate::jwt_require_kid_from_env(None), "unset is false");
+    assert!(
+        !crate::jwt_require_kid_from_env(Some("0")),
+        "\"0\" is false"
+    );
+    assert!(
+        !crate::jwt_require_kid_from_env(Some("false")),
+        "\"false\" is false"
+    );
+    assert!(
+        !crate::jwt_require_kid_from_env(Some("FALSE")),
+        "comparison is case-insensitive"
+    );
+    assert!(crate::jwt_require_kid_from_env(Some("1")), "\"1\" is true");
+    assert!(
+        crate::jwt_require_kid_from_env(Some("true")),
+        "other values stay true (existing behavior)"
+    );
+}
+
+/// RS256 選択時に短い JWT_SECRET が警告対象であること（警告条件を関数化して検証）。
+#[test]
+fn test_jwt_short_secret_warning_condition() {
+    assert!(crate::should_warn_short_jwt_secret(Some("short")));
+    assert!(!crate::should_warn_short_jwt_secret(Some(TEST_JWT_SECRET)));
+    assert!(!crate::should_warn_short_jwt_secret(None));
+
+    // 警告が出ても鍵選択は変わらず、RS256 が使われる（既存挙動の維持）。
+    let keys = crate::jwt_keys_from_env(
+        Some(test_rsa_private_pem()),
+        Some("short".to_string()),
+        None,
+        false,
+    )
+    .expect("short JWT_SECRET does not block RS256 startup");
+    assert_eq!(keys.algorithm_name(), "RS256");
 }
 
 /// RS256 の鍵で署名したセッショントークンが、認証済み API を通る。

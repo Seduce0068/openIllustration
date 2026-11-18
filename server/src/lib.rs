@@ -816,9 +816,8 @@ pub async fn run() -> anyhow::Result<()> {
     migration::verify_migrations(&db).await?;
 
     let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
-    let require_kid = std::env::var("JWT_REQUIRE_KID")
-        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-        .unwrap_or(false);
+    let require_kid_env = std::env::var("JWT_REQUIRE_KID").ok();
+    let require_kid = jwt_require_kid_from_env(require_kid_env.as_deref());
     let jwt_keys = jwt_keys_from_env(
         std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
         std::env::var("JWT_SECRET").ok(),
@@ -1114,6 +1113,18 @@ pub fn validate_jwt_secret(secret: &str) -> Result<(), String> {
     jwt::JwtKeys::from_hmac_secret(secret).map(|_| ())
 }
 
+/// `JWT_REQUIRE_KID` の解釈。未設定・`"0"`・`"false"`（大小文字無視）のみ
+/// false で、それ以外は true とする（従来の起動時挙動をそのまま抽出）。
+pub fn jwt_require_kid_from_env(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+}
+
+/// RS256 選択時に短い `JWT_SECRET` を警告すべきか。
+/// ログを捕捉せずに警告条件を検証できるよう、判定だけを純粋関数に切り出す。
+pub fn should_warn_short_jwt_secret(secret: Option<&str>) -> bool {
+    secret.is_some_and(|secret| jwt::JwtKeys::from_hmac_secret(secret).is_err())
+}
+
 /// 環境変数から JWT の署名鍵を選ぶ。
 ///
 /// `JWT_RSA_PRIVATE_KEY_PEM`（PKCS#8 PEM）が設定されていれば RS256、
@@ -1128,7 +1139,7 @@ pub fn jwt_keys_from_env(
         (Some(pem), Some(secret)) => {
             // RS256 が選択されるため秘密は使われないが、短い値が残っている
             // 設定ミスは警告する（将来 RSA を外したときに弱鍵が露出する）。
-            if jwt::JwtKeys::from_hmac_secret(&secret).is_err() {
+            if should_warn_short_jwt_secret(Some(&secret)) {
                 warn!(
                     "JWT_SECRET is set but shorter than 32 bytes; it is ignored while JWT_RSA_PRIVATE_KEY_PEM is configured"
                 );
