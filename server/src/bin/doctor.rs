@@ -71,6 +71,20 @@ fn check_all() -> Vec<(&'static str, Vec<String>)> {
     }
     results.push(("mock_auth_with_production_config", mock_auth_errors));
 
+    // モック認証が有効なこと自体は開発環境では正しいが、本番設定としては不適切。
+    // production_config_errors は allow_mock_auth で早期 return するため、
+    // ALLOW_MOCK_AUTH=1 単独だと本番チェックが全スキップされてしまう。
+    // ここで明示的に問題として計上し、--strict では exit 1 とする（既定は警告のみ）。
+    let mock_auth_enabled_errors = if allow_mock_auth {
+        vec![
+            "ALLOW_MOCK_AUTH is enabled; acceptable for development but inappropriate for production"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
+    results.push(("mock_auth_enabled", mock_auth_enabled_errors));
+
     // JWT: HS256 は 32 バイト以上、RS256 は PEM と検証キーの整合を検査する。
     let jwt_pem = env("JWT_RSA_PRIVATE_KEY_PEM");
     let jwt_secret = env("JWT_SECRET");
@@ -96,12 +110,27 @@ fn check_all() -> Vec<(&'static str, Vec<String>)> {
     results.push(("jwt_secret", secret_errors));
 
     // IPFS: ゲートウェイは {cid} を含む http(s) URL テンプレートが必要。
-    let gateways = ipfs_gateways(env("IPFS_GATEWAYS").as_deref());
-    let ipfs_errors = if gateways.is_empty() {
-        vec!["no valid IPFS gateway configured".to_string()]
-    } else {
-        Vec::new()
-    };
+    // ipfs_gateways() は不正値を除外して有効値だけ返すため、設定した非空エントリ数
+    // との差を問題として計上する（値は出力しない）。未設定時は既定ゲートウェイを
+    // 使うため加算しない。
+    let gateways_env = env("IPFS_GATEWAYS");
+    let gateways = ipfs_gateways(gateways_env.as_deref());
+    let mut ipfs_errors = Vec::new();
+    if let Some(value) = &gateways_env {
+        let configured = value
+            .split(',')
+            .filter(|entry| !entry.trim().is_empty())
+            .count();
+        let invalid = configured.saturating_sub(gateways.len());
+        if invalid > 0 {
+            ipfs_errors.push(format!(
+                "IPFS_GATEWAYS contains {invalid} invalid entry(ies); using only the valid ones"
+            ));
+        }
+    }
+    if gateways.is_empty() {
+        ipfs_errors.push("no valid IPFS gateway configured".to_string());
+    }
     results.push(("ipfs_gateways", ipfs_errors));
 
     let timeout_errors = if ipfs_timeout(env("IPFS_TIMEOUT_SECS").as_deref()).as_secs() == 0 {
