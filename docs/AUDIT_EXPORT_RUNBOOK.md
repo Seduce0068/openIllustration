@@ -59,6 +59,54 @@ cargo run -p server --bin sign_audit_export -- \
 旧 v3 スナップショットはフラグ無しでも署名検証できる。新規のマスク版のみ
 `masked` 識別子を署名対象へ含める。
 
+## 形式バージョンと互換範囲（v1 エントリ互換の限界）
+
+監査には二つの検証経路があり、受け付ける形式が異なる。混同しないこと。
+
+| 検証対象 | コマンド | 受け付ける形式 |
+| --- | --- | --- |
+| DB の `content_audit_log` | `verify_audit_log` | v2（length-prefixed）と legacy v1 のエントリハッシュ |
+| 署名付きスナップショット | `verify_audit_export`（`common::verify_audit_snapshot`） | version 3 のみ |
+
+- **エントリハッシュの v1 互換は DB 監査ログの検証に限定される。**
+  `verify_audit_log` の出力 `legacy_v1=true` は、その DB 行の `entry_hash` が旧 v1
+  形式の再計算値と一致したことを示すだけであり、署名付きエクスポートが v1/v2
+  形式を受理するという意味ではない。
+- **署名付きエクスポートの公式形式は version 3 のみ**
+  （`common::AUDIT_SNAPSHOT_VERSION = 3`）。v1/v2 および未知のバージョンの
+  スナップショットは、署名が正しくても fail-closed で拒否される。
+  `verify_audit_export` は `unsupported audit snapshot version: N` を出力し、
+  終了コード 1 を返す。
+- この非対称は意図的な設計である。`common` に旧スナップショット受理の互換層は
+  設けず、必要なら旧形式のデータを version 3 として再エクスポートする。
+
+### 旧形式スナップショットの拒否確認（CLI）
+
+version 3 のスナップショットを複製して `version` だけを 1 または 2 に書き換え、
+`verify_audit_export` に渡すと、バージョン検査が署名検証より先に働いて拒否を
+確認できる。
+
+```bash
+# Kubuntu / リポジトリルート
+echo "== version 1 / 2 のスナップショットを準備 =="
+jq '.version = 1' /path/to/audit-snapshot-YYYYMMDD.json > /tmp/audit-snapshot-v1.json
+jq '.version = 2' /path/to/audit-snapshot-YYYYMMDD.json > /tmp/audit-snapshot-v2.json
+
+echo "== version 1 を検証（拒否されること） =="
+cargo run -q -p server --bin verify_audit_export -- \
+  --snapshot /tmp/audit-snapshot-v1.json \
+  --public-key /path/to/audit-public.der; echo "exit_code=$?"
+
+echo "== version 2 を検証（拒否されること） =="
+cargo run -q -p server --bin verify_audit_export -- \
+  --snapshot /tmp/audit-snapshot-v2.json \
+  --public-key /path/to/audit-public.der; echo "exit_code=$?"
+```
+
+期待結果: いずれも `Error: Invalid signature: unsupported audit snapshot version: 1`
+（または `: 2`）を出力し、`exit_code=1` となる。オリジナルの version 3
+スナップショットは下記「第三者検証」で `audit_export_verification: OK` となる。
+
 ## 第三者検証
 
 ```bash
@@ -78,6 +126,13 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名付きスナップショットを作成し、公開鍵で検証成功（version 3、全エントリと BAN 監査を含有）。
 - エントリの `reason` およびガバナンス監査の `reason` を改ざんしたスナップショットが検証失敗（終了コード 1）。
 - common の単体テストで署名・検証・改ざん検出を確認。
+
+## 検証済み事項（2026-11-18）
+
+- `verify_audit_export` に version 1 / 2 のスナップショットを渡すと、いずれも
+  `Error: Invalid signature: unsupported audit snapshot version: N`（終了コード 1）
+  となり、旧形式が fail-closed で拒否されることを CLI で確認した。version 3 は
+  バージョン検査を通過し署名検証へ進むことも確認した。
 
 ## 未解決事項
 

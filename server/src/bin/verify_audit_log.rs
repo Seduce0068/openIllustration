@@ -18,6 +18,10 @@ fn print_help() {
          \n\
          Verifies content_audit_log hash-chain integrity (read-only).
          Accepts v2 (length-prefixed) and legacy v1 entry hashes.\n\
+         Scope: this v1/v2 tolerance applies to DB audit log entries only. Signed\n\
+         audit snapshots are verified by verify_audit_export and require version 3;\n\
+         v1/v2 snapshots are rejected there. `legacy_v1=true` in this tool's output\n\
+         is a DB-entry classification, not a claim about snapshot compatibility.\n\
          Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
          --expect-root compares the root against a previously recorded value to detect\n\
          truncation or omission (the root must have been published out of band).\n\
@@ -144,6 +148,9 @@ async fn main() -> anyhow::Result<()> {
         let computed_v1 = entry.calculate_hash();
         let computed_v2 = entry.calculate_hash_v2();
         let hash_ok = computed_v2 == entry_hash;
+        // DB エントリのハッシュが旧 v1 形式かどうかの判定。
+        // 署名付きスナップショットの形式互換を示すものではない
+        // （common::verify_audit_snapshot は version 3 のみ受理する）。
         let legacy_v1 = computed_v1 == entry_hash;
         let chain_ok = previous_log_hash == expected_prev;
 
