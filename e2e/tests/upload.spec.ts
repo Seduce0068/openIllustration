@@ -118,4 +118,23 @@ test.describe('Content Upload Flow', () => {
     await expect(submitButton).toBeEnabled({ timeout: 10000 });
     await expect(submitButton).not.toHaveText(/Processing/i);
   });
+
+  test('R2: file-upload label is keyboard operable and price input has bounds', async ({ page }) => {
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+
+    const label = page.locator('label[for="file-upload"]');
+    await expect(label).toBeVisible();
+    await expect(label).toHaveAttribute('tabindex', '0');
+
+    // ラベルの keydown ハンドラが input.click() を呼び、filechooser が発火する。
+    const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
+    await label.focus();
+    await page.keyboard.press('Enter');
+    const fileChooser = await fileChooserPromise;
+    expect(fileChooser).toBeTruthy();
+
+    const priceInput = page.locator('#upload-price');
+    await expect(priceInput).toHaveAttribute('min', '1');
+    await expect(priceInput).toHaveAttribute('max', '1000000');
+  });
 });

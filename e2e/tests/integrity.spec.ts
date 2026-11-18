@@ -331,4 +331,80 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       'Reason: oldest log 1',
     ]);
   });
+
+  test('R2: Audit toggle exposes ARIA state and dialog closes on Escape', async ({ page }) => {
+    const hash = computeHash(ORIGINAL_CONTENT);
+
+    // コンテンツカードを描画するためのモック（既存テストと同じ経路）。
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          cid: MOCK_CID,
+          checksum: hash,
+          type: 'Novel',
+          status: 'Approved',
+          price: 0,
+          title: 'Forensic Evidence Log',
+          description: 'ARIA toggle fixture',
+          tags: ['forensic', 'a11y'],
+          is_favorite: false
+        }])
+      });
+    });
+
+    await page.route(`**/content/${MOCK_CID}`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/markdown',
+        headers: {
+          'x-forensic-checksum': hash,
+          'content-type': 'text/markdown'
+        },
+        body: ORIGINAL_CONTENT
+      });
+    });
+
+    await page.route(`**/content/${MOCK_CID}/audit`, async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' })
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
+
+    const card = page.getByTestId('content-card').first();
+    const auditToggle = card.getByRole('button', { name: 'Audit' });
+
+    // 初期状態: 閉じており、aria-controls でタイムラインパネルを参照している。
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(auditToggle).toHaveAttribute('aria-controls', 'forensic-timeline');
+
+    await auditToggle.click();
+
+    // クリックで展開状態になり、アクセシブル名付きの dialog が表示される。
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'true');
+    const dialog = page.getByRole('dialog', { name: 'Forensic Timeline' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute('id', 'forensic-timeline');
+
+    // Escape はトグル（カード内）で受け取り、カードの keydown ハンドラで閉じる。
+    await auditToggle.focus();
+    await page.keyboard.press('Escape');
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(dialog).toHaveCount(0);
+    await expect(auditToggle).toBeFocused();
+  });
 });

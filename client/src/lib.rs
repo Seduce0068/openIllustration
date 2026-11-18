@@ -1545,7 +1545,7 @@ where
                     </button>
                     <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
                         node_ref=audit_toggle_ref
-                        aria-expanded=move || show_audit.get()
+                        aria-expanded=move || if show_audit.get() { "true" } else { "false" }
                         aria-controls="forensic-timeline"
                         class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
