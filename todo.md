@@ -206,6 +206,96 @@ P2（品質・保守・プロダクト拡張）:
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
 
+### 2026-11-19 全体レビューで追加（高）
+
+- [ ] **JPKI 提示に所有証明（nonce 署名検証）を追加** — 根拠 `server/src/jpki.rs:27-45` / R3-AU01 / 重大度 critical。
+  現状は証明書の公開鍵を取り出すだけで秘密鍵保持を検証せず、他人の公開証明書でなりすまし可能。
+- [ ] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
+  auth_verify/refresh は確認するが callback は欠落し、BAN 済み sub が再認証でセッション取得可能。
+- [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:208-212` / R1-ST01 / 重大度 high。
+  security_headers は X-Content-Type-Options/X-Frame-Options のみ。CSP は本番構成確定時に別途設計と明記済み。
+- [ ] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。
+  libSQL は既定 foreign_keys=OFF。`PRAGMA foreign_keys=ON` と起動時 `foreign_key_check` を追加。
+- [ ] **CORS の allow_methods に DELETE を追加** — 根拠 `server/src/lib.rs:1773` / R1-AP01 / 重大度 high。
+  remove_favorite は DELETE だが許可メソッドは GET/POST のみ。
+- [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
+  現状 doctor は警告のみで呼び出し経路が無い。
+- [] **backup-rotate に verify_audit_log と暗号化後復号検証を追加** — 根拠 `scripts/backup-rotate.sh:142-143` / R4-DR01 / 重大度 high。
+  Runbook は両方成功を条件とするが自動取得は verify_backup のみ。
+- [ ] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
+  EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。
+- [ ] **定足数を QUORUM_VOTES 定数へ集約** — 根拠 `server/src/lib.rs:2816,2834,3773` / R1-AR01 / 重大度 high。
+  SQL と Rust で `3` が個別ハードコードされ、変更時に確定ロジックと集計が食い違う。
+- [ ] **リクエスト相関 ID とアクセスログを追加** — 根拠 `server/src/lib.rs:234-251` / R4-OB01 / 重大度 high。
+  x-request-id 生成・伝播と method/path/status/duration ログが無く、Internal エラーの事後調査不可。
+- [ ] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:714-750` / R2-BV01 / 重大度 high。
+  remove_file + create_new が非原子で、同時起動で排他が破れる。
+- [ ] **通報送信 (/mod/report) の失敗系 E2E を追加** — 根拠 `e2e/tests/moderation.spec.ts:102` / disc TQ / 重大度 high。
+  HTTP 500/network abort の固定文言・サーバー本文非表示が未検証。
+- [ ] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
+  現状はシェル文字列パターンのみで fail-open 回帰を実挙動で担保できていない。
+- [ ] **GOV-01 要約 E2E を生 PII 入力→[redacted] 表示へ** — 根拠 `e2e/tests/moderation.spec.ts:9-14` / R5-TS01 / 重大度 high。
+  モックが既に要約済み値を返しオラクルが自明。
+- [ ] **Upoad 価格境界 E2E を属性存在→実送信へ** — 根拠 `e2e/tests/upload.spec.ts:172-174` / R5-TS01 / 重大度 high。
+  min/max 属性だけでは JS/API バリデーション回帰を検出できない。
+- [ ] **ADR-0002/0003 の「提案」残存を確定記述へ** — 根拠 `docs/adr/ADR-0002-jpki-authentication.md:35` / R5-DC01 / 重大度 high。
+  Status: Accepted なのに本文・tags が proposed のまま。
+- [ ] **ADR/Runbook/OPERATIONAL_POLICY の矛盾を是正** — 根拠 `docs/HANDOFF.md:84`,
+  `docs/BACKUP_RESTORE_RUNBOOK.md:264`, `docs/OPERATIONAL_POLICY.md:97-99` / R5-DC01 / 重大度 high。
+  ADR-0004 を Proposed とする記載、暗号化・オフサイトの未解決重複、--database-token 付与例と文命題切れ。
+
+### 2026-11-19 全体レビューで追加（中）
+
+- [ ] **verify_audit_export へ take_value を追加（5 CLI の取り残し）** — 根拠
+  `server/src/bin/verify_audit_export.rs:33-50` / disc FG / 優先度 中。
+- [ ] **IPFS チェックサム不一致を 401 ではなく 502/409 へ** — 根拠 `server/src/lib.rs:2294` / R1-AP01 / 中。
+- [ ] **一覧 API のページネーション契約を共通化** — 根拠 `server/src/lib.rs:1789,2456` / R1-AP01 / 中。
+- [ ] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:106,192,445` / R1-AP01 / 中。
+- [ ] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
+- [ ] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
+- [ ] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
+- [ ] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
+- [ ] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
+- [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
+  `server/migrations/002_payment_orders.sql:16` / R2-DI01 / 中。
+- [ ] **refresh_tokens.expires_at の時刻形式を RFC3339 へ統一** — 根拠 `server/migrations/006_refresh_tokens.sql:7` / R2-DI01 / 中。
+- [ ] **GRACEFUL_DRAIN/MODERATION_FINALIZE を doctor フォールバック検出へ** — 根拠 `server/src/lib.rs:1342,1354` / R1-CF01 / 中。
+- [ ] **ALLOWED_ORIGINS の doctor 判定を allowed_origins() 結果へ** — 根拠 `server/src/bin/doctor.rs:354-369` / R1-CF01 / 中。
+- [ ] **wasm リリースから console_log/panic_hook をゲート** — 根拠 `client/Cargo.toml:13-14` / R3-DE01 / 中。
+- [ ] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。
+- [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
+- [ ] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
+- [ ] **E2E の既定ブラウザを 3 プロジェクトへ** — 根拠 `e2e/ci-e2e.sh:121` / R4-CI01 / 中。
+- [ ] **E2E の npm ci を --ignore-scripts 統一** — 根拠 `e2e/ci-e2e.sh:211` / R4-CI01 / 中。
+- [ ] **監視パス (/health,/ready,/metrics) を observe_metrics から除外** — 根拠 `server/src/lib.rs:182-184` / R4-OB01 / 中。
+- [ ] **finalizer/purge のカウンタを /metrics へ公開** — 根拠 `server/src/lib.rs:143-150` / R4-OB01 / 中。
+- [ ] **起動時 IPFS 警告の生 URL を redact_url 経由へ** — 根拠 `server/src/lib.rs:1261-1264` / R4-OB01 / 中。
+- [ ] **投票・通報フォームへ二重送信ガード** — 根拠 `client/src/lib.rs:2205-2237` / disc VU / 中。
+- [ ] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
+- [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
+- [ ] **アップロード失敗を HTTP ステータス別固定文言へ** — 根拠 `client/src/lib.rs:1825-1826` / disc VU / 中。
+- [ ] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
+- [ ] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
+- [ ] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
+- [ ] **オーファン ゲート ID（EXPORT-12, PAY-06〜08）を整理** — 根拠 `docs/TEST_SPECIFICATION.md:194,209` / disc TQ / 中。
+- [ ] **価格境界 E2E の実送信検証** — disc TQ / 中（R5-TS01 と同一、統合）。
+
+### 2026-11-19 全体レビューで追加（低）
+
+- [ ] **UI 文言を日本語へ統一（英語・内部トークン混在）** — 根拠 `client/src/lib.rs:69-70,1094-1097` / R5-UX01 / 低。
+- [ ] **ナビゲーションへ aria-current を付与** — 根拠 `client/src/lib.rs:836-855` / R5-UX01 / 低。
+- [ ] **SPA ビュー切替で document.title を更新** — 根拠 `client/src/lib.rs:824` / R5-UX01 / 低。
+- [ ] **データ表へ caption と th scope** — 根拠 `client/src/lib.rs:1993-2001` / R5-UX01 / 低。
+- [ ] **canvas へ role=img/aria-label** — 根拠 `client/src/lib.rs:1599-1600` / R5-UX01 / 低。
+- [ ] **PRODUCT 名と (Rust) 表記を統一** — 根拠 `client/index.html:6` / R5-UX01 / 低。
+- [ ] **verify_backup/verify_audit_export のヘルプへ DATABASE_TOKEN 契約** — 根拠
+  `server/src/bin/verify_backup.rs:12` / disc FG / 低。
+- [ ] **doctor --strict --help 併用を他 CLI と整合** — 根拠 `server/src/bin/doctor.rs:43-50` / disc FG / 低。
+- [ ] **README に運用 CLI 案内を追加** — 根拠 `README.md:34-87` / disc FG / 低。
+- [ ] **ENV_LOCK の読み手保護を設定注入へ** — 根拠 `server/src/tests.rs:87-108` / R5-TS01 / 低。
+- [ ] **定期 finalize テストの固定スリープを同期チャネルへ** — 根拠 `server/src/tests.rs:15490-15564` / R5-TS01 / 低。
+- [ ] **NEUT-URL-03 再送抑制 E2E の quiescence 待ち** — 根拠 `e2e/tests/metrics.spec.ts:227-252` / R5-TS01 / 低。
+
 ## 完了
 
 - [x] todo をプロジェクト内（`todo.md`）へ配置し、グローバル AGENTS に運用を明記（2026-11-17）
@@ -249,6 +339,14 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-19 全体レビュー（swarm-project-review + swarm-todo-discovery、15担当・深度1・無制限プロファイル）:
+  約100件の指摘を重複排除・Runtime Proof で裁定し、上記へ反映。主な却下: lib.rs god module 分割・
+  AppState FromRef 分割・ドメインエラー型導入（大規模リファクタで既存ゲートとのトレードオフ判断が必要）、
+  finalize_report の運用者チェック（設計判断済み）、confidence=speculative の将来リスク
+  （短い JWT_SECRET 露出、Merkle root 保存経路、ロールバック対応関係）は候補として保留。
+- セッション JWT の iss/aud 検証は「別途要件化」で未定義（DEC 判断 cần）、TrustedAttributeRequired の
+  実入力経路は DEC-01 外部待ちのため既存未着手を維持。
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
   現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は49件（12 spec）。
