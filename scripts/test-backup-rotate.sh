@@ -109,6 +109,7 @@ cat >"${work}/fail.sh" <<'EOF'
 exit 7
 EOF
 chmod +x "${work}/fail.sh"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 expect_failure "offsite failure propagates" env BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/fail.sh" OFFSITE_DEST="${work}/offsite" "$script"
 
 # 失敗通知が呼ばれること。
@@ -118,6 +119,7 @@ printf '%s\n' "$1" >> "$ALERT_LOG"
 EOF
 chmod +x "${work}/alert.sh"
 export ALERT_LOG="${work}/alerts.log"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 expect_failure "failing run with alert" env BACKUP_GPG_RECIPIENT=test ALERT_CMD="${work}/alert.sh" OFFSITE_COPY_CMD="${work}/fail.sh" OFFSITE_DEST="${work}/offsite" "$script"
 if [[ -s "${ALERT_LOG}" ]]; then
 	echo "PASS alert invoked"
@@ -125,6 +127,49 @@ else
 	echo "FAIL alert not invoked"
 	failures=$((failures + 1))
 fi
+
+echo "=== 一時ファイルの権限と後片付け ==="
+mapfile -d '' artifacts < <(find "${work}/backups" -maxdepth 1 -type f \
+	-name 'openillustration-*.db.gpg' -print0)
+if ((${#artifacts[@]} == 0)); then
+	echo "FAIL no encrypted artifact to check"
+	failures=$((failures + 1))
+else
+	bad_mode=0
+	for artifact in "${artifacts[@]}"; do
+		[[ "$(stat -c %a "$artifact")" == "600" ]] || bad_mode=1
+	done
+	if ((bad_mode == 0)); then
+		echo "PASS artifacts are mode 600 (umask 077)"
+	else
+		echo "FAIL artifact mode is not 600"
+		failures=$((failures + 1))
+	fi
+fi
+mapfile -d '' temps < <(find "${work}/backups" -maxdepth 1 -type d \
+	-name '.openillustration-*' -print0)
+if ((${#temps[@]} == 0)); then
+	echo "PASS no leftover temp directories"
+else
+	echo "FAIL leftover temp directories: ${temps[*]}"
+	failures=$((failures + 1))
+fi
+
+echo "=== 公開先のシンボリックリンクは拒否 ==="
+# スクリプト内の UTC タイムスタンプと一致するよう、前後 5 秒の名前を置く。
+now="$(date -u +%s)"
+for offset in {-5..5}; do
+	stamp="$(date -u -d "@$((now + offset))" +%Y%m%dT%H%M%SZ)"
+	ln -sfn "${work}/nowhere" "${work}/backups/linktest-${stamp}.db"
+done
+expect_failure "symlink target refused" env BACKUP_GPG_RECIPIENT=test BACKUP_PREFIX=linktest "$script"
+if compgen -G "${work}/backups/linktest-*.db.gpg" >/dev/null; then
+	echo "FAIL artifact published despite symlink target"
+	failures=$((failures + 1))
+else
+	echo "PASS no artifact published at symlink target"
+fi
+rm -f "${work}/backups/linktest-"*.db
 
 if ((failures > 0)); then
 	echo "backup-rotate tests FAILED (${failures})" >&2

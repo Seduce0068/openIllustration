@@ -11,9 +11,16 @@ Environment=RETENTION_DAYS=30
 Environment=MIN_KEEP=3
 Environment=DATABASE_URL=file:/var/lib/openillustration/local.db
 # BACKUP_GPG_RECIPIENT（必須）と ALERT_CMD / OFFSITE_* は 600 権限の環境ファイルで管理する。
+# 環境ファイルの解釈は cron 版と異なる: cron 版は backup-cron-wrapper.sh の
+# 制限付き KEY=VALUE パーサ（source/eval なし、値はリテラル）で読み込み、
+# systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
+# コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
 EnvironmentFile=-/etc/openillustration/backup.env
 ExecStart=/opt/openIllustration/scripts/backup-rotate.sh
 User=openillustration
 Group=openillustration
+# 生成するバックアップ/一時ファイルの既定権限を 0600 に制限する
+# （cron 版は backup-rotate.sh 内の umask 077 で同等に制限する）。
+UMask=0077
 # 失敗時に syslog/journal へ明確に記録する（アラート連携の手掛かり）。
 SyslogIdentifier=openillustration-backup

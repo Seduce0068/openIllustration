@@ -6,4 +6,8 @@ MAILTO=admin@example.com
 
 # BACKUP_GPG_RECIPIENT（必須）を含む /etc/openillustration/backup.env を
 # ラッパー経由で読み込む。平文バックアップはスクリプト側で拒否される。
+# 環境ファイルの解釈は systemd 版と異なる: cron 版は backup-cron-wrapper.sh の
+# 制限付き KEY=VALUE パーサ（source/eval なし、値はリテラル）で読み込み、
+# systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
+# コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
 17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh

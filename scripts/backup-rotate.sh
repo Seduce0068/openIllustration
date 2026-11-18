@@ -2,6 +2,8 @@
 # バックアップ取得→検証→古い世代のローテーションを一度に行う。
 # cron 等のスケジューラから実行する想定（サーバーは起動中でも可: VACUUM INTO を使用）。
 set -euo pipefail
+# 生成する一時ファイル・成果物を 0600 に制限する（service の UMask=0077 と同等）。
+umask 077
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -29,6 +31,20 @@ run_bin() {
 		"${bin_dir}/${name}" "$@"
 	else
 		cargo run --quiet -p server --bin "$name" -- "$@"
+	fi
+}
+
+# 公開先に既存ファイルやシンボリックリンクがあれば上書きしない。
+# -e だけではダングリングシンボリックリンクを検出できないため -L も確認する。
+assert_publishable() {
+	local target="$1"
+	if [[ -L "$target" ]]; then
+		echo "Refusing to write through a symlink: ${target}" >&2
+		return 1
+	fi
+	if [[ -e "$target" ]]; then
+		echo "backup already exists: ${target}" >&2
+		return 1
 	fi
 }
 
@@ -86,23 +102,39 @@ chmod 700 "$backup_dir" || echo "warning: failed to restrict permissions on ${ba
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output="${backup_dir}/${prefix}-${stamp}.db"
-if [[ -e "$output" ]]; then
-	echo "backup already exists: ${output}" >&2
-	exit 1
+encrypted="${output}.gpg"
+assert_publishable "$output" || exit 1
+if [[ -n "$gpg_recipient" ]]; then
+	assert_publishable "$encrypted" || exit 1
 fi
 
+# 予測可能な最終パスへ直接書き込まず、mktemp の私有ディレクトリで生成して
+# 検証後に atomic rename で公開する（VACUUM INTO は既存ファイルへ書けない）。
+tmp_dir="$(mktemp -d "${backup_dir}/.${prefix}-${stamp}.XXXXXX")"
+tmp_db="${tmp_dir}/${prefix}.db"
+tmp_encrypted="${tmp_dir}/${prefix}.db.gpg"
+
 echo "==> backup: ${output}"
-run_bin backup_db --output "$output"
-run_bin verify_backup --input "$output"
+run_bin backup_db --output "$tmp_db"
+run_bin verify_backup --input "$tmp_db"
+assert_publishable "$output" || exit 1
+mv -T -- "$tmp_db" "$output"
 
 if [[ -n "$gpg_recipient" ]]; then
 	echo "==> encrypting backup for ${gpg_recipient}"
-	"$gpg_bin" --batch --yes --encrypt --recipient "$gpg_recipient" \
-		--output "${output}.gpg" "$output"
+	if ! "$gpg_bin" --batch --yes --encrypt --recipient "$gpg_recipient" \
+		--output "$tmp_encrypted" "$output"; then
+		# 暗号化失敗時は平文を残す（既存の fail-closed）上で途中の暗号文を削除する。
+		rm -f "$tmp_encrypted"
+		exit 1
+	fi
 	# 暗号化が成功した場合のみ平文を削除（失敗時は平文を残して復旧可能にする）。
 	rm -f "$output"
+	assert_publishable "$encrypted" || exit 1
+	mv -T -- "$tmp_encrypted" "$encrypted"
 	echo "==> plaintext removed: ${output}"
 fi
+rmdir "$tmp_dir"
 
 if [[ -n "$offsitecopy" ]]; then
 	artifact="$output"

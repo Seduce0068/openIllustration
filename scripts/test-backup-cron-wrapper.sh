@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # backup-cron-wrapper.sh の回帰テスト。本番パスのハードコードを一時コピーへ
-# 差し替え、外部サービスなしで fail-closed と値の伝播を検証する。
+# 差し替え、外部サービスなしで fail-closed・値伝播・env ファイル検証を確認する。
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,7 +18,7 @@ sed \
 	"$script" >"${work}/wrapper.sh"
 chmod +x "${work}/wrapper.sh"
 
-# exec 先のダミー。source 経由で渡った環境変数と exec の引数を記録する。
+# exec 先のダミー。env ファイルから渡った環境変数と exec の引数を記録する。
 cat >"${work}/bin/backup-rotate.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -80,6 +80,16 @@ assert_capture_line() {
 	fi
 }
 
+assert_file_absent() {
+	local name="$1" path="$2"
+	if [[ -e "$path" ]]; then
+		echo "FAIL ${name}: unexpected side effect at ${path}"
+		failures=$((failures + 1))
+	else
+		echo "PASS ${name}: no side effect"
+	fi
+}
+
 echo "=== ケース1: 環境ファイルが存在しない/読めない場合は fail-closed ==="
 rm -f "$env_file" "${WRAPPER_CAPTURE}"
 expect_failure "case1 missing env file" env -u BACKUP_ENV_FILE "$wrapper"
@@ -93,7 +103,7 @@ else
 	assert_capture_absent "case1 unreadable env file"
 fi
 
-echo "=== ケース2: source した値が exec 先へ伝播する ==="
+echo "=== ケース2: パースした値が exec 先へ伝播する ==="
 rm -f "$env_file"
 printf 'BACKUP_GPG_RECIPIENT=test@example.com\n' >"$env_file"
 chmod 600 "$env_file"
@@ -104,20 +114,35 @@ assert_capture_line "case2" "RECIPIENT=test@example.com"
 assert_capture_line "case2" "ARGC=0"
 assert_capture_line "case2" "ARGS="
 
-# ケース3: 環境ファイルは source されるため、$(...) や ; といったシェル記法も
-# そのまま評価される。したがって 600 権限の信頼できるファイルだけを置くことが
-# 運用上の前提であり、追加のサニタイズは実装しない（テストでも期待しない）。
-# ここでは害のないコマンド置換で「評価されること」だけを示す。
-echo "=== ケース3: 信頼できる 600 権限ファイル前提（サニタイズなし）==="
-cat >"$env_file" <<'EOF'
-BACKUP_GPG_RECIPIENT=test@example.com
-INJECTION_MARKER="$(printf injected-by-source)"
-EOF
+echo "=== ケース3: 制限付きパーサではシェル記法が評価されない ==="
+# $(...) が評価されれば ${work}/pwned が作られる。リテラル値として保持される
+# こと（＝コマンド置換も副作用も発生しないこと）を検証する。
+{
+	printf 'BACKUP_GPG_RECIPIENT=test@example.com\n'
+	# shellcheck disable=SC2016 # コマンド置換として評価されないことを検証するためリテラル。
+	printf 'INJECTION_MARKER="$(printf injected > %s/pwned)"\n' "$work"
+} >"$env_file"
 chmod 600 "$env_file"
-rm -f "${WRAPPER_CAPTURE}"
-expect_success "case3 source evaluates shell" env -u BACKUP_ENV_FILE "$wrapper"
-assert_capture_line "case3" "MARKER=injected-by-source"
+rm -f "${WRAPPER_CAPTURE}" "${work}/pwned"
+expect_success "case3 restricted parser" env -u BACKUP_ENV_FILE "$wrapper"
+# shellcheck disable=SC2016 # 期待値もリテラル文字列として比較する。
+printf -v expected_marker 'MARKER="$(printf injected > %s/pwned)"' "$work"
+assert_capture_line "case3 literal value" "$expected_marker"
 assert_capture_line "case3" "RECIPIENT=test@example.com"
+assert_file_absent "case3 command substitution not evaluated" "${work}/pwned"
+
+echo "=== ケース4: シンボリックリンクの環境ファイルは拒否 ==="
+ln -sfn "$env_file" "${work}/backup.env.link"
+rm -f "${WRAPPER_CAPTURE}"
+expect_failure "case4 symlink env file" env BACKUP_ENV_FILE="${work}/backup.env.link" "$wrapper"
+assert_capture_absent "case4 symlink env file"
+
+echo "=== ケース5: 600/400 以外の権限は拒否 ==="
+chmod 644 "$env_file"
+rm -f "${WRAPPER_CAPTURE}"
+expect_failure "case5 insecure mode" env -u BACKUP_ENV_FILE "$wrapper"
+assert_capture_absent "case5 insecure mode"
+chmod 600 "$env_file"
 
 if ((failures > 0)); then
 	echo "backup-cron-wrapper tests FAILED (${failures})" >&2
