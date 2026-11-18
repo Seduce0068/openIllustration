@@ -313,12 +313,38 @@ async fn load_order(
     }
 }
 
+/// insert_payment_order の第1引数が `&libsql::Transaction` であることを型レベルで固定する。
+/// シグネチャを `&Connection` に戻すと、FnOnce の境界では deref coercion が効かないため
+/// この関数自体がコンパイルできなくなる（将来の `&state.db` 誤用を型で防ぐことの検証）。
+#[cfg(test)]
+#[allow(dead_code)]
+fn assert_insert_payment_order_requires_transaction(tx: &libsql::Transaction) {
+    fn accept_transaction<'a, F, Fut>(_f: F, _tx: &'a libsql::Transaction)
+    where
+        F: FnOnce(
+            &'a libsql::Transaction,
+            &'a str,
+            &'a str,
+            &'a str,
+            i64,
+            &'a str,
+            &'a str,
+            &'a str,
+            &'a str,
+            Option<i64>,
+        ) -> Fut,
+        Fut: std::future::Future<Output = Result<(), crate::AppError>>,
+    {
+    }
+    accept_transaction(insert_payment_order, tx);
+}
+
 /// payment_orders へ 1 行挿入する。
 /// 呼び出し元の書き込みトランザクション（`&libsql::Transaction`）に渡し、
 /// HD 分岐・固定アドレス分岐のどちらも同じ write_lock 経路で INSERT する。
 #[allow(clippy::too_many_arguments)]
 async fn insert_payment_order(
-    db: &libsql::Connection,
+    db: &libsql::Transaction,
     order_id: &str,
     ppid: &str,
     cid: &str,

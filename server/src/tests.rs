@@ -6139,6 +6139,80 @@ fn spawn_lock_holding_writer(
     (started_rx, release_tx, writer)
 }
 
+/// テスト用: tracing の event message を収集する Layer。
+/// 周期 tick がロック待ちをスキップしたときの warn を検出するために使う。
+#[derive(Clone, Default)]
+struct LogMessages(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl LogMessages {
+    fn contains(&self, needle: &str) -> bool {
+        self.0
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|message| message.contains(needle))
+    }
+}
+
+struct MessageVisitor<'a>(&'a mut String);
+
+impl tracing::field::Visit for MessageVisitor<'_> {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            use std::fmt::Write as _;
+            let _ = write!(self.0, "{value:?}");
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for LogMessages {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut message = String::new();
+        event.record(&mut MessageVisitor(&mut message));
+        self.0.lock().unwrap().push(message);
+    }
+}
+
+/// テスト用: write_lock と BEGIN を保持したまま期限切れ通報を作るライター。
+/// 周期 tick の finalize が write_lock 待ちになる状況を作るために使う。
+fn spawn_report_lock_holding_writer(
+    db: Arc<libsql::Connection>,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let writer = tokio::spawn(async move {
+        let guard = crate::write_lock(&db).lock_owned().await;
+        let tx = db.transaction().await.unwrap();
+        tx.execute(
+            "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Novel', 'owner', 'abc', 'Reported')",
+            (),
+        )
+        .await
+        .unwrap();
+        tx.execute(
+            "INSERT INTO reports (report_id, target_cid, reason, deadline_at)
+             VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'due', datetime('now', '-1 day'))",
+            (),
+        )
+        .await
+        .unwrap();
+        started_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        tx.commit().await.unwrap();
+        drop(guard);
+    });
+    (started_rx, release_tx, writer)
+}
+
 /// 期限切れ注文への bind は write_lock 経由で EXPIRED 更新し、競合下でも 500 にならない。
 /// mutation で EXPIRED 更新を tx 外の `db.execute` に戻すと、ロック保持中に
 /// リクエストが完了してしまうため失敗する。
@@ -10337,7 +10411,7 @@ async fn test_purge_expired_refresh_tokens() {
     .unwrap();
 
     let purged = crate::purge_expired_refresh_tokens(&db).await.unwrap();
-    assert_eq!(purged, 1, "only the expired token must be purged");
+    assert_eq!(purged, Some(1), "only the expired token must be purged");
 
     let mut rows = db
         .query("SELECT token_hash FROM refresh_tokens", ())
@@ -10377,7 +10451,7 @@ async fn test_purge_stale_revoked_subs() {
     .unwrap();
 
     let purged = crate::purge_stale_revoked_subs(&db).await.unwrap();
-    assert_eq!(purged, 1, "only the stale revocation must be purged");
+    assert_eq!(purged, Some(1), "only the stale revocation must be purged");
 
     let mut rows = db.query("SELECT sub FROM revoked_subs", ()).await.unwrap();
     let mut remaining = Vec::new();
@@ -10413,7 +10487,7 @@ async fn test_purge_stale_revoked_sessions() {
     .unwrap();
 
     let purged = crate::purge_stale_revoked_sessions(&db).await.unwrap();
-    assert_eq!(purged, 1, "only the stale revocation must be purged");
+    assert_eq!(purged, Some(1), "only the stale revocation must be purged");
 
     let mut rows = db
         .query("SELECT sid FROM revoked_sessions", ())
@@ -14686,19 +14760,133 @@ async fn test_purge_waits_for_write_lock() {
         .expect("refresh token purge must finish after the write transaction commits")
         .unwrap()
         .unwrap();
-    assert_eq!(purged, 1);
+    assert_eq!(purged, Some(1));
     let purged = tokio::time::timeout(Duration::from_secs(5), &mut sessions_task)
         .await
         .expect("revoked session purge must finish after the write transaction commits")
         .unwrap()
         .unwrap();
-    assert_eq!(purged, 1);
+    assert_eq!(purged, Some(1));
     let purged = tokio::time::timeout(Duration::from_secs(5), &mut subs_task)
         .await
         .expect("revoked sub purge must finish after the write transaction commits")
         .unwrap()
         .unwrap();
-    assert_eq!(purged, 1);
+    assert_eq!(purged, Some(1));
+}
+
+/// 周期 purge は write_lock の取得だけを PURGE_LOCK_WAIT で待ち、
+/// ビジーなら SQL を実行せずスキップする（Ok(None)）。
+/// mutation でロック取得側の timeout を外すと完了せず失敗する。
+#[tokio::test]
+async fn test_periodic_purge_skips_without_running_sql_when_lock_is_busy() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES ('expired', 'u', 'f', '2000-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let outcome = tokio::time::timeout(Duration::from_secs(5), async {
+        crate::purge_expired_refresh_tokens(&db).await
+    })
+    .await
+    .expect("periodic purge must give up on the write lock within PURGE_LOCK_WAIT")
+    .unwrap();
+    assert_eq!(
+        outcome, None,
+        "a busy write lock must be skipped without running SQL"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    // ロックが空けば今度は削除まで完了する（SQL はタイムアウトなしで走る）。
+    assert_eq!(
+        crate::purge_expired_refresh_tokens(&db).await.unwrap(),
+        Some(1)
+    );
+}
+
+/// 周期 tick の finalize が write_lock 待ちでタイムアウトしたとき、
+/// warn を出して次回 tick に回し、shutdown を遅らせないことを検証する。
+/// mutation で finalize の timeout ラップを外すとスキップ warn が出ず失敗する。
+#[tokio::test]
+async fn test_periodic_finalize_lock_wait_is_bounded() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    // contents.owner_hash は users(user_hash) を参照するため、所有者を用意する。
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+
+    let logs = LogMessages::default();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let subscriber = tracing_subscriber::layer::SubscriberExt::with(
+        tracing_subscriber::registry(),
+        logs.clone(),
+    );
+    // current_thread ランタイムの spawn タスクも同じスレッドで poll されるため、
+    // スレッドローカルの default subscriber で finalize の warn を拾える。
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    {
+        let finalizer = tokio::spawn(crate::run_moderation_finalizer(
+            Arc::clone(&db),
+            None,
+            Duration::from_millis(100),
+            shutdown_rx,
+        ));
+        // 起動時の purge/finalize（ここでは対象 0 件）が終わるのを待つ。
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // ライターが write_lock を保持したまま期限切れ通報を作る。
+        let (started, release, writer) = spawn_report_lock_holding_writer(Arc::clone(&db));
+        started.await.unwrap();
+
+        // 周期 purge 群（3 × PURGE_LOCK_WAIT）のあと finalize も
+        // PURGE_LOCK_WAIT で諦め、warn が出るまで待つ。
+        tokio::time::timeout(Duration::from_secs(12), async {
+            while !logs.contains("Moderation finalization skipped") {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("periodic finalization must give up on the write lock");
+
+        // ロックが保持されたままでも、finalize が PURGE_LOCK_WAIT を超えて
+        // 待たないこと（上の warn）を確認できれば、shutdown 分岐は遅延なく選ばれる。
+        // tick 分岐が進行中の場合はその分岐が終わってから次回ループで停止するため、
+        // ここでは最終的に停止することを確認する。
+        shutdown_tx.send(()).expect("shutdown signal");
+        tokio::time::timeout(Duration::from_secs(20), finalizer)
+            .await
+            .expect("shutdown must not wait for the write lock to be released")
+            .expect("finalizer must stop cleanly");
+
+        release.send(()).unwrap();
+        writer.await.unwrap();
+    }
 }
 
 /// 認証時のユーザー登録 INSERT も write_lock を取得してから実行する。
