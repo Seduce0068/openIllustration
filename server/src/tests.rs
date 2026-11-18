@@ -14320,9 +14320,14 @@ async fn get_content_audit_caps_at_max_audit_list() {
         crate::MAX_AUDIT_LIST as usize,
         "LIMIT が効かず全件返っている"
     );
-    // 接続順・レスポンス順（log_id ASC / oldest first）は従来どおり維持。
-    assert_eq!(logs.first().unwrap().log_id, 1);
-    assert_eq!(logs.last().unwrap().log_id, crate::MAX_AUDIT_LIST);
+    // 最新 MAX_AUDIT_LIST 件を新しい順（log_id DESC）で返す。
+    // 501 件投入したため最古の log_id 1 は切り捨てられ、2〜501 が返る。
+    assert_eq!(logs.first().unwrap().log_id, crate::MAX_AUDIT_LIST + 1);
+    assert_eq!(logs.last().unwrap().log_id, 2);
+    // 全体が降順（新しい順）であること。ORDER BY を ASC に戻すと失敗する。
+    let ids: Vec<i64> = logs.iter().map(|log| log.log_id).collect();
+    let expected: Vec<i64> = (2..=crate::MAX_AUDIT_LIST + 1).rev().collect();
+    assert_eq!(ids, expected, "最新 500 件が新しい順に返ること");
 }
 
 /// 監査: 再認証時の revoked_subs 削除レース回帰テスト。

@@ -167,6 +167,8 @@ P2（品質・保守・プロダクト拡張）:
   protocol-relative URL と再送抑制のE2Eを追加。
 - [x] 入力境界のDoS対策（2026-11-18）: JPKIトークン/envelope/DER長、RSA署名(DER)長、
   Ethereum hex事前長チェック、list_reports/get_content_audit のLIMIT(500)。
+- [x] 監査ログAPI顺序の是正（2026-11-18）: get_content_audit が最新500件を新しい順に返すよう変更。
+  古い行はAPIから参照不可のため完全検証には署名付きエクスポート/DBを使用。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

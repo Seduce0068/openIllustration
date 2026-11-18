@@ -1866,15 +1866,16 @@ pub async fn get_content_audit(
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
 
-    // 全行を Vec 化しないよう取得件数を MAX_AUDIT_LIST に制限する。
-    // これに伴い entry_hash / previous_log_hash の連鎖確認は「全件検証」ではなく
-    // 「返した行内だけの一部検証」へ変わる（古い行はレスポンスに含まれない）。
-    // 第三者検証可能な監査ではなく、ローカル DB の整合性確認の範囲に留まる点に注意。
+    // 全行を Vec 化しないよう取得件数を MAX_AUDIT_LIST に制限し、
+    // 最新 500 件を新しい順（log_id DESC）で返す。
+    // 古い行は API からは参照できないため、完全な検証には署名付きエクスポート / DB を使用する。
+    // なお本レスポンスは previous_log_hash を含まず reason もマスクされるため、
+    // レスポンス単体でのハッシュ連鎖検証は成立しない。
     let mut rows = state
         .db
         .query(
             "SELECT log_id, cid, old_status, new_status, changed_by, reason, created_at, entry_hash 
-             FROM content_audit_log WHERE cid = ? ORDER BY log_id ASC
+             FROM content_audit_log WHERE cid = ? ORDER BY log_id DESC
              LIMIT ?",
             libsql::params![cid, MAX_AUDIT_LIST],
         )
