@@ -21,26 +21,35 @@ fn print_help() {
     );
 }
 
+/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
+    match it.next() {
+        Some(value) if !value.starts_with('-') => Ok(value),
+        _ => Err(anyhow!("{flag} requires a value")),
+    }
+}
+
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
+    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
+    let owned: Vec<String> = items.into_iter().collect();
+    parse_str_args(&owned)
+}
+
+fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
     let mut args = Args::default();
-    let mut it = items.into_iter().skip(1);
+    let mut it = items.iter().skip(1).map(String::as_str);
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        match arg {
             "-h" | "--help" => args.help = true,
             "--backup" => {
-                args.backup = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--backup requires a value"))?,
-                );
+                args.backup = Some(take_value(&mut it, "--backup")?.to_string());
             }
             "--target" => {
-                args.target = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--target requires a value"))?,
-                );
+                args.target = Some(take_value(&mut it, "--target")?.to_string());
             }
             "--force" => args.force = true,
             // argv は ps 等で公開される。トークン値は受け付けず、
@@ -506,6 +515,24 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("DATABASE_TOKEN"), "{message}");
         assert!(!message.contains(SECRET), "token value leaked: {message}");
+    }
+
+    #[test]
+    fn option_like_value_is_rejected_without_echo() {
+        const DUMMY: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        for flag in ["--backup", "--target"] {
+            let argv = ["restore_db", flag, "--database-token", DUMMY];
+            let error = parse_args_from(argv.map(String::from))
+                .expect_err("option-like token must be rejected as a value");
+            let message = error.to_string();
+            let expected = format!("{flag} requires a value");
+            assert!(message.contains(expected.as_str()), "{message}");
+            assert!(!message.contains(DUMMY), "dummy value leaked: {message}");
+            assert!(
+                !message.contains("--database-token"),
+                "token flag leaked: {message}"
+            );
+        }
     }
 
     #[test]

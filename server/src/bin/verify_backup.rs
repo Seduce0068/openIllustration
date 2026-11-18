@@ -20,22 +20,34 @@ fn print_help() {
     );
 }
 
+/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
+    match it.next() {
+        Some(value) if !value.starts_with('-') => Ok(value),
+        _ => Err(anyhow!("{flag} requires a value")),
+    }
+}
+
 /// argv の解釈だけを行う純粋関数。環境変数・プロセス引数を読まないため、
 /// 一時 DB のパスや不正な引数を直接渡してテストできる。
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
+    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
+    let owned: Vec<String> = items.into_iter().collect();
+    parse_str_args(&owned)
+}
+
+fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
     let mut args = Args::default();
-    let mut it = items.into_iter().skip(1);
+    let mut it = items.iter().skip(1).map(String::as_str);
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        match arg {
             "-h" | "--help" => args.help = true,
             "--input" => {
-                args.input = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--input requires a value"))?,
-                )
+                args.input = Some(take_value(&mut it, "--input")?.to_string());
             }
             // argv は ps 等で公開される。トークン値は受け付けず、
             // エラーにも値をエコーしない（秘密値を出力しない）。
@@ -335,6 +347,21 @@ mod tests {
         let error = parse_args_from(["verify_backup", "--bogus"].map(String::from))
             .expect_err("unknown argument must be rejected");
         assert!(error_text(&error).contains("unknown argument"), "{error:#}");
+    }
+
+    #[test]
+    fn option_like_value_is_rejected_without_echo() {
+        const DUMMY: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        let argv = ["verify_backup", "--input", "--database-token", DUMMY];
+        let error = parse_args_from(argv.map(String::from))
+            .expect_err("option-like token must be rejected as a value");
+        let message = error_text(&error);
+        assert!(message.contains("--input requires a value"), "{message}");
+        assert!(!message.contains(DUMMY), "dummy value leaked: {message}");
+        assert!(
+            !message.contains("--database-token"),
+            "token flag leaked: {message}"
+        );
     }
 
     #[test]

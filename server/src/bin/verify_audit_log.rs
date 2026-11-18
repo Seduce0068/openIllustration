@@ -32,20 +32,32 @@ fn print_help() {
     eprintln!("{HELP}");
 }
 
+/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
+    match it.next() {
+        Some(value) if !value.starts_with('-') => Ok(value),
+        _ => Err(anyhow!("{flag} requires a value")),
+    }
+}
+
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
+    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
+    let owned: Vec<String> = items.into_iter().collect();
+    parse_str_args(&owned)
+}
+
+fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
     let mut args = Args::default();
-    let mut it = items.into_iter().skip(1);
+    let mut it = items.iter().skip(1).map(String::as_str);
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        match arg {
             "-h" | "--help" => args.help = true,
             "--database-url" => {
-                args.database_url = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--database-url requires a value"))?,
-                );
+                args.database_url = Some(take_value(&mut it, "--database-url")?.to_string());
             }
             // argv は ps 等で公開される。トークン値は受け付けず、
             // エラーにも値をエコーしない（秘密値を出力しない）。
@@ -55,13 +67,10 @@ where
                 ));
             }
             "--cid" => {
-                args.cid = Some(it.next().ok_or_else(|| anyhow!("--cid requires a value"))?);
+                args.cid = Some(take_value(&mut it, "--cid")?.to_string());
             }
             "--expect-root" => {
-                args.expect_root = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--expect-root requires a value"))?,
-                );
+                args.expect_root = Some(take_value(&mut it, "--expect-root")?.to_string());
             }
             "--include-reasons" => args.include_reasons = true,
             other => return Err(anyhow!("unknown argument: {other}")),
@@ -238,6 +247,24 @@ mod tests {
         let error = parse_args_from(["verify_audit_log", "--database-token"].map(String::from))
             .expect_err("--database-token must be rejected even without a value");
         assert!(error.to_string().contains("DATABASE_TOKEN"), "{error:#}");
+    }
+
+    #[test]
+    fn option_like_value_is_rejected_without_echo() {
+        const DUMMY: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        for flag in ["--database-url", "--cid", "--expect-root"] {
+            let argv = ["verify_audit_log", flag, "--database-token", DUMMY];
+            let error = parse_args_from(argv.map(String::from))
+                .expect_err("option-like token must be rejected as a value");
+            let message = error.to_string();
+            let expected = format!("{flag} requires a value");
+            assert!(message.contains(expected.as_str()), "{message}");
+            assert!(!message.contains(DUMMY), "dummy value leaked: {message}");
+            assert!(
+                !message.contains("--database-token"),
+                "token flag leaked: {message}"
+            );
+        }
     }
 
     #[test]

@@ -30,20 +30,32 @@ fn print_help() {
     );
 }
 
+/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
+    match it.next() {
+        Some(value) if !value.starts_with('-') => Ok(value),
+        _ => Err(anyhow!("{flag} requires a value")),
+    }
+}
+
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
+    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
+    let owned: Vec<String> = items.into_iter().collect();
+    parse_str_args(&owned)
+}
+
+fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
     let mut args = Args::default();
-    let mut it = items.into_iter().skip(1);
+    let mut it = items.iter().skip(1).map(String::as_str);
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        match arg {
             "-h" | "--help" => args.help = true,
             "--database-url" => {
-                args.database_url = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--database-url requires a value"))?,
-                );
+                args.database_url = Some(take_value(&mut it, "--database-url")?.to_string());
             }
             // 認証トークンを argv（ps 等で公開される）に載せないため、環境変数のみ受け付ける。
             "--database-token" => {
@@ -52,16 +64,10 @@ where
                 ));
             }
             "--signing-key" => {
-                args.signing_key = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--signing-key requires a value"))?,
-                );
+                args.signing_key = Some(take_value(&mut it, "--signing-key")?.to_string());
             }
             "--output" => {
-                args.output = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--output requires a value"))?,
-                );
+                args.output = Some(take_value(&mut it, "--output")?.to_string());
             }
             "--include-reasons" => args.include_reasons = true,
             other => return Err(anyhow!("unknown argument: {other}")),
@@ -396,6 +402,24 @@ mod tests {
             parse_args_from(["sign_audit_export", "--database-token", "secret"].map(String::from))
                 .expect_err("--database-token must never be accepted on argv");
         assert!(error.to_string().contains("DATABASE_TOKEN"), "{error:#}");
+    }
+
+    #[test]
+    fn option_like_value_is_rejected_without_echo() {
+        const DUMMY: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        for flag in ["--signing-key", "--output", "--database-url"] {
+            let argv = ["sign_audit_export", flag, "--database-token", DUMMY];
+            let error = parse_args_from(argv.map(String::from))
+                .expect_err("option-like token must be rejected as a value");
+            let message = error.to_string();
+            let expected = format!("{flag} requires a value");
+            assert!(message.contains(expected.as_str()), "{message}");
+            assert!(!message.contains(DUMMY), "dummy value leaked: {message}");
+            assert!(
+                !message.contains("--database-token"),
+                "token flag leaked: {message}"
+            );
+        }
     }
 
     #[test]
