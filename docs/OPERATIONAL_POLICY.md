@@ -29,6 +29,11 @@ generated:
   `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン等）を含めない。ポリシー設定変更は運用者の責任で管理し、適用法令・専門家レビューの根拠を記録する。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
 - 実JPKI/マイナアプリの信頼検証が未完成の現行プロトタイプは、本番利用資格判定に使わない。
+- ログアウト時は `sid` とリフレッシュファミリの失効に加え、`/auth/logout` が
+  `refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0` の `Set-Cookie` を返すことを確認する。
+  DB 側のファミリ失効だけではブラウザに 30 日間有効な refresh_token Cookie が残るため、
+  削除 Cookie の配信がログアウト完了の条件。`Secure` は `OIDC_COOKIE_SECURE` に追随し、
+  未設定なら付与する（本番では HTTPS 配信で Secure を維持する）。
 - OIDC認証の未完了 `pending`（`state` / `nonce` / `code_verifier`）は10分TTLとし、保持数はコード定数
   `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
   上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
@@ -99,6 +104,15 @@ generated:
   クライアントの API オリジンはビルド時に `OIL_API_BASE` で注入する。値はオリジンのみ
   （`<scheme>://<host>[:<port>]`、末尾 `/` は除去）とし、パス・クエリ・認証情報・機微情報は入れない。
   未設定時は開発用の `http://localhost:3000`。HTTPS 配信では HTTPS オリジンを指定し mixed content を避ける。
+- 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する。
+  `security_headers` は `CorsLayer` の内側に加えてさらに外側にも置く。CORS プリフライト（OPTIONS 204）は
+  `CorsLayer` で短絡して内側を通らないため、外側の層が無いとヘッダーが落ちる。
+  429 / 403 / 500 / 204 とプリフライト応答を含む全経路でヘッダーが付くことをゲートで確認する。
+- 同時リクエスト上限 `MAX_CONCURRENT_REQUESTS`（既定16・範囲1〜256・超過は429）は、IP 単位の
+  レート制限とは別の同時実行境界である。permit はレスポンス完了時に解放され、長時間ハンドラが
+  permit を保持している間は後続リクエストが 429 になる。値を下げるとバースト時の 429 が増え、
+  上げると DB や外部依存への同時負荷が増えるため、本番ではキャパシティ試験の結果で設定する。
+  範囲外の値はクランプせず既定16へ倒れ、`doctor --strict` が設定不整合として警告する。
 - DBスキーマは起動時にバージョン管理マイグレーションで適用する（`_migrations` にchecksumを記録し、1ファイル1トランザクションで適用、前方のみでロールバックは提供しない）。失敗時は起動を中止し、
   失敗ファイルは適用されない。復旧は原因修正後の再起動とし、`_migrations` の記録を確認する。適用済みバージョンに対応するファイルが無い場合（古いイメージでの起動等）、
   およびマイグレーションディレクトリ自体が存在しない場合も起動を拒否する（fail-closed、ディレクトリ欠落で欠落検査をすり抜けるのを防止）。単一プロセス内の書き込みトランザクションは接続ごとのロックで直列化する（libSQL

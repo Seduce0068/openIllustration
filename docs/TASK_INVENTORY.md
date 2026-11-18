@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master 0d71017, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master 2cd2ab6, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -13,15 +13,28 @@ generated:
   at: "2026-11-18T03:49:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T11:31:17+09:00"
+  at: "2026-11-18T13:28:42+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-18T11:31:17+09:00、ブランチ `master` の HEAD は `0d71017`（`origin/master` と一致）。
-  前回確認時点 `5d9f5bd` 以降の変更は master へ反映済み。
-- 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 追加確認）:
+- 確認: 2026-11-18T13:28:42+09:00、ブランチ `master` の HEAD は `2cd2ab6`（`origin/master` と一致）。
+  前回確認時点 `0d71017` 以降の変更は master へ反映済み。
+- 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
+  - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
+    空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
+    mutation 3パターンで検出を確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+  - [対応済み 79ca230] proptest の dev-dependencies 化と性質テスト: 長年の unused dependency 警告を
+    解消し、`jpy_to_wei` / `is_valid_cid` / `summarize_reason` の境界値・Unicode混入を含む4テストを追加。
+  - [対応済み 2cd2ab6] 全応答のヘッダと logout Cookie の修正: `security_headers` を `CorsLayer` の
+    さらに外側にも置き、CORS プリフライト（OPTIONS 204）を含む 429/403/500/204 へ nosniff / DENY を付与。
+    `/auth/logout` が refresh_token 削除 Cookie（`Max-Age=0` / `Path=/auth` / `HttpOnly` / `SameSite=Strict`、
+    Secure は `OIDC_COOKIE_SECURE` に追随）を返す。同時リクエスト上限の境界・permit 解放テスト
+    （`test_max_concurrent_requests_defaults_and_bounds` /
+    `test_concurrent_request_limit_rejects_second_and_releases_permit`）を含む
+    （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- 前回確認の3コミットの反映（0d71017 時点、2026-11-18 11:31 確認、いずれも master 取り込み済み）:
   - [対応済み 230ae79] 監査スナップショット検証の整理: `verify_chain` の未使用 hashes 蓄積を削除し
     Merkle 経路を一本化。`sign_audit_snapshot` が `reasons_masked=true` で平文 `reason` が残る
     スナップショットを署名時に拒否（`governance_entries` は対象外）。`verify_chain` にも

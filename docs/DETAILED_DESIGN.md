@@ -24,7 +24,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/auth/oidc/start` | 不要 | state/nonce/PKCEを生成し認可URLを返す。OIDC未設定時は501 |
 | GET | `/auth/oidc/callback` | 不要 | 認可コードを交換し、IDトークン検証後にセッションJWTを発行する |
 | POST | `/auth/refresh` | Cookie | リフレッシュトークンを回転し新セッションJWTを発行。再利用検知時はファミリ失効 |
-| POST | `/auth/logout` | Bearer JWT | `sid` を失効させる |
+| POST | `/auth/logout` | Bearer JWT | `sid` とリフレッシュファミリを失効させ、`refresh_token` の削除 Cookie（`Max-Age=0` / `Path=/auth` / `HttpOnly` / `SameSite=Strict`、Secure は `OIDC_COOKIE_SECURE` に追随）を返す |
 | POST | `/auth/backchannel-logout` | 不要 | logout token を検証し `sid` および/または `sub` を失効させる（`sub` は `revoked_subs` テーブルへ永続化し起動時にロード） |
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
@@ -62,7 +62,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   末尾スラッシュは除去し、ワイルドカードは指定できない。本番配信オリジンの決定と値の運用は未決定。
 - 本番相当（`ALLOW_MOCK_AUTH` 無効）のみ、IP 単位のレート制限と同時実行上限を適用する。
   `RATE_LIMIT_PER_MIN`（既定60/分、有効範囲1〜600）を超過、または `MAX_CONCURRENT_REQUESTS`
-  （既定16、有効範囲1〜256）の同時実行数を超過した場合は 429 を返す。不正値・範囲外は既定値を使う。
+  （既定16、有効範囲1〜256）の同時実行数を超過した場合は 429 を返す。不正値・範囲外は既定値を使う
+  （上限256超過はクランプせず既定16へ倒れる）。同時実行 permit は `tokio::Semaphore` から取得し、
+  内側のハンドラがレスポンスを返した時点で `drop` して返却する（レスポンス完了で解放）。
+  境界値（`test_max_concurrent_requests_defaults_and_bounds`）と上限超過の 429・permit 返却
+  （`test_concurrent_request_limit_rejects_second_and_releases_permit`）をテストで固定済み。
   `/health`・`/ready`・`/metrics` は監視用のため除外し、`ALLOW_MOCK_AUTH=1` の開発時は適用しない。
 - リクエスト本文は最大10 MiB。`Content-Length` が上限を超える場合はミドルウェアが Multipart 解析より先に 413 を返す（単体テストと実サーバーで確認）。`Content-Length`
   が無い／虚偽のチャンクド転送は axum の本文制限と Multipart パーサが守り、その場合は 400 になる（多層防御）。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10
@@ -70,9 +74,14 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - IPFS 取得時にチェックサム不一致を検出した場合は 401 で拒否し、CID と redact 済みゲートウェイ URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を確認済み。
   ゲートウェイは設定順に試し、ネットワークエラー（接続失敗・タイムアウト）に限り `IPFS_MAX_ATTEMPTS`（既定1、最大5）まで同じゲートウェイを再試行する。HTTP エラー・サイズ超過・不正データは再試行せず、
   不正データは次のゲートウェイへ送らず即拒否する。
-- 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する（最外側ミドルウェア。
-  IP ゲートの 403 を含む）。`/content/{cid}` のユーザー管理バイトが HTML としてスニッフィングされる
-  リスクを防ぐ。CSP はクライアントのリソース読み込みへ影響するため本番構成確定時に別途設計する。
+- 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する。
+  `security_headers` は `CorsLayer` の内側と外側（最外側）の2か所に置く。CORS プリフライト
+  （OPTIONS 204）は `CorsLayer` で短絡して内側を通らないため、`CorsLayer` のさらに外側にも
+  `security_headers` を置く（既存の内側の層は維持）。これで IP ゲートの 403、レート制限の 429、
+  500、本文なしの 204、CORS プリフライト応答のすべてにヘッダーが付く（二重付与でも同値）。
+  初期3ケース（プリフライト/429/500）に加え 204 も回帰テストで固定済み。
+  `/content/{cid}` のユーザー管理バイトが HTML としてスニッフィングされるリスクを防ぐ。
+  CSP はクライアントのリソース読み込みへ影響するため本番構成確定時に別途設計する。
 - 一覧検索の `q` / `tag` は SQL `LIKE` のパターンとして扱うため、`\` / `%` / `_` をバックスラッシュで
   エスケープし `ESCAPE '\'` 句で照合する（値はすべてバインドパラメータで渡し、SQL 文字列へ埋め込まない）。
   ユーザーが登録したメタデータ（タイトル・説明・タグ）はサーバーでエスケープせず原文を保持・返却し、
@@ -157,6 +166,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
    `revoked_subs` テーブルへも保存し、起動時にログインへロードして再起動後も失効を維持する。再認証時は閾値より新しい `iat` を発行して再ログインを許容し、DB の閾値も削除する（多プロセス共有・実OP連携は未検証）。
 7. リフレッシュトークンは `refresh_tokens` テーブルに SHA-256 ハッシュのみ保存し、ログイン時に 30 日間有効なトークンを HttpOnly Cookie で発行する。`POST /auth/refresh`
    は毎回トークンを回転し、使用済みトークンの再提示を検知した場合はファミリ全体を失効する。ログアウト時もファミリを失効する。
+   `POST /auth/logout` はファミリ失効に加え、`refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0`
+   の `Set-Cookie` を返し、DB 失効だけではブラウザに残る Cookie を即時削除する（送られたトークン値は
+   エコーしない）。`Secure` 属性は `OIDC_COOKIE_SECURE` に追随し、未設定なら付与する（fail-closed）。
+   回帰テストで属性一式と本文 `true` の維持、および `OIDC_COOKIE_SECURE` による Secure の切替を確認済み。
 8. `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` を設定すると ID トークンの
    `acr`（いずれか一致）と `amr`（すべて含有）を検証し、欠落・不一致なら
    認証を拒否する（fail-closed）。`OIDC_MAX_AUTH_AGE_SECS` を設定すると
@@ -384,6 +397,12 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
 
 サーバーは一意なchallenge/nonceを生成し、指定マイナアプリからの提示を受ける。信頼された発行元、署名、nonce結合、audience、証明書・失効状態、必要な年齢属性を公式仕様に基づき検証し、
 成功時のみ短寿命のAPIトークンを発行する。具体API・証明形式は公式仕様確認後に確定する。
+
+現行コードの確認範囲: `server/src/jpki.rs` の `verify_presentation` は提示トークン（または envelope の
+`certificate` / `verifiableCredential`）を base64 デコードし、X.509 DER を解析して有効期限を確認してから
+公開鍵を抽出する。不正base64・非X.509バイト・期限切れ証明書・envelope空・空トークンの5エラーパスを
+テストで固定し、いずれも `Unauthorized` を要求する（mutation 3パターンで検出を確認）。
+これは証明書の解析と有効期限の検証に限り、信頼チェーン・失効・VP署名・nonce・audience の検証は未実装。
 
 トークン発行は検証済み認証トランザクションにサーバー側で結び付ける。クライアントが送る `user_hash` を認証主体として信用しない。安定識別子の生成方式は個人間追跡可能性を抑える設計と合わせて決定する。
 
