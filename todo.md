@@ -187,6 +187,8 @@ P2（品質・保守・プロダクト拡張）:
 - [x] a11y属性のE2E検証（2026-11-18）: Auditトグルのaria-expanded/dialog/Escape、
   ファイル選択ラベルのキーボード操作と価格input範囲を検証（48件）。
   aria-expandedは"true"/"false"文字列を返すよう実装を修正。
+- [x] E2Eシナリオ仕様の是正（2026-11-18）: 11件の未反映を反映。MET ID衝突を
+  NEUT-URL-02/03へ分離、a11y/CONTENT-ERR/favorites/export/GOV-01のオラクルを明記。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

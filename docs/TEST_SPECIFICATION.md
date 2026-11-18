@@ -8,7 +8,7 @@ generated:
   at: "2026-11-18T18:14:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T18:14:23+09:00"
+  at: "2026-11-18T23:28:22+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -25,13 +25,23 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   お気に入り追加削除 / `me/export`）でカバーする。実測は全48件（auth 2 / build-gate 1 / economy 3 /
   error-paths 6 / export 3 / favorites 5 / integrity 5 / metrics 3 / moderation 10 /
   real-api 4 / search 1 / upload 5）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
-  favorites の3件目以降は二重クリック防止と401の再ログイン案内、export の3件目は
-  ダウンロード開始失敗時の固定エラー表示を検証する。
+  favorites の5件はトグル基本フローに加え、二重クリック防止・401の再ログイン案内・
+  失敗後の再トグルで旧エラーを消すこと・ネットワークエラー文言の表示を検証する。
+  export の3件目はダウンロード開始失敗時の固定エラー表示（EXPORT-07）で、
+  EXPORT-11 の解析失敗とは別事象である。
+  error-paths の6件は DASH-ERR / export network / AUTH-500 / AUDIT-500 に加え、
+  CONTENT-ERR-404 / CONTENT-ERR-500（取得失敗表示と改ざん検知の誤表示回避）を含む。
+  metrics の3件は MET-01 と E2E 固有の NEUT-URL-02 / NEUT-URL-03 であり、
+  サーバー側 `observe_metrics` の MET-02 とは別 ID である。
   moderation の10件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
   2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）の回帰である。
-  integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
-  upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
-  メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記40件の内訳は変更しない。
+  integrity の5件は正規・改ざんに加え、3件目が R1-13（チェックサム一致だが JXL デコード失敗時に
+  VERIFIED にしない）、4件目が AUDIT-04 の FORENSIC_TIMELINE 順序、
+  5件目が Audit トグルの ARIA 状態と Escape 時のフォーカス復帰（a11y）を検証する。
+  upload の5件は送信成功・10 MiB 拒否・INT-02 に加え、4件目が R1-14
+  （`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）、
+  5件目がファイル選択 label のキーボード操作と価格入力の上下限（a11y）を検証する。
+  メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記48件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
   今回の3CLIへのテスト追加（doctor 24件 / verify_audit_export 17件 / verify_backup 17件）も
   全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は48件のまま変わらない。
@@ -52,7 +62,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
-| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加 | ログ集約基盤・アラート通知先の選定は未実施 |
+| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
@@ -90,7 +100,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
 | CONTENT-09 | チェックサム一致だが JXL として不正なバイト列（例: `not a jxl codestream`）を HTTP 200 で返すゲートウェイ | チェックサム検証は成功しても VERIFIED にせず、`× DECODE FAILED` と固定エラー文言を表示する | 実装済み。クライアントの `decode_error` 分岐で `set_verified = Some(false)` に切り替え、デコーダのエラー値は画面へ出さない。E2E は `e2e/tests/integrity.spec.ts` の `should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)` で検証。補助する単体テストは `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` |
-| INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／チェックサム一致＋デコード失敗） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない | 実装済み。`integrity.spec.ts` の3件（R1-13 対応でデコード失敗ケースを追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
+| INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／デコード失敗／監査順序／Audit トグルの a11y） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない。Audit トグルは `aria-expanded=false→true→false`、`aria-controls="forensic-timeline"`、`role="dialog"`（名前 `Forensic Timeline`）を満たし、Escape でトグルへフォーカスが復帰する | 実装済み。`integrity.spec.ts` の5件（R1-13 のデコード失敗、AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y を追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
+| A11Y-01 | Upload フォームのキーボード操作と価格入力の境界（R2） | ファイル選択 `label[for="file-upload"]` が `tabindex="0"` を持ち、フォーカス＋Enter で `filechooser` が発火する。`#upload-price` は `min="1"` / `max="1000000"` を満たす | 実装済み・検証済み: `e2e/tests/upload.spec.ts` の `R2: file-upload label is keyboard operable and price input has bounds`。upload.spec.ts 定義5件 |
 | FAV-01 | お気に入りの追加/削除を繰り返す | 重複追加も未登録削除も200で成功し、行数は0または1のまま。削除後の再追加も可 | 実装済み（`test_favorite_add_and_remove_are_idempotent`） |
 | FAV-02 | 未認証・不正CID・非Approvedコンテンツへの操作 | それぞれ401 / 400 / 404で拒否し、お気に入りを登録しない | 実装済み（`test_favorite_requires_auth_and_valid_approved_cid`） |
 | FAV-03 | 他人のsubを本文に指定した操作 | 増減するのは操作者本人の行のみ。他人の行は変化しない | 実装済み（`test_favorite_uses_claims_sub_only`） |
@@ -103,9 +114,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です`、不正 JSON では `集計の解析に失敗しました。` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件・投票一覧エラー2件・集計解析エラー1件を追加した現在は moderation.spec.ts 全10件 pass、フルスイートの定義数は45件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
-| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
-| MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です`、不正 JSON では `集計の解析に失敗しました。` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件・投票一覧エラー2件・集計解析エラー1件を追加した現在は moderation.spec.ts 全10件 pass、フルスイートの定義数は48件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」） |
+| MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件を含め全10件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全10件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
@@ -114,7 +125,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-04 | `reason` / `details` のマスク | `mask_reason` により既定でマスクされ、元の本文が現れない（例: `[redacted:N bytes]`） | テスト名確定: `me_export_masks_reason_and_details` |
 | EXPORT-05 | 未認証でのエクスポート要求 | 401で拒否し、データを返さない | テスト名確定: `me_export_requires_auth` |
 | EXPORT-06 | エクスポートのレスポンスヘッダとログ非出力 | `Content-Disposition: attachment; filename="openillustration-export.json"` と `Cache-Control: no-store` を付与。本文はログへ出さない | テスト名確定: `me_export_headers`。行数上限・`truncated` フラグは設けず全行を返す |
-| EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
+| EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される。ダウンロード開始が例外を投げた場合は `data-testid="export-error"`（`role="alert"`）に固定文言 `ダウンロードの開始に失敗しました。` を出し、`export-status` は出さない（成功文言も出さない）。これは EXPORT-11 の「レスポンス解析失敗」とは別事象 | 実装済み（`e2e/tests/export.spec.ts` 定義3件。chromium で pass を確認済み。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` / `R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと`。固定文言は `client/src/lib.rs:753` の確定値 |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | EXPORT-09 | `/me/export` の読み取りトランザクション | 12表の全クエリが単一の読み取りトランザクション（`BEGIN DEFERRED`）で実行され、`collect_export_snapshot` の `debug_assert!(!db.is_autocommit())` が発火しない。完了時に `tx.commit()`、エラー時は Drop が ROLLBACK | 実装済み。`me_export_queries_run_inside_read_transaction`（`db.transaction()` / `tx.commit()` を外す mutation で失敗）。下記「エクスポートの読み取りトランザクション検証」を参照 |
 | EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は48件のまま |
@@ -147,7 +158,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を全レスポンスへ付与する。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は未設計 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
-| MET-02 | `observe_metrics` の最外側配置 | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照） |
+| MET-02 | `observe_metrics` の最外側配置（サーバー側） | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照）。E2E の同名テストは下記 NEUT-URL-02 / NEUT-URL-03 として別管理 |
+| NEUT-URL-02 | プロトコル相対 URL の中立化と件数送信（E2E） | `//host/path` と Windows UNC を `href="#"` / `src="#"` へ中立化し、`{"event":"neutralized_url","count":2}` を1回だけ送る。通常の相対 URL（`/chapter/1` / `../chapter/1`）は維持 | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `MET-02: protocol-relative URL は # に中立化され件数が送信される`。ドキュメント側 ID は NEUT-URL-02（MET-02 はサーバー側 `observe_metrics` の ID で衝突するため使用しない） |
+| NEUT-URL-03 | 同一本文の再描画で client event を再送しない（E2E） | BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントしても本文取得は合計2回、`POST /metrics/client-events` は1回のまま（`REPORTED` 集合による重複除外） | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `MET-03: 同一本文の再描画では client event を再送しない`。仕様 ID は NEUT-URL-03（MET-03 は仕様に存在しない） |
 | PROP-01 | `prop_jpy_to_wei_boundaries_and_reference` | 任意の `u64` で panic しない。`0` と `MAX_ORDER_JPY` 超（上限+1 と `u64::MAX`）は `Err`、範囲内は `WEI_PER_JPY = 10^18` の独立参照値（u128 計算）と一致 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
@@ -159,7 +172,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | AUDIT-04 | `GET /content/{cid}/audit` の取得上限・新着順と検証限界 | 最新 MAX_AUDIT_LIST(500) 件を `log_id` 新しい順（DESC）で返す。501件投入なら先頭 `log_id=501`・末尾 `2`・全体降順（最古の1は除外）。古い行はAPIから参照不可で、完全検証には署名付きエクスポート/DBを使用。レスポンスには `previous_log_hash` が無く `reason` はマスクされるため、レスポンス単体でのハッシュ連鎖検証は成立しない | 実装済み（`get_content_audit` の `ORDER BY log_id DESC LIMIT ?`）。サーバー側テスト `get_content_audit_caps_at_max_audit_list` が501件投入・500件返却・先頭501・末尾2・降順を検証。E2E は `e2e/tests/integrity.spec.ts` の `/audit` モック（log_id DESC の3件）で FORENSIC_TIMELINE の表示順が新しい順であることを検証。完全な連鎖検証は AUDIT-01（署名付きエクスポート/DB）を参照 |
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
-| EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。下記同節を参照 |
+| EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。下記同節を参照 |
 
 ### 年齢ゲート共通化と TZ 境界の検証（AGE-02〜04）
 
@@ -650,11 +663,11 @@ cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- economy.spec.ts   # Support & Ledger E2E（3件: 取得失敗 HTTP 500 / route.abort の2件含む）のみ
 cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック + 投票一覧エラー・集計解析エラー E2E（10件）
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
-cd e2e && npm test -- metrics.spec.ts   # MET-01 中立化URL件数 E2E のみ
+cd e2e && npm test -- metrics.spec.ts   # 中立化URL E2E（3件: MET-01 / NEUT-URL-02 protocol-relative / NEUT-URL-03 再送抑制）のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
-cd e2e && npm test -- error-paths.spec.ts   # エラーパス E2E（4件）のみ
-cd e2e && npm test -- integrity.spec.ts   # INT-01 完全性 E2E（3件: 正規/改ざん/デコード失敗）のみ
-cd e2e && npm test -- upload.spec.ts   # R1-14 / INT-02 / CONTENT-01 Upload E2E（4件）のみ
+cd e2e && npm test -- error-paths.spec.ts   # エラーパス E2E（6件: DASH-ERR / export network / AUTH-500 / AUDIT-500 / CONTENT-ERR-404 / CONTENT-ERR-500）のみ
+cd e2e && npm test -- integrity.spec.ts   # INT-01 完全性 E2E（5件: 正規/改ざん/R1-13 デコード失敗/FORENSIC_TIMELINE 順序/R2 Audit トグル a11y）のみ
+cd e2e && npm test -- upload.spec.ts   # R1-14 / INT-02 / CONTENT-01 / R2 a11y Upload E2E（5件）のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -727,6 +740,20 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    配列の完全一致で確認する。お気に入りの POST / DELETE もメソッドとパス
    （`/content/{cid}/favorite`）の完全一致で検証し、過剰な再フェッチや想定外の
    クエリ混入を検出する。
+
+5. 失敗 → 再トグルで旧エラーが消える（`re-toggle after a failure clears the stale favorite-error`）:
+   1回目の POST を HTTP 500 で失敗させ、`favorite-error`（`role="alert"`）に
+   `Failed to update favorite (HTTP 500).` が表示され、トグルが再活性化して
+   `aria-pressed="false"` のままであることを確認する。2回目のトグルを開始すると、
+    レスポンスを保留している間でも `favorite-error` は `toHaveCount(0)` で消える。
+   このとき POST は `/content/{cid}/favorite` へちょうど2回、`/content` の再取得は
+   失敗トグルでは行われず1回のままである。2回目のレスポンス後に `aria-pressed="true"` へ進む。
+6. 401 の固定文言（`401 shows re-login guidance in favorite-error`）: POST が401を返すと、
+   `favorite-error`（`role="alert"`）に `client/src/lib.rs:1330` の確定値
+   `再ログインが必要です。` が表示される。POST は1回、`/content` の再取得は1回のままで、
+   トグルは再活性化し `aria-pressed="false"` を維持する。401 専用の文言であり、
+   500 の `Failed to update favorite (HTTP 500).` やネットワークエラーの
+   `Network error updating favorite.` とは切り替えて検証する。
 
 ### E2E 取引履歴エラーシナリオ（ECO-01）
 
@@ -816,6 +843,25 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 `reports_error_uses_only_fixed_phrases` で担保する。実行例は
 `cd e2e && npm test -- moderation.spec.ts`。chromium で10件すべて pass を確認済み。
 
+### GOV-01 要約表示の E2E（MOD-08 / MOD-09）
+
+`e2e/tests/moderation.spec.ts` の
+`GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`
+が、実サーバー結合を行わずモック `/mod/reports` に要約済み理由を返して UI 側の表示契約を検証する。
+要約処理自体の oracle は MOD-08 / MOD-09 のサーバー側テストが担い、ここでは表示と非漏えいを検証する。
+
+1. モックは `reason: '不審な投稿です [redacted]'` の通報1件を返す。これは
+   `common::summarize_reason` が元全文
+   `不審な投稿です。連絡先: reporter@example.com / 090-1234-5678 / https://phish.example.com/login`
+   を要約した後の固定値を想定する（PII は `[redacted]` へ置換される）。
+2. モック認証で MODERATION 画面を開くと、`Jury Voting Queue` の `Reason:` 行に
+   要約済み文字列と `[redacted]` が表示される（`toContainText`）。
+3. 元全文に含まれていたメール `reporter@example.com`、電話 `090-1234-5678`、
+   URL `https://phish.example.com/login` の3値について、`Reason:` 行と `body` の両方で
+   `not.toContainText` を検証する。サーバー本文・生の PII は画面へ出さない。
+4. 本シナリオは定義10件の moderation.spec.ts に含まれ、chromium で pass を確認済み。
+   認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
+
 ### E2E エクスポートシナリオ（R5-04）
 
 `e2e/tests/export.spec.ts` の `R5-04: Export My Data` は、モック認証
@@ -831,13 +877,20 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 3. レスポンス本文の全12表・他ユーザー非漏えい・除外項目・マスク・ヘッダはサーバー側の
    `me_export_*` テスト（EXPORT-01〜06）で担保する。本シナリオは UI からのダウンロード起動と
    エラー表示に焦点を当てる。削除権は未実装のため UI に存在しない。
-4. 実装側で chromium / firefox の2テストが pass していることを確認済み。webkit はホスト側の
-   libicu/libxml2 不在で起動不可（環境依存）のため未検証。
+4. ダウンロード開始失敗（`R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと`）:
+   `/me/export` の応答は成功のまま、`HTMLAnchorElement.prototype.click` を例外に差し替えて
+   ダウンロード開始だけを失敗させる。`data-testid="export-error"` が `role="alert"` 付きで
+   `client/src/lib.rs:753` の確定値 `ダウンロードの開始に失敗しました。` になり、
+   `data-testid="export-status"` は `toHaveCount(0)`（成功文言も出ない）。
+   これは EXPORT-11 の `エクスポート結果の解析に失敗しました。`（レスポンス解析失敗）とは
+   別事象であり、固定文言と testid の両方で切り分ける。
+5. `e2e/tests/export.spec.ts` は定義3件（上記1・2・4）。chromium で pass を確認済み。
+   webkit はホスト側の libicu/libxml2 不在で起動不可（環境依存）のため未検証。
 
-### E2E エラーパスシナリオ（DASH-ERR / R5-04 network / AUTH-500 / AUDIT-500）
+### E2E エラーパスシナリオ（DASH-ERR / R5-04 network / AUTH-500 / AUDIT-500 / CONTENT-ERR-404 / 500）
 
 `e2e/tests/error-paths.spec.ts` は API 自体の挙動ではなく、クライアントが失敗を画面へ告知することを
-検証する（4件）。実行コマンドは `cd e2e && npm test -- error-paths.spec.ts`。
+検証する（6件）。実行コマンドは `cd e2e && npm test -- error-paths.spec.ts`。
 テスト名は次のとおり。
 
 1. `DASH-ERR: GET /content が network error のときダッシュボードにエラー表示が出ること`:
@@ -854,11 +907,26 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    監査エンドポイントを500に差し替え、監査パネルの `data-testid="audit-error"` の
    `role="alert"` に `監査ログの取得に失敗しました (HTTP 500).` が表示される。
 
+5. `CONTENT-ERR-404: /content/{cid} が HTTP 404 のとき取得失敗文言を出し改ざん検知と誤表示しないこと`:
+   `/content/{cid}` を404で応答させ、本文へセンチネル `SERVER_DETAIL_MUST_NOT_BE_SHOWN` を含める。
+   `data-testid="content-load-error"` が `role="alert"` 付きで `Content Load Failed` になり、
+   `data-testid="content-load-error-detail"` は固定文言
+   `コンテンツの取得に失敗しました (HTTP 404).` になる。バッジ
+   `data-testid="content-verification-badge"` は `× LOAD FAILED` で、`COMPROMISED` を含まない。
+   `Integrity Breach Detected` とサーバー詳細センチネルは出ない。
+6. `CONTENT-ERR-500: /content/{cid} が HTTP 500 のとき取得失敗文言を出し改ざん検知と誤表示しないこと`:
+   404 と同一のオラクルを HTTP 500 で繰り返す。詳細文言は
+   `コンテンツの取得に失敗しました (HTTP 500).` であり、バッジは `× LOAD FAILED` のまま。
+   取得失敗はチェックサム不一致（`× COMPROMISED`）・デコード失敗（`× DECODE FAILED`）と排他である。
+   文言・testid は `client/src/lib.rs` の `content_load_error_message` /
+   `verification_badge_text` の確定値を grep して使用する（推測しない）。
+
 ### E2E 完全性検証シナリオ（INT-01 / R1-13）
 
 `e2e/tests/integrity.spec.ts` の `Forensic Integrity Verification (INT-01)` は、モック認証
 （`ALLOW_MOCK_AUTH=1`）でログイン後、`/content` と `/content/{cid}` を差し替えて検証状態の
-表示を確認する（3件）。genuine / tampered の既存2件は変更せず、R1-13 の回帰1件を追加した。
+表示を確認する（5件）。genuine / tampered の既存2件に、R1-13 のデコード失敗、
+AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y の3件を追加した。
 
 1. 正規ケース: 本文と一致する SHA-256 を登録し、`span` hasText `● VERIFIED` が出ることを確認する。
 2. 改ざんケース: チェックサム不一致の本文を返し、`× COMPROMISED` と
@@ -874,19 +942,26 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 4. デコード失敗ケースでは `● VERIFIED`、`Integrity Breach Detected`、
    `Wasm checksum does not match forensic registry.` が出ないことも同時に確認する。
    デコーダのエラー値（内部情報）は画面へ出さず、デコード成功時のみ VERIFIED に戻る。
-5. `/content/{cid}` が HTTP エラー／ネットワークエラーの場合は取得失敗の分岐へ入り、
-   `data-testid="content-verification-error"` 内に `data-testid="content-load-error"`
-   （`role="alert"`、`Content Load Failed`）と `data-testid="content-load-error-detail"`
-   （HTTP エラーは `コンテンツの取得に失敗しました (HTTP <status>).`、
-   通信失敗は `コンテンツの取得に失敗しました。`）を表示し、バッジは `× LOAD FAILED` となる。
-   この分岐はチェックサム不一致（`× COMPROMISED`）・デコード失敗（`× DECODE FAILED`）と
-   排他であり、`client/src/lib.rs` の `content_load_error_message` /
-   `verification_badge_text` が固定値を担保する。
+5. 監査順序（`should render FORENSIC_TIMELINE in log_id DESC order (newest first)`）:
+   `/audit` モックが `log_id` 3→2→1 の降順で返すとき、`content-card` 内の FORENSIC_TIMELINE の
+   `Reason:` 行が `Reason: newest log 3` / `Reason: middle log 2` / `Reason: oldest log 1`
+   の順に並ぶ。取得成功なので `audit-error` は出ない（AUDIT-04）。
+6. a11y（`R2: Audit toggle exposes ARIA state and dialog closes on Escape`）:
+   `data-testid="content-card"` 内の Audit トグルは初期状態で `aria-expanded="false"` と
+   `aria-controls="forensic-timeline"` を持つ。クリックで `aria-expanded="true"` になり、
+   `role="dialog"` かつアクセシブル名 `Forensic Timeline`（`id="forensic-timeline"`）の
+   ダイアログが表示される。トグルへフォーカスを当てて Escape を押すと `aria-expanded` が
+   `false` に戻り、ダイアログは `toHaveCount(0)`、フォーカスはトグルへ復帰する（`toBeFocused()`）。
+
+`/content/{cid}` が HTTP エラー／ネットワークエラーの場合の取得失敗表示
+（`content-load-error` / `content-load-error-detail` / `× LOAD FAILED`）は、
+error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため、ここでは重複して数えない。
+この分岐はチェックサム不一致（`× COMPROMISED`）・デコード失敗（`× DECODE FAILED`）と排他である。
 
 ### E2E Upload シナリオ（R1-14 / INT-02 / CONTENT-01）
 
 `e2e/tests/upload.spec.ts` の `Content Upload Flow` は、モック認証（`ALLOW_MOCK_AUTH=1`）
-でログイン後に UPLOAD 画面へ進み、送信成功と失敗時の表示を検証する（4件）。
+でログイン後に UPLOAD 画面へ進み、送信成功と失敗時の表示、および R2 の a11y を検証する（5件）。
 テスト名と確認点は次のとおり。
 
 1. `should upload JXL content successfully`: JXL ファイルを選択して送信し、
@@ -901,6 +976,12 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    （`Processing...` のまま固まる状態）を再現する。`data-testid="upload-status"` に固定
    文言 `アップロードの準備に失敗しました。` が表示され、送信ボタンが再活性化して
    `Processing...` のまま残らないことを確認する。
+
+5. `R2: file-upload label is keyboard operable and price input has bounds`:
+   `label[for="file-upload"]` が表示され、`tabindex="0"` を持つことを確認する。
+   ラベルへフォーカスして Enter を押すと `filechooser` イベントが発火する。
+   価格入力 `#upload-price` は `min="1"` と `max="1000000"` の属性を持ち、
+   1〜1000000 の範囲が入力可能であることを検証する。
 
 失敗時は生のエラー値・内部情報を画面へ出さず、固定文言のみを表示する。クライアント
 （`client/src/lib.rs`）は準備・通信・応答読取の各段を `Result` で伝播させ、
@@ -960,11 +1041,16 @@ HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload f
   ハッシュをページ全体の `REPORTED` 集合へ記録し、同一ソースの再描画・再マウントでは
   送信せず、別ソースのみ新たに1回送信する（`client/src/lib.rs:358-369,400-425,2615`）。
 
-#### E2E シナリオ
+#### E2E シナリオ（MET-01 / NEUT-URL-02 / NEUT-URL-03）
 
 `e2e/tests/metrics.spec.ts` の
 `MET-01: neutralized URL count is posted once as a minimal client event` が、モック認証
-（`ALLOW_MOCK_AUTH=1`）で次を確認する（chromium、1件）。
+（`ALLOW_MOCK_AUTH=1`）で次を確認する（chromium）。metrics.spec.ts は定義3件で、
+残る2件はドキュメント側 ID を NEUT-URL-02 / NEUT-URL-03 とする。
+E2E の `test()` 名（`MET-02` / `MET-03`）は変更せず、仕様上の ID のみを分離する。
+`MET-02` はサーバー側 `observe_metrics` のゲート ID（`observe_metrics` の最外側配置の検証）であり、
+`MET-03` は仕様に存在しない。したがって E2E の protocol-relative は NEUT-URL-02、
+再送抑制は NEUT-URL-03 として参照する。
 
 1. 危険 URL を 2 件含む Markdown（`[click](javascript:alert(1))` と
    `![img](data:text/html,alert)`）を Novel 本文として返し、チェックサム一致後に
@@ -975,6 +1061,18 @@ HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload f
    キーは `count` と `event` のみ。`authorization` / `x-forwarded-for` ヘッダも送らない。
 4. 204（本文なし）のモック応答で画面に `role="alert"` が出ない。API 側のバリデーションと
    カウンタの差分検証はサーバー側単体テストへ委譲し、本シナリオでは重複して検証しない。
+5. NEUT-URL-02（E2E test 名は `MET-02: protocol-relative URL は # に中立化され件数が送信される`）:
+   本文 `[phish](//evil.example/phish) ![img](//evil.example/img.png)` を Novel として返す。
+   `a[href="#"]` と `img[src="#"]` が各1件、`a[href^="//"]` と `img[src^="//"]` が0件であることを確認し、
+   `POST /metrics/client-events` は `{"event":"neutralized_url","count":2}` の1本だけとする。
+   通常の相対 URL（`/chapter/1` / `../chapter/1`）は中立化せずカウントにも含めない
+   （`client/src/lib.rs:520-539,2507`）。対応ゲートは NEUT-URL-02。
+6. NEUT-URL-03（E2E test 名は `MET-03: 同一本文の再描画では client event を再送しない`）:
+   上記 MET-01 と同じ危険 URL 2件の本文で描画し、本文取得1回・POST1回を確認した後、
+   BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントする。本文取得は合計2回へ増えるが、
+   `REPORTED` 集合（描画ソースのハッシュ）により同一ソースの再描画では送信せず、
+   POST は1本のまま `{"event":"neutralized_url","count":2}` であることを確認する
+   （`client/src/lib.rs:358-369,400-425`）。仕様 ID は NEUT-URL-03 であり MET-03 は使わない。
 
 ### observe_metrics の最外側配置の検証（MET-02）
 
