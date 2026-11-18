@@ -5912,6 +5912,36 @@ async fn test_backchannel_logout_rejects_malformed_claims() {
             "missing_sid_and_sub",
             json!({"events": {"http://schemas.openid.net/event/backchannel-logout": {}}}),
         ),
+        (
+            "non_empty_events",
+            json!({
+                "sid": "some-sid",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {"foo": "bar"}},
+            }),
+        ),
+        (
+            "events_not_an_object",
+            json!({
+                "sid": "some-sid",
+                "events": "http://schemas.openid.net/event/backchannel-logout",
+            }),
+        ),
+        (
+            "nonce_present",
+            json!({
+                "sid": "some-sid",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+                "nonce": "some-nonce",
+            }),
+        ),
+        (
+            "nonce_present_as_number",
+            json!({
+                "sid": "some-sid",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+                "nonce": 42,
+            }),
+        ),
     ];
     for (name, extra) in cases {
         let logout_token = mock.logout_token_with_claims(extra);
@@ -8363,6 +8393,71 @@ async fn test_readiness_requires_ipv6_peer() {
 }
 
 // ---- リフレッシュトークンのローテーションと盗用検知 ----
+
+/// expires_at は文字列ではなく RFC3339 の時刻として比較する。
+/// 小数秒の桁数や `Z` / `+00:00` の違いで辞書順が逆転しても誤判定しないこと。
+#[test]
+fn test_refresh_token_expired_parses_rfc3339() {
+    fn at(value: &str) -> chrono::DateTime<chrono::Utc> {
+        value.parse::<chrono::DateTime<chrono::Utc>>().unwrap()
+    }
+
+    // 同一時刻・小数秒表現違いでも <= により期限切れ（辞書順では "…00+00:00"
+    // より "…00.000+00:00" が後に来るため、文字列比較なら誤って有効と判定される）。
+    assert!(crate::oidc::refresh_token_expired(
+        "2026-01-01T00:00:00.000+00:00",
+        at("2026-01-01T00:00:00+00:00")
+    ));
+
+    // `Z` は数字より ASCII コードが大きいため辞書順が逆転する例。
+    // 時刻としては 1ns 前なので期限切れが正しい。
+    assert!(crate::oidc::refresh_token_expired(
+        "2026-01-01T00:00:00.000Z",
+        at("2026-01-01T00:00:00.000000001+00:00")
+    ));
+
+    // 小数秒を含む未来時刻は有効。境界より前（= まだ期限切れでない）も有効。
+    assert!(!crate::oidc::refresh_token_expired(
+        "2026-01-01T00:00:01.123456789+00:00",
+        at("2026-01-01T00:00:00+00:00")
+    ));
+    assert!(!crate::oidc::refresh_token_expired(
+        "2026-01-01T00:00:00.000000001+00:00",
+        at("2026-01-01T00:00:00+00:00")
+    ));
+
+    // パースできない値は fail-closed（期限切れ扱い）。
+    assert!(crate::oidc::refresh_token_expired(
+        "not-a-rfc3339-date",
+        at("2026-01-01T00:00:00+00:00")
+    ));
+    assert!(crate::oidc::refresh_token_expired(
+        "",
+        at("2026-01-01T00:00:00+00:00")
+    ));
+}
+
+/// 期限切れの refresh token（小数秒付き）は /auth/refresh で拒否される。
+#[tokio::test]
+async fn test_refresh_rejects_expired_token_with_fractional_seconds() {
+    let (app, _oidc, _mock, db) = setup_app_with_oidc().await;
+    let token = "expired-fractional-token";
+    let hash = hex::encode(Sha2Sha256::digest(token.as_bytes()));
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES (?, ?, ?, '2020-01-01T00:00:00.123456789+00:00')",
+        (hash, "expired-user", "expired-family"),
+    )
+    .await
+    .unwrap();
+
+    let (status, _, body) = post_refresh(&app, token).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "an expired refresh token must be rejected: {body}"
+    );
+}
 
 /// /auth/refresh へリクエストし、(status, _new_refresh_cookie, body) を返す。
 async fn post_refresh(app: &Router, token: &str) -> (StatusCode, String, serde_json::Value) {

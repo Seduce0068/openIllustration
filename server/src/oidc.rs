@@ -12,7 +12,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,12 +28,26 @@ const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
 pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 /// リフレッシュトークンの有効期間（30日）。
 const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// OIDC Back-Channel Logout の events クレームに必須のキー。
+const BACKCHANNEL_LOGOUT_EVENT: &str = "http://schemas.openid.net/event/backchannel-logout";
 /// リフレッシュトークンの SHA-256 ハッシュ。DB にはハッシュのみ保存する。
 /// トークン本体は UUIDv4（128bit 乱数）を base64url で表現する。
 fn hash_refresh_token(token: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// DB 保存形式（RFC3339）の `expires_at` を時刻として比較し、期限切れを判定する。
+///
+/// 文字列比較は小数秒の桁数（chrono の `AutoSi` は 0/3/6/9 桁を選ぶ）や
+/// タイムゾーン表記の違いで前後が逆転しうるため、パースして比較する。
+/// パース失敗時は fail-closed（期限切れ扱い）とする。
+pub(crate) fn refresh_token_expired(expires_at: &str, now: DateTime<Utc>) -> bool {
+    match DateTime::parse_from_rfc3339(expires_at) {
+        Ok(expires_at) => expires_at.with_timezone(&Utc) <= now,
+        Err(_) => true,
+    }
 }
 
 /// 新しいリフレッシュトークンを生成し、指定ファミリへ登録する。
@@ -321,6 +335,9 @@ struct LogoutTokenClaims {
     sub: Option<String>,
     sid: Option<String>,
     events: serde_json::Value,
+    /// Back-channel logout token には nonce を含めてはならない（仕様違反の検知用）。
+    /// 型を Value にして、文字列以外の値が入っていても確実に拒否できるようにする。
+    nonce: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -563,13 +580,22 @@ async fn verify_logout_token(
         .map_err(|_| AppError::Unauthorized("logout token validation failed".to_string()))?;
     let claims = data.claims;
 
-    if claims
+    // 仕様では events の値は空 object でなければならない。
+    // キーの存在だけを見ると {"...": {"foo": "bar"}} のような不正な値を通してしまう。
+    if !claims
         .events
-        .get("http://schemas.openid.net/event/backchannel-logout")
-        .is_none()
+        .get(BACKCHANNEL_LOGOUT_EVENT)
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|event| event.is_empty())
     {
         return Err(AppError::Unauthorized(
-            "logout token is missing the backchannel event".to_string(),
+            "logout token has an invalid backchannel event".to_string(),
+        ));
+    }
+    // 署名済みトークンなので、nonce の混入は改ざんではなく発行側の仕様違反として拒否する。
+    if claims.nonce.is_some() {
+        return Err(AppError::Unauthorized(
+            "logout token must not contain a nonce".to_string(),
         ));
     }
     if claims.sid.is_none() && claims.sub.is_none() {
@@ -800,7 +826,7 @@ pub async fn refresh(
             "refresh token reuse detected; token family revoked".to_string(),
         ));
     }
-    if expires_at <= Utc::now().to_rfc3339() {
+    if refresh_token_expired(&expires_at, Utc::now()) {
         return Err(AppError::Unauthorized("refresh token expired".to_string()));
     }
 
