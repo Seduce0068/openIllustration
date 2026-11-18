@@ -78,4 +78,55 @@ mod tests {
         let pk = verify_presentation(&b64, None, false).unwrap();
         assert!(!pk.is_empty());
     }
+
+    fn assert_unauthorized_contains(err: AppError, needle: &str) {
+        match err {
+            AppError::Unauthorized(msg) => assert!(
+                msg.contains(needle),
+                "expected Unauthorized message containing {needle:?}, got {msg:?}"
+            ),
+            other => panic!("expected AppError::Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_base64_token_is_unauthorized() {
+        let err = verify_presentation("!!!not-base64!!!", None, false).unwrap_err();
+        assert_unauthorized_contains(err, "Invalid JPKI presentation token");
+    }
+
+    #[test]
+    fn non_x509_bytes_are_rejected() {
+        // "AAECAw==" is valid base64 for 00 01 02 03, not a DER X.509 certificate.
+        let err = verify_presentation("AAECAw==", None, false).unwrap_err();
+        assert_unauthorized_contains(err, "X.509 parse failed");
+    }
+
+    #[test]
+    fn expired_certificate_is_rejected() {
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let mut params = rcgen::CertificateParams::new(vec!["expired.test".to_string()]).unwrap();
+        params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2021, 1, 1);
+        let cert = params.self_signed(&key_pair).unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(cert.der());
+        let err = verify_presentation(&b64, None, false).unwrap_err();
+        assert_unauthorized_contains(err, "Certificate is expired or not yet valid");
+    }
+
+    #[test]
+    fn envelope_without_credentials_falls_back_to_raw_token() {
+        // Both fields are None: decode_certificate_der must fall through to raw
+        // base64 decoding of the JSON text, which then fails.
+        let json = r#"{"certificate":null,"verifiableCredential":null}"#;
+        let err = verify_presentation(json, None, false).unwrap_err();
+        assert_unauthorized_contains(err, "Invalid JPKI presentation token");
+    }
+
+    #[test]
+    fn empty_token_is_rejected() {
+        // "" is valid base64 for an empty byte sequence, so it reaches X.509 parsing.
+        let err = verify_presentation("", None, false).unwrap_err();
+        assert_unauthorized_contains(err, "X.509 parse failed");
+    }
 }
