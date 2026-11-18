@@ -15,6 +15,8 @@ min_keep="${MIN_KEEP:-3}"
 bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
 gpg_recipient="${BACKUP_GPG_RECIPIENT:-}"
 gpg_bin="${GPG_BIN:-gpg}"
+# ローテーション列挙に使う find（テストで失敗を注入できるように上書き可能）。
+find_bin="${FIND_BIN:-find}"
 # 平文バックアップは開発専用。明示的なオプトアウトが無い限り拒否する
 # （オフサイト保存が設定されている場合はオプトアウトも認めない）。
 allow_plaintext="${ALLOW_UNENCRYPTED_BACKUP:-0}"
@@ -85,8 +87,13 @@ if [[ -n "$alert_cmd" && ! -x "$alert_cmd" ]]; then
 fi
 
 # 失敗時に通知する。通知自体が失敗しても元の終了コードを維持する。
+# ローテーション列挙の一時ファイルも EXIT 時に必ず削除する。
+rotation_list=""
 on_failure() {
 	local code=$?
+	if [[ -n "$rotation_list" ]]; then
+		rm -f -- "$rotation_list" || true
+	fi
 	if ((code == 0)); then
 		return 0
 	fi
@@ -165,6 +172,15 @@ fi
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
 # 保持期間を超えていても残す（誤設定で全削除されるのを防ぐ）。
 cutoff=$(($(date -u +%s) - retention_days * 86400))
+# process substitution の終了ステータスは親シェルに伝わらないため、
+# find の出力を一時ファイルへ書き出してから明示的に成否を確認する。
+rotation_list="$(mktemp "${backup_dir}/.${prefix}-rotate.XXXXXX")"
+if ! "$find_bin" "$backup_dir" -maxdepth 1 -type f \
+	\( -name "${prefix}-*.db" -o -name "${prefix}-*.db.gpg" \) -print0 |
+	sort -zr >"$rotation_list"; then
+	echo "error: failed to enumerate backups in ${backup_dir}" >&2
+	exit 1
+fi
 kept=0
 pruned=0
 while IFS= read -r -d '' file; do
@@ -178,7 +194,6 @@ while IFS= read -r -d '' file; do
 		pruned=$((pruned + 1))
 		echo "pruned: ${file}"
 	fi
-done < <(find "$backup_dir" -maxdepth 1 -type f \
-	\( -name "${prefix}-*.db" -o -name "${prefix}-*.db.gpg" \) -print0 | sort -zr)
+done <"$rotation_list"
 
 echo "==> complete: kept=${kept} pruned=${pruned} retention_days=${retention_days}"

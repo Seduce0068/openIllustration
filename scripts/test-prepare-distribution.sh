@@ -10,6 +10,14 @@ trap 'rm -rf "$work"' EXIT
 
 mkdir -p "${work}/bin"
 
+# ライセンス本文コピーループ用の fixture。ダミー文字列のみを使う
+# （実ライセンス全文や秘密情報は使わない）。
+fixture_dir="${work}/fixtures"
+mkdir -p "${fixture_dir}/crate-a" "${fixture_dir}/crate-b" "${fixture_dir}/missing"
+printf 'DUMMY LICENSE TEXT A\nsecond line\n' >"${fixture_dir}/crate-a/LICENSE"
+printf 'DUMMY LICENSE TEXT B\n' >"${fixture_dir}/crate-b/LICENSE-MIT"
+export DUMMY_FIXTURE_DIR="${fixture_dir}"
+
 # cargo deny / cargo metadata のダミー。固定 JSON を返し、licenses 検査は
 # DUMMY_CARGO_DENY_FAIL=1 のときだけ失敗させる（fail-closed の検証用）。
 cat >"${work}/bin/cargo" <<'EOF'
@@ -18,7 +26,42 @@ set -euo pipefail
 
 case "${1:-}" in
 	metadata)
-		printf '%s\n' '{"packages":[]}'
+		# license_file が実在する通常 fixture と、存在しないパスを指す
+		# fail-closed 検証用 fixture を DUMMY_METADATA_MISSING_LICENSE で切り替える。
+		if [[ "${DUMMY_METADATA_MISSING_LICENSE:-0}" == "1" ]]; then
+			# license_file も manifest_dir 配下の候補も存在しないため、
+			# prepare-distribution.sh は非 0 で失敗する必要がある。
+			jq -n --arg dir "${DUMMY_FIXTURE_DIR:?}" '{
+				packages: [
+					{
+						name: "missing-license-crate",
+						version: "0.1.0",
+						license_file: ($dir + "/missing/NO_SUCH_LICENSE"),
+						manifest_path: ($dir + "/missing/Cargo.toml"),
+						source: "registry+https://example.invalid/index"
+					}
+				]
+			}'
+		else
+			jq -n --arg dir "${DUMMY_FIXTURE_DIR:?}" '{
+				packages: [
+					{
+						name: "fixture-crate-a",
+						version: "1.2.3",
+						license_file: ($dir + "/crate-a/LICENSE"),
+						manifest_path: ($dir + "/crate-a/Cargo.toml"),
+						source: "registry+https://example.invalid/index"
+					},
+					{
+						name: "fixture-crate-b",
+						version: "4.5.6",
+						license_file: ($dir + "/crate-b/LICENSE-MIT"),
+						manifest_path: ($dir + "/crate-b/Cargo.toml"),
+						source: "registry+https://example.invalid/index"
+					}
+				]
+			}'
+		fi
 		exit 0
 		;;
 	deny)
@@ -135,13 +178,28 @@ assert_notice_matches_tsv() {
 	fi
 }
 
+# コピー先のライセンス本文が fixture と完全一致することを検証する。
+assert_license_text() {
+	local dir="$1" name="$2" file="$3" expected="$4"
+	if [[ -f "${dir}/THIRD_PARTY_LICENSES/${file}" ]] && cmp -s "${dir}/THIRD_PARTY_LICENSES/${file}" "${expected}"; then
+		echo "PASS ${name}: ${file} matches fixture"
+	else
+		echo "FAIL ${name}: ${file} missing or differs from fixture"
+		failures=$((failures + 1))
+	fi
+}
+
 echo "=== ケース1: 通常生成と4成果物の存在 ==="
 expect_success "case1 generate" bash "$script" "$normal_out"
 assert_present "$normal_out" "case1 artifacts"
+assert_license_text "$normal_out" "case1 license text" "fixture-crate-a-1.2.3.txt" "${fixture_dir}/crate-a/LICENSE"
+assert_license_text "$normal_out" "case1 license text" "fixture-crate-b-4.5.6.txt" "${fixture_dir}/crate-b/LICENSE-MIT"
 
 echo "=== ケース2: NOTICE 件数と DEPENDENCIES.tsv 行数の整合（固定値なし） ==="
 expect_success "case2 generate" bash "$script" "$consistency_out"
 assert_notice_matches_tsv "$consistency_out" "case2 consistency"
+assert_license_text "$consistency_out" "case2 license text" "fixture-crate-a-1.2.3.txt" "${fixture_dir}/crate-a/LICENSE"
+assert_license_text "$consistency_out" "case2 license text" "fixture-crate-b-4.5.6.txt" "${fixture_dir}/crate-b/LICENSE-MIT"
 
 echo "=== ケース3: deny 失敗時の fail-closed（成果物なし） ==="
 expect_failure "case3 deny failure" env DUMMY_CARGO_DENY_FAIL=1 bash "$script" "$fail_out"
@@ -174,6 +232,14 @@ else
 	failures=$((failures + 1))
 fi
 assert_notice_matches_tsv "$existing_out" "case4 consistency"
+assert_license_text "$existing_out" "case4 license text" "fixture-crate-a-1.2.3.txt" "${fixture_dir}/crate-a/LICENSE"
+assert_license_text "$existing_out" "case4 license text" "fixture-crate-b-4.5.6.txt" "${fixture_dir}/crate-b/LICENSE-MIT"
+
+echo "=== ケース5: ライセンス本文コピー失敗時の fail-closed ==="
+# license_file が存在せずフォールバック候補もない場合、prepare-distribution.sh は
+# 非 0 で終了する必要がある（黙ってスキップして成功してはいけない）。
+missing_license_out="${work}/out-missing-license"
+expect_failure "case5 missing license file" env DUMMY_METADATA_MISSING_LICENSE=1 bash "$script" "$missing_license_out"
 
 if ((failures > 0)); then
 	echo "prepare-distribution tests FAILED (${failures})" >&2

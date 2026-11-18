@@ -148,6 +148,38 @@ else
 	failures=$((failures + 1))
 fi
 
+echo "=== find 失敗時の fail-closed ==="
+# backup-rotate.sh は BACKUP_DIR を mkdir -p してから列挙するため、
+# 存在しないディレクトリでは find まで到達しない。FIND_BIN に失敗する
+# 実行ファイルを渡し、列挙失敗が process substitution で飲み込まれないことを検証する。
+cat >"${work}/failing-find" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated find failure" >&2
+exit 42
+EOF
+chmod +x "${work}/failing-find"
+: >"${ALERT_LOG}"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+expect_failure "find failure propagates" env BACKUP_GPG_RECIPIENT=test FIND_BIN="${work}/failing-find" ALERT_CMD="${work}/alert.sh" "$script"
+if [[ -s "${ALERT_LOG}" ]]; then
+	echo "PASS alert invoked on find failure"
+else
+	echo "FAIL alert not invoked on find failure"
+	failures=$((failures + 1))
+fi
+if grep -q "==> complete:" "${work}/out.log"; then
+	echo "FAIL complete reported despite find failure"
+	failures=$((failures + 1))
+else
+	echo "PASS no complete on find failure"
+fi
+if compgen -G "${work}/backups/.openillustration-rotate.*" >/dev/null; then
+	echo "FAIL leftover rotation temp file"
+	failures=$((failures + 1))
+else
+	echo "PASS rotation temp file cleaned up"
+fi
+
 echo "=== 一時ファイルの権限と後片付け ==="
 mapfile -d '' artifacts < <(find "${work}/backups" -maxdepth 1 -type f \
 	-name 'openillustration-*.db.gpg' -print0)

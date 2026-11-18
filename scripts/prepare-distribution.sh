@@ -77,6 +77,10 @@ echo "$metadata" | jq -r '
 	fi
 	if [[ -n "$src" ]]; then
 		cp "$src" "${out_dir}/THIRD_PARTY_LICENSES/${name}-${version}.txt"
+	else
+		# ライセンス本文が取得できない依存は、不完全な配布物を作らないため fail-closed。
+		echo "no license text found for ${name}-${version}" >&2
+		exit 1
 	fi
 done
 

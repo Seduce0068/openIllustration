@@ -153,23 +153,58 @@ cargo build -p server --locked
 (cd client && npm ci --ignore-scripts --no-audit --no-fund && npm run build-css)
 (cd client && trunk build)
 # 外部 CDN / フォントへの参照が残っていないことをゲートする。
-if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' client/dist/index.html; then
-	echo "external asset reference remains in client/dist/index.html" >&2
+# 先に対象ファイルの存在を明示確認する（欠落時に grep が 2 を返す前に fail-fast）。
+if [[ ! -f client/dist/index.html ]]; then
+	echo "required file is missing: client/dist/index.html" >&2
 	exit 1
 fi
-# CSS 側からの外部参照もゲートする（入力 CSS と、存在する場合の生成 CSS）。
+if [[ ! -f client/input.css ]]; then
+	echo "required file is missing: client/input.css" >&2
+	exit 1
+fi
+
+# grep の終了コードは 0（一致）/1（不一致）/2（エラー）を区別し、意図的に
+# 無視するのは 1 だけ。set -euo pipefail 下では `cmd || status=$?` の形で
+# 捕捉すれば errexit を発動させずに grep 自身の終了コードが得られる。
+# ここでは grep をパイプに包まないため $? は grep の終了コード（PIPESTATUS[0] と
+# 同じ値）になる。将来パイプを導入する場合は末尾コマンドの $? ではなく
+# PIPESTATUS[0] を読むこと（末尾の成功で 2 が隠れ fail-open になるため）。
+assert_no_external_asset_reference() {
+	local target_file="$1"
+	local grep_status=0
+	grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' "$target_file" || grep_status=$?
+	case "$grep_status" in
+	0)
+		echo "external asset reference remains in ${target_file}" >&2
+		exit 1
+		;;
+	1)
+		# 不一致は想定どおり。この終了コードだけを意図的に無視する。
+		;;
+	*)
+		echo "failed to scan ${target_file} for external asset references (grep status: ${grep_status})." >&2
+		exit 1
+		;;
+	esac
+}
+
+assert_no_external_asset_reference client/dist/index.html
+
+# CSS 側からの外部参照もゲートする（入力 CSS と生成 CSS）。
 # 判定ロジック・エラー文言は index.html のゲートと同じものを使用する。
 external_css_files=(client/input.css)
-if [[ -d client/dist ]]; then
-	while IFS= read -r generated_css; do
-		external_css_files+=("$generated_css")
-	done < <(find client/dist -type f -name '*.css' -print)
+# <(find ...) のプロセス置換は find の終了コードを隠して fail-open になるため、
+# 一時ファイルへ出力してから明示的に成否を確認する（workdir は EXIT trap で削除）。
+generated_css_list="${workdir}/generated-css.list"
+if ! find client/dist -type f -name '*.css' -print >"$generated_css_list"; then
+	echo "failed to enumerate generated CSS under client/dist." >&2
+	exit 1
 fi
+while IFS= read -r generated_css; do
+	external_css_files+=("$generated_css")
+done <"$generated_css_list"
 for css_file in "${external_css_files[@]}"; do
-	if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' "$css_file"; then
-		echo "external asset reference remains in ${css_file}" >&2
-		exit 1
-	fi
+	assert_no_external_asset_reference "$css_file"
 done
 
 echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
