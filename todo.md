@@ -62,7 +62,7 @@ P1（本番運用の健全性）:
   `verify_audit_export` に `--expect-root` と `VerificationOutcome` / `verify_export` の
   純粋化で17テスト、`verify_backup` は `--database-token` を argv で拒否（
   `DATABASE_TOKEN` 環境変数のみ）＋sidecar fail-closed で17テスト。
-  全て `server/src/bin/` のサーバー側 bin テストであり E2E は37件のまま（CLI-01〜03）
+  全て `server/src/bin/` のサーバー側 bin テストであり E2E は40件のまま（CLI-01〜03）
 - [x] SSRF リダイレクト無効化と XFF/IPv4-compatible 形式の hardened 解釈
   （2026-11-18 対応済み・未コミット、SSRF 2件 + XFF 11件のサーバー側テスト、
   `Policy::none()` で 3xx は追従せずフェイルオーバー、NET-05 / NET-06）
@@ -71,7 +71,7 @@ P1（本番運用の健全性）:
 - [x] `/me/export` の12表読み取りを単一の読み取りトランザクション化（2026-11-18 対応済み・未コミット、
    EXPORT-09 / EXPORT-10）: `BEGIN DEFERRED` で包み、`debug_assert!(!db.is_autocommit())` と明示
    `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点スナップショットを
-   返す検証を含むサーバー側テスト2件。E2E は37件のまま
+   返す検証を含むサーバー側テスト2件。E2E は40件のまま
 - [x] 監査タイムラインの理由マスク（2026-11-18 対応済み・未コミット、AUDIT-03）:
    `get_content_audit` が `reason` に `summarize_reason` を適用し、ハッシュ検証用の `entry_hash`
    は DB の生値を維持。DB 全文も不変。サーバー側テスト1件
@@ -122,7 +122,7 @@ P2（品質・保守・プロダクト拡張）:
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
   E2E 定義数は37件（現行）。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 37件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 40件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -143,7 +143,7 @@ P2（品質・保守・プロダクト拡張）:
    `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
    「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [x] 型境界とビルドゲート（2026-11-18）: 注文のNULL価格を400へ統一、CSS側CDN参照と
-  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 37件。
+  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 40件。
   ※ 本番投票は実JPKI署名が未実装のため現状401（外部要因DEC-01）。
 - [x] トランザクション安全性（2026-11-18）: exportのBEGINをwrite_lock配下へ、
   期限切れ更新と固定アドレス注文INSERTをtx内へ統一（高リスクの500を解消）。
@@ -157,6 +157,9 @@ P2（品質・保守・プロダクト拡張）:
   JWT検証鍵2048bit、clock skew範囲+doctor、自己署名JPKI拒否、Pinata CID検証、
   auth_verifyのDB失効削除と自己デッドロック解消、DBトークンargv拒否、
   restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
+- [x] 定数単一情報源化とエラー表示（2026-11-18）: clock skew 定数を pub use で共有、
+  favorite 再試行クリアの E2E、Ledger の /transactions 失敗表示（role=alert）。
+  E2E 40件。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
@@ -168,30 +171,30 @@ P2（品質・保守・プロダクト拡張）:
 - [x] R2-09: `get_content` を `status = 'Approved'` で絞り、Reported/Rejected を 404 化（2026-11-17）
 - [x] 未コミット変更のドキュメント反映（2026-11-18）: メトリクス最外側化・決済 bind 署名 v2・監査CLI硬化を
   DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY / AUDIT_EXPORT_RUNBOOK へ記載。
-  E2E 定義は37件のまま（今回の追加はサーバー側テスト5件）。git commit/push は親エージェントが実施。
+  E2E 定義は40件のまま（今回の追加はサーバー側テスト5件）。git commit/push は親エージェントが実施。
 - [x] 3CLIの自動テスト追加のドキュメント反映（2026-11-18）: doctor / verify_audit_export /
   verify_backup の純粋関数化・`--expect-root`・`--database-token` 拒否・sidecar fail-closed と
   各24/17/17テストを TEST_SPECIFICATION（CLI-01〜03 ゲート）・DETAILED_DESIGN・
   AUDIT_EXPORT_RUNBOOK・BACKUP_RESTORE_RUNBOOK・TASK_INVENTORY へ反映。
-  E2E 定義は37件のまま（全てサーバー側 bin テスト）。frontmatter 日時は `date` 実測値へ更新。
+  E2E 定義は40件のまま（全てサーバー側 bin テスト）。frontmatter 日時は `date` 実測値へ更新。
   git commit/push は親エージェントが実施。
 - [x] ネットワーク hardening のドキュメント反映（2026-11-18）: SSRF リダイレクト無効化
   （`Policy::none()`、3xx フェイルオーバー、2件）、XFF 追記型/上書き型の解釈と
   IPv4-compatible（`::a.b.c.d`）拒否（11件）、`doctor --strict` の
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` 警告（13カテゴリ・24テスト）を
   DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / INFRA_NETWORK /
-  TASK_INVENTORY へ記載。E2E は37件のまま。frontmatter 日時は `date` 実測値へ更新。
+  TASK_INVENTORY へ記載。E2E は40件のまま。frontmatter 日時は `date` 実測値へ更新。
   git commit/push は親エージェントが実施。
 - [x] 年齢ゲート共通化・TZ ローカル日付・`/me/export` 読み取りトランザクションのドキュメント反映
    （2026-11-18）: 実コードを grep して確定した値のみを DETAILED_DESIGN / AGE_VALIDATION_POLICY /
    OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY へ記載。新規テスト5件は
-   AGE-03 / AGE-04 / EXPORT-09 / EXPORT-10 の各ゲートへ反映し、E2E 定義は37件のまま。
+   AGE-03 / AGE-04 / EXPORT-09 / EXPORT-10 の各ゲートへ反映し、E2E 定義は40件のまま。
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 - [x] 監査マスク・投票署名 v2・価格 NULL・エクスポート解析のドキュメント反映（2026-11-18）:
    実コード（`server/src/lib.rs` / `server/src/tests.rs` / `client/src/lib.rs`）を grep して確定した
    値のみを DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY /
    ADR-0004 へ記載。新規テスト7件（監査マスク1件・投票 v2 4件・価格 NULL 1件・クライアント解析1件）は
-   AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 の各ゲートへ反映し、E2E 定義は37件のまま。
+   AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 の各ゲートへ反映し、E2E 定義は40件のまま。
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 - [x] 敵対的レビュー指摘（期限 TOCTOU・旧設計記述）の対応（2026-11-18）:
    `verify_order` が検証 I/O 完了後に tx 内の最新 `expires_at` を再判定し、期限切れなら
@@ -206,7 +209,7 @@ P2（品質・保守・プロダクト拡張）:
 ## メモ
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
-  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は37件（12 spec）。
+  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は40件（12 spec）。
 - 詳細な残タスク棚卸しは `docs/TASK_INVENTORY.md`、レビュー履歴は `docs/REVIEW_REPORT.md`、
   未知タスク調査は `docs/UNKNOWN_TASKS_INVESTIGATION.md` を参照。
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。
@@ -214,4 +217,4 @@ P2（品質・保守・プロダクト拡張）:
   他の項目はレポートの静的推論を含むため、着手時に事実確認する。
 - 今回の反映は未コミットの `server/src/lib.rs` / `oidc.rs` / `tests.rs` と
   `client/src/lib.rs` を grep した確定値に基づく。
-  E2E 定義数37件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。
+  E2E 定義数40件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。
