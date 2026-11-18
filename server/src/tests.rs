@@ -413,6 +413,10 @@ struct MockOidcServer {
     forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     /// 設定時は ID トークンヘッダから kid を省略する（kid 必須検査のテスト用）。
     omit_kid: Arc<std::sync::Mutex<bool>>,
+    /// 設定時は ID トークンの nbf を絶対 UNIX 時刻で上書きする（R1-19 nbf 検証用）。
+    nbf_override: Arc<std::sync::Mutex<Option<usize>>>,
+    /// 設定時は ID トークンから nbf クレームを省略する（Option 扱いの確認用）。
+    omit_nbf: Arc<std::sync::Mutex<bool>>,
     /// 設定時は auth_time クレームを発行する（max_age 検証用）。
     auth_time: AuthTimeOverride,
     state: Arc<MockOidcState>,
@@ -438,6 +442,8 @@ impl MockOidcServer {
         let at_hash_override = Arc::new(std::sync::Mutex::new(None));
         let forged_key_der = Arc::new(std::sync::Mutex::new(None));
         let omit_kid = Arc::new(std::sync::Mutex::new(false));
+        let nbf_override = Arc::new(std::sync::Mutex::new(None));
+        let omit_nbf = Arc::new(std::sync::Mutex::new(false));
         let auth_time = Arc::new(std::sync::Mutex::new(None));
         let state = Arc::new(MockOidcState {
             base_url: base_url.clone(),
@@ -446,6 +452,8 @@ impl MockOidcServer {
             at_hash_override: at_hash_override.clone(),
             forged_key_der: forged_key_der.clone(),
             omit_kid: omit_kid.clone(),
+            nbf_override: nbf_override.clone(),
+            omit_nbf: omit_nbf.clone(),
             assurance: Arc::new(std::sync::Mutex::new(None)),
             auth_time: auth_time.clone(),
             encoding_key,
@@ -475,6 +483,8 @@ impl MockOidcServer {
             at_hash_override,
             forged_key_der,
             omit_kid,
+            nbf_override,
+            omit_nbf,
             auth_time,
             state,
             handle,
@@ -558,6 +568,10 @@ struct MockOidcState {
     at_hash_override: Arc<std::sync::Mutex<Option<String>>>,
     forged_key_der: Arc<std::sync::Mutex<Option<Vec<u8>>>>,
     omit_kid: Arc<std::sync::Mutex<bool>>,
+    /// 設定時は ID トークンの nbf を絶対 UNIX 時刻で上書きする（R1-19 nbf 検証用）。
+    nbf_override: Arc<std::sync::Mutex<Option<usize>>>,
+    /// 設定時は ID トークンから nbf クレームを省略する（Option 扱いの確認用）。
+    omit_nbf: Arc<std::sync::Mutex<bool>>,
     /// Some の場合のみ acr/amr クレームを発行する（保証レベル検証用）。
     assurance: AssuranceOverride,
     /// Some の場合のみ auth_time クレームを発行する（max_age 検証用）。
@@ -607,6 +621,12 @@ async fn mock_token(
         "at_hash": at_hash,
     });
     let mut claims = claims;
+    // R1-19: nbf を差し替える／省略して、検証の有無を観測できるようにする。
+    if *state.omit_nbf.lock().unwrap() {
+        claims.as_object_mut().unwrap().remove("nbf");
+    } else if let Some(nbf) = *state.nbf_override.lock().unwrap() {
+        claims["nbf"] = json!(nbf);
+    }
     if let Some((acr, amr)) = state.assurance.lock().unwrap().clone() {
         claims["acr"] = json!(acr);
         claims["amr"] = json!(amr);
@@ -5625,6 +5645,71 @@ async fn test_oidc_rejects_at_hash_mismatch() {
         text.contains("at_hash mismatch"),
         "client must receive the at_hash rejection: {text}"
     );
+}
+
+/// R1-19 / ADR-0002: 未来の nbf を持つ ID トークンは 401 で拒否される。
+/// clock skew (60 秒) を十分に超える値を設定し、validate_nbf が効くことを確認する。
+#[tokio::test]
+async fn test_oidc_rejects_future_nbf() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let now = chrono::Utc::now().timestamp() as usize;
+    *mock.nbf_override.lock().unwrap() = Some(now + 3600);
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).unwrap();
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("ID token validation failed"),
+        "client must receive the nbf rejection: {text}"
+    );
+}
+
+/// R1-19: nbf は Option なので、クレーム欠落時も従来どおり受理される。
+#[tokio::test]
+async fn test_oidc_accepts_missing_nbf() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    *mock.omit_nbf.lock().unwrap() = true;
+
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    assert_eq!(body["authorized"], true);
+}
+
+/// R1-19: clock skew (60 秒) 内の未来 nbf は受理される（既存の有効トークンも壊れない）。
+#[tokio::test]
+async fn test_oidc_accepts_nbf_within_clock_skew() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let now = chrono::Utc::now().timestamp() as usize;
+    *mock.nbf_override.lock().unwrap() = Some(now + 30);
+
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    assert_eq!(body["authorized"], true);
 }
 
 /// JWKS 未登録の鍵で署名された ID トークンは 401 で拒否される

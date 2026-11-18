@@ -475,6 +475,10 @@ async fn verify_id_token(
     validation.set_audience(std::slice::from_ref(&oidc.config.client_id));
     validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
     validation.leeway = oidc.config.clock_skew_secs;
+    // R1-19 / ADR-0002: jsonwebtoken 12 の既定は validate_nbf = false のため明示的に有効化する。
+    // leeway には OIDC_CLOCK_SKEW_SECS を流用する。nbf は Option であり必須クレームには
+    // 含めないため、クレーム欠落時は従来どおり受理される（値がある場合のみ検証される）。
+    validation.validate_nbf = true;
 
     let data = decode::<IdTokenClaims>(id_token, &key, &validation)
         .map_err(|_| AppError::Unauthorized("ID token validation failed".to_string()))?;
