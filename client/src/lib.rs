@@ -3,8 +3,10 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{CowStr, Event, HeadingLevel, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::fmt::Write as _;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement};
 
@@ -121,6 +123,24 @@ fn build_content_query(q: &str, tag: &str, content_type: &str, favorite_only: bo
     } else {
         format!("?{}", params.join("&"))
     }
+}
+
+/// テキスト入力（q/tag/type）から GET までのデバウンス間隔（ms）。
+/// `favorite_only` 変更と refresh_counter（お気に入りトグルの成功通知）は
+/// 即時取得とし、このデバウンスを適用しない（コメントは Dashboard 参照）。
+const SEARCH_DEBOUNCE_MS: i32 = 250;
+
+/// レスポンスを画面へ反映してよいかを判定する純粋ヘルパー。
+/// 入力変化のたびに世代を進めるため、最新世代の応答だけを採用する。
+fn should_apply_response(current_generation: u64, response_generation: u64) -> bool {
+    current_generation == response_generation
+}
+
+/// 実行中のデバウンスタイマー。ハンドルと Rust 側の Closure を保持し、
+/// 次回の入力で `clearTimeout` と Closure の drop を行う。
+struct PendingFetch {
+    handle: Option<i32>,
+    closure: Closure<dyn FnMut()>,
 }
 
 /// 一覧カードに表示するメタデータを組み立てる。
@@ -242,16 +262,34 @@ fn sanitize_heading_slug(text: &str) -> String {
 
 /// 既に使われている slug と衝突しない一意の値を割り当てる。
 /// 例: `foo`, `foo-1`, `foo-2`。
-fn assign_unique_slug(base: &str, used: &mut HashSet<String>) -> String {
+///
+/// `used` は「使用済み slug → 次に試す連番」を保持する HashMap。
+/// 初回は `foo` を採用して `used["foo"] = 1` を記録し、衝突時はその
+/// 連番から `foo-1`, `foo-2` ... を試す。採番した slug も同じくキーとして
+/// 記録するので、明示的な `foo-1` 見出しとの衝突も旧実装どおり回避できる。
+/// 使用済み slug を先頭から走査する旧実装は同一見出しが並ぶと O(N²) だったが、
+/// 連番を覚えることでならし O(1) で採番できる。
+fn assign_unique_slug(base: &str, used: &mut HashMap<String, usize>) -> String {
     let base = sanitize_heading_slug(base);
-    let mut candidate = base.clone();
-    let mut suffix = 1usize;
-    while used.contains(&candidate) {
-        candidate = format!("{base}-{suffix}");
-        suffix += 1;
+    loop {
+        match used.get(&base).copied() {
+            None => {
+                // 未使用の slug。次に試す連番 1 を記録して採用。
+                used.insert(base.clone(), 1);
+                return base;
+            }
+            Some(next) => {
+                // 使用済み。記録された連番から順に空きを探す。
+                used.insert(base.clone(), next + 1);
+                let candidate = format!("{base}-{next}");
+                if !used.contains_key(&candidate) {
+                    // 生成した slug も使用済みとして記録する。
+                    used.insert(candidate.clone(), 1);
+                    return candidate;
+                }
+            }
+        }
     }
-    used.insert(candidate.clone());
-    candidate
 }
 
 /// Markdown を一度だけ解析し、見出しのレベル・表示名・一意 slug を集める。
@@ -259,7 +297,7 @@ fn assign_unique_slug(base: &str, used: &mut HashSet<String>) -> String {
 /// TOC のアンカーと本文の見出し id は必ず一致する。
 fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
     let mut headings = Vec::new();
-    let mut used = HashSet::new();
+    let mut used = HashMap::new();
     let mut current: Option<(HeadingLevel, String)> = None;
 
     for event in Parser::new(markdown) {
@@ -844,33 +882,107 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
 
+    // レスポンスの世代カウンタ。入力変化ごとに進め、古い応答は捨てる。
+    // Leptos の StoredValue は SyncStorage を要求するため、ここでは
+    // wasm シングルスレッド前提の Rc を Effect クロージャで直接共有する。
+    let generation = Rc::new(Cell::new(0u64));
+    // 直近の「即時取得トリガー」の値。テキスト入力との切り分けに使う。
+    let last_immediate = Rc::new(Cell::new((false, 0u32)));
+    // 実行中のデバウンスタイマー。
+    let pending_fetch = Rc::new(RefCell::new(None::<PendingFetch>));
+    // on_cleanup は Send+Sync を要求するため、Rc を含む PendingFetch ではなく
+    // タイマーハンドル（i32）だけを StoredValue に持つ。
+    let timer_handle = StoredValue::new(None::<i32>);
+
     Effect::new(move |_| {
-        let token = token_stored.get_value();
-        // 入力 signal をここで読むことで、変化のたびに再取得する。
-        let query = build_content_query(
-            &q.get(),
-            &tag.get(),
-            &content_type.get(),
-            favorite_only.get(),
-        );
-        // お気に入りトグルの成功通知も再取得のトリガーにする。
-        let _refresh = refresh_counter.get();
-        spawn_local(async move {
-            match Request::get(&format!("{}/content{}", API_BASE, query))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        // 再実行前とアンマウント時にタイマーを止め、破棄済み Closure が
+        // 呼ばれないようにする（Rc 側の Closure は再実行時に drop される）。
+        on_cleanup(move || {
+            if let Some(handle) = timer_handle.get_value()
+                && let Some(window) = web_sys::window()
             {
-                Ok(res) if res.ok() => {
-                    if let Ok(list) = res.json::<Vec<ContentMeta>>().await {
-                        set_error.set(String::new());
-                        set_items.set(list);
-                    }
-                }
-                Ok(_) => set_error.set("Failed to load content index.".to_string()),
-                Err(_) => set_error.set("Network error loading content.".to_string()),
+                window.clear_timeout_with_handle(handle);
             }
         });
+        let favorite = favorite_only.get();
+        let refresh = refresh_counter.get();
+        let previous = last_immediate.get();
+        // 採用した方式: q/tag/type のテキスト入力だけ 250ms デバウンスする。
+        // favorite_only の変更と refresh_counter（お気に入りトグルの成功通知）は
+        // 即時取得する。これらはユーザーの明示操作なので待たせず、
+        // かつ連続テキスト入力による 1 文字ごとの GET を防ぐ。
+        let immediate = favorite != previous.0 || refresh != previous.1;
+        last_immediate.set((favorite, refresh));
+
+        // テキスト signal もここで読み、入力変化を Effect の追跡対象にする。
+        let query = build_content_query(&q.get(), &tag.get(), &content_type.get(), favorite);
+        let token = token_stored.get_value();
+
+        let generation_cell = Rc::clone(&generation);
+        let response_generation = generation_cell.get() + 1;
+        generation_cell.set(response_generation);
+
+        // 前回の予約をキャンセル（デバウンス）。Closure も drop して
+        // キャンセル済みタイマーの Rust 側データが残らないようにする。
+        let pending = Rc::clone(&pending_fetch);
+        if let Some(old) = pending.borrow_mut().take() {
+            if let Some(handle) = old.handle {
+                window.clear_timeout_with_handle(handle);
+            }
+            drop(old.closure);
+        }
+
+        let fetch = move || {
+            let query = query.clone();
+            let token = token.clone();
+            let generation_cell = Rc::clone(&generation_cell);
+            spawn_local(async move {
+                match Request::get(&format!("{}/content{}", API_BASE, query))
+                    .header("Authorization", &format!("Bearer {}", token))
+                    .send()
+                    .await
+                {
+                    Ok(res) if res.ok() => match res.json::<Vec<ContentMeta>>().await {
+                        Ok(list) => {
+                            if should_apply_response(generation_cell.get(), response_generation) {
+                                set_error.set(String::new());
+                                set_items.set(list);
+                            }
+                        }
+                        // HTTP 成功でも JSON 解析失敗なら無音にせず固定文言を出す。
+                        Err(_) => {
+                            if should_apply_response(generation_cell.get(), response_generation) {
+                                set_error.set("Failed to load content index.".to_string());
+                            }
+                        }
+                    },
+                    Ok(_) => {
+                        if should_apply_response(generation_cell.get(), response_generation) {
+                            set_error.set("Failed to load content index.".to_string());
+                        }
+                    }
+                    Err(_) => {
+                        if should_apply_response(generation_cell.get(), response_generation) {
+                            set_error.set("Network error loading content.".to_string());
+                        }
+                    }
+                }
+            });
+        };
+
+        let closure: Closure<dyn FnMut()> = Closure::new(fetch);
+        let delay = if immediate { 0 } else { SEARCH_DEBOUNCE_MS };
+        let handle = window
+            .set_timeout_with_callback_and_timeout_and_arguments_0(
+                closure.as_ref().unchecked_ref(),
+                delay,
+            )
+            .ok();
+        timer_handle.set_value(handle);
+        *pending.borrow_mut() = Some(PendingFetch { handle, closure });
     });
 
     view! {
@@ -1646,12 +1758,27 @@ fn vote_error_message(status: Option<u16>) -> String {
     }
 }
 
+/// 投票一覧の取得失敗時に表示する固定文言。HTTP ステータス番号のみを埋め込み、
+/// サーバーが返した本文や生エラーは決して表示しない。
+fn reports_error_message(status: Option<u16>) -> String {
+    match status {
+        Some(code) => format!("投票一覧の取得に失敗しました (HTTP {code})."),
+        None => "Network error loading reports.".to_string(),
+    }
+}
+
+/// 投票一覧の JSON 解析失敗時に表示する固定文言。解析エラーの詳細は出さない。
+const REPORTS_PARSE_ERROR: &str = "投票一覧の解析に失敗しました。";
+
 #[component]
 fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
     let (reason, set_reason) = signal(String::new());
     let (status, set_status) = signal(String::new());
     let (reports, set_reports) = signal(Vec::<Report>::new());
+    // 投票一覧の取得失敗を明示する。失敗しても reports は空にせず既存データを維持し、
+    // 空状態を「保留投票なし」と誤表示しない。
+    let (reports_error, set_reports_error) = signal(String::new());
     // R5-09: 透明性ダッシュボードの集計表示状態。
     let (stats_html, set_stats_html) = signal(String::new());
     let (stats_error, set_stats_error) = signal(String::new());
@@ -1666,14 +1793,30 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let fetch_reports = move || {
         let token = token_stored.get_value();
         spawn_local(async move {
-            let res = Request::get(&format!("{}/mod/reports", API_BASE))
+            match Request::get(&format!("{}/mod/reports", API_BASE))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
-                .await;
-            if let Ok(response) = res
-                && let Ok(data) = response.json::<Vec<Report>>().await
+                .await
             {
-                set_reports.set(data);
+                Ok(response) if response.ok() => match response.json::<Vec<Report>>().await {
+                    Ok(data) => {
+                        // 成功時のみ一覧を更新し、前回のエラーを消す。
+                        set_reports.set(data);
+                        set_reports_error.set(String::new());
+                    }
+                    Err(_) => {
+                        // 解析失敗: 既存データは維持し、固定文言のみ表示する。
+                        set_reports_error.set(REPORTS_PARSE_ERROR.to_string());
+                    }
+                },
+                Ok(response) => {
+                    // HTTP エラー（401 を含む）: 既存データを維持し、ステータス番号のみ表示する。
+                    set_reports_error.set(reports_error_message(Some(response.status())));
+                }
+                Err(_) => {
+                    // ネットワークエラー: 生エラーは出さず固定文言を表示する。
+                    set_reports_error.set(reports_error_message(None));
+                }
             }
         });
     };
@@ -1828,6 +1971,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
             <div class="border border-white/10 p-8 space-y-6">
                 <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
+                <Show when=move || !reports_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="reports-error" class="text-xs text-red-500">
+                        {move || reports_error.get()}
+                    </p>
+                </Show>
                 <Show when=move || !vote_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="vote-error" class="text-xs text-red-500">
                         {move || vote_error.get()}
@@ -1865,7 +2013,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                             }
                         }
                     />
-                    <Show when=move || reports.get().is_empty() fallback=|| ()>
+                    <Show when=move || reports.get().is_empty() && reports_error.get().is_empty() fallback=|| ()>
                         <div class="text-center py-12 text-[10px] text-gray-600 italic">"NO_PENDING_VOTES"</div>
                     </Show>
                 </div>
@@ -1978,6 +2126,65 @@ mod tests {
             .map(|heading| heading.slug.clone())
             .collect();
         assert_eq!(slugs, vec!["section", "section-1"]);
+    }
+
+    /// 連番の記録状態まで含めて `foo` / `foo-1` / `foo-2` 系列を検証する。
+    #[test]
+    fn assign_unique_slug_records_next_suffix_per_base() {
+        use std::collections::HashMap;
+
+        let mut used = HashMap::new();
+        assert_eq!(super::assign_unique_slug("Foo", &mut used), "foo");
+        assert_eq!(used.get("foo"), Some(&1));
+        assert_eq!(super::assign_unique_slug("foo", &mut used), "foo-1");
+        assert_eq!(used.get("foo"), Some(&2));
+        assert_eq!(super::assign_unique_slug("foo", &mut used), "foo-2");
+        assert_eq!(used.get("foo"), Some(&3));
+
+        // 明示的な `foo-1` が先に採番されても空きを飛ばして衝突しない。
+        let mut used = HashMap::new();
+        assert_eq!(super::assign_unique_slug("foo", &mut used), "foo");
+        assert_eq!(super::assign_unique_slug("foo-1", &mut used), "foo-1");
+        assert_eq!(super::assign_unique_slug("foo", &mut used), "foo-2");
+
+        // 日本語などで base が空になる場合は `section` 系を維持。
+        let mut used = HashMap::new();
+        assert_eq!(super::assign_unique_slug("日本語", &mut used), "section");
+        assert_eq!(super::assign_unique_slug("!!!", &mut used), "section-1");
+    }
+
+    /// 1 万件の同一見出しを時間計測なしで検証する（O(N²) 回帰テスト）。
+    /// slug が `a`, `a-1`, ... と連番で発行され、全件一意であることを確認する。
+    #[test]
+    fn ten_thousand_identical_headings_get_unique_sequential_slugs() {
+        use std::collections::HashSet;
+
+        const N: usize = 10_000;
+        let markdown = "# a\n".repeat(N);
+        let headings = super::collect_headings(&markdown);
+        assert_eq!(headings.len(), N);
+
+        let mut seen = HashSet::with_capacity(N);
+        for (i, heading) in headings.iter().enumerate() {
+            let expected = if i == 0 {
+                "a".to_string()
+            } else {
+                format!("a-{i}")
+            };
+            assert_eq!(heading.slug, expected, "見出し {i} の slug");
+            assert!(
+                seen.insert(heading.slug.clone()),
+                "slug が重複した: {}",
+                heading.slug
+            );
+        }
+        assert_eq!(seen.len(), N);
+
+        // 実害のあった render_toc 経路でも同じ一意性が成り立つこと。
+        let toc = super::render_toc(&markdown);
+        let fragments = anchor_fragments(&toc);
+        assert_eq!(fragments.len(), N);
+        assert_eq!(fragments.into_iter().collect::<HashSet<_>>().len(), N);
     }
 
     #[test]
@@ -2198,6 +2405,25 @@ mod tests {
     }
 
     #[test]
+    fn only_latest_generation_response_is_applied() {
+        // 現在世代と一致する応答だけを採用する。
+        assert!(super::should_apply_response(0, 0));
+        assert!(super::should_apply_response(42, 42));
+        assert!(super::should_apply_response(u64::MAX, u64::MAX));
+        // 入力変化後に届いた古い応答（反応順が逆転したケース）は捨てる。
+        assert!(!super::should_apply_response(2, 1));
+        assert!(!super::should_apply_response(u64::MAX, 0));
+        // 未来の世代も想定外なので採用しない。
+        assert!(!super::should_apply_response(1, 2));
+    }
+
+    #[test]
+    fn search_debounce_delay_is_within_expected_range() {
+        // 1 文字ごと GET を防ぐため、200〜300ms の範囲に収める。
+        assert!((200..=300).contains(&super::SEARCH_DEBOUNCE_MS));
+    }
+
+    #[test]
     fn content_meta_html_escapes_user_supplied_fields() {
         let tags = vec![
             "<img src=x onerror=alert(1)>".to_string(),
@@ -2303,6 +2529,26 @@ mod tests {
             super::vote_error_message(None),
             "Network error submitting vote."
         );
+    }
+
+    #[test]
+    fn reports_error_uses_only_fixed_phrases() {
+        // HTTP エラー（401 を含む）はステータス番号のみを埋め込む固定文言。
+        assert_eq!(
+            super::reports_error_message(Some(401)),
+            "投票一覧の取得に失敗しました (HTTP 401)."
+        );
+        assert_eq!(
+            super::reports_error_message(Some(500)),
+            "投票一覧の取得に失敗しました (HTTP 500)."
+        );
+        // ネットワークエラー（ステータスなし）も固定文言。生エラーは出さない。
+        assert_eq!(
+            super::reports_error_message(None),
+            "Network error loading reports."
+        );
+        // JSON 解析失敗も解析エラーの詳細を含まない固定文言。
+        assert_eq!(super::REPORTS_PARSE_ERROR, "投票一覧の解析に失敗しました。");
     }
 
     #[test]
