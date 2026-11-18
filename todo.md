@@ -192,6 +192,8 @@ P2（品質・保守・プロダクト拡張）:
 - [x] dialog/フォーカスとE2E堅牢性（2026-11-18）: aria-modal+初期フォーカス+Tab trap、
   label role=button、CLOSE/SpaceのE2E、否定アサーションの状態確定、MET poll延長。
   E2E 49件。
+- [x] Audit dialog のARIA整合（2026-11-18）: 実挙動（背景操作可のnon-modal）に合わせ
+  aria-modal を削除し、初期フォーカスとTab/Shift+TabトラップをE2Eで検証。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。

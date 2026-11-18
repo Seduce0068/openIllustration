@@ -481,8 +481,22 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(dialog).toBeVisible();
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'true');
 
+    const closeButton = dialog.getByRole('button', { name: 'CLOSE' });
+
+    // モーダル中核契約①: requestAnimationFrame による初期フォーカス。
+    // オープン直後にダイアログ内 CLOSE がフォーカスされる。rAF の遅延があるため
+    // toBeFocused の自動待ち（expect retries）に任せ、固定 sleep は置かない。
+    await expect(closeButton).toBeFocused();
+
+    // モーダル中核契約②: フォーカストラップ。CLOSE フォーカス中に Tab / Shift+Tab を
+    // 送っても背後のトグル等へ抜けず CLOSE に留まる（client/src/lib.rs:1552-1560）。
+    await page.keyboard.press('Tab');
+    await expect(closeButton).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(closeButton).toBeFocused();
+
     // Escape ではなく dialog 内の CLOSE ボタンで閉じる（client/src/lib.rs:1645-1654）。
-    await dialog.getByRole('button', { name: 'CLOSE' }).click();
+    await closeButton.click();
 
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(dialog).toHaveCount(0);

@@ -1367,7 +1367,7 @@ where
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
     let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
-    // モーダル化: ダイアログ内の初期フォーカス先兼 Tab トラップの周回先。
+    // non-modal パネル表示時: ダイアログ内の初期フォーカス先兼 Tab フォーカスの周回先。
     let audit_close_ref = NodeRef::<leptos::html::Button>::new();
 
     // Show が true になった後に CLOSE へフォーカスを移す。
@@ -1549,9 +1549,10 @@ where
                     }
                     return;
                 }
-                // モーダル中の Tab トラップ。パネル内のインタラクティブ要素は
-                // CLOSE ボタンのみなので、Tab / Shift+Tab を CLOSE へ戻し、
-                // 背後のトグルやカード要素へフォーカスが抜けないようにする。
+                // パネル表示中の Tab フォーカス制御。パネル内のインタラクティブ要素は
+                // CLOSE ボタンのみなので、Tab / Shift+Tab を CLOSE へ戻す現行挙動を維持する。
+                // 将来パネル内にフォーカス可能要素を追加する場合は、shift_key() で
+                // 先頭/末尾を判定するループ型トラップへ変更すること（今回は挙動を変更しない）。
                 if ev.key() == "Tab" && show_audit.get() {
                     ev.prevent_default();
                     if let Some(close) = audit_close_ref.get() {
@@ -1642,10 +1643,12 @@ where
                     None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
                 }}
 
+                // このパネルは画像エリアに重なる non-modal disclosure（non-modal dialog）であり、
+                // モーダルではない。背景（nav・他カード・Audit/favorite トグル）は引き続き
+                // 操作可能なままなので、背景を aria-hidden / inert にしない。
                 <Show when=move || show_audit.get() fallback=|| ()>
                     <div id="forensic-timeline"
                         role="dialog"
-                        aria-modal="true"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
