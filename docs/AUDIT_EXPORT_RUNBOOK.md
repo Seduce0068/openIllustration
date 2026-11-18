@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-17T01:30:00+09:00"
+  at: "2026-11-18T13:40:37+09:00"
 ---
 
 ## 目的

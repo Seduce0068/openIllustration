@@ -9,10 +9,10 @@ tags:
   - agent-team
 generated:
   by: dsh (agent team)
-  at: "2026-11-17T19:37:13+09:00"
+  at: "2026-11-18T13:40:37+09:00"
 verified:
   by: dsh
-  at: "2026-11-17T20:16:07+09:00"
+  at: "2026-11-18T13:40:37+09:00"
 status: current
 ---
 
@@ -176,7 +176,7 @@ Reported/Rejected でも CID を知っていれば配信されることは**コ�
 | R3-15 | 新規投稿→閲覧のクロス画面 journey が E2E で接続されていない | 中 | `upload.spec.ts:43` で終了し、閲覧側は別 CID をモック | 0.85 |
 | R3-16 | `fullyParallel` と実サーバー再利用でローカル E2E が状態リークしうる | 低 | `e2e/playwright.config.ts:18-34,72,79` | 0.70 |
 
-**補足**: TASK_INVENTORY は「E2E 9件」と記載するが現行ソースは `test()` 10 件で1件差がある。
+**補足**: TASK_INVENTORY は「E2E 9件」と記載するが現行ソースは `test()` 35 件で26件差がある（2026-11-18 実測、11 spec ファイル）。
 
 ## Round 4: 運用・本番化・CI/CD
 

@@ -5,7 +5,7 @@ description: "監査ログを署名付きでエクスポートし、公開鍵で
 tags: [adr, audit, verification, accepted]
 generated:
   by: dsh
-  at: "2026-11-17T01:25:00+09:00"
+  at: "2026-11-18T13:40:37+09:00"
 ---
 
 ## ADR-0005: 監査エクスポートと署名検証

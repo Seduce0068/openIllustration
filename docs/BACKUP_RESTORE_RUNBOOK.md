@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-17T01:20:00+09:00"
+  at: "2026-11-18T13:40:37+09:00"
 ---
 
 ## 目的
