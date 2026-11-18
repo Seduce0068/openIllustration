@@ -33,12 +33,14 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
         body: JSON.stringify([{
           cid: mockCID,
           checksum: mockHash,
-          type: 'Illustration',
+          // 支援フローの検証であり JXL デコードは本質ではないため、
+          // デコーダを呼ばない Novel をフィクスチャとして使う（R1-13 の表示変更対応）。
+          type: 'Novel',
           status: 'Approved',
           price: mockPrice,
           title: 'Gilded Sigil',
-          description: 'Mock illustration for the ledger flow',
-          tags: ['jxl', 'mock'],
+          description: 'Mock content for the ledger flow',
+          tags: ['novel', 'mock'],
           is_favorite: false
         }])
       });
@@ -48,7 +50,7 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await page.route(`**/content/${mockCID}`, async route => {
       await route.fulfill({
         status: 200,
-        contentType: 'image/jxl',
+        contentType: 'text/markdown',
         headers: { 'x-forensic-checksum': mockHash },
         body: mockContent
       });

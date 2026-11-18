@@ -19,9 +19,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全25件（auth 2 / economy 1 /
-  error-paths 4 / export 2 / favorites 1 / integrity 2 / metrics 1 / moderation 4 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全26件（auth 2 / economy 1 /
+  error-paths 4 / export 2 / favorites 1 / integrity 3 / metrics 1 / moderation 4 /
   real-api 4 / search 1 / upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
 
 ## 2. 実装済みテストの概要
 
@@ -34,7 +35,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
-| 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
+| 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
 | Markdown表示 | raw HTMLのエスケープ、インライン・参照リンク・自動リンク・画像URLの危険スキーム拒否（実体参照による難読化、Unicode 空白/制御文字（ZWSP・NBSP）によるスキーム隠しを含む）と安全スキーム維持をユニットテスト。危険 URL が `render_markdown` を通した後も `href="#"` / `src="#"` に置換される統合検証も実施 | ブラウザ別URL解釈のE2Eは未実施 |
 | 投稿入力 | 許可MIME、JPEG XLシグネチャ、Markdown UTF-8、重複CIDの再投稿拒否、未知フィールド拒否、全フィールド（`price` / `file` / `owner_hash` / `signature`）の重複 400 拒否、WASM 側 JXL デコードの寸法上限（8000px / 64M ピクセル）とチャンネル数別（1/2/3/4以上）RGBA 変換、クライアント選択時の 10 MiB 超過即時拒否（E2E・送信ボタン無効化と未送信も検証）を検証 | 実 JXL デコードの WASM 実行試験は未実施 |
 | モデレーション | 通報状態遷移、重複通報拒否、通報reasonの空/過大拒否とトリム保存、期限前は確定しないこと、期限後確定（同数→`Rejected`、定足数未達→`Approved` 復帰）、期限切れ投票拒否、投稿者投票拒否、BAN済み投票者の拒否、30日以内の異議と30日超の通常通報、finalize エンドポイントの冪等性、重複投票拒否、確定後投票拒否、投票ペイロード検証（report_id/result）とトークンsub不一致401の拒否、投票署名メッセージが report_id と result の両方に束縛されること、運用者未設定時の BAN/UNBAN/UNPIN 拒否、運用者による BAN（根拠・期間）/UNBAN/UNPIN の監査記録、自己BAN・不正期間・空理由・BAN済み運用者の拒否、期限前スキップ・期限後自動確定・複数件処理・冪等性・ワーカー周期の範囲検証 | 同一接続への並行 `BEGIN` が失敗することの再現、書き込みロックによる直列化、並行投票と自動確定の同時実行を検証。ワーカー停止/再起動時の挙動、実運用手続、第三者検証可能な監査（DEC-04）の試験が不足。reason上限値の妥当性はADR-0004の運用で見直し |
@@ -64,6 +65,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存 |
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
+| CONTENT-09 | チェックサム一致だが JXL として不正なバイト列（例: `not a jxl codestream`）を HTTP 200 で返すゲートウェイ | チェックサム検証は成功しても VERIFIED にせず、`× DECODE FAILED` と固定エラー文言を表示する | 実装済み。クライアントの `decode_error` 分岐で `set_verified = Some(false)` に切り替え、デコーダのエラー値は画面へ出さない。E2E は `e2e/tests/integrity.spec.ts` の `should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)` で検証。補助する単体テストは `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` |
+| INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／チェックサム一致＋デコード失敗） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない | 実装済み。`integrity.spec.ts` の3件（R1-13 対応でデコード失敗ケースを追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
 | FAV-01 | お気に入りの追加/削除を繰り返す | 重複追加も未登録削除も200で成功し、行数は0または1のまま。削除後の再追加も可 | 実装済み（`test_favorite_add_and_remove_are_idempotent`） |
 | FAV-02 | 未認証・不正CID・非Approvedコンテンツへの操作 | それぞれ401 / 400 / 404で拒否し、お気に入りを登録しない | 実装済み（`test_favorite_requires_auth_and_valid_approved_cid`） |
 | FAV-03 | 他人のsubを本文に指定した操作 | 増減するのは操作者本人の行のみ。他人の行は変化しない | 実装済み（`test_favorite_uses_claims_sub_only`） |
@@ -233,6 +236,7 @@ cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E �
 cd e2e && npm test -- metrics.spec.ts   # MET-01 中立化URL件数 E2E のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
 cd e2e && npm test -- error-paths.spec.ts   # エラーパス E2E（4件）のみ
+cd e2e && npm test -- integrity.spec.ts   # INT-01 完全性 E2E（3件: 正規/改ざん/デコード失敗）のみ
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
@@ -360,6 +364,27 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 4. `AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること`:
    監査エンドポイントを500に差し替え、監査パネルの `data-testid="audit-error"` の
    `role="alert"` に `監査ログの取得に失敗しました (HTTP 500).` が表示される。
+
+### E2E 完全性検証シナリオ（INT-01 / R1-13）
+
+`e2e/tests/integrity.spec.ts` の `Forensic Integrity Verification (INT-01)` は、モック認証
+（`ALLOW_MOCK_AUTH=1`）でログイン後、`/content` と `/content/{cid}` を差し替えて検証状態の
+表示を確認する（3件）。genuine / tampered の既存2件は変更せず、R1-13 の回帰1件を追加した。
+
+1. 正規ケース: 本文と一致する SHA-256 を登録し、`span` hasText `● VERIFIED` が出ることを確認する。
+2. 改ざんケース: チェックサム不一致の本文を返し、`× COMPROMISED` と
+   `Integrity Breach Detected` / `Wasm checksum does not match forensic registry.` が出ることを確認する。
+3. デコード失敗ケース（`should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)`）:
+   `type: 'Illustration'` のメタデータに対し、`not a jxl codestream` とその SHA-256 を返す
+   モックゲートウェイを用意する。取得は HTTP 200 で1回だけであり、チェックサムは一致するが
+   JXL デコードに失敗する。実装側と確定した次文言・testid で失敗表示を確認する。
+   - 共通コンテナ: `data-testid="content-verification-error"`
+   - 見出し: `role="alert"` かつ `data-testid="jxl-decode-error"` の `JXL Decode Failed`
+   - 詳細: `data-testid="jxl-decode-error-detail"` の `JXL のデコードに失敗しました。`
+   - バッジ: `data-testid="content-verification-badge"` の `× DECODE FAILED`
+4. デコード失敗ケースでは `● VERIFIED`、`Integrity Breach Detected`、
+   `Wasm checksum does not match forensic registry.` が出ないことも同時に確認する。
+   デコーダのエラー値（内部情報）は画面へ出さず、デコード成功時のみ VERIFIED に戻る。
 
 ### 中立化URL件数指標の検証（MET-01）
 
