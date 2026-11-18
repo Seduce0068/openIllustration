@@ -166,6 +166,7 @@ pub fn wallet_bind_message_v2(
 /// DB に保存された amount_wei から円建て金額を導出する。
 /// amount_wei は常に `jpy_to_wei` の 10^18 スケールで保存されるため、
 /// 割り切れない値はデータ不整合として拒否する。
+/// ゼロも `jpy_to_wei(0)` と同じく「注文金額は正」という契約に反するため拒否する。
 pub fn amount_jpy_from_wei(amount_wei: &str) -> Result<AmountJpy, AppError> {
     let wei = amount_wei
         .parse::<u128>()
@@ -181,6 +182,9 @@ pub fn amount_jpy_from_wei(amount_wei: &str) -> Result<AmountJpy, AppError> {
                 "amount_wei is not a whole JPY amount: {amount_wei}"
             ))
         })?;
+    if jpy == 0 {
+        return Err(AppError::Internal("amount_wei is zero".to_string()));
+    }
     AmountJpy::try_from(jpy)
         .map_err(|_| AppError::Internal(format!("amount_wei exceeds u64 JPY: {amount_wei}")))
 }

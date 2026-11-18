@@ -7902,6 +7902,16 @@ fn test_amount_jpy_from_wei_bounds() {
         "unexpected error for {over_u64_wei}: {err}"
     );
 
+    // 拒否: 0 wei と 10^18 スケールで 0 になる先頭ゼロ付き文字列。
+    // jpy_to_wei(0) と同じく「注文金額は正」という契約に揃え、Internal で fail-closed にする。
+    for zero in ["0", "000000000000000000"] {
+        let err = crate::payments::amount_jpy_from_wei(zero).unwrap_err();
+        assert!(
+            matches!(&err, AppError::Internal(msg) if msg == "amount_wei is zero"),
+            "unexpected error for {zero:?}: {err}"
+        );
+    }
+
     // 拒否: 数値として解析できない文字列 (空文字・非数字・負数・小数・空白混入・16進表記)。
     for invalid in ["", "abc", "-1", "1.5", " 1", "0x1"] {
         let err = crate::payments::amount_jpy_from_wei(invalid).unwrap_err();
