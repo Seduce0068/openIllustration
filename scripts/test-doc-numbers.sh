@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ドキュメント記載の数値（E2E件数 / doctorチェック数 / migration範囲）が
-# 実コードと乖離していないことを検査する回帰スクリプト。
+# ドキュメント記載の数値（E2E件数 / doctorチェック数 / migration範囲）と
+# Rust テスト名が実コードと乖離していないことを検査する回帰スクリプト。
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -103,10 +103,58 @@ else
 	assert_numbers_match "migration range ${range_start}-${range_end}" "$migration_count" "$documented_count"
 fi
 
+# --- 4. Rust テスト名の照合 -----------------------------------------------
+# ドキュメント側の `test_<name>` トークンが実コードの `fn test_<name>` に
+# 存在するかを照合する。rename された古い名前がドキュメントに残ると FAIL。
+# 実コード側は `fn test_` で走査するため `test_http_client` / `test_key_pair`
+# 等のヘルパー関数も実在として扱う（誤検知を避けるため意図的に残す）。
+
+# 抽出上の誤検知だけを最小限定で除外する。
+# - test_config: `proptest_config(...)` から `test_config` が部分一致する（L529）
+# - test_state: `rate_limit_test_state(...)` から `test_state` が部分一致する（L990）
+# - test_jwt_verification_keys_json_: `test_jwt_verification_keys_json_*` の
+#   ワイルドカード抽出尾（L147）。実コード側の `..._keys_from_env_verification_keys_json_*` とは別物。
+declare -A doc_test_exclusions=(
+	[test_config]=1
+	[test_state]=1
+	[test_jwt_verification_keys_json_]=1
+)
+
+mapfile -t doc_test_names < <(
+	while IFS= read -r name; do
+		[[ -z "$name" ]] && continue
+		[[ -n "${doc_test_exclusions[$name]:-}" ]] && continue
+		printf '%s\n' "$name"
+	done < <(grep -oE 'test_[a-z0-9_]+' "$spec" | sort -u || true)
+)
+
+# 実在テスト名集合を作る（関数シグネチャの `fn ` を除去）。
+# server/src/ 配下には bin/ も含まれるが、各 bin の #[test] fn を明示的にも走査し取りこぼしを防ぐ。
+declare -A code_test_names=()
+while IFS= read -r name; do
+	[[ -z "$name" ]] && continue
+	code_test_names["$name"]=1
+done < <(
+	{
+		grep -rhoE 'fn test_[a-z0-9_]+' server/src/ common/src/ client/src/ || true
+		for bin_dir in server/src/bin common/src/bin client/src/bin; do
+			[[ -d "$bin_dir" ]] || continue
+			grep -rhoE 'fn test_[a-z0-9_]+' "$bin_dir" || true
+		done
+	} | sed -E 's/^fn //' | sort -u
+)
+
+for name in "${doc_test_names[@]}"; do
+	if [[ -z "${code_test_names[$name]:-}" ]]; then
+		echo "FAIL test name: '${name}' is documented in ${spec} but not found in source" >&2
+		failures=$((failures + 1))
+	fi
+done
+
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then
 	echo "doc numbers FAILED (${failures})" >&2
 	exit 1
 fi
-echo "doc numbers OK: e2e=${e2e_total} doctor=${doctor_checks} migrations=${migration_count}"
+echo "doc numbers OK: e2e=${e2e_total} doctor=${doctor_checks} migrations=${migration_count} tests=${#doc_test_names[@]}"
 exit 0
