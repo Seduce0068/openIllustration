@@ -592,48 +592,147 @@ fn init_tracing() {
     }
 }
 
-/// ロックファイルに記録された PID が生存しているか（Linux の /proc を使用）。
-/// /proc が無い環境では stale と判断せず、安全側に倒して拒否する。
-fn pid_alive(pid: u32) -> bool {
-    let proc_path = format!("/proc/{pid}");
-    std::path::Path::new(&proc_path).exists()
+/// ロックファイルの内容から `(PID, プロセス開始時刻)` を取り出す純粋関数。
+///
+/// - 新形式: 1行目が PID、2行目が `/proc/<pid>/stat` の field 22 (starttime)。
+/// - 旧形式: PID のみ（`starttime` は `None`）。後方互換として扱う。
+/// - PID が読めない場合: `(0, None)` を返す。PID 0 は通常のプロセスに割り当てられないため、
+///   呼び出し側は stale ロックとして回収できる。
+pub(crate) fn parse_instance_lock(contents: &str) -> (u32, Option<u64>) {
+    let mut lines = contents.lines();
+    let pid = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let starttime = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u64>().ok());
+    (pid, starttime)
+}
+
+/// `/proc/<pid>/stat` の field 22 (starttime: 起動からの clock ticks) を読む純粋関数。
+/// `/proc` が無い環境・プロセスが消えた場合・形式が読めない場合は `None`。
+pub(crate) fn read_proc_starttime(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm (field 2) は空白や ')' を含み得るため、最後の ')' より後だけを解析する。
+    // ')' の直後は field 3 (state) なので field 22 はそこから 19 個先のトークン。
+    let after_comm = stat.rfind(')')?;
+    stat.get(after_comm + 1..)?
+        .split_whitespace()
+        .nth(19)?
+        .parse::<u64>()
+        .ok()
+}
+
+/// ロック所有者が生存中かを判定する。
+/// `/proc` が読めない環境では判定不能のため「生存」として起動を拒否する（fail-closed）。
+fn instance_lock_owner_alive(pid: u32, starttime: Option<u64>) -> bool {
+    if read_proc_starttime(std::process::id()).is_none() {
+        return true;
+    }
+    match starttime {
+        // PID 再利用を防ぐため、開始時刻が一致したときだけ生存とみなす。
+        // /proc/<pid> はあるのに stat が読めない場合は確認不能なので拒否側へ倒す。
+        Some(expected) => match read_proc_starttime(pid) {
+            Some(actual) => actual == expected,
+            None => std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        },
+        // 旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
+        None => std::path::Path::new(&format!("/proc/{pid}")).exists(),
+    }
+}
+
+/// PID と starttime を1回の書き込みでロックファイルへ記録する。
+fn write_instance_lock(file: &mut std::fs::File) -> anyhow::Result<()> {
+    use std::io::Write;
+
+    let pid = std::process::id();
+    let contents = match read_proc_starttime(pid) {
+        Some(starttime) => format!("{pid}\n{starttime}\n"),
+        None => format!("{pid}\n"),
+    };
+    file.write_all(contents.as_bytes())?;
+    file.sync_all()?;
+    Ok(())
 }
 
 /// 単一ライター用のロックファイルを原子的に取得する。
 fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
     use std::fs::OpenOptions;
-    use std::io::Write;
 
     match OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(lock_path)
     {
-        Ok(mut file) => {
-            writeln!(file, "{}", std::process::id())?;
-            file.sync_all()?;
-            Ok(())
-        }
+        Ok(mut file) => write_instance_lock(&mut file),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             let contents = std::fs::read_to_string(lock_path).unwrap_or_default();
-            let stale_pid = contents.trim().parse::<u32>().ok();
-            if stale_pid.is_some_and(pid_alive) {
+            let (stale_pid, stale_starttime) = parse_instance_lock(&contents);
+            if instance_lock_owner_alive(stale_pid, stale_starttime) {
                 anyhow::bail!(
-                    "another server instance appears to be running (lock: {lock_path}, pid: {})",
-                    stale_pid.unwrap()
+                    "another server instance appears to be running (lock: {lock_path}, pid: {stale_pid})"
                 );
             }
-            // クラッシュ後の残骸。原子的に削除して再取得を試みる。
+            // TOCTOU 対策: stale と判定した直後に再読込し、最初に読んだ (PID, starttime)
+            // と一致するときだけ削除する。書き換えられていたら他プロセスが先に
+            // ロックを取得したとして、こちらは削除せず失敗する。
+            let still_stale = std::fs::read_to_string(lock_path)
+                .ok()
+                .is_some_and(|current| {
+                    parse_instance_lock(&current) == (stale_pid, stale_starttime)
+                });
+            if !still_stale {
+                anyhow::bail!("instance lock changed while acquiring (lock: {lock_path}); retry");
+            }
             std::fs::remove_file(lock_path)?;
-            let mut file = OpenOptions::new()
+            let mut file = match OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(lock_path)?;
-            writeln!(file, "{}", std::process::id())?;
-            file.sync_all()?;
-            Ok(())
+                .open(lock_path)
+            {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    anyhow::bail!(
+                        "another server instance acquired the lock first (lock: {lock_path})"
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            };
+            write_instance_lock(&mut file)
         }
         Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(test)]
+mod instance_lock_tests {
+    use super::{parse_instance_lock, read_proc_starttime};
+
+    #[test]
+    fn parse_instance_lock_supports_new_and_legacy_formats() {
+        assert_eq!(parse_instance_lock("12345\n67890\n"), (12345, Some(67890)));
+        assert_eq!(parse_instance_lock("12345\n"), (12345, None));
+        assert_eq!(
+            parse_instance_lock(" 12345 \n 67890 \n"),
+            (12345, Some(67890))
+        );
+        assert_eq!(parse_instance_lock("not-a-pid\n"), (0, None));
+    }
+
+    #[test]
+    fn read_proc_starttime_matches_proc_stat_field_22() {
+        let Ok(stat) = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id())) else {
+            return; // /proc が無い環境ではスキップ
+        };
+        // テストバイナリ名に空白や ')' は含まれないため、単純な split でも field 22 が取れる。
+        // 独立した取り出し方で starttime のフィールド位置を検証する。
+        let expected = stat
+            .split_whitespace()
+            .nth(21)
+            .and_then(|value| value.parse::<u64>().ok());
+        assert!(expected.is_some());
+        assert_eq!(read_proc_starttime(std::process::id()), expected);
     }
 }
 

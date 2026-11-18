@@ -8602,7 +8602,7 @@ fn test_instance_lock_rejects_live_pid() {
     std::fs::remove_file(&lock).unwrap();
     assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok());
     let contents = std::fs::read_to_string(&lock).unwrap();
-    assert_eq!(contents.trim().parse::<u32>().unwrap(), std::process::id());
+    assert_eq!(crate::parse_instance_lock(&contents).0, std::process::id());
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -8621,7 +8621,41 @@ fn test_instance_lock_recovers_stale_lock() {
 
     assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok());
     let contents = std::fs::read_to_string(&lock).unwrap();
-    assert_eq!(contents.trim().parse::<u32>().unwrap(), std::process::id());
+    assert_eq!(crate::parse_instance_lock(&contents).0, std::process::id());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ロックファイルの Newtype パース（旧形式 PID のみ／新形式 PID+starttime）。
+#[test]
+fn test_instance_lock_parse_formats() {
+    assert_eq!(crate::parse_instance_lock("123\n"), (123, None));
+    assert_eq!(crate::parse_instance_lock("123\n456\n"), (123, Some(456)));
+    assert_eq!(crate::parse_instance_lock("bad\n"), (0, None));
+    assert_eq!(crate::parse_instance_lock(""), (0, None));
+}
+
+/// 生存 PID だが starttime が異なるロックは stale として回収できる（PID 再利用対策）。
+#[test]
+fn test_instance_lock_rejects_reused_pid_with_different_starttime() {
+    let dir = std::env::temp_dir().join(format!(
+        "openillustration_reused_pid_lock_test_{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let lock = dir.join("instance.db.instance.lock");
+
+    let starttime = crate::read_proc_starttime(std::process::id()).unwrap_or(1);
+    std::fs::write(
+        &lock,
+        format!("{}\n{}\n", std::process::id(), starttime.wrapping_add(1)),
+    )
+    .unwrap();
+    assert!(
+        crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok(),
+        "a mismatched starttime must be treated as stale"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -9749,6 +9783,40 @@ fn test_content_metadata_validation_bounds() {
 fn test_like_escaping_keeps_wildcards_literal() {
     assert_eq!(escape_like("plain"), "plain");
     assert_eq!(escape_like("100%_cat\\x"), "100\\%\\_cat\\\\x");
+}
+
+/// 実リポジトリの migration セット（001〜013）が新しい厳密検証を通過し、
+/// 適用と検証の双方が成功することの回帰テスト。
+#[tokio::test]
+async fn test_migration_set_applies_and_verifies_cleanly() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+
+    crate::migration::run_migrations(&db).await.unwrap();
+    crate::migration::verify_migrations(&db).await.unwrap();
+
+    let mut rows = db
+        .query("SELECT version FROM _migrations ORDER BY version", ())
+        .await
+        .unwrap();
+    let mut versions = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        let version: String = row.get(0).unwrap();
+        versions.push(version);
+    }
+    assert!(!versions.is_empty(), "migrations must have been applied");
+    assert_eq!(versions[0], "001");
+    for (index, version) in versions.iter().enumerate() {
+        assert_eq!(
+            version.parse::<u32>().unwrap(),
+            index as u32 + 1,
+            "applied versions must be contiguous: {versions:?}"
+        );
+    }
 }
 
 #[tokio::test]
