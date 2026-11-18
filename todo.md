@@ -101,8 +101,9 @@ P2（品質・保守・プロダクト拡張）:
 - [x] 運用スクリプトの硬化（2026-11-18）: cron env を制限付き KEY=VALUE パーサへ変更し
   source/eval を撤廃、所有者・symlink・権限を検証。backup-rotate は umask 077 と
   mktemp+atomic rename、deploy へ UMask=0077。
-- [ ] sign_audit_export の鍵権限チェック（0644拒否・親Dir 0700）に自動テストが無い。
-  AUDIT_EXPORT_RUNBOOK の手動確認に委譲中。テスト仕様 AUDIT-02 の設計表を使って追加する。
+- [x] sign_audit_export の鍵権限チェックに自動テスト9件を追加（2026-11-18 対応済み）。
+  0600受理/0644拒否/親0777拒否/0755警告/symlink解決/--database-token拒否/上書き拒否/新規生成。
+  mutation で検出力を確認。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
