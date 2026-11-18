@@ -1409,59 +1409,82 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         set_loading.set(true);
         set_status.set("Generating forensic evidence...".to_string());
 
+        // 失敗時に表示する文言は固定文字列のみ（生データ・機微情報は出さない）。
+        const PREPARE_ERROR: &str = "アップロードの準備に失敗しました。";
+        const NETWORK_ERROR: &str = "ネットワークエラーが発生しました。";
+        const RESPONSE_ERROR: &str = "アップロード結果の読み取りに失敗しました。";
+
         spawn_local(async move {
-            let array_buffer = wasm_bindgen_futures::JsFuture::from(f.array_buffer())
-                .await
-                .unwrap();
-            let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
+            // 準備・通信の各段を Result で伝播させ、パニックで loading が戻らない事故を防ぐ。
+            let outcome: Result<String, &'static str> = async move {
+                let array_buffer = wasm_bindgen_futures::JsFuture::from(f.array_buffer())
+                    .await
+                    .map_err(|_| PREPARE_ERROR)?;
+                let bytes = js_sys::Uint8Array::new(&array_buffer).to_vec();
 
-            let mock_signature = vec![0u8; 256];
+                let mock_signature = vec![0u8; 256];
 
-            let form_data = FormData::new().unwrap();
-            let media_type = upload_media_type(&f.type_(), &f.name());
-            let options = BlobPropertyBag::new();
-            options.set_type(media_type);
-            let blob = Blob::new_with_u8_array_sequence_and_options(
-                &js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]).into()),
-                &options,
-            )
-            .unwrap();
-            form_data
-                .append_with_blob_and_filename("file", &blob, &f.name())
-                .unwrap();
-            form_data.append_with_str("owner_hash", &user_hash).unwrap();
-            form_data
-                .append_with_str("price", &price_val.to_string())
-                .unwrap();
-            // 任意メタデータ。未入力でも1フィールド送り、サーバー側で空値として扱う。
-            form_data.append_with_str("title", &title_val).unwrap();
-            form_data
-                .append_with_str("description", &description_val)
-                .unwrap();
-            // tags はカンマ区切り1フィールド（サーバー側の共通インターフェース）。
-            form_data.append_with_str("tags", &tags_val).unwrap();
-            let sig_blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
-                &js_sys::Uint8Array::from(&mock_signature[..]).into(),
-            ))
-            .unwrap();
-            form_data.append_with_blob("signature", &sig_blob).unwrap();
+                let form_data = FormData::new().map_err(|_| PREPARE_ERROR)?;
+                let media_type = upload_media_type(&f.type_(), &f.name());
+                let options = BlobPropertyBag::new();
+                options.set_type(media_type);
+                let blob = Blob::new_with_u8_array_sequence_and_options(
+                    &js_sys::Array::of1(&js_sys::Uint8Array::from(&bytes[..]).into()),
+                    &options,
+                )
+                .map_err(|_| PREPARE_ERROR)?;
+                form_data
+                    .append_with_blob_and_filename("file", &blob, &f.name())
+                    .map_err(|_| PREPARE_ERROR)?;
+                form_data
+                    .append_with_str("owner_hash", &user_hash)
+                    .map_err(|_| PREPARE_ERROR)?;
+                form_data
+                    .append_with_str("price", &price_val.to_string())
+                    .map_err(|_| PREPARE_ERROR)?;
+                // 任意メタデータ。未入力でも1フィールド送り、サーバー側で空値として扱う。
+                form_data
+                    .append_with_str("title", &title_val)
+                    .map_err(|_| PREPARE_ERROR)?;
+                form_data
+                    .append_with_str("description", &description_val)
+                    .map_err(|_| PREPARE_ERROR)?;
+                // tags はカンマ区切り1フィールド（サーバー側の共通インターフェース）。
+                form_data
+                    .append_with_str("tags", &tags_val)
+                    .map_err(|_| PREPARE_ERROR)?;
+                let sig_blob = Blob::new_with_u8_array_sequence(&js_sys::Array::of1(
+                    &js_sys::Uint8Array::from(&mock_signature[..]).into(),
+                ))
+                .map_err(|_| PREPARE_ERROR)?;
+                form_data
+                    .append_with_blob("signature", &sig_blob)
+                    .map_err(|_| PREPARE_ERROR)?;
 
-            let res = Request::post(&format!("{}/content/upload", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .body(form_data)
-                .unwrap()
-                .send()
-                .await;
+                let response = Request::post(&format!("{}/content/upload", API_BASE))
+                    .header("Authorization", &format!("Bearer {}", token))
+                    .body(form_data)
+                    .map_err(|_| PREPARE_ERROR)?
+                    .send()
+                    .await
+                    .map_err(|_| NETWORK_ERROR)?;
 
-            if let Ok(response) = res {
-                if response.ok() {
-                    if let Ok(cid) = response.json::<String>().await {
-                        set_status.set(format!("SUCCESS: Content registered as {}", cid));
-                    }
-                } else {
-                    set_status.set("ERROR: Upload failed.".to_string());
+                if !response.ok() {
+                    return Ok("ERROR: Upload failed.".to_string());
                 }
+                let cid = response
+                    .json::<String>()
+                    .await
+                    .map_err(|_| RESPONSE_ERROR)?;
+                Ok(format!("SUCCESS: Content registered as {}", cid))
             }
+            .await;
+
+            match outcome {
+                Ok(message) => set_status.set(message),
+                Err(message) => set_status.set(message.to_string()),
+            }
+            // finally 相当: 成否にかかわらずボタンを再活性化する。
             set_loading.set(false);
         });
     };
@@ -1537,7 +1560,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     {move || if loading.get() { "Processing..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
-                    <div class="p-4 bg-white/5 border border-white/20 text-xs">
+                    <div data-testid="upload-status" class="p-4 bg-white/5 border border-white/20 text-xs">
                         <span class="text-gray-500 mr-2">"[STATUS]"</span> {move || status.get()}
                     </div>
                 </Show>

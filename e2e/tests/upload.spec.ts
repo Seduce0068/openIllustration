@@ -89,4 +89,33 @@ test.describe('Content Upload Flow', () => {
 
     await expect(page.locator('text=ERROR: Upload failed')).toBeVisible({ timeout: 10000 });
   });
+
+  test('R1-14: shows an error and re-enables the button when arrayBuffer() rejects', async ({ page }) => {
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+
+    const fileInput = page.locator('input[type="file"]');
+    await fileInput.setInputFiles({
+      name: 'broken.jxl',
+      mimeType: 'image/jxl',
+      buffer: Buffer.from('mock jxl data'),
+    });
+
+    // wasm-bindgen が呼ぶ Blob.prototype.arrayBuffer を失敗させ、
+    // 準備フェーズの unwrap パニック（Processing... 固まり）を再現する。
+    await page.evaluate(() => {
+      Blob.prototype.arrayBuffer = function (): Promise<ArrayBuffer> {
+        return Promise.reject(new Error('forced arrayBuffer failure'));
+      };
+    });
+
+    const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
+    await submitButton.click();
+
+    const status = page.getByTestId('upload-status');
+    await expect(status).toContainText('アップロードの準備に失敗しました。', { timeout: 15000 });
+
+    // "Processing..." のまま固まらず、ボタンが再活性化されること。
+    await expect(submitButton).toBeEnabled({ timeout: 10000 });
+    await expect(submitButton).not.toHaveText(/Processing/i);
+  });
 });
