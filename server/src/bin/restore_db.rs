@@ -153,7 +153,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let safety_copy = if target.exists() {
-        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        // 1 秒以内の再 --force で安全コピーを上書きしないようミリ秒を付与する。
+        // 既存の `%Y%m%dT%H%M%SZ` 形式は維持し、時刻の末尾に精度が増えるだけ。
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
         let mut name = target.as_os_str().to_os_string();
         name.push(format!(".pre-restore-{stamp}"));
         let copy = PathBuf::from(name);
