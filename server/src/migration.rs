@@ -2,8 +2,10 @@
 // Applies versioned SQL migrations from server/migrations/
 //
 // Conventions:
-// - Filenames: `NNN_name.sql` with zero-padded, monotonically increasing numbers
-//   (e.g. `001_initial_schema.sql`). Ordering is lexicographic on the filename.
+// - Filenames must be strictly `NNN_name.sql`: `NNN` is exactly three digits and
+//   `name` is one or more lowercase letters/digits/underscores
+//   (e.g. `001_initial_schema.sql`). Every `.sql` file is validated before any
+//   migration is applied; invalid names, gaps and duplicates abort the run.
 // - Migrations are applied in one transaction per file and recorded in the
 //   `_migrations` table together with a SHA-256 checksum of the file content.
 // - Applied migrations must not be edited; edits are detected at startup and
@@ -13,6 +15,7 @@
 
 use crate::AppError;
 use libsql::Connection;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -90,6 +93,111 @@ fn calculate_checksum(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// A migration file that passed strict filename validation.
+#[derive(Debug, Clone)]
+struct MigrationFile {
+    /// Numeric value of the `NNN` prefix (used for sequence validation).
+    version: u32,
+    /// Zero-padded token as written in the filename, e.g. `"001"`.
+    version_token: String,
+    /// Full file name, used in diagnostics.
+    filename: String,
+    /// `NNN_name` (filename without `.sql`); kept as the `_migrations.name` value
+    /// for compatibility with databases migrated by earlier versions.
+    name: String,
+    path: PathBuf,
+}
+
+fn invalid_migration_filename(filename: &str) -> AppError {
+    AppError::Internal(format!(
+        "Invalid migration filename '{filename}': expected NNN_name.sql (NNN = exactly three digits, name = one or more lowercase letters/digits/underscores)"
+    ))
+}
+
+/// Strictly parse `NNN_name.sql`.
+///
+/// Accepting an unvalidated name would record an arbitrary value (e.g. `notes`)
+/// as `_migrations.version` and let `verify_migrations` accept it as well, so
+/// anything outside the documented format is rejected here (fail-closed).
+fn parse_migration_filename(filename: &str) -> Result<(u32, &str, &str), AppError> {
+    let reject = || invalid_migration_filename(filename);
+    let stem = filename.strip_suffix(".sql").ok_or_else(&reject)?;
+    let (version_token, name) = stem.split_once('_').ok_or_else(&reject)?;
+
+    if version_token.len() != 3
+        || !version_token.bytes().all(|b| b.is_ascii_digit())
+        || name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return Err(reject());
+    }
+
+    let version = version_token.parse::<u32>().map_err(|_| reject())?;
+    Ok((version, version_token, stem))
+}
+
+/// Enumerate all `.sql` files, validate their names and version sequence, and
+/// return them ordered by numeric version.
+fn collect_migration_files(migrations_path: &Path) -> Result<Vec<MigrationFile>, AppError> {
+    let entries = fs::read_dir(migrations_path)
+        .map_err(|e| AppError::Internal(format!("Failed to read migrations directory: {}", e)))?;
+
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            AppError::Internal(format!("Failed to read migrations directory entry: {}", e))
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("sql") {
+            continue;
+        }
+        let filename = entry.file_name().to_string_lossy().to_string();
+        let (version, version_token, name) = parse_migration_filename(&filename)?;
+        let version_token = version_token.to_string();
+        let name = name.to_string();
+        files.push(MigrationFile {
+            version,
+            version_token,
+            filename,
+            name,
+            path,
+        });
+    }
+
+    files.sort_by_key(|file| file.version);
+    validate_migration_sequence(&files)?;
+    Ok(files)
+}
+
+/// Versions must start at 001 and increase by exactly one, with no duplicates.
+fn validate_migration_sequence(files: &[MigrationFile]) -> Result<(), AppError> {
+    let mut expected = 1u32;
+    let mut previous: Option<&MigrationFile> = None;
+
+    for file in files {
+        if let Some(prev) = previous
+            && prev.version == file.version
+        {
+            return Err(AppError::Internal(format!(
+                "Duplicate migration version '{}' in '{}' and '{}'; refusing to run migrations",
+                file.version_token, prev.filename, file.filename
+            )));
+        }
+        if file.version != expected {
+            return Err(AppError::Internal(format!(
+                "Non-contiguous migration versions: expected {:03} but found '{}'; migration versions must start at 001 with no gaps",
+                expected, file.filename
+            )));
+        }
+        previous = Some(file);
+        expected = expected.saturating_add(1);
+    }
+
+    Ok(())
 }
 
 /// Apply a single migration file
@@ -191,38 +299,21 @@ pub async fn run_migrations_from(db: &Connection, migrations_path: &Path) -> Res
 
     info!("Running migrations from {:?}", migrations_path);
 
-    let entries = fs::read_dir(migrations_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read migrations directory: {}", e)))?;
-    let mut entries: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("sql"))
-        .collect();
+    // Fail-closed: validate every filename and the whole version sequence before
+    // applying anything, so an unknown/non-numeric file can never become a
+    // `_migrations.version` value that later passes verification.
+    let files = collect_migration_files(migrations_path)?;
 
-    // Sort by filename (version prefix)
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let filename = entry.file_name().to_string_lossy().to_string();
-        // Expect format: NNN_name.sql
-        let version = filename.split('_').next().unwrap_or("").to_string();
-        if version.is_empty() {
-            warn!(
-                "Skipping migration with invalid filename format: {}",
-                filename
-            );
-            continue;
-        }
-
-        if applied.contains(&version) {
-            info!("Migration {} already applied, skipping", version);
+    for file in files {
+        if applied.contains(&file.version_token) {
+            info!("Migration {} already applied, skipping", file.version_token);
             continue; // Already applied
         }
 
-        info!("Applying migration: {}", filename);
-        let sql = fs::read_to_string(entry.path())
+        info!("Applying migration: {}", file.filename);
+        let sql = fs::read_to_string(&file.path)
             .map_err(|e| AppError::Internal(format!("Failed to read migration file: {}", e)))?;
-        let name = filename.trim_end_matches(".sql").to_string();
-        apply_migration(db, &version, &name, &sql).await?;
+        apply_migration(db, &file.version_token, &file.name, &sql).await?;
     }
 
     Ok(())
@@ -250,26 +341,18 @@ pub async fn verify_migrations_from(
         )));
     }
 
-    let entries = fs::read_dir(migrations_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read migrations directory: {}", e)))?;
-    let mut entries: Vec<_> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("sql"))
-        .collect();
+    // run_migrations と同じ厳密検証を共有する。ここでも検証しないと、
+    // run 側をすり抜けた不正ファイルが verify を通過してしまう。
+    let files = collect_migration_files(migrations_path)?;
 
-    entries.sort_by_key(|e| e.file_name());
-
-    let file_versions: std::collections::HashSet<String> = entries
+    let file_versions: HashSet<String> = files
         .iter()
-        .filter_map(|entry| {
-            let filename = entry.file_name().to_string_lossy().to_string();
-            let version = filename.split('_').next().unwrap_or("").to_string();
-            (!version.is_empty()).then_some(version)
-        })
+        .map(|file| file.version_token.clone())
         .collect();
 
     // 適用済みだがファイルが無いバージョンは、古いバイナリ/誤った migrations ディレクトリ。
     // 想定より新しいスキーマに対して起動すると後続の SQL が失敗するため早期に拒否する。
+    // （削除された migration の検出はこのチェックと上記の連続性チェックが担う。）
     let applied = get_applied_versions(db).await?;
     if let Some(unknown) = applied
         .iter()
@@ -280,14 +363,8 @@ pub async fn verify_migrations_from(
         )));
     }
 
-    for entry in entries {
-        let filename = entry.file_name().to_string_lossy().to_string();
-        let version = filename.split('_').next().unwrap_or("").to_string();
-        if version.is_empty() {
-            continue;
-        }
-
-        let sql = fs::read_to_string(entry.path())
+    for file in files {
+        let sql = fs::read_to_string(&file.path)
             .map_err(|e| AppError::Internal(format!("Failed to read migration file: {}", e)))?;
         let expected_checksum = calculate_checksum(&sql);
 
@@ -297,7 +374,7 @@ pub async fn verify_migrations_from(
                     "SELECT checksum FROM {} WHERE version = ?",
                     MIGRATIONS_TABLE
                 ),
-                [version.as_str()],
+                [file.version_token.as_str()],
             )
             .await?;
 
@@ -306,7 +383,7 @@ pub async fn verify_migrations_from(
             if stored_checksum != expected_checksum {
                 return Err(AppError::Internal(format!(
                     "Migration {} checksum mismatch: file checksum {}, applied checksum {}",
-                    version, expected_checksum, stored_checksum
+                    file.version_token, expected_checksum, stored_checksum
                 )));
             }
         }
@@ -328,6 +405,174 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn write_migration(dir: &Path, version: u32, name: &str, sql: &str) {
+        fs::write(dir.join(format!("{version:03}_{name}.sql")), sql).unwrap();
+    }
+
+    fn write_contiguous_migrations(dir: &Path, count: u32) {
+        for version in 1..=count {
+            write_migration(
+                dir,
+                version,
+                "migration",
+                &format!("CREATE TABLE migration_{version} (id INTEGER PRIMARY KEY);"),
+            );
+        }
+    }
+
+    async fn memory_db() -> Connection {
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap()
+    }
+
+    #[test]
+    fn migration_filename_parser_accepts_only_documented_format() {
+        let (version, token, name) = parse_migration_filename("001_initial_schema.sql").unwrap();
+        assert_eq!(version, 1);
+        assert_eq!(token, "001");
+        assert_eq!(name, "001_initial_schema");
+
+        for bad in [
+            "notes.sql",
+            "01_a.sql",
+            "0001_a.sql",
+            "001_.sql",
+            "001_a-b.sql",
+            "001_A.sql",
+            "001_a.txt",
+            "abc_a.sql",
+        ] {
+            assert!(
+                parse_migration_filename(bad).is_err(),
+                "{bad} must be rejected"
+            );
+        }
+    }
+
+    /// 敵対的レビューで指摘されたケース: 数値でないファイル名が version として
+    /// 記録され、verify も通過してしまう問題を fail-closed で拒否する。
+    #[tokio::test]
+    async fn rejects_invalid_migration_filename_in_run_and_verify() {
+        let dir = temp_migrations_dir("badname");
+        write_migration(
+            &dir,
+            1,
+            "initial",
+            "CREATE TABLE initial_t (id INTEGER PRIMARY KEY);",
+        );
+        fs::write(
+            dir.join("notes.sql"),
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY);",
+        )
+        .unwrap();
+
+        let db = memory_db().await;
+        let run_err = run_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            run_err.to_string().contains("Invalid migration filename")
+                && run_err.to_string().contains("notes.sql"),
+            "unexpected error: {run_err}"
+        );
+
+        let verify_err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            verify_err
+                .to_string()
+                .contains("Invalid migration filename"),
+            "verify must also reject the invalid filename, got: {verify_err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 追加された 999_future.sql が連続性違反として検出されること。
+    #[tokio::test]
+    async fn rejects_added_non_contiguous_migration_version() {
+        let dir = temp_migrations_dir("future");
+        write_contiguous_migrations(&dir, 13);
+
+        let db = memory_db().await;
+        run_migrations_from(&db, &dir).await.unwrap();
+        verify_migrations_from(&db, &dir).await.unwrap();
+
+        write_migration(
+            &dir,
+            999,
+            "future",
+            "CREATE TABLE future_t (id INTEGER PRIMARY KEY);",
+        );
+
+        let run_err = run_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            run_err
+                .to_string()
+                .contains("Non-contiguous migration versions")
+                && run_err.to_string().contains("expected 014"),
+            "unexpected error: {run_err}"
+        );
+        let verify_err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            verify_err
+                .to_string()
+                .contains("Non-contiguous migration versions"),
+            "verify must also reject the gap, got: {verify_err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 同一バージョンの重複（013_dup.sql 等）が検出されること。
+    #[tokio::test]
+    async fn rejects_duplicate_migration_version() {
+        let dir = temp_migrations_dir("duplicate");
+        write_contiguous_migrations(&dir, 13);
+
+        let db = memory_db().await;
+        run_migrations_from(&db, &dir).await.unwrap();
+
+        write_migration(
+            &dir,
+            13,
+            "dup",
+            "CREATE TABLE dup_t (id INTEGER PRIMARY KEY);",
+        );
+
+        let run_err = run_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            run_err
+                .to_string()
+                .contains("Duplicate migration version '013'"),
+            "unexpected error: {run_err}"
+        );
+        let verify_err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            verify_err
+                .to_string()
+                .contains("Duplicate migration version '013'"),
+            "verify must also reject duplicates, got: {verify_err}"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 連続した migration セット（001〜013 相当）は従来どおり適用できること。
+    #[tokio::test]
+    async fn accepts_full_contiguous_migration_set() {
+        let dir = temp_migrations_dir("fullset");
+        write_contiguous_migrations(&dir, 13);
+
+        let db = memory_db().await;
+        run_migrations_from(&db, &dir).await.unwrap();
+        verify_migrations_from(&db, &dir).await.unwrap();
+        assert_eq!(get_applied_versions(&db).await.unwrap().len(), 13);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
