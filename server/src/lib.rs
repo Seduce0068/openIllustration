@@ -18,6 +18,7 @@ use axum::{
 use common::Claims;
 use libsql::{Builder, Connection};
 use reqwest::Client;
+use reqwest::redirect::Policy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
@@ -762,6 +763,20 @@ pub fn production_config_errors(
     errors
 }
 
+/// 本番・テスト共通の HTTP クライアントを組み立てる。
+///
+/// `Policy::none()` で全リダイレクトを拒否する。IPFS ゲートウェイ（および
+/// OIDC エンドポイント）が 3xx でクラウドメタデータ等の内部アドレスへ
+/// リダイレクトしても、CID 検証やゲートウェイ URL 検証をすり抜けて
+/// 内部へ到達しないようにするための必須設定である。
+/// 3xx は追従されず、そのままレスポンスとして呼び出し側へ返る。
+pub(crate) fn build_http_client(timeout: Duration) -> reqwest::Result<Client> {
+    Client::builder()
+        .timeout(timeout)
+        .redirect(Policy::none())
+        .build()
+}
+
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
 
@@ -940,12 +955,10 @@ pub async fn run() -> anyhow::Result<()> {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
-        http_client: Client::builder()
-            .timeout(oidc_http_timeout(
-                std::env::var("OIDC_HTTP_TIMEOUT_SECS").ok().as_deref(),
-            ))
-            .build()
-            .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
+        http_client: build_http_client(oidc_http_timeout(
+            std::env::var("OIDC_HTTP_TIMEOUT_SECS").ok().as_deref(),
+        ))
+        .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
         jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth,
         ipfs_gateways,
@@ -1977,9 +1990,12 @@ pub async fn get_content(
         "image/jxl"
     };
 
-    // ゲートウェイは設定順に試す。ネットワークエラー（接続失敗・タイムアウト）に
-    // 限り各ゲートウェイを最大 ipfs_max_attempts 回まで再試行する。
-    // HTTP エラー・サイズ超過・チェックサム不一致は再試行せず即拒否する。
+    // ゲートウェイは設定順に試す。ネットワークエラー（接続失敗・タイムアウト）は
+    // 各ゲートウェイを最大 ipfs_max_attempts 回まで再試行する。
+    // 2xx 以外の HTTP 応答（3xx を含む）は次のゲートウェイへフェイルオーバーする。
+    // HTTP クライアントは Policy::none() でリダイレクトを追従しないため、
+    // 3xx の Location 先へは接続せず、3xx はエラーとして扱う。
+    // サイズ超過・チェックサム不一致は即拒否する。
     // すべて失敗した場合は 500 を返し、部分的なデータを完全なコンテンツとして返さない。
     let mut last_error = String::new();
 
@@ -2061,6 +2077,8 @@ pub async fn get_content(
                 .body(Body::from(bytes))
                 .map_err(|e| AppError::Internal(format!("Response build error: {}", e)));
         } else {
+            // 3xx を含む 2xx 以外は次のゲートウェイへ切り替える。
+            // リダイレクトは無効化済みなので Location 先へは接続しない。
             last_error = format!("{}: HTTP {}", redact_url(&gateway_url), response.status());
         }
     }

@@ -79,6 +79,7 @@ use libsql::Builder;
 use rsa::sha2::Sha256;
 use rsa::{PrivateKey, pkcs8::EncodePublicKey};
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use tower::ServiceExt;
 
@@ -111,6 +112,12 @@ const TEST_JWT_SECRET: &str = "test_secret_for_openillustration_tests";
 /// テスト用の HS256 鍵。
 fn test_jwt_keys() -> Arc<crate::jwt::JwtKeys> {
     Arc::new(crate::jwt::JwtKeys::from_hmac_secret(TEST_JWT_SECRET).expect("test_secret is valid"))
+}
+
+/// テスト用 HTTP クライアント。本番と同じ `crate::build_http_client` 経由で
+/// `Policy::none()` を適用するため、3xx の Location 先へは到達しない。
+fn test_http_client() -> reqwest::Client {
+    crate::build_http_client(Duration::from_secs(30)).expect("build test HTTP client")
 }
 
 async fn generate_token(secret: &str, sub: &str) -> String {
@@ -167,7 +174,7 @@ async fn setup_app_with_options(
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth,
         ipfs_gateways,
@@ -970,6 +977,20 @@ async fn untrusted_network_middleware(
     crate::network::resolve_client_ip_and_run(&[], ConnectInfo(peer), request, next).await
 }
 
+/// ネットワーク判定だけを通す app（信頼プロキシあり）。
+fn trusted_network_app() -> Router {
+    Router::new()
+        .fallback(|| async { StatusCode::OK })
+        .layer(axum::middleware::from_fn(trusted_network_middleware))
+}
+
+/// ネットワーク判定だけを通す app（信頼プロキシなし）。
+fn untrusted_network_app() -> Router {
+    Router::new()
+        .fallback(|| async { StatusCode::OK })
+        .layer(axum::middleware::from_fn(untrusted_network_middleware))
+}
+
 async fn rate_limit_test_state(per_minute: u32) -> Arc<AppState> {
     rate_limit_test_state_with_concurrency(per_minute, 16).await
 }
@@ -1412,6 +1433,99 @@ async fn mock_gateway_handler(
         .expect("mock response")
 }
 
+/// SSRF 検証用のローカルシナリオ。
+/// ゲートウェイは 302 + `Location: <リダイレクト先>` を返し、リダイレクト先は
+/// 内部サービス（例: 169.254.169.254）に見立てたローカルサーバー。
+/// `target_hits` でリダイレクトを追従したかどうかを観測する。
+struct RedirectScenario {
+    gateway_template: String,
+    target_hits: Arc<AtomicUsize>,
+    _gateway_handle: tokio::task::JoinHandle<()>,
+    _target_handle: tokio::task::JoinHandle<()>,
+}
+
+#[derive(Clone)]
+struct RedirectTargetState {
+    hits: Arc<AtomicUsize>,
+    body: Vec<u8>,
+}
+
+impl RedirectScenario {
+    /// `target_body` はリダイレクト先が返す本文。CID の checksum と一致させれば、
+    /// リダイレクトを追従した場合にだけ検証成功（200）になる。
+    async fn start(target_body: Vec<u8>) -> Self {
+        let target_hits = Arc::new(AtomicUsize::new(0));
+        let target_state = RedirectTargetState {
+            hits: Arc::clone(&target_hits),
+            body: target_body,
+        };
+        let target_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind redirect target");
+        let target_addr = target_listener
+            .local_addr()
+            .expect("redirect target address");
+        let target_app = Router::new()
+            .route("/secret", axum::routing::get(redirect_target_handler))
+            .with_state(target_state);
+        let target_handle = tokio::spawn(async move {
+            axum::serve(target_listener, target_app)
+                .await
+                .expect("redirect target server");
+        });
+
+        let location = Arc::new(format!("http://{target_addr}/secret"));
+        let gateway_listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind redirect gateway");
+        let gateway_addr = gateway_listener
+            .local_addr()
+            .expect("redirect gateway address");
+        let gateway_app = Router::new()
+            .route("/{*path}", axum::routing::get(redirect_gateway_handler))
+            .with_state(location);
+        let gateway_handle = tokio::spawn(async move {
+            axum::serve(gateway_listener, gateway_app)
+                .await
+                .expect("redirect gateway server");
+        });
+
+        Self {
+            gateway_template: format!("http://{gateway_addr}/{{cid}}"),
+            target_hits,
+            _gateway_handle: gateway_handle,
+            _target_handle: target_handle,
+        }
+    }
+}
+
+impl Drop for RedirectScenario {
+    fn drop(&mut self) {
+        self._gateway_handle.abort();
+        self._target_handle.abort();
+    }
+}
+
+async fn redirect_gateway_handler(
+    axum::extract::State(location): axum::extract::State<Arc<String>>,
+) -> Response {
+    Response::builder()
+        .status(StatusCode::FOUND)
+        .header(header::LOCATION, location.as_str())
+        .body(Body::empty())
+        .expect("redirect response")
+}
+
+async fn redirect_target_handler(
+    axum::extract::State(state): axum::extract::State<RedirectTargetState>,
+) -> Response {
+    state.hits.fetch_add(1, Ordering::SeqCst);
+    Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::from(state.body.clone()))
+        .expect("redirect target response")
+}
+
 fn verify_body(birth_date: &str, country: &str) -> String {
     serde_json::to_string(&VerifyRequest {
         presentation_token: "mock_token".to_string(),
@@ -1674,6 +1788,80 @@ async fn test_ipv4_mapped_peer_is_rejected() {
         "::ffff:203.0.113.1".parse().unwrap(),
     );
     let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// NET-02: 追記型 XFF（末尾が信頼プロキシ自身）では元のクライアントを採用する。
+/// 末尾のピアを採用する回帰では IPv6 ピアとして許可されてしまうため 403 で検証する。
+#[tokio::test]
+async fn test_trusted_proxy_append_style_xff_uses_original_client() {
+    let app = trusted_network_app();
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    req.headers_mut().insert(
+        "x-forwarded-for",
+        format!("203.0.113.5, 2001:db8::1234, {RATE_LIMIT_PROXY}")
+            .parse::<HeaderValue>()
+            .unwrap(),
+    );
+    let response = app.oneshot(with_peer(req, RATE_LIMIT_PROXY)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// NET-02: 上書き型 XFF（末尾がピアでない）は従来どおり末尾を採用する。
+#[tokio::test]
+async fn test_trusted_proxy_overwrite_style_xff_uses_last_entry() {
+    let app = trusted_network_app();
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    req.headers_mut().insert(
+        "x-forwarded-for",
+        "203.0.113.5, 2001:db8::1234"
+            .parse::<HeaderValue>()
+            .unwrap(),
+    );
+    let response = app.oneshot(with_peer(req, RATE_LIMIT_PROXY)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// NET-02: 信頼プロキシ未設定時は複数値の XFF 全体を無視する。
+#[tokio::test]
+async fn test_untrusted_proxy_ignores_multi_value_xff() {
+    let app = untrusted_network_app();
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    req.headers_mut().insert(
+        "x-forwarded-for",
+        format!("203.0.113.1, 2001:db8::2, {RATE_LIMIT_PROXY}")
+            .parse::<HeaderValue>()
+            .unwrap(),
+    );
+    let response = app
+        .oneshot(with_peer(req, RATE_LIMIT_UNTRUSTED_PEER))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// SEC-01: IPv4-compatible IPv6（`::a.b.c.d`）は IPv4 として拒否する。
+#[tokio::test]
+async fn test_ipv4_compatible_peer_is_rejected() {
+    let app = setup_app().await;
+    let req = with_peer(
+        Request::get("/health").body(Body::empty()).unwrap(),
+        "::192.0.2.1".parse().unwrap(),
+    );
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// SEC-01: 信頼プロキシ経由の XFF に IPv4-compatible 形式が入っても拒否する。
+#[tokio::test]
+async fn test_ipv4_compatible_forwarded_client_is_rejected() {
+    let app = trusted_network_app();
+    let mut req = Request::get("/no-such-path").body(Body::empty()).unwrap();
+    req.headers_mut().insert(
+        "x-forwarded-for",
+        "::192.0.2.1".parse::<HeaderValue>().unwrap(),
+    );
+    let response = app.oneshot(with_peer(req, RATE_LIMIT_PROXY)).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
@@ -4426,6 +4614,115 @@ async fn test_get_content_falls_back_to_next_gateway() {
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     assert_eq!(&bytes[..], &body[..]);
+}
+
+/// SSRF-REDIRECT: ゲートウェイが 302 で内部サービスへリダイレクトしても
+/// 追従せず、リダイレクト先へ到達しないことを検証する。
+/// リダイレクトを追従すれば checksum が一致して 200 になるよう仕掛ける。
+#[tokio::test]
+async fn test_get_content_does_not_follow_gateway_redirect() {
+    let target_body = b"metadata from internal service".to_vec();
+    let scenario = RedirectScenario::start(target_body.clone()).await;
+    let checksum = sha256::digest(&target_body);
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K";
+    let (app, db) = setup_app_with_options(
+        vec![scenario.gateway_template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', ?, 'Approved');",
+        [cid, checksum.as_str()],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}"))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "3xx must be rejected instead of being followed"
+    );
+    assert_eq!(
+        scenario.target_hits.load(Ordering::SeqCst),
+        0,
+        "the redirect target must never be reached"
+    );
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        !text.contains("metadata from internal service"),
+        "redirect target body must not leak: {text}"
+    );
+}
+
+/// SSRF-REDIRECT: 302 を返すゲートウェイは無視し、次のゲートウェイへ
+/// フェイルオーバーする（3xx の Location 先へは接続しない）。
+#[tokio::test]
+async fn test_get_content_redirect_falls_back_to_next_gateway() {
+    let scenario = RedirectScenario::start(b"internal metadata".to_vec()).await;
+    let body = b"content from healthy gateway".to_vec();
+    let checksum = sha256::digest(&body);
+    let healthy = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f".to_string()),
+        inflated_content_length: None,
+    })
+    .await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f";
+    let (app, db) = setup_app_with_options(
+        vec![scenario.gateway_template.clone(), healthy.template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', ?, 'Approved');",
+        [cid, checksum.as_str()],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}"))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &body[..]);
+    assert_eq!(
+        scenario.target_hits.load(Ordering::SeqCst),
+        0,
+        "failover must not contact the redirect target"
+    );
 }
 
 /// CONTENT-02: 10 MiB ちょうどの応答は受理する（境界の off-by-one 検出）。
