@@ -1633,6 +1633,19 @@ fn Ledger(token: String) -> impl IntoView {
     }
 }
 
+/// 投票成功時の通知文言。生エラーや機微情報は含めない固定文言。
+const VOTE_NOTICE: &str = "投票を記録しました。";
+
+/// 投票失敗時の文言を HTTP ステータスから選ぶ固定文言集合。
+/// `None` はステータスを取得できなかった場合（ネットワークエラー）。
+/// サーバーが返した本文や生エラーは決して表示しない。
+fn vote_error_message(status: Option<u16>) -> String {
+    match status {
+        Some(code) => format!("投票に失敗しました (HTTP {code})."),
+        None => "Network error submitting vote.".to_string(),
+    }
+}
+
 #[component]
 fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
@@ -1643,6 +1656,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (stats_html, set_stats_html) = signal(String::new());
     let (stats_error, set_stats_error) = signal(String::new());
     let (stats_loaded, set_stats_loaded) = signal(false);
+    // 投票結果のフィードバック。成功通知と失敗エラーは固定文言のみを表示する。
+    let (vote_error, set_vote_error) = signal(String::new());
+    let (vote_notice, set_vote_notice) = signal(String::new());
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
@@ -1739,6 +1755,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     };
 
     let do_vote = move |report_id: i64, result: String| {
+        // 新しい試行では前回の通知・エラーを必ず消す。
+        set_vote_error.set(String::new());
+        set_vote_notice.set(String::new());
         let token = token_stored.get_value();
         let user_hash = user_hash_stored.get_value();
         spawn_local(async move {
@@ -1754,10 +1773,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .unwrap()
                 .send()
                 .await;
-            if let Ok(r) = res
-                && r.ok()
-            {
-                fetch_reports();
+            match res {
+                Ok(r) if r.ok() => {
+                    set_vote_notice.set(VOTE_NOTICE.to_string());
+                    fetch_reports();
+                }
+                Ok(r) => {
+                    set_vote_error.set(vote_error_message(Some(r.status())));
+                }
+                Err(_) => {
+                    set_vote_error.set(vote_error_message(None));
+                }
             }
         });
     };
@@ -1802,6 +1828,16 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
             <div class="border border-white/10 p-8 space-y-6">
                 <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
+                <Show when=move || !vote_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="vote-error" class="text-xs text-red-500">
+                        {move || vote_error.get()}
+                    </p>
+                </Show>
+                <Show when=move || !vote_notice.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="vote-notice" class="text-xs text-green-500">
+                        {move || vote_notice.get()}
+                    </p>
+                </Show>
                 <div class="space-y-4">
                     <For
                         each=move || reports.get()
@@ -2247,6 +2283,26 @@ mod tests {
         assert!(html.contains(">1</p>"), "{html}");
         assert!(html.contains("moderation-stats-totals"), "{html}");
         assert!(html.contains("moderation-stats-monthly"), "{html}");
+    }
+
+    #[test]
+    fn vote_feedback_uses_only_fixed_phrases() {
+        // 成功通知は固定文言。
+        assert_eq!(super::VOTE_NOTICE, "投票を記録しました。");
+        // HTTP エラーはステータス番号のみを埋め込む固定文言。
+        assert_eq!(
+            super::vote_error_message(Some(403)),
+            "投票に失敗しました (HTTP 403)."
+        );
+        assert_eq!(
+            super::vote_error_message(Some(500)),
+            "投票に失敗しました (HTTP 500)."
+        );
+        // ネットワークエラー（ステータスなし）も固定文言。生エラーは出さない。
+        assert_eq!(
+            super::vote_error_message(None),
+            "Network error submitting vote."
+        );
     }
 
     #[test]
