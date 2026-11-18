@@ -3,14 +3,10 @@
 //! 秘密情報の値は一切出力しない。
 
 use server::{
-    ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests,
-    oidc_http_timeout, production_config_errors, rate_limit_per_min, validate_jwt_secret,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, ipfs_gateways,
+    ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests, oidc_http_timeout,
+    production_config_errors, rate_limit_per_min, validate_jwt_secret,
 };
-
-/// OIDC_CLOCK_SKEW_SECS の許容範囲。oidc.rs のパースと同じ 1..=300 を使う。
-/// doctor は設定値を出力せず、範囲内かどうかだけを診断する。
-const OIDC_CLOCK_SKEW_MIN_SECS: u64 = 1;
-const OIDC_CLOCK_SKEW_MAX_SECS: u64 = 300;
 
 fn print_help() {
     eprintln!(
@@ -206,14 +202,12 @@ where
     let oidc_clock_skew_errors = match lookup("OIDC_CLOCK_SKEW_SECS") {
         None => Vec::new(),
         Some(value) => match value.parse::<u64>() {
-            Ok(seconds)
-                if (OIDC_CLOCK_SKEW_MIN_SECS..=OIDC_CLOCK_SKEW_MAX_SECS).contains(&seconds) =>
-            {
+            Ok(seconds) if (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(&seconds) => {
                 Vec::new()
             }
-            _ => vec![
-                "OIDC_CLOCK_SKEW_SECS is outside 1..=300; using default 60 seconds".to_string(),
-            ],
+            _ => vec![format!(
+                "OIDC_CLOCK_SKEW_SECS is outside {CLOCK_SKEW_MIN_SECS}..={CLOCK_SKEW_MAX_SECS}; using default {DEFAULT_CLOCK_SKEW_SECS} seconds"
+            )],
         },
     };
     results.push(("oidc_clock_skew", oidc_clock_skew_errors));

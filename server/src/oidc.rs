@@ -33,9 +33,9 @@ pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 /// OIDC_CLOCK_SKEW_SECS の許容範囲（秒）。
 /// 0 や極端に大きな値は exp / nbf / auth_time 検証を実質的に無効化するため、
 /// 範囲外の設定は既定値へフォールバックする（fail-closed）。
-const CLOCK_SKEW_MIN_SECS: u64 = 1;
-const CLOCK_SKEW_MAX_SECS: u64 = 300;
-const DEFAULT_CLOCK_SKEW_SECS: u64 = 60;
+pub const CLOCK_SKEW_MIN_SECS: u64 = 1;
+pub const CLOCK_SKEW_MAX_SECS: u64 = 300;
+pub const DEFAULT_CLOCK_SKEW_SECS: u64 = 60;
 /// リフレッシュトークンの有効期間（30日）。
 const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// OIDC Back-Channel Logout の events クレームに必須のキー。
