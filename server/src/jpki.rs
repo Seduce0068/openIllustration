@@ -7,6 +7,13 @@ use x509_parser::{prelude::*, public_key::PublicKey};
 /// JWT の署名鍵と同様、NIST SP 800-57 の 112 bit 強度を満たす 2048 bit を下限とする。
 const JPKI_RSA_MIN_KEY_BITS: usize = 2048;
 
+/// 提示トークン（JSON envelope 全体）の受付上限。64 KiB 超は解析前に拒否する。
+const MAX_PRESENTATION_TOKEN_LEN: usize = 64 * 1024;
+/// envelope の certificate / verifiableCredential 文字列の上限（base64 デコード前）。
+const MAX_CERT_ENVELOPE_LEN: usize = 64 * 1024;
+/// デコード後の X.509 証明書 DER の上限（X.509 パース前）。
+const MAX_CERT_DER_LEN: usize = 16 * 1024;
+
 /// 解析済み公開鍵が JPKI の鍵ポリシーを満たすかを判定する。
 /// 非 RSA（EC / DSA 等）と RSA 2048 bit 未満は拒否する。
 fn public_key_meets_policy(key: &PublicKey<'_>) -> bool {
@@ -22,6 +29,12 @@ pub fn verify_presentation(
     explicit_public_key_der: Option<Vec<u8>>,
     allow_mock: bool,
 ) -> Result<Vec<u8>, AppError> {
+    if presentation_token.len() > MAX_PRESENTATION_TOKEN_LEN {
+        return Err(AppError::Unauthorized(
+            "JPKI presentation token is too large".into(),
+        ));
+    }
+
     if allow_mock && presentation_token == "mock_token" {
         return explicit_public_key_der
             .ok_or_else(|| AppError::Unauthorized("mock_token requires public_key_der".into()));
@@ -35,15 +48,32 @@ fn decode_certificate_der(token: &str) -> Result<Vec<u8>, AppError> {
     if let Ok(vp) = serde_json::from_str::<PresentationEnvelope>(token)
         && let Some(cert_b64) = vp.certificate.or(vp.verifiable_credential)
     {
-        return base64::engine::general_purpose::STANDARD
+        if cert_b64.len() > MAX_CERT_ENVELOPE_LEN {
+            return Err(AppError::Unauthorized(
+                "JPKI certificate envelope value is too large".into(),
+            ));
+        }
+        let der = base64::engine::general_purpose::STANDARD
             .decode(cert_b64.trim())
-            .map_err(|e| AppError::Unauthorized(format!("Invalid certificate base64: {e}")));
+            .map_err(|e| AppError::Unauthorized(format!("Invalid certificate base64: {e}")))?;
+        return ensure_cert_der_len(der);
     }
 
-    base64::engine::general_purpose::STANDARD
+    let der = base64::engine::general_purpose::STANDARD
         .decode(token.trim())
         .or_else(|_| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(token.trim()))
-        .map_err(|e| AppError::Unauthorized(format!("Invalid JPKI presentation token: {e}")))
+        .map_err(|e| AppError::Unauthorized(format!("Invalid JPKI presentation token: {e}")))?;
+    ensure_cert_der_len(der)
+}
+
+/// デコード済み DER が上限を超えていないことを X.509 パース前に確認する。
+fn ensure_cert_der_len(der: Vec<u8>) -> Result<Vec<u8>, AppError> {
+    if der.len() > MAX_CERT_DER_LEN {
+        return Err(AppError::Unauthorized(
+            "JPKI certificate DER is too large".into(),
+        ));
+    }
+    Ok(der)
 }
 
 fn extract_subject_public_key(cert_der: &[u8]) -> Result<Vec<u8>, AppError> {
@@ -292,6 +322,43 @@ mod tests {
     fn empty_token_is_rejected() {
         // "" is valid base64 for an empty byte sequence, so it reaches X.509 parsing.
         let err = verify_presentation("", None, false).unwrap_err();
+        assert_unauthorized_contains(err, "X.509 parse failed");
+    }
+
+    /// 64 KiB 超の提示トークンは base64 デコード前に Unauthorized で拒否する。
+    #[test]
+    fn oversized_presentation_token_is_unauthorized() {
+        let token = "A".repeat(MAX_PRESENTATION_TOKEN_LEN + 1);
+        let err = verify_presentation(&token, None, false).unwrap_err();
+        assert_unauthorized_contains(err, "presentation token is too large");
+    }
+
+    /// envelope 内の証明書文字列が 64 KiB 超なら base64 デコード前に拒否する。
+    #[test]
+    fn oversized_envelope_certificate_is_rejected_before_base64_decode() {
+        let json = format!(
+            r#"{{"certificate":"{}"}}"#,
+            "A".repeat(MAX_CERT_ENVELOPE_LEN + 1)
+        );
+        let err = decode_certificate_der(&json).unwrap_err();
+        assert_unauthorized_contains(err, "certificate envelope value is too large");
+    }
+
+    /// デコード後の DER が 16 KiB 超なら X.509 パース前に拒否する。
+    #[test]
+    fn oversized_decoded_certificate_der_is_rejected() {
+        let der = vec![0u8; MAX_CERT_DER_LEN + 1];
+        let token = base64::engine::general_purpose::STANDARD.encode(der);
+        let err = verify_presentation(&token, None, false).unwrap_err();
+        assert_unauthorized_contains(err, "certificate DER is too large");
+    }
+
+    /// 境界値ちょうど 16 KiB の DER は長さガードを通り、X.509 パースで拒否される。
+    #[test]
+    fn certificate_der_at_limit_reaches_x509_parse() {
+        let der = vec![0u8; MAX_CERT_DER_LEN];
+        let token = base64::engine::general_purpose::STANDARD.encode(der);
+        let err = verify_presentation(&token, None, false).unwrap_err();
         assert_unauthorized_contains(err, "X.509 parse failed");
     }
 }

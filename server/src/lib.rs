@@ -1783,6 +1783,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(state)
 }
 
+/// GET /mod/reports の取得上限。全行を Vec 化しないよう SQL の LIMIT にバインドする。
+pub const MAX_REPORT_LIST: i64 = 500;
+/// GET /content/{cid}/audit の取得上限。全行を Vec 化しないよう SQL の LIMIT にバインドする。
+pub const MAX_AUDIT_LIST: i64 = 500;
+
 #[derive(Serialize, Deserialize)]
 pub struct ReportResponse {
     pub report_id: i64,
@@ -1803,8 +1808,9 @@ pub async fn list_reports(
              FROM reports r
              JOIN contents c ON r.target_cid = c.cid
              WHERE c.status = 'Reported'
-             ORDER BY r.created_at DESC",
-            (),
+             ORDER BY r.created_at DESC
+             LIMIT ?",
+            libsql::params![MAX_REPORT_LIST],
         )
         .await?;
 
@@ -1860,12 +1866,17 @@ pub async fn get_content_audit(
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
 
+    // 全行を Vec 化しないよう取得件数を MAX_AUDIT_LIST に制限する。
+    // これに伴い entry_hash / previous_log_hash の連鎖確認は「全件検証」ではなく
+    // 「返した行内だけの一部検証」へ変わる（古い行はレスポンスに含まれない）。
+    // 第三者検証可能な監査ではなく、ローカル DB の整合性確認の範囲に留まる点に注意。
     let mut rows = state
         .db
         .query(
             "SELECT log_id, cid, old_status, new_status, changed_by, reason, created_at, entry_hash 
-             FROM content_audit_log WHERE cid = ? ORDER BY log_id ASC",
-            [cid],
+             FROM content_audit_log WHERE cid = ? ORDER BY log_id ASC
+             LIMIT ?",
+            libsql::params![cid, MAX_AUDIT_LIST],
         )
         .await?;
 

@@ -7870,23 +7870,29 @@ fn test_required_confirmations_by_chain() {
 fn test_recover_ethereum_address_rejects_invalid_signatures() {
     let message = b"openIllustration payment order boundary";
 
-    // 非 hex はデコード前に拒否する。
-    let err = crate::payments::recover_ethereum_address(message, "0xnothex").unwrap_err();
+    // 非 hex は hex::decode で拒否する（長さガードを通すため 0x 込み 132 文字）。
+    let non_hex = format!("0x{}", "zz".repeat(65));
+    let err = crate::payments::recover_ethereum_address(message, &non_hex).unwrap_err();
     assert!(
         matches!(&err, AppError::BadRequest(msg) if msg == "signature must be hex"),
         "unexpected error: {err}"
     );
 
-    // 65 バイト以外（64 / 66 バイト）は拒否する。
+    // 64 バイト（130 文字）は長さガードを通り、65 バイト検査で拒否する。
     let short = format!("0x{}", "11".repeat(64));
+    let err = crate::payments::recover_ethereum_address(message, &short).unwrap_err();
+    assert!(
+        matches!(&err, AppError::BadRequest(msg) if msg == "signature must be 65 bytes"),
+        "unexpected error: {err}"
+    );
+
+    // 66 バイト（134 文字）は hex::decode 前の長さガードで拒否する。
     let long = format!("0x{}", "11".repeat(66));
-    for invalid in [short.as_str(), long.as_str()] {
-        let err = crate::payments::recover_ethereum_address(message, invalid).unwrap_err();
-        assert!(
-            matches!(&err, AppError::BadRequest(msg) if msg == "signature must be 65 bytes"),
-            "unexpected error: {err}"
-        );
-    }
+    let err = crate::payments::recover_ethereum_address(message, &long).unwrap_err();
+    assert!(
+        matches!(&err, AppError::BadRequest(msg) if msg == "signature hex must be 130 or 132 characters"),
+        "unexpected error: {err}"
+    );
 
     // recovery id が 0/1/27/28 以外は拒否する。
     let mut signature = vec![0x11u8; 65];
@@ -7911,6 +7917,41 @@ fn test_recover_ethereum_address_rejects_invalid_signatures() {
         matches!(&err, AppError::Unauthorized(msg) if msg == "signature recovery failed"),
         "unexpected error: {err}"
     );
+}
+
+/// JPYC: hex::decode 前に署名文字列長を検査し、130/132 文字以外を早期 BadRequest で拒否する。
+#[test]
+fn test_recover_ethereum_address_rejects_oversized_hex_before_decode() {
+    let message = b"openIllustration payment order oversized signature";
+    let guard_error = "signature hex must be 130 or 132 characters";
+
+    for len in [8, 129, 131, 133, 1_000_000] {
+        let candidate = "a".repeat(len);
+        let err = crate::payments::recover_ethereum_address(message, &candidate).unwrap_err();
+        assert!(
+            matches!(&err, AppError::BadRequest(msg) if msg == guard_error),
+            "length {len} must be rejected by the pre-decode guard, got {err}"
+        );
+    }
+
+    // 0x 付きも「文字列全体の長さ」で判定されるため、同じく早期拒否される。
+    let oversized = format!("0x{}", "ab".repeat(100_000));
+    let err = crate::payments::recover_ethereum_address(message, &oversized).unwrap_err();
+    assert!(
+        matches!(&err, AppError::BadRequest(msg) if msg == guard_error),
+        "unexpected error: {err}"
+    );
+
+    // 対照: 130 / 132 文字はガードを通り、65 バイトの復元処理まで進む。
+    // 0xaa は recovery id として不正なので "invalid signature recovery id" が返る。
+    for candidate in ["a".repeat(130), format!("0x{}", "a".repeat(130))] {
+        let err = crate::payments::recover_ethereum_address(message, &candidate).unwrap_err();
+        assert!(
+            matches!(&err, AppError::BadRequest(msg) if msg == "invalid signature recovery id"),
+            "length {} must pass the hex-length guard, got {err}",
+            candidate.len()
+        );
+    }
 }
 
 /// JPYC: 0x プレフィックス無しの署名と 27/28 形式の recovery id も同じアドレスへ復元する。
@@ -14172,6 +14213,116 @@ async fn list_reports_filters_reported_and_orders_newest_first() {
     );
     assert_eq!(items[0].reason, "new reason");
     assert_eq!(items[1].reason, "old reason");
+}
+
+/// R2: GET /mod/reports は MAX_REPORT_LIST 件で切り、全行 Vec 化を防ぐ。
+/// SQL の LIMIT を外すと 501 件返ってこのテストが失敗するため、mutation 検出にもなる。
+#[tokio::test]
+async fn list_reports_caps_at_max_report_list() {
+    assert_eq!(crate::MAX_REPORT_LIST, 500);
+    let (app, db) = setup_app_with_db().await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g";
+    db.execute(
+        "UPDATE contents SET status = 'Reported' WHERE cid = ?",
+        [cid.to_string()],
+    )
+    .await
+    .unwrap();
+
+    // 上限 + 1 件投入。created_at は id と単調増加させ、newest-first も検証する。
+    let tx = db.transaction().await.unwrap();
+    for id in 1..=crate::MAX_REPORT_LIST + 1 {
+        let created_at = format!("2026-01-01 00:{:02}:{:02}", id / 60, id % 60);
+        tx.execute(
+            "INSERT INTO reports (report_id, target_cid, reason, created_at)
+             VALUES (?, ?, ?, ?)",
+            libsql::params![id, cid.to_string(), format!("reason {id}"), created_at],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/mod/reports")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let items: Vec<crate::ReportResponse> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        items.len(),
+        crate::MAX_REPORT_LIST as usize,
+        "LIMIT が効かず全件返っている"
+    );
+    // 接続順・レスポンス順（newest first）は従来どおり維持。
+    // 501 件投入して 500 件返るため、先頭は最新の 501、末尾は 2 になる。
+    assert_eq!(items.first().unwrap().report_id, crate::MAX_REPORT_LIST + 1);
+    assert_eq!(
+        items[0].reason,
+        format!("reason {}", crate::MAX_REPORT_LIST + 1)
+    );
+}
+
+/// R2: GET /content/{cid}/audit は MAX_AUDIT_LIST 件で切り、全行 Vec 化を防ぐ。
+/// 既存の entry_hash / previous_log_hash 連鎖検証（test_audit_log_chain_integrity 等）は
+/// DB を直接読むため、この LIMIT 追加の影響を受けず壊れない。
+#[tokio::test]
+async fn get_content_audit_caps_at_max_audit_list() {
+    assert_eq!(crate::MAX_AUDIT_LIST, 500);
+    let (app, db) = setup_app_with_db().await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g";
+
+    let tx = db.transaction().await.unwrap();
+    for id in 1..=crate::MAX_AUDIT_LIST + 1 {
+        tx.execute(
+            "INSERT INTO content_audit_log
+                 (log_id, cid, old_status, new_status, changed_by, reason, entry_hash)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            libsql::params![
+                id,
+                cid.to_string(),
+                "Approved".to_string(),
+                "Reported".to_string(),
+                "reporter".to_string(),
+                format!("reason {id}"),
+                format!("{id:064x}"),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+    tx.commit().await.unwrap();
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}/audit"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let logs: Vec<crate::AuditLogResponse> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        logs.len(),
+        crate::MAX_AUDIT_LIST as usize,
+        "LIMIT が効かず全件返っている"
+    );
+    // 接続順・レスポンス順（log_id ASC / oldest first）は従来どおり維持。
+    assert_eq!(logs.first().unwrap().log_id, 1);
+    assert_eq!(logs.last().unwrap().log_id, crate::MAX_AUDIT_LIST);
 }
 
 /// 監査: 再認証時の revoked_subs 削除レース回帰テスト。

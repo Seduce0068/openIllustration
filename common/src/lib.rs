@@ -44,13 +44,35 @@ pub fn verify_checksum(data: &[u8], expected_checksum: &str) -> bool {
     hex::encode(result) == expected_checksum
 }
 
+/// PKCS#1 v1.5 署名の受付長（RSA 2048〜4096 bit）。
+const MIN_RSA_SIGNATURE_LEN: usize = 256;
+const MAX_RSA_SIGNATURE_LEN: usize = 512;
+/// 公開鍵 DER の受付上限（2 KiB）。RSA 4096 bit の SPKI でも十分に収まる。
+const MAX_PUBLIC_KEY_DER_LEN: usize = 2 * 1024;
+
 pub fn verify_rsa_signature(
     public_key_der: &[u8],
     data: &[u8],
     signature: &[u8],
 ) -> Result<(), ForensicError> {
+    // 既存の不正 DER テストが Crypto("Invalid public key") を期待するため、
+    // DER の長さ検査とパースを署名長ガードより先に行う。
+    if public_key_der.len() > MAX_PUBLIC_KEY_DER_LEN {
+        return Err(ForensicError::Crypto(format!(
+            "Invalid public key: DER length {} exceeds {} bytes",
+            public_key_der.len(),
+            MAX_PUBLIC_KEY_DER_LEN
+        )));
+    }
     let public_key = PublicKey::from_public_key_der(public_key_der)
         .map_err(|e| ForensicError::Crypto(format!("Invalid public key: {}", e)))?;
+
+    if !(MIN_RSA_SIGNATURE_LEN..=MAX_RSA_SIGNATURE_LEN).contains(&signature.len()) {
+        return Err(ForensicError::InvalidSignature(format!(
+            "signature length must be {MIN_RSA_SIGNATURE_LEN}..={MAX_RSA_SIGNATURE_LEN} bytes, got {}",
+            signature.len()
+        )));
+    }
 
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -1102,6 +1124,53 @@ mod tests {
                 "expected InvalidSignature for {signature:?}, got {error:?}"
             );
         }
+    }
+
+    /// 署名長ガード: 256..=512 バイトのみ受理し、範囲外は InvalidSignature で拒否する。
+    #[test]
+    fn verify_rsa_signature_enforces_signature_length_bounds() {
+        let (private_pem, public_der) = test_key_pair();
+        let data = b"signature length boundary";
+        let valid = sign_bytes(&private_pem, data);
+        assert_eq!(valid.len(), 256, "control: RSA 2048 signature is 256 bytes");
+
+        // 空・255・513 バイトは正しい公開鍵でも署名長ガードで拒否する。
+        let too_short = vec![0u8; 255];
+        let too_long = vec![0u8; 513];
+        for signature in [&[][..], &too_short[..], &too_long[..]] {
+            let error = verify_rsa_signature(&public_der, data, signature)
+                .expect_err("out-of-range signature length must be rejected");
+            assert!(
+                matches!(&error, ForensicError::InvalidSignature(message)
+                    if message.contains("signature length must be")),
+                "expected length-guard error for {} bytes, got {error:?}",
+                signature.len()
+            );
+        }
+
+        // 境界値 256 バイトはガードを通過して検証へ進む（正常系は受理）。
+        assert!(verify_rsa_signature(&public_der, data, &valid).is_ok());
+        let mut tampered = valid.clone();
+        tampered[0] ^= 0x01;
+        let error = verify_rsa_signature(&public_der, data, &tampered).unwrap_err();
+        assert!(
+            matches!(&error, ForensicError::InvalidSignature(message)
+                if !message.contains("signature length must be")),
+            "256-byte signature must reach verification, got {error:?}"
+        );
+    }
+
+    /// 公開鍵 DER が 2 KiB を超える場合は署名検証前に拒否する。
+    #[test]
+    fn verify_rsa_signature_rejects_oversized_public_key_der() {
+        let der = vec![0u8; MAX_PUBLIC_KEY_DER_LEN + 1];
+        let error = verify_rsa_signature(&der, b"oversized der", &[0u8; 256])
+            .expect_err("oversized public key DER must be rejected");
+        assert!(
+            matches!(&error, ForensicError::Crypto(message)
+                if message.contains("Invalid public key") && message.contains("DER length")),
+            "expected oversized-DER rejection, got {error:?}"
+        );
     }
 
     /// 監査対象 2: 不正 base64 署名は署名検証より前に InvalidSignature で拒否される。

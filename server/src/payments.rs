@@ -229,6 +229,13 @@ pub fn derive_receiving_address(xprv: &str, index: u32) -> Result<String, AppErr
 
 /// EIP-191 `personal_sign` の署名から Ethereum アドレスを復元する。
 pub fn recover_ethereum_address(message: &[u8], signature_hex: &str) -> Result<String, AppError> {
+    // hex::decode の前に長さを検査し、巨大な入力をデコードしない。
+    // 130 = 65 バイト（0x 無し） / 132 = 65 バイト（0x 付き）。
+    if signature_hex.len() != 130 && signature_hex.len() != 132 {
+        return Err(AppError::BadRequest(
+            "signature hex must be 130 or 132 characters".to_string(),
+        ));
+    }
     let raw = signature_hex.strip_prefix("0x").unwrap_or(signature_hex);
     let signature =
         hex::decode(raw).map_err(|_| AppError::BadRequest("signature must be hex".to_string()))?;
