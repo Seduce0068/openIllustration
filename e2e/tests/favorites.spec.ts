@@ -204,7 +204,14 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await page.getByLabel('Search').fill('');
     // デバウンス後の検索リクエストが飛ぶのを待ってから解除する。
     // 待たないと解除側の即時 GET にまとまり、リクエスト数が実行タイミング依存になる。
-    await expect.poll(() => contentRequests).toHaveLength(6);
+    // 「ちょうど6件」をポーリングで拾うと、直後に7件目が飛んだ瞬間に取りこぼして
+    // 失敗するため、6件以上かつ6件目が検索語クリアのデバウンス取得であることを確認する。
+    await expect
+      .poll(() => contentRequests.length, { timeout: 10000 })
+      .toBeGreaterThanOrEqual(6);
+    await expect
+      .poll(() => contentRequests[5], { timeout: 10000 })
+      .toEqual({ q: null, tag: null, type: null, favorite_only: '1' });
     await page.getByLabel('Favorites only').uncheck();
     await expect(page.getByText('Fav Story')).toBeVisible();
     await card('Fav Story').getByRole('button', { name: 'Add to favorites' }).focus();
@@ -232,7 +239,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     // 配列を完全一致で検証し、想定外の再フェッチ・クエリ混入を検出する。
     // 検索語クリア→デバウンス取得→お気に入り解除→Enter トグルの順で
     // 1操作1回の GET になるよう、途中の取得を明示的に待っている。
-    await expect.poll(() => contentRequests).toEqual([
+    // 完全一致の配列アサーションは維持しつつ、最後の GET が遅れても待てるよう明示 timeout を付与する。
+    await expect.poll(() => contentRequests, { timeout: 10000 }).toEqual([
       { q: null, tag: null, type: null, favorite_only: null },
       { q: null, tag: null, type: null, favorite_only: null },
       { q: null, tag: null, type: null, favorite_only: null },
@@ -353,8 +361,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     });
     await expect.poll(() => favoriteCalls.length).toBe(1);
 
-    // 少し gap を空けて2回目。レスポンス保留中は disabled で送られない。
-    await page.waitForTimeout(100);
+    // レスポンス保留中は disabled になるまで明示的に待ってから2回目を送る（固定 sleep は使わない）。
+    await expect(toggle).toBeDisabled();
     await toggle.evaluate((el: HTMLElement) => el.click());
     await expect(toggle).toBeDisabled();
     await expect.poll(() => favoriteCalls.length).toBe(1);

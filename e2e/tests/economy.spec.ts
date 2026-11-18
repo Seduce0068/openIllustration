@@ -100,6 +100,10 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await contentArea.hover();
 
     const pendingButton = page.getByRole('button', { name: 'Settlement Pending' });
+    // オーバーレイは opacity-0 → group-hover:opacity-100 の遷移がある。
+    // toBeVisible() は opacity:0 でも通るため、親のオーバーレイが完全に
+    // 表示される（opacity:1）まで待ってからボタンを検証する。
+    await expect(pendingButton.locator('xpath=..')).toHaveCSS('opacity', '1');
     await expect(pendingButton).toBeVisible();
     await expect(pendingButton).toBeDisabled();
     await expect(page.locator('text=JPYC settlement verification is in development')).toBeVisible();
