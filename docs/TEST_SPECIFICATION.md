@@ -5,7 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T04:49:38+09:00"
+  at: "2026-11-18T10:43:36+09:00"
+verified:
+  by: dsh
+  at: "2026-11-18T10:43:36+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -21,8 +24,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
   お気に入り追加削除 / `me/export`）でカバーする。実測は全27件（auth 2 / economy 1 /
   error-paths 4 / export 2 / favorites 1 / integrity 3 / metrics 1 / moderation 4 /
-  real-api 4 / search 1 / upload 3）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
+  upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
 
 ## 2. 実装済みテストの概要
 
@@ -76,10 +80,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-01 | 同一ユーザーの同一通報への再投票 | 拒否 | 実装済み（API検査＋DB一意インデックス）、回帰テストあり |
 | MOD-02 | 3人の異なる投票者による結果 | 規則通り状態遷移 | 実装済み（確定後の追加投票は400で拒否）、回帰テストあり |
 | MOD-03 | レビュー中コンテンツへの重複通報 | 拒否 | 実装済み、回帰テストあり |
-| MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全10件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc`。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
-| MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
-| MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全10件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で3件 pass、フルスイート24件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
+| MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
+| MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で4件 pass、フルスイート27件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
@@ -91,16 +95,16 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
-| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。実JPKI実機・失効確認は未検証 |
-| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。実JPKIの失効・期限切れは未検証 |
+| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。実JPKI実機・失効確認は未検証 |
+| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。実JPKIの失効・期限切れは未検証 |
 | ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ） | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装 |
-| PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。実チェーンRPCは未実装 |
+| PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
-| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス8件は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
+| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
@@ -192,8 +196,8 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
 
 ### 暗号検証エラーパスの検証（AUDIT-01）
 
-`common/src/lib.rs` の8テストで、公開鍵 DER・署名バイト・監査スナップショットのエラーパスを
-検証する（3a6bd64）。テスト名は次のとおり。
+`common/src/lib.rs` の12テストで、公開鍵 DER・署名バイト・監査スナップショットの
+エラーパスとハッシュ連鎖（`verify_chain_*`）を検証する（3a6bd64）。テスト名は次のとおり。
 
 - `verify_rsa_signature_rejects_invalid_public_key_der`: 空・不正 ASN.1・ゴミ DER を拒否。
 - `verify_rsa_signature_rejects_wrong_key`: 別鍵は `InvalidSignature`、正鍵は受理（対照付き）。
@@ -204,6 +208,14 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
 - `audit_snapshot_entry_verify_hash_accepts_match_and_rejects_mismatch`: 保存済みハッシュと
   v2 再計算値の一致判定。改変値・v1 ハッシュは拒否。
 - `public_key_der_from_private_pem_rejects_invalid_pem`: 不正 PEM を拒否。
+- `verify_chain_accepts_valid_unmasked_snapshot`: 署名・連鎖・連番・Merkle root が有効な
+  スナップショットを受理する（正常系の対照）。
+- `verify_chain_rejects_log_id_gap_with_valid_signature`: 署名は有効なまま `log_id` の
+  飛ばし（連番不連続）を拒否する。
+- `verify_chain_rejects_broken_previous_hash_with_valid_signature`: 再署名済みでも
+  `previous_log_hash` の改ざんを chain mismatch で拒否する。
+- `verify_chain_rejects_broken_merkle_root_with_valid_signature`: 再署名済みでも
+  Merkle root の改ざんを拒否する。
 
 ### 決済ユーティリティの境界の検証（PAY-01〜03）
 
@@ -385,6 +397,40 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 4. デコード失敗ケースでは `● VERIFIED`、`Integrity Breach Detected`、
    `Wasm checksum does not match forensic registry.` が出ないことも同時に確認する。
    デコーダのエラー値（内部情報）は画面へ出さず、デコード成功時のみ VERIFIED に戻る。
+
+### E2E Upload シナリオ（R1-14 / INT-02 / CONTENT-01）
+
+`e2e/tests/upload.spec.ts` の `Content Upload Flow` は、モック認証（`ALLOW_MOCK_AUTH=1`）
+でログイン後に UPLOAD 画面へ進み、送信成功と失敗時の表示を検証する（4件）。
+テスト名と確認点は次のとおり。
+
+1. `should upload JXL content successfully`: JXL ファイルを選択して送信し、
+   `SUCCESS: Content registered` が表示されることを確認する。
+2. `should reject files over 10 MiB before upload`: 10 MiB 超のファイルを選択した時点で
+   `ERROR: File exceeds the 10 MiB limit.` を表示し、送信ボタンは無効のまま、
+   `/content/upload` へのリクエストが0回（未送信）であることを確認する。
+3. `INT-02: should reject ZIP files`: 許可外 MIME のファイルを送信すると API が400を返し、
+   `ERROR: Upload failed` が表示されることを確認する。
+4. `R1-14: shows an error and re-enables the button when arrayBuffer() rejects`:
+   `Blob.prototype.arrayBuffer` を拒否させ、準備フェーズの unwrap パニック
+   （`Processing...` のまま固まる状態）を再現する。`data-testid="upload-status"` に固定
+   文言 `アップロードの準備に失敗しました。` が表示され、送信ボタンが再活性化して
+   `Processing...` のまま残らないことを確認する。
+
+失敗時は生のエラー値・内部情報を画面へ出さず、固定文言のみを表示する。クライアント
+（`client/src/lib.rs`）は準備・通信・応答読取の各段を `Result` で伝播させ、
+成否にかかわらず `set_loading(false)` を実行してボタンを再活性化する。固定文言は3種類。
+
+| 失敗段階 | 固定文言 |
+| --- | --- |
+| 準備（`array_buffer` / `FormData` / `Blob` 生成など） | `アップロードの準備に失敗しました。` |
+| 通信（`Request::send`） | `ネットワークエラーが発生しました。` |
+| 応答読取（`response.json::<String>()`） | `アップロード結果の読み取りに失敗しました。` |
+
+`data-testid="upload-status"` は `[STATUS]` の接頭辞に続けて状態文言を描画し、
+文言が空のときは `Show` により非表示になる。loading 中は送信ボタンが `Processing...`
+かつ `disabled` で、完了後に `Sign & Submit to Evidence Ledger` へ戻る。
+HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload failed.` を表示する。
 
 ### 中立化URL件数指標の検証（MET-01）
 
