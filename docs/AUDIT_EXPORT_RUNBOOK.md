@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 ---
 
 ## 目的
@@ -19,15 +19,21 @@ generated:
 - 署名鍵は PKCS#8 PEM の RSA 秘密鍵（2048 bit 以上）をファイルで渡す。
   コマンドライン引数や環境変数に秘密鍵の内容を渡さない。
 - 公開鍵は SubjectPublicKeyInfo の DER 形式で配布する。
+- 署名鍵ファイルは owner-only（0600 / 0400）で、親ディレクトリは 0700 で管理する。
+  `sign_audit_export` は起動時にこれらを検査し、満たさない場合は拒否または警告する。
+- リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数でのみ渡す。`--database-token` は
+  廃止され、指定するとエラーになる（`argv` は `ps` 等で公開されるため）。
 - スナップショット JSON の出力先は既存ファイルであってはならない（上書き拒否）。
+  CLI は `create_new` で存在チェックと生成を原子的に行う。
 
 ## 鍵ペアの準備（初期設定）
 
 ```bash
 # Kubuntu / 安全管理したディレクトリで実行
-openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out audit-signing-key.pem
-chmod 600 audit-signing-key.pem
-openssl pkey -in audit-signing-key.pem -pubout -outform DER -out audit-public.der
+mkdir -m 700 -p /secure/path
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /secure/path/audit-signing-key.pem
+chmod 600 /secure/path/audit-signing-key.pem
+openssl pkey -in /secure/path/audit-signing-key.pem -pubout -outform DER -out audit-public.der
 ```
 
 秘密鍵はバックアップとともに厳重に管理する。公開鍵は利用者へ配布する。
@@ -35,12 +41,18 @@ openssl pkey -in audit-signing-key.pem -pubout -outform DER -out audit-public.de
 ## スナップショット作成
 
 ```bash
-# Kubuntu / リポジトリルート
+# Kubuntu / リポジトリルート（リモート DB の場合は環境変数でトークンを渡す）
+export DATABASE_TOKEN='<リモートlibSQLのトークン>'   # リモート DB を使う場合のみ。ローカル DB は不要
 cargo run -p server --bin sign_audit_export -- \
   --database-url file:/path/to/local.db \
   --signing-key /secure/path/audit-signing-key.pem \
   --output /path/to/audit-snapshot-YYYYMMDD.json
 ```
+
+`--database-token` は受け付けない（指定すると
+`--database-token is not accepted; set DATABASE_TOKEN in the environment instead` で終了）。
+既定値は `DATABASE_URL`（`file:local.db`）と `DATABASE_TOKEN`（空）。トークンはプロセス一覧へ
+露出しないよう、必ず環境変数で渡すこと（`--database-token` は argv に載るため廃止）。
 
 出力には `version`, `entries`（全コンテンツ監査エントリ）, `governance_entries`（BAN/UNBAN/ピン解除の運用判断）, `merkle_root`, `signature`
 が含まれる（version 3、`common::AUDIT_SNAPSHOT_VERSION` で固定）。第三者は `entries` から v2 ハッシュ・連鎖・Merkle root を再計算し、
@@ -58,6 +70,50 @@ cargo run -p server --bin sign_audit_export -- \
 後方互換のため、`reasons_masked=false`（未マスク）の署名対象は旧形式のまま。
 旧 v3 スナップショットはフラグ無しでも署名検証できる。新規のマスク版のみ
 `masked` 識別子を署名対象へ含める。
+
+## CLI の硬化（鍵権限・トークン・上書き拒否）
+
+`sign_audit_export`（`server/src/bin/sign_audit_export.rs`）は秘密鍵と出力の取扱いを次のとおり検査する。
+
+| 項目 | 契約 | 根拠 |
+| --- | --- | --- |
+| 鍵ファイル権限 | PEM を `canonicalize` して実ファイルを検査し、owner-only（`0600` / `0400`、`mode & 0o077 == 0`）を要求。満たさなければ拒否 | `ps` 等と同様にグループ/他ユーザーへ秘密鍵が読まれるリスクを防ぐ |
+| 親ディレクトリ権限 | group/other 書き込み可能（`mode & 0o022 != 0`）なら拒否。`0700` でない（`mode & 0o055 != 0`）場合は警告を出力 | 鍵ファイルのすり替え・追加を防ぐ |
+| リモート DB トークン | `DATABASE_TOKEN` 環境変数からのみ読む。`--database-token` は渡された時点でエラー | argv はプロセス一覧へ公開されるため |
+| 出力の上書き | `OpenOptions::create_new(true)` で存在チェックと生成を原子的に行い、既存ファイルを拒否 | 存在チェックと生成の TOCTOU を防ぐ |
+
+### 手動確認手順（Kubuntu / リポジトリルート）
+
+鍵権限・トークン・上書き拒否は下記で確認できる。いずれも既存の署名鍵・DB を変更しないこと。
+
+```bash
+echo "== 1. 鍵が 0600 でない場合は拒否されること =="
+cp /secure/path/audit-signing-key.pem /tmp/loose-key.pem
+chmod 644 /tmp/loose-key.pem
+cargo run -q -p server --bin sign_audit_export -- \
+  --signing-key /tmp/loose-key.pem \
+  --output /tmp/should-not-exist.json; echo "exit_code=$?"   # 1 (require owner-only 0600)
+
+echo "== 2. --database-token が拒否されること =="
+cargo run -q -p server --bin sign_audit_export -- \
+  --signing-key /secure/path/audit-signing-key.pem \
+  --database-token dummy \
+  --output /tmp/should-not-exist.json; echo "exit_code=$?"   # 1 (not accepted)
+
+echo "== 3. 既存出力の上書きが拒否されること =="
+echo 'existing' > /tmp/existing-snapshot.json
+cargo run -q -p server --bin sign_audit_export -- \
+  --signing-key /secure/path/audit-signing-key.pem \
+  --output /tmp/existing-snapshot.json; echo "exit_code=$?"   # 1 (must not already exist)
+cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされていない）
+```
+
+期待結果: いずれも終了コード 1 となり、3 の出力ファイルは元の内容を保持する。
+正常系（鍵 0600・親 0700・新規出力・`DATABASE_TOKEN` 環境変数）は
+「スナップショット作成」の手順に従って実行する。上記はコード上の契約から導いた確認手順であり、
+本ドキュメント更新時点でこの手順の実行は行っていない。
+専用の自動テストは未追加であり、継続的な検証は Runbook の本手順と
+[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の AUDIT-02 ゲートで扱う。
 
 ## 形式バージョンと互換範囲（v1 エントリ互換の限界）
 
@@ -140,3 +196,4 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名鍵の HSM 管理、ローテーション、旧公開鍵の配布方針。
 - 公開範囲と個人情報（理由_TEXT 等）のマスキング方針。
 - スナップショットの自動生成頻度と公開手順。
+- 鍵権限・`DATABASE_TOKEN` 環境変数・出力上書き拒否の専用自動テスト（現状は手動確認のみ、AUDIT-02）。

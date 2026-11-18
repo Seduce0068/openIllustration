@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-18T10:43:30+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -89,6 +89,13 @@ generated:
   第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
 - 監査スナップショットは `sign_audit_export` で署名し、`verify_audit_export` で公開鍵検証する（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)
   ）。秘密鍵はファイルで厳重管理し、CLI 引数や環境変数へ内容を渡さない。
+  `sign_audit_export` は起動時に署名鍵 PEM を `canonicalize` して権限を検査し、owner-only
+  （`0600` / `0400`）を要求する。親ディレクトリが group/other 書き込み可能なら拒否し、
+  `0700` でなければ警告する。リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ
+  読み、`--database-token` は受け付けない（`argv` 露出対策）。出力先は `create_new` で原子的に
+  生成し、既存ファイルの上書きを拒否する。手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
+- 監査 CLI の権限・トークン・上書き拒否は実装済みだが、専用の自動テストはまだない。
+  運用では鍵権限・親ディレクトリ権限・`DATABASE_TOKEN` 設定・既存出力の有無をRunbookの手順で確認する。
 - 本番前に署名鍵の HSM 管理とローテーション、監査対象・公開範囲、外部アンカー、個人情報保護、障害時運用を定めて試験する。
 
 ## 4. 支援・決済
@@ -97,6 +104,10 @@ generated:
 - 閲覧のみの利用者にJPYC保有を求める方針ではない。
 - 対応チェーン、トークンコントラクト、送金先変更、取引確認・最終性、手数料、返金・紛争の各運用を決定する。
 - 模擬支援APIは501で無効化済み。取引記録は実決済の証明ではない。JPYC検証の実装時に決済APIへ置換し、模擬処理は再導入しない。
+- ウォレット所有証明（bind）の署名対象は `wallet_bind_message_v2` により、注文IDに加えて
+  `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy` を含むものとする。
+  注文IDのみを署名対象にする旧形式は、送金先・金額・チェーンを確認できない盲署名リスクがあるため
+  受理しない（401拒否）。金額は DB の `amount_wei` から円建てへ導出し、アドレスは小文字化して照合する。
 
 ## 5. 運用準備・未整備事項
 
@@ -195,7 +206,7 @@ generated:
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | `1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 任意 | `file:local.db` | libSQL接続先。 |
-| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。 |
+| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` は従来どおり `--database-token` も受け付ける。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |

@@ -8,7 +8,7 @@ tags:
   - tasks
 generated:
   by: dsh (lead)
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 status: current
 ---
 
@@ -41,6 +41,15 @@ P1（本番運用の健全性）:
 - [x] `/auth/login` を `ALLOW_MOCK_AUTH` でゲートし設計書と実装を整合（C2 / R1-21、2026-11-17 対応済み）
 - [x] `verify_order` へ CAS とトランザクションを導入し確定後不変を担保（R1-25、2026-11-18 対応済み）
 - [x] メトリクスカウンタを差分アサーション＋注入可能設計へ変更（R3-01、2026-11-18 対応済み）
+- [x] `observe_metrics` を `Router` 最外側へ移動し 429 / IPv4 403 / 413 /
+  CORS プリフライト OPTIONS 204 を計上（2026-11-18 対応済み・未コミット、
+  MET-02 サーバー側テスト4件）
+- [x] 決済 bind 署名を v2 化（order_id / chain_id / wallet_address /
+  recipient_address / amount_jpy）し、注文IDのみの旧形式署名を401拒否
+  （盲署名対策、2026-11-18 対応済み・未コミット、PAY-05）
+- [x] 監査 CLI（`sign_audit_export`）を硬化: 鍵権限 0600/0400・親 0700、
+  `DATABASE_TOKEN` 環境変数限定（`--database-token` 廃止）、出力 `create_new` 上書き拒否
+  （2026-11-18 対応済み・未コミット、AUDIT-02。自動テストは未追加でRunbook手動確認）
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
@@ -92,6 +101,8 @@ P2（品質・保守・プロダクト拡張）:
 - [x] 運用スクリプトの硬化（2026-11-18）: cron env を制限付き KEY=VALUE パーサへ変更し
   source/eval を撤廃、所有者・symlink・権限を検証。backup-rotate は umask 077 と
   mktemp+atomic rename、deploy へ UMask=0077。
+- [ ] sign_audit_export の鍵権限チェック（0644拒否・親Dir 0700）に自動テストが無い。
+  AUDIT_EXPORT_RUNBOOK の手動確認に委譲中。テスト仕様 AUDIT-02 の設計表を使って追加する。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
@@ -101,6 +112,9 @@ P2（品質・保守・プロダクト拡張）:
 - [x] todo をプロジェクト内（`todo.md`）へ配置し、グローバル AGENTS に運用を明記（2026-11-17）
 - [x] 6パス・クロスレビューの統合結果を P0/P1/P2 として本ファイルへ転記（2026-11-17）
 - [x] R2-09: `get_content` を `status = 'Approved'` で絞り、Reported/Rejected を 404 化（2026-11-17）
+- [x] 未コミット変更のドキュメント反映（2026-11-18）: メトリクス最外側化・決済 bind 署名 v2・監査CLI硬化を
+  DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY / AUDIT_EXPORT_RUNBOOK へ記載。
+  E2E 定義は35件のまま（今回の追加はサーバー側テスト5件）。git commit/push は親エージェントが実施。
 
 ## メモ
 

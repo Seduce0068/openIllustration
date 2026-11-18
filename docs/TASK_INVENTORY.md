@@ -10,17 +10,31 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T03:49:23+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T13:28:42+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-18T13:28:42+09:00、ブランチ `master` の HEAD は `2cd2ab6`（`origin/master` と一致）。
-  前回確認時点 `0d71017` 以降の変更は master へ反映済み。
+- 確認: 2026-11-18T14:13:12+09:00、ブランチ `master` の HEAD は `8c1d88e`（`origin/master` と一致）。
+  前回確認時点 `2cd2ab6` 以降のドキュメント更新コミットは master へ反映済み。
+- 直近の未コミット変更の反映（2026-11-18 確認、コードは `server/src/` に未コミットで存在）:
+  - [対応済み（未コミット）] メトリクス最外側化: `observe_metrics` を `Router` の最も外側へ移動し、
+    内側で短絡するレート制限 429 / IP ゲート 403 / 本文サイズ 413 / CORS プリフライト OPTIONS 204 を
+    取りこぼさず HTTP カウンタへ計上。サーバー側テスト4件を追加（MET-02、
+    [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] 決済 bind 署名 v2: `wallet_bind_message_v2` が
+    order_id / chain_id / wallet_address / recipient_address / amount_jpy を署名対象とし、
+    注文IDのみの旧形式署名を401で拒否（盲署名対策）。`amount_jpy_from_wei` を追加し、
+    旧 `wallet_bind_message` は `#[deprecated]` で互換維持。旧形式拒否のテスト1件を追加（PAY-05）。
+  - [対応済み（未コミット）] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
+    （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
+    `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
+    上書き拒否を実装。専用の自動テストは未追加でRunbookの手動確認に委譲（AUDIT-02、
+    [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -176,6 +190,13 @@ status: current
   拒否注文が index を消費しないようにした。一意性は migration 003 の部分 UNIQUE
   インデックスで担保し、新規マイグレーションは不要。回帰テスト4件を追加
   （連番と異なる受取先、同一内容5並行の全成功、固定アドレスの NULL 維持、不正入力で index 不消費）。
+- [対応済み（未コミット）] **盲署名対策の bind 署名 v2**: `wallet_bind_message_v2` が
+  order_id / chain_id / wallet_address / recipient_address / amount_jpy を署名対象とし、
+  `bind_wallet` を v2 へ切替。DB の `amount_wei` から円建てを導出する `amount_jpy_from_wei` を追加
+  （割り切れない値は拒否）。旧 `wallet_bind_message` は `#[deprecated]` で API 互換のため残すが、
+  注文IDのみの旧形式署名は 401 で拒否（`test_bind_wallet_rejects_legacy_order_only_signature`）。
+  既存 bind 回帰のヘルパーも v2 署名へ更新（[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の PAY-05）。
 
 ### 3.3 モデレーション・コンテンツ
 
@@ -220,6 +241,12 @@ status: current
 - [一部対応] **署名付き監査エクスポート**: ADR-0005 に基づき、`sign_audit_export` が全コンテンツ監査エントリ＋`governance_audit_log`（BAN/UNBAN/UNPIN）と
   Merkle root を RSA 署名した version 3 スナップショットを生成。`verify_audit_export` が公開鍵のみで検証（両エントリ列の改ざん検出を実測確認）。手順は
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
+- [対応済み（未コミット）] **監査CLI硬化**: `sign_audit_export` が署名鍵 PEM を `canonicalize` して
+  権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
+  （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
+  `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
+  既存ファイルの上書きを拒否（TOCTOU 対策）。専用の自動テストは未追加で、手動確認手順を
+  [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
 - [対応済み] 監査エクスポートの公開範囲: `reason`/`details` を既定でマスクし、`--include-reasons` オプトインで本文を含める。マスク後の文字列が署名対象（
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - [高・要判断] **第三者検証可能な監査の残項目**: DB外アンカー/追記専用媒体、公開範囲の最終判断、訂正/削除との調整、鍵の HSM 管理とローテーション（
@@ -261,6 +288,12 @@ status: current
 - [対応済み] R3-01: HTTP カウンタを `AppState` の `Metrics` へ移し、テストから独立
   インスタンスを注入可能化。絶対値アサーションを正確な差分（+2 requests / +1 error）へ変更。
   mutation（エラー加算削除）でテスト失敗を確認。
+- [対応済み（未コミット）] **メトリクス最外側化**: `observe_metrics` を `Router` の最も外側
+  （`security_headers` のさらに外側）へ移動。内側で短絡するレート制限 429 / IP ゲート 403 /
+  本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
+  `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
+  差分アサーションのサーバー側テスト4件を追加（MET-02、
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は35件のまま変更なし。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。

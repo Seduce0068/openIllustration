@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T11:43:43+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -39,7 +39,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
 | POST | `/payments/orders` | Bearer JWT | `cid`・`chain_id`・`wallet_address`・`amount_jpy` を受け取り、コンテンツの提示価格と `amount_jpy` を照合して JPYC注文を作成する。不正CID・不存在/レビュー中コンテンツ・価格不一致は拒否。受取アドレス未設定時は501 |
 | GET | `/payments/orders/:order_id` | Bearer JWT | 本人の注文状態を返す |
-| POST | `/payments/orders/:order_id/bind` | Bearer JWT | 注文IDへのウォレット署名を検証する |
+| POST | `/payments/orders/:order_id/bind` | Bearer JWT | ウォレット所有証明を検証する。署名対象は注文ID・chain_id・wallet_address・recipient_address・amount_jpy（v2）。注文IDのみの旧形式署名は盲署名対策として401で拒否 |
 | POST | `/payments/orders/:order_id/verify` | Bearer JWT | 送金を検証する。RPC検証未設定時は501 |
 | POST | `/content/:cid/support` | Bearer JWT | 無効化済み（501）。模擬ハッシュは支払証明にならないため、JPYC送金検証の実装時に決済APIへ置換する |
 | POST | `/mod/report` | Bearer JWT | 通報登録と `Reported` 遷移 |
@@ -82,6 +82,13 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   初期3ケース（プリフライト/429/500）に加え 204 も回帰テストで固定済み。
   `/content/{cid}` のユーザー管理バイトが HTML としてスニッフィングされるリスクを防ぐ。
   CSP はクライアントのリソース読み込みへ影響するため本番構成確定時に別途設計する。
+- メトリクス観測（`observe_metrics`）は `Router` の最も外側（`security_headers` のさらに外側）に積む。
+  内側のミドルウェアで短絡するレート制限の 429・IP ゲートの 403・本文サイズ拒否の 413・
+  CORS プリフライトの OPTIONS 204 も取りこぼさず、
+  `openillustration_http_requests_total`（全リクエスト）と
+  `openillustration_http_errors_total`（4xx/5xx）へ計上する。429/403/413 は requests と
+  errors の双方を、204 は requests のみを加算する（実装: `server/src/lib.rs` の
+  `build_router` / `observe_metrics`）。
 - 一覧検索の `q` / `tag` は SQL `LIKE` のパターンとして扱うため、`\` / `%` / `_` をバックスラッシュで
   エスケープし `ESCAPE '\'` 句で照合する（値はすべてバインドパラメータで渡し、SQL 文字列へ埋め込まない）。
   ユーザーが登録したメタデータ（タイトル・説明・タグ）はサーバーでエスケープせず原文を保持・返却し、
@@ -379,6 +386,16 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
 - `sign_audit_export` は件数と Merkle root を RSA 署名したスナップショットを生成し、`verify_audit_export` は公開鍵 DER のみで署名・完全性を検証する（ADR-0005、
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。これは運営者が公開したことを示すに留まり、DB外アンカーや追記専用媒体の代替ではない。
+- `sign_audit_export` の CLI 契約（硬化済み、実装: `server/src/bin/sign_audit_export.rs`）:
+  - 署名鍵 PEM は `canonicalize` でシンボリックリンク先を解決してから権限を検査し、owner-only
+    （`0600` / `0400`、すなわち `mode & 0o077 == 0`）を要求する。満たさなければ拒否する。
+  - 親ディレクトリが group/other 書き込み可能（`mode & 0o022 != 0`）なら拒否し、
+    `0700` でない（`mode & 0o055 != 0`）場合は警告を出す。
+  - リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ読む。`--database-token` は
+    渡された時点でエラーとなる（`argv` は `ps` 等で公開されるため）。既定値は
+    `DATABASE_URL`（`file:local.db`）と `DATABASE_TOKEN`（空）。
+  - 出力は `OpenOptions::create_new(true)` で存在チェックと生成を原子的に行い、既存ファイルの
+    上書きを拒否する（TOCTOU 対策）。
 - マスク整合チェック: `sign_audit_snapshot` は `reasons_masked=true` のとき各 `entry.reason` が
   `mask_reason` のマスク済み形式（空文字または `[redacted:` 接頭辞）であることを検査し、
   平文が残るスナップショットは署名時に `InvalidSignature`（`unmasked entry reason with
@@ -429,6 +446,15 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 `CONFIRMING` の注文は同じ送金で再 verify でき、確認数が進展すれば `FINALIZED` へ進む。`FINALIZED` は確定後不変とし、再 verify
 や確認数の後退でも状態を戻さない（実チェーン上の再編成検知は RPC 実装時に別途検討）。
+
+ウォレット所有証明（`/payments/orders/:order_id/bind`）の署名対象は `wallet_bind_message_v2` で
+`order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy` の5項目とする。
+署名者が送金先・金額・チェーンを確認できるようにすることが盲署名対策の目的である。
+アドレスは `normalize_address` で小文字化し、EVM の大小文字無視（表示用チェックサム差）による
+検証失敗を防ぐ。`amount_jpy` は DB の `amount_wei` から `amount_jpy_from_wei` で導出し、
+10^18 スケールで割り切れない値はデータ不整合として拒否する。旧 `wallet_bind_message`
+（注文IDのみ）は API 互換のため `#[deprecated]` 付きで残すが、新規の署名生成には使わず、
+旧形式の署名は 401 で拒否する（実装: `server/src/payments.rs` の `bind_wallet`）。
 
 ### 検証可能な監査
 

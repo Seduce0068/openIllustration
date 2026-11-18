@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T13:19:58+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T13:19:58+09:00"
+  at: "2026-11-18T14:13:12+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -31,6 +31,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）の回帰である。
   integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
   upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
+  メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記35件の内訳は変更しない。
+  追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
 
 ## 2. 実装済みテストの概要
 
@@ -40,7 +42,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限のエラーパス5件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
-| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証 | ログ集約基盤・アラート通知先の選定は未実施 |
+| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
@@ -50,11 +52,12 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | Upload | Content-Typeのユニット/APIテスト、負価格・非整数価格・64bit範囲外価格・上限超過価格の拒否（拒否理由を検証）、価格0と上限値 `MAX_ORDER_JPY` の受理と保存を検証、必須フィールド欠落・owner不一致・BANユーザーの拒否、実 RSA 鍵で署名したバイト列の受理と別バイト列への署名使い回し401拒否 | 実multipartサイズ境界・実Pinata連携の試験が不足 |
 | ContentMeta / list_contents | `ContentMeta` が `title` / `description` / `tags` を返すこと、`list_contents` が省略可の `q` / `tag` / `type` / `limit` / `offset` を受理し既定値（limit=50、offset=0）と範囲（`1..=100`）へフォールバックすることを API テストで検証。`q` の部分一致、`tag` の前方一致、`type` の完全一致、`created_at DESC` の並びとページングの重複なしも確認 | 長さ上限・LIKE 注入拒否・XSS エスケープは CONTENT-06〜08 で個別に検証。タグの正規化・全文検索は未実装 |
 | お気に入り | 追加/削除の冪等（重複追加・未登録削除）、未認証401・不正CID400・非Approved404、他人subからの操作拒否、`favorite_only` の本人分のみ返却（真理値パース・既存条件とのAND・ページング・Approved限定）、旧JSONの `is_favorite` 欠落互換、migration 012 の UNIQUE + FK CASCADE を API・ユニットテストで検証 | `user_hash` をログ・監査・レスポンスへ出さないことは設計方針で担保。実運用ログの確認は未実施 |
-| 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
+| 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証。`wallet_bind_message_v2` が注文ID・chain_id・wallet_address・recipient_address・amount_jpy を署名対象とし、注文IDのみの旧形式署名を401で拒否する下記 PAY-05 を追加 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化 | 実装は完了。専用の自動テストは未追加（Runbookの手動確認に委譲）。匿名化・外部アンカーは未実装 |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 
 ## 3. 必須要件のリリースゲート
@@ -111,7 +114,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
-| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
+| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
+| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。自動テストは未追加。Runbookの手動確認手順で運用時に確認する |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
@@ -119,9 +123,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を全レスポンスへ付与する。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は未設計 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
+| MET-02 | `observe_metrics` の最外側配置 | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照） |
 | PROP-01 | `prop_jpy_to_wei_boundaries_and_reference` | 任意の `u64` で panic しない。`0` と `MAX_ORDER_JPY` 超（上限+1 と `u64::MAX`）は `Err`、範囲内は `WEI_PER_JPY = 10^18` の独立参照値（u128 計算）と一致 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
@@ -325,6 +331,8 @@ cargo test --workspace
 cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（5件）
 cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
 cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
+cargo test -p server metrics_count   # MET-02 最外側メトリクス4件（429 / IPv4 403 / 413 / OPTIONS）
+cargo test -p server test_bind_wallet_rejects_legacy_order_only_signature   # PAY-05 旧形式署名の401拒否
 cargo test -p server max_concurrent_requests_defaults_and_bounds   # NET-04 境界値
 cargo test -p server concurrent_request_limit_rejects_second_and_releases_permit   # NET-04 実リクエスト
 cargo test -p server property_tests   # PROP-01〜04（各128ケース）
@@ -621,6 +629,54 @@ HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload f
    キーは `count` と `event` のみ。`authorization` / `x-forwarded-for` ヘッダも送らない。
 4. 204（本文なし）のモック応答で画面に `role="alert"` が出ない。API 側のバリデーションと
    カウンタの差分検証はサーバー側単体テストへ委譲し、本シナリオでは重複して検証しない。
+
+### observe_metrics の最外側配置の検証（MET-02）
+
+`observe_metrics` は `Router` の最も外側（`security_headers` のさらに外側）に置く。内側の
+ミドルウェアで短絡するレスポンスも取りこぼさないことを、`server/src/tests.rs` の4件で
+`openillustration_http_requests_total` / `openillustration_http_errors_total` の差分から検証する。
+各テストは事前に `GET /metrics` で基準値を読み、対象リクエスト後に再度読む。事後読み自体も
+最外側で計上されるため requests は +2（対象 + 事後 GET）となり、errors は対象が 4xx/5xx の
+場合だけ +1 になる。ヘルパーは `read_http_metrics(app)`。
+
+| テスト名 | 短絡元と対象レスポンス | 期待差分 |
+| --- | --- | --- |
+| `test_metrics_count_rate_limited_response` | `rate_limit_test_state(1)` で quota を使い切り、2回目の `/no-such-path` が 429 | requests +2 / errors +1 |
+| `test_metrics_count_ipv4_forbidden_response` | `ALLOW_IPV4_LOCALHOST` 未設定、IPv4 ピア `203.0.113.1` の `/health` が 403 | requests +2 / errors +1 |
+| `test_metrics_count_oversized_body_rejection` | `Content-Length` を `10 * 1024 * 1024 + 1` と宣言した `/content/upload` が 413 | requests +2 / errors +1 |
+| `test_metrics_count_cors_preflight` | `Origin` と `Access-Control-Request-Method: POST` 付き OPTIONS `/auth/login`（CorsLayer の短絡、成功） | requests +2 / errors 増なし |
+
+### ウォレット bind 署名 v2 の検証（PAY-05）
+
+`wallet_bind_message_v2(order_id, chain_id, wallet_address, recipient_address, amount_jpy)` が
+5項目を署名対象とし、注文IDのみを署名対象にする旧形式を拒否することを検証する。
+
+- `test_bind_wallet_rejects_legacy_order_only_signature`（新規）: 注文を作成した後、
+  `openIllustration payment order {order_id}` という旧形式メッセージへウォレット鍵で署名して
+  `POST /payments/orders/{order_id}/bind` に送る。期待は `401 Unauthorized`。
+  金額・送金先・チェーンが署名に含まれないため受理されない（盲署名対策の回帰）。
+- 既存の bind 回帰（`test_payment_order_lifecycle` /
+  `test_payment_order_rejects_wrong_wallet_signature` / `test_bind_wallet_rejects_elapsed_expiry`）
+  は v2 署名へ更新した。テストヘルパー `bind_payment_order` は引数へ
+  `chain_id` / `recipient_address` / `amount_jpy` を追加し、v2 メッセージを生成する。
+- `amount_jpy` は `amount_jpy_from_wei` で DB の `amount_wei` から導出する（10^18 スケールで
+  割り切れない値は `Internal` として拒否）。アドレスは `normalize_address` で小文字化する。
+
+### 監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）
+
+`server/src/bin/sign_audit_export.rs` の硬化項目に対するテスト設計。実装は完了しているが、
+`server/src/tests.rs` に専用の自動テストはまだ追加されていない（現状は Runbookの手動確認に
+委譲）。ゲートを満たすには下表のケースを自動化するか、Runbookの手順で運用時に確認する。
+
+| 検証項目 | 条件 | 期待結果 |
+| --- | --- | --- |
+| 鍵ファイル権限 | PEM が `0644` 等 `mode & 0o077 != 0` | 拒否（`require owner-only 0600`） |
+| 鍵ファイル権限 | PEM が `0600` / `0400` | 受理 |
+| 親ディレクトリ権限 | `mode & 0o022 != 0`（group/other 書き込み可） | 拒否 |
+| 親ディレクトリ権限 | `mode & 0o055 != 0`（`0700` 以外、例 `0755`） | 警告を出力して継続 |
+| トークン受け渡し | `--database-token TOKEN` を指定 | エラー（`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`） |
+| トークン受け渡し | `DATABASE_TOKEN` 環境変数を設定 | 読み込んでリモート libSQL へ渡す（未設定は空） |
+| 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` により原子的に失敗） |
 
 ## 5. リリース証跡
 
