@@ -24,6 +24,10 @@ use std::{
 use uuid::Uuid;
 
 const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
+/// 未完了の OIDC 認証（`pending`）の保持上限。
+/// 認証開始は未認証で呼べるため、上限を設けないと TTL 到期までエントリが
+/// 際限なく溜まりメモリを圧迫する（R1-23）。
+pub(crate) const MAX_PENDING_AUTH: usize = 1024;
 const JWKS_TTL: StdDuration = StdDuration::from_secs(5 * 60);
 pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 /// リフレッシュトークンの有効期間（30日）。
@@ -144,10 +148,17 @@ pub struct OidcConfig {
     pub max_auth_age_secs: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
 }
 
-struct PendingAuth {
+pub(crate) struct PendingAuth {
     nonce: String,
     code_verifier: String,
     created_at: Instant,
+}
+
+/// TTL を過ぎた pending を一括削除する。
+/// `take_pending` と `register_pending` の双方から呼び、取出しが無い経路でも掃除されるようにする。
+fn purge_expired_pending(pending: &mut HashMap<String, PendingAuth>) {
+    let now = Instant::now();
+    pending.retain(|_, auth| now.saturating_duration_since(auth.created_at) < PENDING_TTL);
 }
 
 pub struct OidcState {
@@ -250,13 +261,34 @@ impl OidcState {
         &self.config
     }
 
+    /// 期限切れを掃除したうえで pending を登録する。
+    /// 上限に達している場合は 429（TooManyRequests）を返し、新規エントリを増やさない。
+    /// 認証開始は未認証で呼べるため、ここがメモリ枯渇に対する境界になる（R1-23）。
+    pub(crate) fn register_pending(
+        &self,
+        auth_state: String,
+        pending: PendingAuth,
+    ) -> Result<(), AppError> {
+        let mut store = self
+            .pending
+            .lock()
+            .map_err(|_| AppError::Internal("OIDC pending store is poisoned".to_string()))?;
+        purge_expired_pending(&mut store);
+        if store.len() >= MAX_PENDING_AUTH {
+            return Err(AppError::TooManyRequests(
+                "too many pending OIDC authorizations".to_string(),
+            ));
+        }
+        store.insert(auth_state, pending);
+        Ok(())
+    }
+
     fn take_pending(&self, state: &str) -> Result<PendingAuth, AppError> {
         let mut pending = self
             .pending
             .lock()
             .map_err(|_| AppError::Internal("OIDC pending store is poisoned".to_string()))?;
-        let now = Instant::now();
-        pending.retain(|_, auth| now.duration_since(auth.created_at) < PENDING_TTL);
+        purge_expired_pending(&mut pending);
         pending
             .remove(state)
             .ok_or_else(|| AppError::BadRequest("invalid or expired state".to_string()))
@@ -286,6 +318,33 @@ impl OidcState {
             .ok()?
             .get(state)
             .map(|auth| auth.nonce.clone())
+    }
+
+    /// テスト用: `register_pending` に渡すダミーの pending を生成する。
+    #[cfg(test)]
+    pub(crate) fn test_pending(nonce: &str) -> PendingAuth {
+        PendingAuth {
+            nonce: nonce.to_string(),
+            code_verifier: "test-code-verifier".to_string(),
+            created_at: Instant::now(),
+        }
+    }
+
+    /// テスト用: 現在保持している pending の数。
+    #[cfg(test)]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.pending.lock().map(|store| store.len()).unwrap_or(0)
+    }
+
+    /// テスト用: 指定 state の `created_at` を TTL 超過分だけ過去にずらす。
+    /// 期限切れエントリが `register_pending` で回収されることを検証する。
+    #[cfg(test)]
+    pub(crate) fn expire_pending(&self, state: &str) {
+        if let Ok(mut store) = self.pending.lock()
+            && let Some(auth) = store.get_mut(state)
+        {
+            auth.created_at -= PENDING_TTL + StdDuration::from_secs(1);
+        }
     }
 }
 
@@ -622,17 +681,14 @@ pub async fn start(State(state): State<Arc<AppState>>) -> Result<Json<StartRespo
     let code_verifier = random_token();
     let challenge = code_challenge(&code_verifier);
 
-    oidc.pending
-        .lock()
-        .map_err(|_| AppError::Internal("OIDC pending store is poisoned".to_string()))?
-        .insert(
-            auth_state.clone(),
-            PendingAuth {
-                nonce: nonce.clone(),
-                code_verifier,
-                created_at: Instant::now(),
-            },
-        );
+    oidc.register_pending(
+        auth_state.clone(),
+        PendingAuth {
+            nonce: nonce.clone(),
+            code_verifier,
+            created_at: Instant::now(),
+        },
+    )?;
 
     let mut url = reqwest::Url::parse(&oidc.config.authorization_endpoint)
         .map_err(|_| AppError::Internal("invalid authorization endpoint".to_string()))?;

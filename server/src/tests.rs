@@ -5528,6 +5528,152 @@ async fn test_oidc_start_and_callback() {
     assert!(body["token"].as_str().unwrap().len() > 20);
 }
 
+/// R1-23: pending は上限まで登録でき、上限超過は 429 で拒否される。
+#[tokio::test]
+async fn test_oidc_pending_limit_rejects_excess_registration() {
+    let (_app, oidc, _mock, _db) = setup_app_with_oidc().await;
+    let max = crate::oidc::MAX_PENDING_AUTH;
+
+    for i in 0..max {
+        let state = format!("pending-{i}");
+        oidc.register_pending(state.clone(), crate::oidc::OidcState::test_pending(&state))
+            .expect("registration up to the limit must succeed");
+    }
+    assert_eq!(oidc.pending_count(), max);
+
+    let error = oidc
+        .register_pending(
+            "overflow".to_string(),
+            crate::oidc::OidcState::test_pending("overflow"),
+        )
+        .expect_err("registration beyond the limit must fail");
+    assert!(
+        matches!(error, AppError::TooManyRequests(_)),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(
+        oidc.pending_count(),
+        max,
+        "rejected registration must not be stored"
+    );
+}
+
+/// R1-23: 上限に達した状態で `/auth/oidc/start` が 429 を返す。
+#[tokio::test]
+async fn test_oidc_start_returns_429_when_pending_full() {
+    let (app, oidc, _mock, _db) = setup_app_with_oidc().await;
+    let max = crate::oidc::MAX_PENDING_AUTH;
+    for i in 0..max {
+        let state = format!("pending-{i}");
+        oidc.register_pending(state.clone(), crate::oidc::OidcState::test_pending(&state))
+            .expect("registration up to the limit must succeed");
+    }
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("too many pending OIDC authorizations")
+    );
+    assert_eq!(
+        oidc.pending_count(),
+        max,
+        "a rejected start must not add another pending entry"
+    );
+}
+
+/// R1-23: 期限切れエントリは登録時に掃除され、上限に空きができる。
+#[tokio::test]
+async fn test_oidc_pending_limit_purges_expired_entries() {
+    let (_app, oidc, _mock, _db) = setup_app_with_oidc().await;
+    let max = crate::oidc::MAX_PENDING_AUTH;
+    for i in 0..max {
+        let state = format!("pending-{i}");
+        oidc.register_pending(state.clone(), crate::oidc::OidcState::test_pending(&state))
+            .expect("registration up to the limit must succeed");
+    }
+
+    let expired = "pending-0";
+    oidc.expire_pending(expired);
+    assert!(
+        oidc.pending_nonce(expired).is_some(),
+        "the helper only rewinds created_at"
+    );
+
+    oidc.register_pending(
+        "fresh".to_string(),
+        crate::oidc::OidcState::test_pending("fresh"),
+    )
+    .expect("an expired entry must free capacity");
+    assert_eq!(oidc.pending_count(), max);
+    assert!(
+        oidc.pending_nonce(expired).is_none(),
+        "expired entry must be purged"
+    );
+    assert_eq!(oidc.pending_nonce("fresh").as_deref(), Some("fresh"));
+}
+
+/// R1-23: 上限近くまで埋まっていても OIDC start/callback フローは成立する。
+#[tokio::test]
+async fn test_oidc_pending_limit_keeps_start_callback_flow() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let max = crate::oidc::MAX_PENDING_AUTH;
+    for i in 0..max - 1 {
+        let state = format!("pending-{i}");
+        oidc.register_pending(state.clone(), crate::oidc::OidcState::test_pending(&state))
+            .expect("registration up to the limit must succeed");
+    }
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    assert_eq!(oidc.pending_count(), max);
+
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        oidc.pending_nonce(&auth_state).is_none(),
+        "callback must consume the pending entry"
+    );
+    assert_eq!(oidc.pending_count(), max - 1);
+}
+
 /// ADR-0002: state は単回消費であり、再利用は拒否する。
 #[tokio::test]
 async fn test_oidc_callback_rejects_reused_state() {

@@ -368,6 +368,8 @@ pub enum AppError {
     Forbidden(String),
     #[error("Conflict: {0}")]
     Conflict(String),
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
     #[error("Not implemented: {0}")]
     NotImplemented(String),
 }
@@ -391,6 +393,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
+            AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
             AppError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
         };
 
