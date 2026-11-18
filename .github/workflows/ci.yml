@@ -36,6 +36,7 @@ jobs:
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
         npx --yes markdownlint-cli2@0.24.0 "docs/**/*.md" "todo.md" "README.md" "index.md"
+        bash scripts/test-doc-numbers.sh
         cargo install cargo-deny --version 0.20.2 --locked
         cargo deny check licenses
         cargo deny check advisories

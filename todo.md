@@ -173,6 +173,8 @@ P2（品質・保守・プロダクト拡張）:
   JPKI envelope の certificate / verifiableCredential 両方を長さ検査。
 - [x] 監査タイムラインの仕様化（2026-11-18）: APIが最新500件を新着順で返す契約を
   設計・テスト仕様へ反映し、FORENSIC_TIMELINEの表示順E2Eを追加（46件）。
+- [x] ドキュメント数値の自動照合（2026-11-18）: scripts/test-doc-numbers.sh を追加し
+  E2E件数・内訳・doctor check数・migration範囲を CI ゲート化。8進数解釈バグを修正。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
