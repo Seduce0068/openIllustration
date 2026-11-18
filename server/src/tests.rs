@@ -6028,6 +6028,184 @@ async fn test_payment_verify_rejects_expired_order() {
     );
 }
 
+/// テスト用: 外部ライターが write_lock と BEGIN を保持した状態を作る。
+/// `started` を受け取った時点でロックは保持されており、`release` を送ると
+/// COMMIT してロックを解放する。tx 外書き込みの mutation を検出するために使う。
+fn spawn_lock_holding_writer(
+    db: Arc<libsql::Connection>,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let writer = tokio::spawn(async move {
+        // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
+        let guard = crate::write_lock(&db).lock_owned().await;
+        let tx = db.transaction().await.unwrap();
+        tx.execute("INSERT INTO users (user_hash) VALUES ('lock_holder')", ())
+            .await
+            .unwrap();
+        started_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        tx.commit().await.unwrap();
+        drop(guard);
+    });
+    (started_rx, release_tx, writer)
+}
+
+/// 期限切れ注文への bind は write_lock 経由で EXPIRED 更新し、競合下でも 500 にならない。
+/// mutation で EXPIRED 更新を tx 外の `db.execute` に戻すと、ロック保持中に
+/// リクエストが完了してしまうため失敗する。
+#[tokio::test]
+async fn test_expired_bind_waits_for_write_transaction() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    // status は PENDING のまま期限だけを過去にする。
+    db.execute(
+        "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
+        ("2000-01-01T00:00:00+00:00".to_string(), order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    // 実フローに合わせて有効な v2 署名を作る（期限チェックは署名検証より前）。
+    let message = crate::payments::wallet_bind_message_v2(&order_id, 137, &wallet, receiving, 1000);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+    let signature = format!("0x{}", hex::encode(sig_bytes));
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let app_for_task = app.clone();
+    let token_for_task = token.clone();
+    let order_id_for_task = order_id.clone();
+    let mut bind_task = tokio::spawn(async move {
+        app_for_task
+            .oneshot(with_peer(
+                Request::post(format!("/payments/orders/{order_id_for_task}/bind"))
+                    .header("authorization", format!("Bearer {token_for_task}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(json!({ "signature": signature }).to_string()))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap()
+    });
+    tokio::task::yield_now().await;
+
+    // tx 外の生 execute なら write_lock をバイパスしてここで完了してしまう。
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut bind_task)
+            .await
+            .is_err(),
+        "期限切れ bind は書き込みトランザクションの完了を待つべき"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut bind_task)
+        .await
+        .expect("bind must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("order has expired"),
+        "rejection must come from elapsed expiry: {text}"
+    );
+
+    // EXPIRED 更新がコミットされていること。
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, crate::payments::STATUS_EXPIRED);
+}
+
+/// 期限切れ注文への verify も write_lock 経由で EXPIRED 更新し、競合下で 500 にならない。
+#[tokio::test]
+async fn test_expired_verify_waits_for_write_transaction() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    db.execute(
+        "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
+        ("2000-01-01T00:00:00+00:00".to_string(), order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let app_for_task = app.clone();
+    let token_for_task = token.clone();
+    let order_id_for_task = order_id.clone();
+    let mut verify_task = tokio::spawn(async move {
+        verify_payment_order(&app_for_task, &token_for_task, &order_id_for_task).await
+    });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut verify_task)
+            .await
+            .is_err(),
+        "期限切れ verify は書き込みトランザクションの完了を待つべき"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut verify_task)
+        .await
+        .expect("verify must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("order has expired"),
+        "rejection must come from elapsed expiry: {text}"
+    );
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, crate::payments::STATUS_EXPIRED);
+}
+
 /// JPYC: 確認数が規定未満の送金は CONFIRMING で保持される。
 #[tokio::test]
 async fn test_payment_verify_keeps_confirming_until_threshold() {
@@ -7822,6 +8000,98 @@ async fn test_fixed_receiving_address_keeps_derivation_index_null() {
             .iter()
             .all(|(index, address)| index.is_none() && address == receiving),
         "固定受取アドレスでは index が NULL のまま再利用されること"
+    );
+}
+
+/// 固定受取アドレス設定でも並行注文が全件成功し、order が全件保存される。
+#[tokio::test]
+async fn test_fixed_receiving_address_parallel_orders_all_saved() {
+    const CONCURRENCY: usize = 5;
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let barrier = Arc::new(tokio::sync::Barrier::new(CONCURRENCY));
+    let tasks: Vec<_> = (0..CONCURRENCY)
+        .map(|_| {
+            let app = app.clone();
+            let token = token.clone();
+            let barrier = Arc::clone(&barrier);
+            tokio::spawn(async move {
+                barrier.wait().await;
+                post_order_request(
+                    &app,
+                    &token,
+                    137,
+                    "0x1111111111111111111111111111111111111111",
+                )
+                .await
+            })
+        })
+        .collect();
+
+    let mut results = Vec::new();
+    for task in tasks {
+        results.push(task.await.unwrap());
+    }
+    for (status, body) in &results {
+        assert_eq!(*status, StatusCode::OK, "並行注文が失敗した: {body}");
+        assert_eq!(body["recipient_address"].as_str().unwrap(), receiving);
+    }
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), CONCURRENCY, "全注文が保存されること");
+    assert!(
+        stored
+            .iter()
+            .all(|(index, address)| index.is_none() && address == receiving),
+        "固定受取アドレスでは index が NULL のまま再利用されること"
+    );
+}
+
+/// 固定アドレス分岐の INSERT も HD 分岐と同じく write_lock を通ることを検証する。
+/// mutation で `insert_payment_order(&state.db, ...)` に戻すと、ロック保持中に
+/// リクエストが完了してしまうため失敗する。
+#[tokio::test]
+async fn test_fixed_address_order_waits_for_write_transaction() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
+    started.await.unwrap();
+
+    let app_for_task = app.clone();
+    let token_for_task = token.clone();
+    let mut order_task = tokio::spawn(async move {
+        post_order_request(&app_for_task, &token_for_task, 137, receiving).await
+    });
+    tokio::task::yield_now().await;
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut order_task)
+            .await
+            .is_err(),
+        "固定アドレス注文は書き込みトランザクションの完了を待つべき"
+    );
+
+    release.send(()).unwrap();
+    writer.await.unwrap();
+
+    let (status, body) = tokio::time::timeout(Duration::from_secs(5), &mut order_task)
+        .await
+        .expect("order must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(status, StatusCode::OK, "ロック解放後は成功すること: {body}");
+    assert_eq!(body["recipient_address"].as_str().unwrap(), receiving);
+
+    let stored = stored_order_derivations(&db).await;
+    assert_eq!(stored.len(), 1, "注文が 1 件保存されること");
+    assert!(
+        stored
+            .iter()
+            .all(|(index, address)| index.is_none() && address == receiving)
     );
 }
 
@@ -13326,6 +13596,110 @@ async fn me_export_snapshot_consistent_under_concurrent_ban_write() {
         audit.iter().all(|row| row["action"] != "BAN"),
         "BAN 更新前の governance_audit_log が見えること: {audit:?}"
     );
+}
+
+/// 共有 Connection 上で書き込みトランザクションが BEGIN を保持している間、
+/// `me_export` が write_lock を待ってから BEGIN し、500 にならずに成功することを検証する。
+///
+/// 旧実装は write_lock なしで `db.transaction()` を呼ぶため、並行する書き込みの
+/// BEGIN と衝突して "cannot start a transaction within a transaction" の 500 になる。
+/// mutation で `begin_write_tx(&state.db)` を素の `db.transaction()` に戻すと、
+/// このテストは「書き込み完了前に完了してしまう」または 500 で失敗する。
+#[tokio::test]
+async fn me_export_waits_for_concurrent_write_transaction() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute(
+        "INSERT INTO users (user_hash, public_key_der, is_banned) VALUES ('alice', X'0102', 0)",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::clone(&db),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let app = build_router(shared_state);
+
+    // 書き込み側が BEGIN を保持したことの通知と、COMMIT を許可するチャネル。
+    let (write_started_tx, write_started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let (write_done_tx, write_done_rx) = tokio::sync::oneshot::channel::<()>();
+
+    let writer_db = Arc::clone(&db);
+    let writer = tokio::spawn(async move {
+        // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
+        let guard = crate::write_lock(&writer_db).lock_owned().await;
+        let tx = writer_db.transaction().await.unwrap();
+        tx.execute(
+            "INSERT INTO users (user_hash) VALUES ('concurrent_writer')",
+            (),
+        )
+        .await
+        .unwrap();
+        write_started_tx.send(()).unwrap();
+        // 書き込みトランザクションを意図的に保持する。
+        release_rx.await.unwrap();
+        tx.commit().await.unwrap();
+        drop(guard);
+        write_done_tx.send(()).unwrap();
+    });
+
+    // 書き込みが共有 Connection 上で BEGIN を保持するまで待つ。
+    write_started_rx.await.unwrap();
+
+    let app_for_task = app.clone();
+    let mut export_task =
+        tokio::spawn(async move { me_export_request(&app_for_task, Some("alice")).await });
+    // エクスポート側が BEGIN を試みる機会を確実に与える。
+    tokio::task::yield_now().await;
+
+    // 書き込みが終わる前にエクスポートが完了してはいけない。
+    // write_lock を取得しない旧実装では、ここで即座に 500 レスポンスが返る。
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), &mut export_task)
+            .await
+            .is_err(),
+        "me_export は書き込みトランザクションの完了を待つべき"
+    );
+
+    release_tx.send(()).unwrap();
+    write_done_rx.await.unwrap();
+
+    let response = tokio::time::timeout(Duration::from_secs(5), &mut export_task)
+        .await
+        .expect("me_export must finish after the write transaction commits")
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "write_lock 待機後は 500 にならず成功すること"
+    );
+    writer.await.unwrap();
 }
 
 // ---------------------------------------------------------------------------

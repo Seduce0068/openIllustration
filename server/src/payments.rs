@@ -314,7 +314,8 @@ async fn load_order(
 }
 
 /// payment_orders へ 1 行挿入する。
-/// HD 分岐は書き込みトランザクション経由、固定アドレス分岐は通常接続経由で同じ SQL を共有する。
+/// 呼び出し元の書き込みトランザクション（`&libsql::Transaction`）に渡し、
+/// HD 分岐・固定アドレス分岐のどちらも同じ write_lock 経路で INSERT する。
 #[allow(clippy::too_many_arguments)]
 async fn insert_payment_order(
     db: &libsql::Connection,
@@ -440,10 +441,12 @@ pub async fn create_order(
             expires_at,
         }))
     } else if let Some(address) = &state.payment_receiving_address {
-        // 固定アドレス分岐は derivation_index=NULL のまま従前どおり。
+        // 固定アドレス分岐も HD 分岐と同じ書き込みトランザクション（write_lock）経由で INSERT する。
+        // derivation_index は NULL のまま従前どおり。
         let recipient_address = normalize_address(address);
+        let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
         insert_payment_order(
-            &state.db,
+            &tx,
             &order_id,
             &claims.sub,
             &payload.cid,
@@ -455,6 +458,7 @@ pub async fn create_order(
             None,
         )
         .await?;
+        tx.commit().await?;
 
         Ok(Json(CreateOrderResponse {
             order_id,
@@ -484,24 +488,28 @@ pub(crate) fn is_order_expired(expires_at: &str, now: &str) -> bool {
     expires_at <= now
 }
 
-/// 期限切れ注文を EXPIRED へ更新して拒否する（更新系エンドポイント共通）。
-async fn reject_if_expired(state: &AppState, order: &PaymentOrder) -> Result<(), AppError> {
+/// 期限切れなら EXPIRED へ更新する（更新系エンドポイント共通）。
+/// 更新は呼び出し元の書き込みトランザクション内で行い、コミットは呼び出し元が行う。
+/// 期限切れで更新した場合は `true` を返す。呼び出し側はコミット後に既存どおり
+/// `AppError::BadRequest("order has expired")`（400）を返す。
+async fn reject_if_expired(
+    tx: &libsql::Transaction,
+    order: &PaymentOrder,
+) -> Result<bool, AppError> {
     if is_order_expired(&order.expires_at, &chrono::Utc::now().to_rfc3339()) {
-        state
-            .db
-            .execute(
-                "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
-                (
-                    STATUS_EXPIRED,
-                    order.order_id.as_str(),
-                    STATUS_FINALIZED,
-                    STATUS_EXPIRED,
-                ),
-            )
-            .await?;
-        return Err(AppError::BadRequest("order has expired".to_string()));
+        tx.execute(
+            "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
+            (
+                STATUS_EXPIRED,
+                order.order_id.as_str(),
+                STATUS_FINALIZED,
+                STATUS_EXPIRED,
+            ),
+        )
+        .await?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
 
 pub async fn bind_wallet(
@@ -516,7 +524,13 @@ pub async fn bind_wallet(
             "order is no longer verifiable".to_string(),
         ));
     }
-    reject_if_expired(state.as_ref(), &order).await?;
+    // 期限切れ判定と EXPIRED 更新は write_lock を取得したトランザクション内で行う。
+    // 期限切れなら更新をコミットしてから 400 を返す（旧挙動を維持）。
+    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    if reject_if_expired(&tx, &order).await? {
+        tx.commit().await?;
+        return Err(AppError::BadRequest("order has expired".to_string()));
+    }
     if order.status != STATUS_PENDING {
         return Err(AppError::BadRequest(
             "order is not awaiting wallet binding".to_string(),
@@ -540,7 +554,7 @@ pub async fn bind_wallet(
     }
 
     // 所有証明を DB へ記録する。再起動後も verify の必須条件として残る。
-    let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    // 期限切れ判定で取得したトランザクションをそのまま使い、一括でコミットする。
     tx.execute(
         "UPDATE payment_orders
          SET wallet_bound = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -582,7 +596,16 @@ pub async fn verify_order(
         ));
     }
     // status が PENDING のまま expires_at を過ぎた注文も期限切れとして扱う。
-    reject_if_expired(state.as_ref(), &order).await?;
+    // EXPIRED 更新は write_lock を取得したトランザクション内で行い、期限切れなら
+    // コミットしてから 400 を返す（旧挙動を維持）。期限切れでなければ書き込みが
+    // ないため tx の drop でロールバックし、以降の検証 I/O の前にはロックを解放する。
+    {
+        let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        if reject_if_expired(&tx, &order).await? {
+            tx.commit().await?;
+            return Err(AppError::BadRequest("order has expired".to_string()));
+        }
+    }
 
     // 所有証明の記録が無い注文は検証を許可しない（再起動後も維持される）。
     if !is_wallet_bound(&state.db, &order.order_id).await? {

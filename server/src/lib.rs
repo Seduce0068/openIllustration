@@ -4302,25 +4302,26 @@ pub async fn me_export(
     claims: AuthClaims,
 ) -> Result<Response, AppError> {
     let sub = claims.sub.as_str();
-    let db = state.db.as_ref();
 
-    // 12 表の読み取りを単一の読み取りトランザクション（libsql の
-    // `Connection::transaction()` = BEGIN DEFERRED）で包む。書き込みロックは
-    // 取得しない: 読み取り専用なので write_lock と競合させず、共有 Connection
-    // 上で別リクエストが書き込んでもエクスポート全体が単一時点の
-    // スナップショットになるようにする。
-    let tx = db
-        .transaction()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))?;
+    // 12 表の読み取りを単一のトランザクション（libsql の
+    // `Connection::transaction()` = BEGIN DEFERRED）で包む。読み取り専用でも
+    // 共有 Connection は同時に 1 つの BEGIN しか保持できないため、
+    // 書き込みと同じ write_lock を取得して BEGIN を直列化する。
+    // これによりアップロード等の書き込みトランザクションと並行しても
+    // "cannot start a transaction within a transaction" による 500 にならず、
+    // 書き込み完了を待ってからエクスポートが開始される。
+    // ガードは tx より後にドロップされるため、コミット／ロールバック完了まで
+    // ロックが保持される。
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
     let export = collect_export_snapshot(&tx, sub).await?;
 
-    // 読み取りのみだが明示的にコミットして共有ロックを解放する。
+    // 読み取りのみだが明示的にコミットしてトランザクションを終了する。
     // 途中のクエリがエラーを返して `?` で早期 return した場合、
     // libsql::Transaction の Drop が内側の local::Transaction
     // （DropBehavior::Rollback）を破棄し、ROLLBACK が実行される。
-    // したがって中途半端なトランザクションや共有ロックは残らない。
+    // tx の終了後に _write_guard がドロップされ write_lock が解放されるため、
+    // 中途半端なトランザクションや共有ロックは残らない。
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
