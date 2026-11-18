@@ -1830,6 +1830,26 @@ fn reports_error_message(status: Option<u16>) -> String {
 /// 投票一覧の JSON 解析失敗時に表示する固定文言。解析エラーの詳細は出さない。
 const REPORTS_PARSE_ERROR: &str = "投票一覧の解析に失敗しました。";
 
+/// 集計取得の失敗種別。生エラーやサーバー本文は保持しない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StatsFailure {
+    /// `/mod/stats` の JSON 解析失敗。
+    Parse,
+    /// `/mod/stats` のリクエスト送信失敗（ネットワークエラー）。
+    Fetch,
+}
+
+/// 集計取得失敗時に画面へ表示する固定文言を返す純粋ヘルパー。
+/// 生エラー（`reqwest::Error` / `serde_json::Error`）を引数に取らないため、
+/// フィールド名・解析位置・サーバー本文などの機微情報が露出する余地がない。
+/// HTTP ステータス付きのエラーは呼び出し側で従来どおり組み立てる。
+fn stats_error_message(failure: StatsFailure) -> &'static str {
+    match failure {
+        StatsFailure::Parse => "集計の解析に失敗しました。",
+        StatsFailure::Fetch => "集計の取得に失敗しました。",
+    }
+}
+
 #[component]
 fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
@@ -1901,10 +1921,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         set_stats_error.set(String::new());
                         set_stats_loaded.set(true);
                     }
-                    Err(err) => {
+                    Err(_) => {
+                        // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず固定文言のみ表示する。
                         set_stats_html.set(String::new());
                         set_stats_loaded.set(false);
-                        set_stats_error.set(format!("集計の解析に失敗しました: {err}"));
+                        set_stats_error.set(stats_error_message(StatsFailure::Parse).to_string());
                     }
                 },
                 Ok(response) if response.status() == 403 => {
@@ -1920,10 +1941,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         response.status()
                     ));
                 }
-                Err(err) => {
+                Err(_) => {
+                    // ネットワークエラーの生情報は出さず固定文言のみ表示する。
                     set_stats_html.set(String::new());
                     set_stats_loaded.set(false);
-                    set_stats_error.set(format!("集計の取得に失敗しました: {err}"));
+                    set_stats_error.set(stats_error_message(StatsFailure::Fetch).to_string());
                 }
             }
         });
@@ -2633,6 +2655,39 @@ mod tests {
         );
         // JSON 解析失敗も解析エラーの詳細を含まない固定文言。
         assert_eq!(super::REPORTS_PARSE_ERROR, "投票一覧の解析に失敗しました。");
+    }
+
+    #[test]
+    fn stats_error_uses_only_fixed_phrases() {
+        // 解析失敗・取得失敗の双方で固定文言のみを返す。
+        let parse = super::stats_error_message(super::StatsFailure::Parse);
+        let fetch = super::stats_error_message(super::StatsFailure::Fetch);
+        assert_eq!(parse, "集計の解析に失敗しました。");
+        assert_eq!(fetch, "集計の取得に失敗しました。");
+
+        // 生エラーや機微情報（serde のフィールド名・解析位置・型情報、
+        // reqwest のエラー本文等）が一切含まれないことを検証する。
+        for message in [parse, fetch] {
+            for leaked in [
+                "SERVER_DETAIL_MUST_NOT_BE_SHOWN",
+                "generated_at",
+                "totals",
+                "monthly",
+                "expected",
+                "invalid type",
+                "missing field",
+                "line 1 column",
+                "reqwest",
+                "serde",
+                "error sending request",
+                ": ",
+            ] {
+                assert!(
+                    !message.contains(leaked),
+                    "fixed phrase must not leak raw error details: {leaked}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T17:18:25+09:00"
+  at: "2026-11-18T18:14:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T17:18:25+09:00"
+  at: "2026-11-18T18:14:23+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -22,8 +22,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全36件（auth 2 / build-gate 1 / economy 1 /
-  error-paths 4 / export 3 / favorites 3 / integrity 3 / metrics 1 / moderation 9 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全37件（auth 2 / build-gate 1 / economy 1 /
+  error-paths 4 / export 3 / favorites 3 / integrity 3 / metrics 1 / moderation 10 /
   real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   favorites の3件目以降は二重クリック防止と401の再ログイン案内、export の3件目は
   ダウンロード開始失敗時の固定エラー表示を検証する。
@@ -34,15 +34,15 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記36件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
   今回の3CLIへのテスト追加（doctor 24件 / verify_audit_export 17件 / verify_backup 17件）も
-  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は36件のまま変わらない。
-  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は36件のまま。
+  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は37件のまま変わらない。
+  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は37件のまま。
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
    読み取りトランザクションの5件も `server/src/tests.rs` のサーバー側テストであり、
-   E2E 定義数は36件のまま変更なし。
+   E2E 定義数は37件のまま変更なし。
    直近の監査理由マスク1件・投票署名 v2 の4件・一覧の `price` NULL 1件は
    `server/src/tests.rs` のサーバー側テスト、エクスポート解析失敗1件は
    `client/src/lib.rs` のクライアント側単体テストである。いずれも E2E 定義を増やさず、
-   E2E 定義数は36件のまま変更しない。
+   E2E 定義数は37件のまま変更しない。
 
 ## 2. 実装済みテストの概要
 
@@ -69,7 +69,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 | 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 24件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
-| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は36件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
+| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は37件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
 
 ## 3. 必須要件のリリースゲート
 
@@ -102,7 +102,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件と投票一覧エラー2件を追加した現在は moderation.spec.ts 全9件 pass、フルスイートの定義数は32件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件と投票一覧エラー2件を追加した現在は moderation.spec.ts 全9件 pass、フルスイートの定義数は36件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"` に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は既存6件と合わせ9件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
@@ -116,7 +116,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | EXPORT-09 | `/me/export` の読み取りトランザクション | 12表の全クエリが単一の読み取りトランザクション（`BEGIN DEFERRED`）で実行され、`collect_export_snapshot` の `debug_assert!(!db.is_autocommit())` が発火しない。完了時に `tx.commit()`、エラー時は Drop が ROLLBACK | 実装済み。`me_export_queries_run_inside_read_transaction`（`db.transaction()` / `tx.commit()` を外す mutation で失敗）。下記「エクスポートの読み取りトランザクション検証」を参照 |
-| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は36件のまま |
+| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は37件のまま |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス5件（`invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected`）を追加し、いずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。実JPKIの失効・期限切れは未検証 |
@@ -173,20 +173,35 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 TZ の強制変更はプロセス環境を汚さないため、純粋関数 `today_for_policy` / `validate_age_at` に
 基準時刻と TZ を明示して検証する。未知の TZ は UTC へフォールバックする分岐も含める。
 年齢数値の判定は `/auth/verify` の `validate_age` に委ね、callback / refresh では設定エラーのみを
-403 へ変換する。これらはサーバー側テストであり、E2E 定義数は36件のまま変わらない。
+403 へ変換する。これらはサーバー側テストであり、E2E 定義数は37件のまま変わらない。
 
-### エクスポートの読み取りトランザクション検証（EXPORT-09〜10）
+### エクスポートの読み取りトランザクション検証（EXPORT-09〜10 / EXPORT-12）
 
 R5-04 の12表エクスポートを単一時点のスナップショットにするため、`me_export` は
-`db.transaction()`（`BEGIN DEFERRED`）で `collect_export_snapshot` を包み、`tx.commit()` で閉じる。
-書き込みロックを取らないため、共有 `Connection` 上で別リクエストが書き込んでも競合しない。
+`begin_write_tx`（`write_lock` 取得後に `BEGIN DEFERRED`）で `collect_export_snapshot` を包み、
+`tx.commit()` で閉じる。共有 `Connection` の BEGIN をアップロード等の書き込みと直列化するため、
+同時書き込みがあっても 500 にならず、書き込み完了を待ってから開始する。
 
 | テスト関数 | 検証する test oracle |
 | --- | --- |
 | `me_export_queries_run_inside_read_transaction` | `version:1` が返り、`debug_assert!(!db.is_autocommit())` が発火しない。`db.transaction()` / `tx.commit()` を外す mutation で失敗 |
 | `me_export_snapshot_consistent_under_concurrent_ban_write` | 一時 DB の2接続で、書き込み側の `BEGIN IMMEDIATE` 未コミット BAN 更新・監査挿入がエクスポート結果に現れない（`is_banned: false`、BAN 監査なし）。完了後に書き込みを `COMMIT` |
+| `me_export_waits_for_concurrent_write_transaction` | 外部ライターが `write_lock` と BEGIN を保持している間は完了せず（200ms タイムアウト）、解放後に成功する。`begin_write_tx` を素の `db.transaction()` に戻す mutation で失敗 |
 
-これらはサーバー側テスト2件のみで、E2E 定義数は36件のまま変わらない。
+これらはサーバー側テスト3件のみで、E2E 定義数は37件のまま変わらない。
+
+### 期限再判定とトランザクション直列化の回帰（PAY-06〜08）
+
+共有 `Connection` の BEGIN 直列化と期限判定の回帰テストを `server/src/tests.rs` に追加した。
+すべてサーバー側テストであり、E2E 定義数は37件のまま変わらない。
+
+| テスト関数 | 検証する test oracle |
+| --- | --- |
+| `test_expired_bind_waits_for_write_transaction` | 期限切れ注文の bind は外部ライターの `write_lock` / BEGIN 保持中は完了せず、解放後に EXPIRED 更新をコミットして400を返す。EXPIRED 更新を tx 外の `db.execute` に戻す mutation で失敗 |
+| `test_expired_verify_waits_for_write_transaction` | 期限切れ注文の verify も同様に待ち、解放後に400と EXPIRED 更新を返す |
+| `test_fixed_receiving_address_parallel_orders_all_saved` | `PAYMENT_RECEIVING_XPRV` 未設定（固定受取アドレス）で並行注文が全件成功し、全注文が保存される（`derivation_index` は NULL のまま） |
+| `test_fixed_address_order_waits_for_write_transaction` | 固定アドレス分岐の INSERT も HD 分岐と同じく `write_lock` 経由。ロック保持中は完了せず、解放後に成功する。`insert_payment_order(&state.db, ...)` に戻す mutation で失敗 |
+| `test_payment_verify_rechecks_expiry_after_verification` | verifier が `expires_at` を過去へ書き換えても、CAS 前に tx 内の最新値で再判定し、EXPIRED＋400を返す。FINALIZED へ進まず `tx_hash` / `confirmations` も書き込まれない。再判定を外す mutation で失敗 |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -251,7 +266,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
-今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は36件のまま
+今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は37件のまま
 変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
 判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 
@@ -525,7 +540,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 ### 監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証（AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11）
 
 直近の未コミット変更7件のうち6件は `server/src/tests.rs`、1件は `client/src/lib.rs` の
-クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は36件のまま。
+クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は37件のまま。
 
 #### AUDIT-03: 監査理由の表示マスクと entry_hash の生値維持
 

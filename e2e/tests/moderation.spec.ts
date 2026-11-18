@@ -31,6 +31,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const reportsHttpErrorText = (status: number) => `投票一覧の取得に失敗しました (HTTP ${status}).`;
   const reportsNetworkErrorText = 'Network error loading reports.';
 
+  // client/src/lib.rs の stats_error_message(StatsFailure::Parse) を grep して確定した
+  // 固定文言。serde の生エラー（フィールド名・解析位置・型情報・レスポンス本文）は
+  // 画面へ出さない契約を検証する。
+  const statsParseErrorText = '集計の解析に失敗しました。';
+
   // 投票フィードバック用の共通セットアップ。モック認証でログインし、
   // 投票キューに1件（report_id=42）を表示した状態まで進める。
   const openModerationWithReport = async (page: Page) => {
@@ -349,6 +354,60 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     expect(statsRequestCount).toBe(2);
     expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+      { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('R5-09 (parse error): /mod/stats が不正 JSON のとき moderation-stats-error に固定文言のみを表示し serde の生エラーを出さない', async ({ page }) => {
+    // totals に文字列を入れて deserialization を失敗させる。serde の生エラーには
+    // この文字列（フィールド値）や型情報・解析位置が含まれ得るため、センチネルとして
+    // 画面に漏れないことを検証する。
+    const sentinel = 'RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW';
+    const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+
+    await page.route('**/mod/stats', async route => {
+      statsRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          generated_at: '2026-11-18T00:00:00Z',
+          totals: sentinel,
+        }),
+      });
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await openModeration(page);
+
+    const statsError = page.getByTestId('moderation-stats-error');
+    await expect(statsError).toBeVisible({ timeout: 10000 });
+    await expect(statsError).toHaveAttribute('role', 'alert');
+    // 固定文言そのものが表示される。
+    await expect(statsError).toHaveText(statsParseErrorText);
+    // 集計カードは出さない。
+    await expect(page.getByTestId('moderation-stats')).toHaveCount(0);
+    // 注入したセンチネル（生エラーに含まれ得るフィールド値）はページ全体で出ない。
+    await expect(page.locator('body')).not.toContainText(sentinel);
+    // serde の生エラー（フィールド名・型情報・解析位置）がエラー要素に出ない。
+    for (const rawDetail of [
+      'totals',
+      'invalid type',
+      'expected struct',
+      'at line 1 column',
+      'line 1',
+      'serde',
+      'error decoding response body',
+    ]) {
+      await expect(statsError).not.toContainText(rawDetail);
+    }
+    // 認証トークン付きで 1 回だけ取得されていること。
+    expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
     ]);
   });

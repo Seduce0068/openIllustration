@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T17:18:25+09:00"
+  at: "2026-11-18T18:14:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T17:18:25+09:00"
+  at: "2026-11-18T18:14:23+09:00"
 status: current
 ---
 
@@ -49,7 +49,7 @@ status: current
     `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
     `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
-    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は36件のまま変更しない。
+    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は37件のまま変更しない。
   - [対応済み] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
     `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、IPFS ゲートウェイ /
     OIDC の 3xx を追従しない。`get_content` は 2xx 以外（3xx を含む）を次のゲートウェイへ
@@ -81,7 +81,7 @@ status: current
     明示 `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点
     スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の5件はいずれもサーバー側テストであり、E2E 定義数は36件のまま変更しない。
+    今回の5件はいずれもサーバー側テストであり、E2E 定義数は37件のまま変更しない。
   - [対応済み] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
     `common::summarize_reason` を適用し、`entry_hash` は DB の生値を維持（DB 全文も不変）。
     サーバー側テスト1件（AUDIT-03、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
@@ -98,7 +98,7 @@ status: current
   - [対応済み] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
     固定文言 `エクスポート結果の解析に失敗しました。` を返し、「0 件」成功表示へ落とさない。
     クライアント側単体テスト1件（EXPORT-11、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は36件のまま変更しない。
+    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は37件のまま変更しない。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -371,10 +371,21 @@ status: current
   本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
   `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
   差分アサーションのサーバー側テスト4件を追加（MET-02、
-  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は36件のまま変更なし。
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は37件のまま変更なし。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。
+- [対応済み] 敵対的レビュー指摘（2026-11-18）: `verify_order` の期限 TOCTOU を修正。検証 I/O
+  完了後に `begin_write_tx` 内の最新 `expires_at` で再判定し、期限切れなら EXPIRED 更新を
+  コミットして400を返す（古い status を期待する CAS で FINALIZED へ進ませない）。
+  verifier が `expires_at` を過去へ書き換える回帰テスト1件を追加し、再判定削除の mutation で
+  失敗を確認（PAY-08、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み] トランザクション直列化の回帰5件と仕様反映（2026-11-18、`fa16320` / `d1a8d65`）:
+  export lock 1件（EXPORT-12）、決済期限2件・固定受取アドレス2件（PAY-06〜07）を
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) へ追記。`me_export` は `begin_write_tx`
+  経由で `write_lock` を取得し、共有 `Connection` の BEGIN を書き込みと直列化する。
+  旧設計の無ロック記述は [DETAILED_DESIGN.md](DETAILED_DESIGN.md) と
+  TEST_SPECIFICATION から削除済み。E2E 定義数は37件のまま。
 - [対応済み] R4-03: `OIDC_HTTP_TIMEOUT_SECS`（1〜60 秒、既定 10 秒）を追加し、
   OIDC の HTTP クライアントへ適用。境界値テストを追加し、mutation（範囲検査削除）で
   テスト失敗を確認。

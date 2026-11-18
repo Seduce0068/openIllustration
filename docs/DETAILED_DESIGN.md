@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T17:18:25+09:00"
+  at: "2026-11-18T18:14:23+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -486,6 +486,12 @@ INSERT を同じトランザクションでコミットする。この原子的�
 `CONFIRMING` の注文は同じ送金で再 verify でき、確認数が進展すれば `FINALIZED` へ進む。`FINALIZED` は確定後不変とし、再 verify
 や確認数の後退でも状態を戻さない（実チェーン上の再編成検知は RPC 実装時に別途検討）。
 
+`verify_order` は読み取り時の期限判定に加え、検証 I/O（非同期）完了後にも期限を再判定する。
+再判定は `begin_write_tx` 内の最新 `expires_at` を使い、期限切れなら `EXPIRED` をコミットして
+400 を返す。これにより、検証中に期限を過ぎた注文を読み取り時の古い status を期待する CAS で
+`FINALIZED` へ進ませない（TOCTOU 対策）。期限前なら同じトランザクションと書き込みロックを
+そのまま CAS 更新に使い、状態変更は2段の CAS（DETECTED → 次状態）で担保する。
+
 ウォレット所有証明（`/payments/orders/:order_id/bind`）の署名対象は `wallet_bind_message_v2` で
 `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy` の5項目とする。
 署名者が送金先・金額・チェーンを確認できるようにすることが盲署名対策の目的である。
@@ -524,11 +530,17 @@ INSERT を同じトランザクションでコミットする。この原子的�
   `governance_audit_log` / `refresh_tokens` / `revoked_subs` の12表。
 - トップレベル項目は `version:1` / `generated_at`（RFC 3339）/ `sub` と上記12表の配列。
   `revoked_sessions` は対象外。行数上限・`truncated` フラグは設けず全行を返す。
-- 12表の読み取りは単一の読み取りトランザクション（`Connection::transaction()` = `BEGIN DEFERRED`）内で実行する。
-  `collect_export_snapshot` が全クエリを同じトランザクションへ閉じ込め、`debug_assert!(!db.is_autocommit())`
-  で検証する（cargo test の debug ビルドで有効）。完了時に `tx.commit()` で共有ロックを解放し、
-  途中のクエリが失敗した場合は `libsql::Transaction` の Drop が ROLLBACK する。書き込みロックは取得せず、
-  実行中に別接続が書き込んでも全12表は単一時点のスナップショットになる。
+- 12表の読み取りは単一のトランザクション（`Connection::transaction()` = `BEGIN DEFERRED`）内で実行する。
+  `me_export` は `begin_write_tx` で書き込みと同じ `write_lock` を取得してから BEGIN し、
+  `collect_export_snapshot` が全クエリを同じトランザクションへ閉じ込め、
+  `debug_assert!(!db.is_autocommit())` で検証する（cargo test の debug ビルドで有効）。
+  共有 `Connection` は同時に1つの BEGIN しか保持できないため、書き込みと BEGIN を直列化し、
+  アップロード等の書き込みトランザクション完了を待ってから開始する（旧実装の
+  `cannot start a transaction within a transaction` による 500 を解消）。
+  完了時に `tx.commit()` でトランザクションを閉じ、ガードは tx より後にドロップして
+  コミット完了までロックを保持する。途中のクエリが失敗した場合は
+  `libsql::Transaction` の Drop が ROLLBACK する。開始後は全12表が単一時点の
+  スナップショットになる（書き込み待ちは BEGIN 前のみ）。
 - `reason` / `details` は `mask_reason` により既定でマスクする（例: `[redacted:N bytes]`）。
 - `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` /
   他ユーザーID はレスポンスへ含めない。
