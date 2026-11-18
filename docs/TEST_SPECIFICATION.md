@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T18:14:23+09:00"
+  at: "2026-11-19T00:23:03+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T23:28:22+09:00"
+  at: "2026-11-19T00:23:03+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -43,7 +43,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   5件目がファイル選択 label のキーボード操作と価格入力の上下限（a11y）を検証する。
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記48件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
-  今回の3CLIへのテスト追加（doctor 24件 / verify_audit_export 17件 / verify_backup 17件）も
+  今回の3CLIへのテスト追加（doctor 29件（既存26件＋境界テスト3件） / verify_audit_export 17件 / verify_backup 17件）も
   全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は49件のまま変わらない。
   直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は49件のまま。
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
@@ -77,7 +77,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 24件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 29件（既存26件＋境界テスト3件） / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 | 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は49件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
@@ -147,7 +147,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
-| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と24テストを追加し、13カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
+| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と29テスト（既存26件＋境界テスト3件）を追加し、14カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | NET-05 | SSRF: IPFSゲートウェイのリダイレクト追従拒否 | 302 + `Location` で内部サービスへ誘導されても追従せず、リダイレクト先へ到達しない。3xx はエラーとして次のゲートウェイへフェイルオーバーする | 実装済み。`build_http_client` が `Policy::none()` を設定。サーバー側テスト2件（`test_get_content_does_not_follow_gateway_redirect` / `test_get_content_redirect_falls_back_to_next_gateway`）。下記「SSRF リダイレクト無効化の検証（NET-05）」を参照 |
@@ -165,7 +165,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-04 | `prop_summarize_reason_truncates_safe_text_at_char_boundary` | PII を含まない文字（あ / 知 / A / b / 空白 / 改行 / 🍣 / 。、0..=160個）で、120文字以下は等価、超過は先頭119文字＋`…` に切り詰め（Unicode 境界を維持） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
-| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。13カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に24テストを追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。14カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に29テスト（既存26件＋フォールバック境界テスト3件）を追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | AUDIT-03 | `GET /content/{cid}/audit` の理由マスクと `entry_hash` 維持 | `reason` は `summarize_reason` の結果のみで、メール・URL・4桁数字・DB 全文が漏れない。`entry_hash` は生 `reason` から計算した DB の生値と一致し、DB 全文は不変 | 実装済み（`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。下記「監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証」を参照 |
@@ -273,7 +273,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 いずれもダミーの `JWT_SECRET`（32バイト以上）を設定した実測値である（2026-11-18、ビルド済み
 `target/debug/doctor` で確認）。`mock_auth_enabled` / `ipv4_localhost` / `trusted_proxy` の追加に
-より検査数は13となり、`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。
+より検査数は14となり、`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。
 `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` 未設定なら追加問題は出ない。よって P5 は
 `--strict` で終了コード1であり（旧挙動の0ではない）、`--strict` の判定は
 `should_fail(strict, problems)` に委譲される。P4 の jwt 警告はダミー PEM が無効なことに
@@ -286,25 +286,28 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
 判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 
-#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、24テスト）
+#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、29テスト（既存26件＋境界テスト3件））
 
 - `parse_args_from<I>(items) -> ParseOutcome`: 引数は `Vec<String>` で受け取り、先頭要素を
   プログラム名として読み飛ばす。`[]` は `Run { strict: false }`、`["--strict"]` は
   `Run { strict: true }`、`-h` / `--help` は `Help`、単一の不明引数は
   `UnknownArgument(String)`、複数引数は `TooManyArguments` を返す（完全一致のみ有効）。
 - `check_all_with<F>(lookup) -> Vec<(&'static str, Vec<String>)>`: 環境変数を `lookup`
-  経由でのみ読み、13カテゴリを固定で返す（`production` /
+  経由でのみ読み、14カテゴリを固定で返す（`production` /
   `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` / `jwt_secret` /
   `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` /
-  `age_policy` / `rate_limit` / `ipv4_localhost` / `trusted_proxy`）。秘密値は問題文へ
-  含めない。`check_all()` は実環境の `env` を渡すだけのラッパーである。
+  `oidc_clock_skew` / `age_policy` / `rate_limit` / `ipv4_localhost` / `trusted_proxy`）。
+  秘密値は問題文へ含めない。`check_all()` は実環境の `env` を渡すだけのラッパーである。
 - `should_fail(strict, problems) -> bool`: `strict && problems > 0` のみ。既定は警告表示で
   exit 0、`--strict` のとき問題が1件以上なら exit 1。
+- `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は `rate_limit` と同じく
+  「生のパース値」と「正規化後の値」を比較し、既定へフォールバックした場合に当該カテゴリへ
+  警告1件を計上する。新規カテゴリは増やさず `check(s)` は14のままである。
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
 | 引数パース | 6 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` |
-| 設定判定 | 15 | `check_always_reports_thirteen_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` |
+| 設定判定 | 20 | `check_always_reports_fourteen_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` / `oidc_clock_skew_in_range_and_unset_add_no_warning` / `oidc_clock_skew_out_of_range_warns_without_disclosing_value` / `ipfs_timeout_fallback_is_warned_without_disclosing_value` / `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` / `oidc_http_timeout_fallback_is_warned_without_disclosing_value` |
 | strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
 
 真値は `1` と `true`（大文字小文字不問）のみで、`0` / `false` / `no` / 空文字は偽である。
@@ -312,9 +315,10 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 ##### doctor のネットワーク設定警告（追加4件）
 
-`ipv4_localhost` と `trusted_proxy` の2カテゴリを追加し、検査数は11→13、bin テストは20→24件へ
-増えた（既存 `check_always_reports_eleven_categories` は
-`check_always_reports_thirteen_categories` へ改称）。追加4件の oracle は次のとおり。
+`ipv4_localhost` と `trusted_proxy` の2カテゴリを追加し、その後の `oidc_clock_skew` 追加と
+フォールバック検出テスト3件を含め、現行は14カテゴリ・29テスト（既存26件＋境界テスト3件）である
+（既存 `check_always_reports_eleven_categories` は `check_always_reports_fourteen_categories`
+へ改称）。ネットワーク設定警告の追加4件の oracle は次のとおり。
 
 | テスト | 条件 | 期待結果 |
 | --- | --- | --- |
@@ -326,6 +330,22 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 `should_fail(strict, problems)` の判定は不変で、`--strict` のときのみ問題があれば exit 1 となる。
 実バイナリで `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor` を実行し、
 `doctor: 14 check(s), 2 problem(s)`（`mock_auth_enabled` + `jwt`）を確認した。
+
+##### doctor のフォールバック検出（追加3件）
+
+`ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` の各パーサは不正値・範囲外を既定へ
+フォールバックするため、従前の「正規化後の値が 0」という判定は発火しなかった（死コード）。
+`rate_limit` と同じ方式で「生のパース値」と「正規化後の値」を比較し、差分がある場合に当該
+カテゴリへ警告1件を計上する。警告文は固定で設定値は出力しない。
+
+| テスト | フォールバックを検出する値 | 警告なし（有効値） |
+| --- | --- | --- |
+| `ipfs_timeout_fallback_is_warned_without_disclosing_value` | `abc` / `0` / `301`（範囲外） / `999999999` | `1` / `15` / `300` / 未設定 |
+| `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` | `abc` / `0` / `6`（範囲外） / `999999999` | `1` / `3` / `5` / 未設定 |
+| `oidc_http_timeout_fallback_is_warned_without_disclosing_value` | `abc` / `0` / `61`（範囲外） / `999999999` | `1` / `10` / `60` / 未設定 |
+
+各テストは警告文の完全一致で値のエコーを防ぎ、有効値と未設定では警告が出ないことも検証する。
+新規カテゴリは追加せず、`doctor: 14 check(s)` は不変で問題数だけが増える。
 
 #### CLI-02: `verify_audit_export`（`server/src/bin/verify_audit_export.rs`、17テスト）
 

@@ -172,30 +172,36 @@ where
     }
     results.push(("ipfs_gateways", ipfs_errors));
 
-    let timeout_errors = if ipfs_timeout(lookup("IPFS_TIMEOUT_SECS").as_deref()).as_secs() == 0 {
-        vec!["IPFS timeout resolved to zero".to_string()]
-    } else {
-        Vec::new()
-    };
+    // 各パーサは不正値・範囲外を既定へフォールバックするため、
+    // 「正規化後の値が 0」といった判定は決して発火しない（死コード）。
+    // rate_limit と同じ方式で「生のパース値」と「正規化後の値」を比較し、
+    // フォールバックが発生した場合のみ警告する。設定値自体は出力しない。
+    let mut timeout_errors = Vec::new();
+    if let Some(value) = lookup("IPFS_TIMEOUT_SECS")
+        && ipfs_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    {
+        timeout_errors
+            .push("IPFS_TIMEOUT_SECS is invalid or outside 1..=300; using default".to_string());
+    }
     results.push(("ipfs_timeout", timeout_errors));
-    results.push((
-        "ipfs_max_attempts",
-        if ipfs_max_attempts(lookup("IPFS_MAX_ATTEMPTS").as_deref()) == 0 {
-            vec!["IPFS attempts resolved to zero".to_string()]
-        } else {
-            Vec::new()
-        },
-    ));
 
-    let oidc_timeout = oidc_http_timeout(lookup("OIDC_HTTP_TIMEOUT_SECS").as_deref());
-    results.push((
-        "oidc_http_timeout",
-        if oidc_timeout.as_secs() == 0 {
-            vec!["OIDC HTTP timeout resolved to zero".to_string()]
-        } else {
-            Vec::new()
-        },
-    ));
+    let mut attempts_errors = Vec::new();
+    if let Some(value) = lookup("IPFS_MAX_ATTEMPTS")
+        && ipfs_max_attempts(Some(&value)) != value.parse::<usize>().unwrap_or(0)
+    {
+        attempts_errors
+            .push("IPFS_MAX_ATTEMPTS is invalid or outside 1..=5; using default".to_string());
+    }
+    results.push(("ipfs_max_attempts", attempts_errors));
+
+    let mut oidc_timeout_errors = Vec::new();
+    if let Some(value) = lookup("OIDC_HTTP_TIMEOUT_SECS")
+        && oidc_http_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    {
+        oidc_timeout_errors
+            .push("OIDC_HTTP_TIMEOUT_SECS is invalid or outside 1..=60; using default".to_string());
+    }
+    results.push(("oidc_http_timeout", oidc_timeout_errors));
 
     // OIDC_CLOCK_SKEW_SECS: 範囲外は既定 60 へフォールバックするため警告する。
     // 値は出力せず、範囲内かどうかのみを診断する。
@@ -664,6 +670,75 @@ mod tests {
             assert_eq!(errors[0], EXPECTED, "value={value}");
             assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
         }
+    }
+
+    // --- 2d. タイムアウト / 試行回数のフォールバック検出 --------------------
+
+    #[test]
+    fn ipfs_timeout_fallback_is_warned_without_disclosing_value() {
+        const EXPECTED: &str = "IPFS_TIMEOUT_SECS is invalid or outside 1..=300; using default";
+        const LEAKY: &str = "999999999";
+        for value in ["abc", "0", "301", LEAKY] {
+            let results = check_all_with(lookup_from(&[("IPFS_TIMEOUT_SECS", value)]));
+            let errors = errors_for(&results, "ipfs_timeout");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
+        for value in ["1", "15", "300"] {
+            let results = check_all_with(lookup_from(&[("IPFS_TIMEOUT_SECS", value)]));
+            assert!(
+                errors_for(&results, "ipfs_timeout").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "ipfs_timeout").is_empty());
+    }
+
+    #[test]
+    fn ipfs_max_attempts_fallback_is_warned_without_disclosing_value() {
+        const EXPECTED: &str = "IPFS_MAX_ATTEMPTS is invalid or outside 1..=5; using default";
+        const LEAKY: &str = "999999999";
+        for value in ["abc", "0", "6", LEAKY] {
+            let results = check_all_with(lookup_from(&[("IPFS_MAX_ATTEMPTS", value)]));
+            let errors = errors_for(&results, "ipfs_max_attempts");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
+        for value in ["1", "3", "5"] {
+            let results = check_all_with(lookup_from(&[("IPFS_MAX_ATTEMPTS", value)]));
+            assert!(
+                errors_for(&results, "ipfs_max_attempts").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "ipfs_max_attempts").is_empty());
+    }
+
+    #[test]
+    fn oidc_http_timeout_fallback_is_warned_without_disclosing_value() {
+        const EXPECTED: &str = "OIDC_HTTP_TIMEOUT_SECS is invalid or outside 1..=60; using default";
+        const LEAKY: &str = "999999999";
+        for value in ["abc", "0", "61", LEAKY] {
+            let results = check_all_with(lookup_from(&[("OIDC_HTTP_TIMEOUT_SECS", value)]));
+            let errors = errors_for(&results, "oidc_http_timeout");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
+        for value in ["1", "10", "60"] {
+            let results = check_all_with(lookup_from(&[("OIDC_HTTP_TIMEOUT_SECS", value)]));
+            assert!(
+                errors_for(&results, "oidc_http_timeout").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "oidc_http_timeout").is_empty());
     }
 
     // --- 3. strict 判定 ----------------------------------------------------
