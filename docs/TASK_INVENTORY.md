@@ -21,81 +21,81 @@ status: current
 
 - 確認: 2026-11-18T14:13:12+09:00、ブランチ `master` の HEAD は `8c1d88e`（`origin/master` と一致）。
   前回確認時点 `2cd2ab6` 以降のドキュメント更新コミットは master へ反映済み。
-- 直近の未コミット変更の反映（2026-11-18 確認、コードは `server/src/` と `client/src/` に未コミットで存在）:
-  - [対応済み（未コミット）] メトリクス最外側化: `observe_metrics` を `Router` の最も外側へ移動し、
+- 直近の変更の反映（2026-11-18、すべてコミット済み）:
+  - [対応済み] メトリクス最外側化: `observe_metrics` を `Router` の最も外側へ移動し、
     内側で短絡するレート制限 429 / IP ゲート 403 / 本文サイズ 413 / CORS プリフライト OPTIONS 204 を
     取りこぼさず HTTP カウンタへ計上。サーバー側テスト4件を追加（MET-02、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] 決済 bind 署名 v2: `wallet_bind_message_v2` が
+  - [対応済み] 決済 bind 署名 v2: `wallet_bind_message_v2` が
     order_id / chain_id / wallet_address / recipient_address / amount_jpy を署名対象とし、
     注文IDのみの旧形式署名を401で拒否（盲署名対策）。`amount_jpy_from_wei` を追加し、
     旧 `wallet_bind_message` は `#[deprecated]` で互換維持。旧形式拒否のテスト1件を追加（PAY-05）。
-  - [対応済み（未コミット）] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
+  - [対応済み] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
     （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
     `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
     上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
-  - [対応済み（未コミット）] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
+  - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、13カテゴリ固定・秘密値非出力・`--strict` 判定を
     `server/src/bin/doctor.rs` の24テストで検証（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で13 check(s) を確認。
-  - [対応済み（未コミット）] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
+  - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
     マスク出力）を追加（CLI-02、
     [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
-  - [対応済み（未コミット）] `verify_backup` の契約明文化: `--database-token` は argv で拒否
+  - [対応済み] `verify_backup` の契約明文化: `--database-token` は argv で拒否
     （値もエコーしない、`DATABASE_TOKEN` 環境変数のみ。 `sign_audit_export` と同じ契約）、
     `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
     `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
     今回の追加は全てサーバー側 bin テストであり、E2E 定義数は35件のまま変更しない。
-  - [対応済み（未コミット）] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
+  - [対応済み] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
     `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、IPFS ゲートウェイ /
     OIDC の 3xx を追従しない。`get_content` は 2xx 以外（3xx を含む）を次のゲートウェイへ
     フェイルオーバーする。サーバー側テスト2件（NET-05、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] XFF 複数値と IPv4-compatible 形式: 追記型 XFF は末尾のピアを
+  - [対応済み] XFF 複数値と IPv4-compatible 形式: 追記型 XFF は末尾のピアを
     除去して最左のクライアントを採用し、上書き型は末尾を採用、不正エントリは fail-closed。
     IPv4-compatible IPv6（`::a.b.c.d`）も IPv4 として正規化して拒否し、`::` / `::1` は
     IPv6 のまま保持。サーバー側テスト11件（NET-06、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [INFRA_NETWORK.md](INFRA_NETWORK.md),
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
+  - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
     検査は11→13カテゴリ、bin テストは20→24件。`env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
     の実出力で13 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-  - [対応済み（未コミット）] 年齢ゲートの共通化: `ensure_age_policy_configured` を
+  - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
     `/auth/oidc/callback` と `/auth/refresh` の state / Cookie 消費前に適用。`ConfigurationRequired`
     （`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/0）と
     `TrustedAttributeRequired` を 403 に変換し、数値判定は `/auth/verify` に委ねる。
     サーバー側テスト1件（AGE-03、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] 年齢基準日のローカル TZ 化: `validate_age` が `TZ` を読み、
+  - [対応済み] 年齢基準日のローカル TZ 化: `validate_age` が `TZ` を読み、
     `today_for_policy` が `Asia/Tokyo`（UTC+9）と `Etc/GMT±N`（POSIX 符号反転）を解釈、
     未設定・未対応名は UTC へフォールバック。JST 深夜の境界例を含むサーバー側テスト2件（AGE-04、
     [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-  - [対応済み（未コミット）] `/me/export` の読み取りトランザクション化: 12表を
+  - [対応済み] `/me/export` の読み取りトランザクション化: 12表を
     `Connection::transaction()`（`BEGIN DEFERRED`）で包み、`debug_assert!(!db.is_autocommit())` と
     明示 `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点
     スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
     今回の5件はいずれもサーバー側テストであり、E2E 定義数は35件のまま変更しない。
-  - [対応済み（未コミット）] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
+  - [対応済み] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
     `common::summarize_reason` を適用し、`entry_hash` は DB の生値を維持（DB 全文も不変）。
     サーバー側テスト1件（AUDIT-03、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] 投票署名 v2: `moderation_vote_message_v2` がドメイン分離子
+  - [対応済み] 投票署名 v2: `moderation_vote_message_v2` がドメイン分離子
     `moderation-vote-v2` と `report_id` / `result` / `juror_hash` を署名対象とし、
     `mod_vote` は v2 のみ受理。旧形式署名と他投票者向け署名の転用は401拒否。サーバー側テスト4件
     （MOD-12、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
     [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md),
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] 一覧の価格 NULL: `build_content_query` が
+  - [対応済み] 一覧の価格 NULL: `build_content_query` が
     `COALESCE(price, 0) AS price` で NULL を購入不可0として返す。サーバー側テスト1件（CONTENT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-  - [対応済み（未コミット）] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
+  - [対応済み] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
     固定文言 `エクスポート結果の解析に失敗しました。` を返し、「0 件」成功表示へ落とさない。
     クライアント側単体テスト1件（EXPORT-11、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
     今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は35件のまま変更しない。
@@ -254,7 +254,7 @@ status: current
   拒否注文が index を消費しないようにした。一意性は migration 003 の部分 UNIQUE
   インデックスで担保し、新規マイグレーションは不要。回帰テスト4件を追加
   （連番と異なる受取先、同一内容5並行の全成功、固定アドレスの NULL 維持、不正入力で index 不消費）。
-- [対応済み（未コミット）] **盲署名対策の bind 署名 v2**: `wallet_bind_message_v2` が
+- [対応済み] **盲署名対策の bind 署名 v2**: `wallet_bind_message_v2` が
   order_id / chain_id / wallet_address / recipient_address / amount_jpy を署名対象とし、
   `bind_wallet` を v2 へ切替。DB の `amount_wei` から円建てを導出する `amount_jpy_from_wei` を追加
   （割り切れない値は拒否）。旧 `wallet_bind_message` は `#[deprecated]` で API 互換のため残すが、
@@ -299,11 +299,11 @@ status: current
 - [対応済み fefa49a] 投票入力の基本検証テスト: `POST /mod/vote` で `report_id <= 0` と未知の `result` を `400` で拒否すること、トークン `sub` と
   `vote.juror_hash` の不一致（署名が正しくても）を `401` で拒否し票を記録しないことを回帰テストで保護（`test_vote_with_invalid_payload_rejected`,
   `test_vote_with_sub_mismatch_rejected`）。ハンドラ自体の挙動変更はない。
-- [対応済み（未コミット）] **投票署名 v2 と投票者束縛**: `moderation_vote_message_v2` が
+- [対応済み] **投票署名 v2 と投票者束縛**: `moderation_vote_message_v2` が
   `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash` を署名対象とし、
   `mod_vote` は v2 のみ受理。旧 `moderation_vote_message` は `#[deprecated]` で残すが
   旧形式署名は401拒否、別投票者向け署名の転用も401拒否（4テスト、MOD-12）。
-- [対応済み（未コミット）] **監査タイムラインの理由マスク**: `GET /content/{cid}/audit` の
+- [対応済み] **監査タイムラインの理由マスク**: `GET /content/{cid}/audit` の
   `reason` に `summarize_reason` を適用しつつ `entry_hash` は DB の生値を維持。
   DB の生 reason とハッシュは変更しない（1テスト、AUDIT-03）。
 
@@ -312,13 +312,13 @@ status: current
 - [一部対応] **署名付き監査エクスポート**: ADR-0005 に基づき、`sign_audit_export` が全コンテンツ監査エントリ＋`governance_audit_log`（BAN/UNBAN/UNPIN）と
   Merkle root を RSA 署名した version 3 スナップショットを生成。`verify_audit_export` が公開鍵のみで検証（両エントリ列の改ざん検出を実測確認）。手順は
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
-- [対応済み（未コミット）] **監査CLI硬化**: `sign_audit_export` が署名鍵 PEM を `canonicalize` して
+- [対応済み] **監査CLI硬化**: `sign_audit_export` が署名鍵 PEM を `canonicalize` して
   権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
   （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
   `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
   既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に9テストを追加済みで、手動確認手順を
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
-- [対応済み（未コミット）] **`verify_audit_export` の `--expect-root` と純粋関数化**:
+- [対応済み] **`verify_audit_export` の `--expect-root` と純粋関数化**:
   `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
   Merkle root と大小文字非区別で照合し、不一致は `audit root mismatch` で拒否。
   `VerificationOutcome` / `verify_export` は I/O と `process::exit` を持たない。
@@ -366,7 +366,7 @@ status: current
 - [対応済み] R3-01: HTTP カウンタを `AppState` の `Metrics` へ移し、テストから独立
   インスタンスを注入可能化。絶対値アサーションを正確な差分（+2 requests / +1 error）へ変更。
   mutation（エラー加算削除）でテスト失敗を確認。
-- [対応済み（未コミット）] **メトリクス最外側化**: `observe_metrics` を `Router` の最も外側
+- [対応済み] **メトリクス最外側化**: `observe_metrics` を `Router` の最も外側
   （`security_headers` のさらに外側）へ移動。内側で短絡するレート制限 429 / IP ゲート 403 /
   本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
   `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
@@ -436,7 +436,7 @@ status: current
 - [対応済み] バックアップの自動ローテーション: `scripts/backup-rotate.sh` が取得・検証・保持期間（既定30日）超過分の削除を実施。直近 `MIN_KEEP`（既定3）件は保護。静的検証と実 DB
   で動作確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] `verify_backup` に `PRAGMA integrity_check` を追加（旧実装はテーブル/マイグレーション数のみで破損を見逃す）。実 DB で破損ページを持つバックアップが拒否されることを確認。
-- [対応済み（未コミット）] `verify_backup` のargv契約とサイドカー fail-closed を明文化:
+- [対応済み] `verify_backup` のargv契約とサイドカー fail-closed を明文化:
   `--database-token` は受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ、
   `sign_audit_export` と同じ契約）。`-wal` / `-shm` / `-journal` は DB オープン前に拒否。
   `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化し、
@@ -462,11 +462,11 @@ status: current
 
 - [対応済み] CORS の fail-closed 化: `ALLOW_MOCK_AUTH=1` の開発時のみ未設定で開発オリジンへフォールバックし、本番相当（mock 無効）で未設定なら全オリジン拒否。実サーバーで ACAO
   ヘッダの有無を確認（[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- [対応済み（未コミット）] SSRF リダイレクト無効化: `build_http_client` が
+- [対応済み] SSRF リダイレクト無効化: `build_http_client` が
   `reqwest::redirect::Policy::none()` を設定し 3xx を追従しない。2xx 以外（3xx を含む）は
   次の IPFS ゲートウェイへフェイルオーバー（サーバー側テスト2件、NET-05、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [対応済み（未コミット）] XFF 複数値解釈と IPv4-compatible 形式の拒否: 追記型は末尾のピアを
+- [対応済み] XFF 複数値解釈と IPv4-compatible 形式の拒否: 追記型は末尾のピアを
   除去して最左のクライアントを採用し、上書き型は末尾を採用、不正エントリは fail-closed。
   `::a.b.c.d` は IPv4 として正規化して拒否（`::` / `::1` は IPv6 を維持）。サーバー側テスト
   11件（NET-06、[INFRA_NETWORK.md](INFRA_NETWORK.md),
@@ -488,7 +488,7 @@ status: current
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] アップロード重複フィールド: `price` に加え `file` / `owner_hash` / `signature` の二重送信も 400（Duplicate ... field）で拒否される回帰テストを追加（
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [対応済み（未コミット）] 一覧の価格 NULL を0として返す: `build_content_query` の `SELECT` を
+- [対応済み] 一覧の価格 NULL を0として返す: `build_content_query` の `SELECT` を
   `COALESCE(price, 0) AS price` とし、NULL の Approved 行でも500にならず購入不可0を返す
   （サーバー側テスト1件、CONTENT-10、[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] 実鍵署名試験: 実 RSA 秘密鍵で署名したアップロードの受理と、署名を別バイト列へ使い回した場合の 401 拒否を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
@@ -512,12 +512,12 @@ status: current
 - [中] 外部依存のアラート通知先への接続と実運用でのデプロイ・復旧訓練。
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [対応済み（未コミット）] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
+- [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
   `should_fail` を分離し、`server/src/bin/doctor.rs` に24テストを追加。検査は13カテゴリ固定、
   秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- [対応済み（未コミット）] エクスポート解析失敗の固定文言: `export_status_message` が
+- [対応済み] エクスポート解析失敗の固定文言: `export_status_message` が
   `DataExport` として読めないレスポンスを「0 件」成功にせず、`export-error` に固定文言
   `エクスポート結果の解析に失敗しました。` を表示する（クライアント側単体テスト1件、EXPORT-11、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。

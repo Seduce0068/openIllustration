@@ -58,6 +58,11 @@ npm --version
 # 最低バージョンを検証する（package.json の engines と整合）。
 min_node_major="${MIN_NODE_MAJOR:-18}"
 node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+# 非数値なら下限チェックと上限警告が黙ってスキップされるため、明示的に失敗させる。
+if [[ ! "$node_major" =~ ^[0-9]+$ ]]; then
+	echo "Node major version is not numeric: '${node_major}'." >&2
+	exit 1
+fi
 if [[ "$node_major" =~ ^[0-9]+$ ]] && ((node_major < min_node_major)); then
 	echo "Node ${node_major} is older than the required major ${min_node_major}." >&2
 	exit 1
@@ -146,6 +151,20 @@ if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' c
 	echo "external asset reference remains in client/dist/index.html" >&2
 	exit 1
 fi
+# CSS 側からの外部参照もゲートする（入力 CSS と、存在する場合の生成 CSS）。
+# 判定ロジック・エラー文言は index.html のゲートと同じものを使用する。
+external_css_files=(client/input.css)
+if [[ -d client/dist ]]; then
+	while IFS= read -r generated_css; do
+		external_css_files+=("$generated_css")
+	done < <(find client/dist -type f -name '*.css' -print)
+fi
+for css_file in "${external_css_files[@]}"; do
+	if grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' "$css_file"; then
+		echo "external asset reference remains in ${css_file}" >&2
+		exit 1
+	fi
+done
 
 echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
 (cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci)
