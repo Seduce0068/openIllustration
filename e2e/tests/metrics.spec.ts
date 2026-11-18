@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import * as crypto from 'crypto';
 
 /**
@@ -118,5 +118,133 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     expect(call.headers['authorization']).toBeUndefined();
     expect(call.headers['x-forwarded-for']).toBeUndefined();
     await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  /**
+   * MET-02 / MET-03 共通のセットアップ。
+   * 与えた本文を checksum 付きの Novel として配信し、/metrics/client-events の
+   * POST（と CORS プリフライトの OPTIONS）を捕まえる。既存の MET-01 は変更しない。
+   */
+  async function setupNeutralizedMetricsPage(
+    page: Page,
+    body: string,
+  ): Promise<{ captured: CapturedCall[]; contentBodyRequests: number[] }> {
+    const captured: CapturedCall[] = [];
+    const contentBodyRequests: number[] = [];
+    const bodyChecksum = crypto.createHash('sha256').update(body).digest('hex');
+
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ nonce: 'test-nonce' }),
+      });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authorized: true,
+          user_hash: 'mock_user_hash',
+          token: 'mock_jwt_token',
+        }),
+      });
+    });
+    await page.route(url => url.pathname === '/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            cid: CID,
+            checksum: bodyChecksum,
+            type: 'Novel',
+            status: 'Approved',
+            price: 0,
+            title: 'Neutralized Story',
+            description: 'Dangerous URLs are neutralized on render',
+            tags: ['metrics'],
+            is_favorite: false,
+          },
+        ]),
+      });
+    });
+    await page.route(url => url.pathname === `/content/${CID}`, async route => {
+      contentBodyRequests.push(Date.now());
+      await route.fulfill({ status: 200, contentType: 'text/markdown', body });
+    });
+    await page.route(url => url.pathname === `/content/${CID}/audit`, async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/metrics/client-events', async route => {
+      const request = route.request();
+      const origin = request.headers()['origin'];
+      const corsHeaders: Record<string, string> = {
+        'Access-Control-Allow-Origin': origin ?? 'http://127.0.0.1:8080',
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'content-type',
+      };
+      if (request.method() === 'OPTIONS') {
+        await route.fulfill({ status: 204, headers: corsHeaders });
+        return;
+      }
+      captured.push({
+        method: request.method(),
+        body: request.postData() ?? '',
+        headers: request.headers(),
+      });
+      await route.fulfill({ status: 204, headers: corsHeaders, body: '' });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
+    return { captured, contentBodyRequests };
+  }
+
+  test('MET-02: protocol-relative URL は # に中立化され件数が送信される', async ({ page }) => {
+    // network-path reference(//host) と Windows UNC(\\host) はスキームが無いため
+    // 従来は安全とみなされていたが、ブラウザが現在のスキームを補完して
+    // 外部ホストへ誘導し得るため拒否される（client/src/lib.rs:520-539）。
+    // 中立化された link/image の href/src は "#" になる（:462-486）。
+    const protocolRelativeBody = '[phish](//evil.example/phish) ![img](//evil.example/img.png)';
+    const { captured } = await setupNeutralizedMetricsPage(page, protocolRelativeBody);
+
+    await expect(page.locator('a[href="#"]')).toHaveCount(1);
+    await expect(page.locator('img[src="#"]')).toHaveCount(1);
+    await expect(page.locator('a[href^="//"]')).toHaveCount(0);
+    await expect(page.locator('img[src^="//"]')).toHaveCount(0);
+
+    await expect
+      .poll(() => captured.map(call => JSON.parse(call.body) as unknown), {
+        intervals: [100, 100, 100, 100, 100],
+        timeout: 2000,
+      })
+      .toEqual([{ event: 'neutralized_url', count: 2 }]);
+  });
+
+  test('MET-03: 同一本文の再描画では client event を再送しない', async ({ page }) => {
+    const body = '[click](javascript:alert(1)) ![img](data:text/html,alert)';
+    const { captured, contentBodyRequests } = await setupNeutralizedMetricsPage(page, body);
+
+    await expect
+      .poll(() => captured.map(call => JSON.parse(call.body) as unknown))
+      .toEqual([{ event: 'neutralized_url', count: 2 }]);
+    expect(contentBodyRequests.length).toBe(1);
+
+    // BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントさせ、同じ本文を再描画する。
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await expect(page.getByText('Neutralized Story')).toHaveCount(0);
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
+    await expect.poll(() => contentBodyRequests.length, { timeout: 10000 }).toBe(2);
+
+    // 同一描画ソースは thread_local の REPORTED で除外され POST は1回のまま
+    // （client/src/lib.rs:358-369, 400-425）。
+    await expect.poll(() => captured.length).toBe(1);
+    expect(captured.map(call => JSON.parse(call.body) as unknown)).toEqual([
+      { event: 'neutralized_url', count: 2 },
+    ]);
   });
 });

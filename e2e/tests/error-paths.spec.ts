@@ -51,9 +51,12 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
     await loginWithMockAuth(page);
 
-    // 実装文言（client/src/lib.rs L761）: "Network error loading content."
-    await expect(page.getByText('Network error loading content.', { exact: true }))
-      .toBeVisible({ timeout: 10000 });
+    // 実装文言（client/src/lib.rs:70, 1183）: "Network error loading content."
+    // 別の role=alert が増えても strict mode 違反にならないよう testid で特定する。
+    const dashboardError = page.getByTestId('dashboard-error');
+    await expect(dashboardError).toBeVisible({ timeout: 10000 });
+    await expect(dashboardError).toHaveText('Network error loading content.', { timeout: 10000 });
+    await expect(dashboardError).toHaveAttribute('role', 'alert');
     expect(contentAborted).toBe(true);
   });
 
@@ -163,5 +166,73 @@ test.describe('Error paths (network error / HTTP 500)', () => {
       .toHaveText('監査ログの取得に失敗しました (HTTP 500).', { timeout: 10000 });
     await expect(auditAlert).toHaveAttribute('role', 'alert');
     await expect(auditAlert).toBeVisible();
+  });
+
+  /**
+   * CONTENT-ERR: /content/{cid} の HTTP エラー（404 / 500）。
+   * 実装（client/src/lib.rs:1576-1581）は role="alert" の content-load-error に
+   * "Content Load Failed" を、content-load-error-detail に固定文言を出す。
+   * verified=false でも取得失敗が優先され、バッジは "× LOAD FAILED"、
+   * "Integrity Breach Detected" は出ない（:1309-1323, :1591-1594, :1636-1645）。
+   * サーバーエラー本文は画面へ出さない。
+   */
+  const CONTENT_ERR_CID = 'QmYwAPJzv5CZsnAztHZk3RQ3m2YgFf9pRnvNsYQ7nBTeS';
+
+  async function setupContentHttpErrorFixture(page: Page, status: 404 | 500): Promise<void> {
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          cid: CONTENT_ERR_CID,
+          checksum: 'mock_checksum',
+          type: 'Novel',
+          status: 'Approved',
+          price: 0,
+          title: 'Content Load Error Fixture',
+          description: 'content http error fixture',
+          tags: ['error'],
+          is_favorite: false,
+        }]),
+      });
+    });
+    await page.route(`**/content/${CONTENT_ERR_CID}`, async route => {
+      await route.fulfill({
+        status,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await page.route(`**/content/${CONTENT_ERR_CID}/audit`, async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await loginWithMockAuth(page);
+    await expect(page.getByText('Content Load Error Fixture')).toBeVisible({ timeout: 20000 });
+  }
+
+  async function expectContentLoadError(page: Page, status: 404 | 500): Promise<void> {
+    const loadError = page.getByTestId('content-load-error');
+    await expect(loadError).toBeVisible({ timeout: 10000 });
+    await expect(loadError).toHaveAttribute('role', 'alert');
+    await expect(loadError).toHaveText('Content Load Failed');
+    await expect(page.getByTestId('content-load-error-detail'))
+      .toHaveText(`コンテンツの取得に失敗しました (HTTP ${status}).`);
+
+    const badge = page.getByTestId('content-verification-badge');
+    await expect(badge).toHaveText('× LOAD FAILED');
+    await expect(badge).not.toContainText('COMPROMISED');
+    await expect(page.getByText('Integrity Breach Detected')).toHaveCount(0);
+    // HTTP エラー本文（サーバー詳細）を画面へ出さない。
+    await expect(page.getByText('SERVER_DETAIL_MUST_NOT_BE_SHOWN')).toHaveCount(0);
+  }
+
+  test('CONTENT-ERR-404: /content/{cid} が HTTP 404 のとき取得失敗文言を出し改ざん検知と誤表示しないこと', async ({ page }) => {
+    await setupContentHttpErrorFixture(page, 404);
+    await expectContentLoadError(page, 404);
+  });
+
+  test('CONTENT-ERR-500: /content/{cid} が HTTP 500 のとき取得失敗文言を出し改ざん検知と誤表示しないこと', async ({ page }) => {
+    await setupContentHttpErrorFixture(page, 500);
+    await expectContentLoadError(page, 500);
   });
 });

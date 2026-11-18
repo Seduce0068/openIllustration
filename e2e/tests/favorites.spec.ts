@@ -447,4 +447,28 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     releaseSecondResponse();
     await expect(toggle).toHaveAttribute('aria-pressed', 'true');
   });
+
+  // 通信エラー（HTTP ステータス無し）は固定文言 "Network error updating favorite."
+  // （client/src/lib.rs:1332）を favorite-error に出す。既存のリクエスト回数完全一致
+  // アサーション（2回/8回）を壊さないよう独立 test にし、モックもここで完結させる。
+  test('network error shows Network error updating favorite in favorite-error', async ({ page }) => {
+    const { favoriteCalls, contentRequests, toggle, card } =
+      await setupFavoriteGuardPage(page, async route => {
+        await route.abort();
+      });
+
+    await toggle.click();
+
+    const error = card.getByTestId('favorite-error');
+    await expect(error).toBeVisible({ timeout: 10000 });
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(error).toHaveText('Network error updating favorite.', { timeout: 10000 });
+    await expect.poll(() => favoriteCalls).toEqual([
+      { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
+    ]);
+    // 失敗時は一覧を再取得せず、ガードも解除される（HTTP エラーケースと同じ）。
+    await expect.poll(() => contentRequests.length).toBe(1);
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  });
 });

@@ -492,6 +492,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
     await expect(page.getByTestId('vote-error')).toHaveCount(0);
     await expect(page.getByTestId('vote-notice')).toHaveText(voteNoticeText, { timeout: 10000 });
+    // vote-notice は role="status"（client/src/lib.rs:2205）。vote-error は role="alert" のまま。
+    await expect(page.getByTestId('vote-notice')).toHaveAttribute('role', 'status');
 
     // 再度失敗 → 通知が消え、エラーが表示される（新しい試行でクリア）。
     forbidVote = true;
