@@ -370,6 +370,13 @@ pub fn mask_reason(reason: &str, include: bool) -> String {
     }
 }
 
+/// `mask_reason(reason, false)` が生成し得る値か。
+/// 平文はスナップショットに残らないため、再適用による一致は検証できず、
+/// マスク関数が付ける接頭辞（空文字は正当）で判定する。
+fn reason_is_masked(reason: &str) -> bool {
+    reason.is_empty() || reason.starts_with("[redacted:")
+}
+
 /// モデレーション画面向けの通報理由要約。
 ///
 /// - 空文字はそのまま返す。
@@ -561,9 +568,15 @@ impl SignedAuditSnapshot {
     }
 
     /// エントリ列のハッシュ連鎖・連番・Merkle root を再計算して検証する。
+    /// 単体呼び出しでも未サポート版を受理しないよう、先頭でバージョンを検証する。
     pub fn verify_chain(&self) -> Result<(), ForensicError> {
+        if self.version != AUDIT_SNAPSHOT_VERSION {
+            return Err(ForensicError::InvalidSignature(format!(
+                "unsupported audit snapshot version: {}",
+                self.version
+            )));
+        }
         let mut expected_prev = "GENESIS_HASH".to_string();
-        let mut hashes = Vec::with_capacity(self.entries.len());
         for (index, entry) in self.entries.iter().enumerate() {
             let expected_id = index as i64 + 1;
             if entry.log_id != expected_id {
@@ -585,7 +598,6 @@ impl SignedAuditSnapshot {
                 )));
             }
             expected_prev = entry.entry_hash.clone();
-            hashes.push(entry.entry_hash.clone());
         }
         let digest = compute_audit_chain_digest(
             &self
@@ -614,6 +626,19 @@ pub fn sign_audit_snapshot(
             "unsupported audit snapshot version: {}",
             snapshot.version
         )));
+    }
+    // reasons_masked=true で平文 reason が残っていると、検証側は entry_hash の
+    // 再計算をスキップするため検出できない。署名時に拒否する。
+    // governance_entries は既存の正常スナップショットに平文が残り得るため対象外。
+    if snapshot.reasons_masked {
+        for entry in &snapshot.entries {
+            if !reason_is_masked(&entry.reason) {
+                return Err(ForensicError::InvalidSignature(format!(
+                    "unmasked entry reason with reasons_masked=true at log_id={}",
+                    entry.log_id
+                )));
+            }
+        }
     }
     let key = PrivateKey::from_pkcs8_pem(private_key_pem)
         .map_err(|e| ForensicError::Crypto(format!("Invalid private key: {e}")))?;
@@ -1157,6 +1182,55 @@ mod tests {
         }
     }
 
+    /// reasons_masked=true なのに平文 reason が残るスナップショットは署名時に拒否する。
+    #[test]
+    fn sign_audit_snapshot_rejects_plaintext_reason_when_masked() {
+        let (private_pem, _) = test_key_pair();
+        let entries = build_chained_entries(2);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let mut snapshot = SignedAuditSnapshot {
+            version: AUDIT_SNAPSHOT_VERSION,
+            reasons_masked: true,
+            entries,
+            governance_entries: Vec::new(),
+            merkle_root: merkle_root_of(&hashes),
+            signature: String::new(),
+        };
+        assert!(
+            snapshot
+                .entries
+                .iter()
+                .any(|entry| !reason_is_masked(&entry.reason)),
+            "control: plaintext reasons must be present for this check"
+        );
+
+        let error = sign_audit_snapshot(&snapshot, &private_pem)
+            .expect_err("plaintext reason with reasons_masked=true must be rejected");
+        assert!(
+            matches!(&error, ForensicError::InvalidSignature(message)
+                if message.contains("reasons_masked=true") && message.contains("log_id=1")),
+            "expected masked-flag inconsistency error, got {error:?}"
+        );
+
+        // 対照: mask_reason でマスクし直せば署名でき、連鎖検証も通る。
+        // entry_hash は据え置き（reasons_masked=true では再計算しない）。
+        for entry in &mut snapshot.entries {
+            entry.reason = mask_reason(&entry.reason, false);
+        }
+        snapshot.signature =
+            sign_audit_snapshot(&snapshot, &private_pem).expect("masked reasons must be signable");
+        assert!(snapshot.verify_chain().is_ok());
+
+        // 空文字（mask_reason("") の結果）も正当なマスク済み値として受理する。
+        let mut empty_reason = snapshot.clone();
+        empty_reason.entries[1].reason = String::new();
+        empty_reason.signature = String::new();
+        assert!(sign_audit_snapshot(&empty_reason, &private_pem).is_ok());
+    }
+
     /// 監査対象 4: verify_hash は保存済み entry_hash と v2 再計算値の一致だけを判定する。
     #[test]
     fn audit_snapshot_entry_verify_hash_accepts_match_and_rejects_mismatch() {
@@ -1308,6 +1382,28 @@ mod tests {
         assert_signature_is_valid(&snapshot, &public_der);
         assert_chain_error(&snapshot, "Merkle root mismatch");
         assert!(verify_audit_snapshot(&snapshot, &public_der).is_err());
+    }
+
+    /// verify_chain を単体で呼んでも未サポート版は拒否される。
+    #[test]
+    fn verify_chain_rejects_unsupported_version() {
+        let (private_pem, _) = test_key_pair();
+        let entries = build_chained_entries(1);
+        let hashes: Vec<String> = entries
+            .iter()
+            .map(|entry| entry.entry_hash.clone())
+            .collect();
+        let valid = resign(entries, merkle_root_of(&hashes), &private_pem);
+        assert!(
+            valid.verify_chain().is_ok(),
+            "control: v3 chain must be valid"
+        );
+
+        for version in [0, 2, AUDIT_SNAPSHOT_VERSION + 1, 999] {
+            let mut snapshot = valid.clone();
+            snapshot.version = version;
+            assert_chain_error(&snapshot, "unsupported audit snapshot version");
+        }
     }
 
     #[test]
