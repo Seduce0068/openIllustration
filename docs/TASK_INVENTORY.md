@@ -1,7 +1,7 @@
 ---
 type: Reference
 title: "タスク棚卸し（残タスク・未決事項）"
-description: "openIllustration の現状（master 5d9f5bd, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
+description: "openIllustration の現状（master 0d71017, 2026-11-18 再確認）を基に、安全第一で洗い出した残タスク・未決事項・検証ギャップ。"
 tags:
   - tasks
   - backlog
@@ -13,14 +13,29 @@ generated:
   at: "2026-11-18T03:49:23+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T10:43:24+09:00"
+  at: "2026-11-18T11:31:17+09:00"
 status: current
 ---
 
 ## 1. 前提（確認時点の事実）
 
-- 確認: 2026-11-18T10:43:24+09:00、ブランチ `master` の HEAD は `5d9f5bd`（upstream と一致）。
-  前回確認時（`c766025`）には本監査対応の未コミット差分があったが、現時点では master へ反映済み。
+- 確認: 2026-11-18T11:31:17+09:00、ブランチ `master` の HEAD は `0d71017`（`origin/master` と一致）。
+  前回確認時点 `5d9f5bd` 以降の変更は master へ反映済み。
+- 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 追加確認）:
+  - [対応済み 230ae79] 監査スナップショット検証の整理: `verify_chain` の未使用 hashes 蓄積を削除し
+    Merkle 経路を一本化。`sign_audit_snapshot` が `reasons_masked=true` で平文 `reason` が残る
+    スナップショットを署名時に拒否（`governance_entries` は対象外）。`verify_chain` にも
+    `AUDIT_SNAPSHOT_VERSION` の version チェックを追加。56テスト成功、mutation で検出力を確認
+    （[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+  - [対応済み e25a644] バックアップ時の生存ロック検査: `backup_db` がソース/出力 DB の
+    `instance.lock` を PID+starttime で検査し、生存インスタンスなら `VACUUM INTO` を拒否。
+    判定不能時は fail-closed、stale は許可。7テスト追加、実 CLI で拒否を実証
+    （[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md),
+    [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+  - [対応済み 0d71017] OIDC pending の起動時・周期 sweep: `purge_expired_pending` が削除件数を返し
+    `register` / `take` / `sweep` で共有。`run_moderation_finalizer` へ `OidcState` を配線し
+    起動時と周期 tick で回収。3テスト追加、配線 mutation で検出を確認
+    （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、

@@ -33,6 +33,9 @@ generated:
   `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
   上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
   未認証で呼べる開始エンドポイントからのメモリ枯渇を防ぐ境界であり、環境変数ではない。
+  回収は認証リクエスト時だけに限らず、`run_moderation_finalizer` が起動時と周期 tick
+  （`MODERATION_FINALIZE_INTERVAL_SECS`）にも `sweep_expired_pending` を呼ぶため、
+  認証リクエストが来ないアイドル中も期限切れ `pending` は蓄積しない。
 
 ## 2. コンテンツ・個人データ
 
@@ -103,6 +106,12 @@ generated:
   のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。リモート DB ではこの排他が使えないため警告のみとし、
   単一ライター運用を契約とする。バックアップは `backup_db`（`VACUUM INTO`・上書き拒否）で取得し、`verify_backup` と `verify_audit_log` で検証する。手順は
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
+- バックアップ運用では、サーバー稼働中は `backup_db` が拒否される。ソース DB（ローカルの場合）と
+  出力先 DB の `<db>.instance.lock` を検査し、生存サーバーが保持していれば `refusing backup`
+  で失敗する（判定不能時も拒否、stale ロックのみ許可、fail-closed）。cron / systemd の定期実行は
+  サーバー停止中（メンテナンス窓）に行う。`scripts/backup-rotate.sh` はサーバーを停止せず既定どおり
+  `backup_db` を呼ぶため、稼働中に実行すると拒否されて失敗する（取得→検証→ローテーションの既定動作）。
+  ロック拒否時の対処は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
 - `payment_orders.derivation_index` には migration 003 の部分 UNIQUE インデックス
   （`WHERE derivation_index IS NOT NULL`）が適用済みである。固定受取アドレスの注文
   （`derivation_index IS NULL`）は制約対象外とし、xprv 設定時は注文ごとの受取先

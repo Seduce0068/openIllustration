@@ -168,6 +168,14 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 9. 実デジタル認証サービスへの接続は、クライアントID取得後に検証する。
    現行のテストはローカルOPモックでフローと検証項目を確認する。
 
+期限切れ `pending` の回収は認証リクエスト時の `register` / `take` だけに依存しない。
+`purge_expired_pending` が削除件数を返すようになり、`server/src/lib.rs` の
+`run_moderation_finalizer` が起動時と周期 tick（`MODERATION_FINALIZE_INTERVAL_SECS`）に
+`OidcState::sweep_expired_pending` を呼び、`OidcState` をワーカーへ配線した。
+ロック取得失敗時は best-effort として 0 を返す。
+認証リクエストが来ないアイドル中でも古い `pending` が残らないことを
+起動時 sweep・周期 sweep・フロー維持の3テストで確認済み（配線の mutation で検出）。
+
 ## 3. コンテンツ処理
 
 ### 投稿 `POST /content/upload`
@@ -326,6 +334,22 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
 読み出され、後方互換。期限切れ判定は判定側の時刻比較で行い、`is_banned` フラグ自体は履歴として保持する。
 ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
+### バックアップ（`backup_db`）の生存ロック検査
+
+- `backup_db` は `VACUUM INTO` で一貫性のあるスナップショットを作成し、既存ファイルの上書きを拒否する。
+  取得後にテーブル数と `_migrations` 台帳を検証する（手順は
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+- `VACUUM INTO` はインスタンスロックを取得しないため、サーバー起動時（特にマイグレーション実行中）
+  と競合すると BUSY や旧スナップショットになる恐れがある。開始前に生存ロック検査を行う。
+- 検査対象はソース DB（`DATABASE_URL` がローカル DB を指す場合）と出力先 DB の双方で、
+  それぞれ `<db path>.instance.lock` を調べる。ロックが無い、または PID が存在しない
+  stale ロックは続行を許可する。
+- ロック内容の PID とプロセス開始時刻（`/proc/<pid>/stat` の field 22）を照合し、PID 再利用を防ぐ。
+  旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
+- 生存サーバーがロックを保持する場合は `refusing backup: a live server instance holds the instance lock`
+  で拒否する。`/proc` が読めない等で判定不能な場合も「生存」として扱い拒否する（fail-closed）。
+  7テストを追加し、実 CLI で拒否を実証済み。
+
 ## 6. 監査ハッシュ
 
 - 新規エントリは `AuditLogEntry::calculate_hash_v2` で生成する。CID、状態、主体、理由、前エントリーハッシュに長さプレフィックスを付け、ドメイン分離ラベルを付与した上でSHA-256化するため、
@@ -334,6 +358,15 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
 - `sign_audit_export` は件数と Merkle root を RSA 署名したスナップショットを生成し、`verify_audit_export` は公開鍵 DER のみで署名・完全性を検証する（ADR-0005、
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。これは運営者が公開したことを示すに留まり、DB外アンカーや追記専用媒体の代替ではない。
+- マスク整合チェック: `sign_audit_snapshot` は `reasons_masked=true` のとき各 `entry.reason` が
+  `mask_reason` のマスク済み形式（空文字または `[redacted:` 接頭辞）であることを検査し、
+  平文が残るスナップショットは署名時に `InvalidSignature`（`unmasked entry reason with
+  reasons_masked=true at log_id=...`）で拒否する。マスク時は検証側が `entry_hash` を
+  再計算しないため署名時点で防ぐ（fail-closed）。`governance_entries` は既存スナップショットに
+  平文が残り得るため対象外。
+- バージョン検証: `verify_chain` は単体呼び出しでも先頭で `AUDIT_SNAPSHOT_VERSION`（現行 3）を
+  検査し、不一致なら `unsupported audit snapshot version` で拒否する。署名・エクスポート検証に
+  加え連鎖検証にも適用し、未サポート版の受理をふさぐ。
 - DB外アンカー、信用できる第三者による独立検証、鍵の HSM 管理とローテーションは未実装。
 - 目的はDB内の連鎖整合性チェック補助に限定し、改ざん不能・否認防止を主張しない。root の外部保存先は各デプロイの運用者が決める。
 

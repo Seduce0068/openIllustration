@@ -20,6 +20,8 @@ generated:
 - `DATABASE_URL` はローカル DB のパス（`file:` プレフィックス）を指す。
 - バックアップ先ディレクトリは事前に存在し、出力ファイルは**存在しない**こと。
   既存ファイルは上書きしない（安全側）。
+- バックアップ取得時はサーバーが停止していること。生存 `instance.lock` を検出した
+  `backup_db` は `VACUUM INTO` を実行せず拒否する（下記「サーバー稼働中のロック拒否」を参照）。
 
 ## バックアップ取得
 
@@ -36,7 +38,8 @@ cargo run -p server --bin backup_db -- \
 （`verify_backup` はさらに `PRAGMA integrity_check` も実施する二段構え）。
 
 定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
-古い世代の削除を一行で行う（server 起動中でも実行可）:
+古い世代の削除を一行で行う（サーバー停止中に実行する。稼働中は下記のとおり
+`backup_db` がロックを検出して拒否する）:
 
 ```bash
 # Kubuntu / cron 等から実行（BIN_DIR はビルド済みバイナリのディレクトリ）
@@ -89,6 +92,25 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 成功時無通知・失敗時通知・不正パス拒否の3ケースを実確認済み。
 `bash -n` / `shellcheck` / `shfmt -d` に加え、実 DB で古い世代3件が削除され
 新しい世代が保持されることを確認済み。
+
+## サーバー稼働中のロック拒否
+
+`backup_db` は `VACUUM INTO` の前に、ソース DB（`DATABASE_URL` がローカル DB を指す場合）と
+出力先 DB のそれぞれについて `<db path>.instance.lock` を検査する。生存サーバーがロックを
+保持している場合は次のエラーで終了し、バックアップを作成しない（fail-closed）:
+
+```text
+refusing backup: a live server instance holds the instance lock (<lock path>, pid <pid>); stop the server or wait until startup/migration has finished
+```
+
+ロック内容は PID とプロセス開始時刻（`/proc/<pid>/stat` の field 22）で照合し、PID 再利用を防ぐ。
+旧形式（PID のみ）は PID の存在だけで判定する。PID が存在しない stale ロックは続行を許可する。
+`/proc` が読めない等で判定不能な場合も「生存」として扱い拒否する（fail-closed）。
+
+対処: サーバーを停止して（SIGTERM、`/ready` が 503 になることを確認して）から
+`backup_db` または `backup-rotate.sh` を再実行する。`scripts/backup-rotate.sh` は
+サーバーを停止しないため、稼働中に cron / systemd から呼ぶと拒否されて失敗する。
+定期実行はメンテナンス窓などサーバー停止中にスケジュールする。
 
 ## バックアップ検証
 
