@@ -1274,6 +1274,18 @@ async fn run_moderation_finalizer(
         Err(error) => tracing::warn!("Revoked sub purge failed on startup: {}", error),
     }
 
+    // 最初の tick まで待つと再起動直後の期限切れ通報が最大 interval のあいだ
+    // 未確定のまま残るため、起動時にも一度だけ確定処理を走らせる。
+    // シャットダウンが既に通知されている（watch の初期値から変化した）場合は
+    // 停止中の余計な書き込みを避けるため実行しない。
+    if !shutdown.borrow().has_changed() {
+        match finalize_due_reports(db.as_ref()).await {
+            Ok(0) => {}
+            Ok(count) => tracing::info!("Auto-finalized {} moderation report(s) on startup", count),
+            Err(error) => tracing::warn!("Moderation finalization failed on startup: {}", error),
+        }
+    }
+
     loop {
         tokio::select! {
             _ = ticker.tick() => {
@@ -2306,6 +2318,14 @@ pub async fn mod_report(
     Ok(Json(true))
 }
 
+/// 票数集計で「現在 BAN 中の投票者」を除外するための共通述語。
+///
+/// `v` = votes, `u` = users の別名で使う。判定は `ensure_user_not_banned` と同じ:
+/// BAN は `is_banned = TRUE` かつ `ban_until` が NULL（無期限）または未来。
+/// 期限切れ（`ban_until <= now`）は判定上 BAN 解除済みなので票を残す。
+/// `users` に該当行がない投票者も BAN 情報がないため票を残す（LEFT JOIN と併用）。
+const VOTE_NOT_FROM_BANNED_VOTER_SQL: &str = "(u.user_hash IS NULL OR COALESCE(u.is_banned, FALSE) = FALSE OR (u.ban_until IS NOT NULL AND u.ban_until <= datetime('now')))";
+
 /// ADR-0004: 期限到達済みの通報を集計して確定する。
 ///
 /// - 投票期間（7日。`deadline_at` 未設定時は `created_at + 7 days`）が終わる前は
@@ -2313,6 +2333,7 @@ pub async fn mod_report(
 /// - 定足数（3票）未達なら通報を棄却し、コンテンツを `Approved` に戻す。
 /// - 同数は公開継続リスクを避けて `Rejected` とする。
 /// - 確定済み・レビュー対象外の通報は冪等に無視する。
+/// - 投票後に BAN された Juror の票は定足数に算入しない（期限切れ BAN は算入する）。
 pub async fn process_report_conclusion(
     tx: &libsql::Transaction,
     report_id: i64,
@@ -2344,10 +2365,16 @@ pub async fn process_report_conclusion(
         return Ok(());
     }
 
-    // 1. Tally votes
+    // 1. Tally votes（BAN 済み Juror の票は除外。期限切れ BAN の票は残す）
     let mut rows = tx
         .query(
-            "SELECT vote_result, COUNT(*) FROM votes WHERE report_id = ? GROUP BY vote_result",
+            &format!(
+                "SELECT v.vote_result, COUNT(*) AS cnt
+                 FROM votes v
+                 LEFT JOIN users u ON u.user_hash = v.voter_hash
+                 WHERE v.report_id = ? AND {VOTE_NOT_FROM_BANNED_VOTER_SQL}
+                 GROUP BY v.vote_result"
+            ),
             [report_id],
         )
         .await?;
@@ -3287,20 +3314,27 @@ async fn load_mod_governance_counts(
 
 /// 確定通報を月・定足数未達フラグ別に集計する。
 /// reason / target_cid / voter_hash は SELECT せず、投票数（COUNT）だけを使う。
+/// 定足数判定は `process_report_conclusion` と同じく BAN 中投票者の票を除外する。
 async fn load_mod_conclusion_counts(
     db: &Connection,
 ) -> Result<Vec<ModConclusionCountRow>, AppError> {
     let mut rows = db
         .query(
-            "SELECT substr(r.concluded_at, 1, 7) AS month,
-                    CASE WHEN COALESCE(v.vote_count, 0) < 3 THEN 1 ELSE 0 END AS quorum_not_met,
-                    COUNT(*) AS cnt
-             FROM reports r
-             LEFT JOIN (
-                 SELECT report_id, COUNT(*) AS vote_count FROM votes GROUP BY report_id
-             ) v ON v.report_id = r.report_id
-             WHERE r.concluded_at IS NOT NULL
-             GROUP BY month, quorum_not_met",
+            &format!(
+                "SELECT substr(r.concluded_at, 1, 7) AS month,
+                        CASE WHEN COALESCE(vc.vote_count, 0) < 3 THEN 1 ELSE 0 END AS quorum_not_met,
+                        COUNT(*) AS cnt
+                 FROM reports r
+                 LEFT JOIN (
+                     SELECT v.report_id, COUNT(*) AS vote_count
+                     FROM votes v
+                     LEFT JOIN users u ON u.user_hash = v.voter_hash
+                     WHERE {VOTE_NOT_FROM_BANNED_VOTER_SQL}
+                     GROUP BY v.report_id
+                 ) vc ON vc.report_id = r.report_id
+                 WHERE r.concluded_at IS NOT NULL
+                 GROUP BY month, quorum_not_met"
+            ),
             (),
         )
         .await?;

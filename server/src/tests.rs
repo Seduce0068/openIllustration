@@ -7606,6 +7606,184 @@ async fn test_unban_clears_ban_until() {
     assert!(ban_until.is_none(), "UNBAN で ban_until もクリアされる");
 }
 
+// ---- BAN 済み Juror の票を定足数集計から除外する（敵対的レビュー指摘の修正） ----
+
+#[derive(Debug)]
+struct ConclusionOutcome {
+    status: String,
+    reason: String,
+    stored_votes: i64,
+}
+
+/// 投票後に Juror を BAN して確定させ、結果・監査理由・保存済み票数を返す。
+/// `ban_until_modifier`: None = 無期限 BAN, "+1 day" = 有効な期限付き, "-1 day" = 期限切れ。
+async fn conclude_after_banning_juror(
+    vote_results: &[&str],
+    banned_index: usize,
+    ban_until_modifier: Option<&str>,
+) -> ConclusionOutcome {
+    let (app, db) = setup_mod_app().await;
+    let mut jurors = Vec::new();
+    for result in vote_results {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, result, &juror, &key).await,
+            StatusCode::OK,
+            "vote must be accepted before the juror is banned"
+        );
+        jurors.push(juror);
+    }
+
+    let banned = &jurors[banned_index];
+    match ban_until_modifier {
+        Some(modifier) => {
+            db.execute(
+                "UPDATE users SET is_banned = TRUE, ban_until = datetime('now', ?) WHERE user_hash = ?",
+                [modifier.to_string(), banned.clone()],
+            )
+            .await
+            .unwrap();
+        }
+        None => {
+            db.execute(
+                "UPDATE users SET is_banned = TRUE, ban_until = NULL WHERE user_hash = ?",
+                [banned.clone()],
+            )
+            .await
+            .unwrap();
+        }
+    }
+
+    force_conclude(&db, 1).await;
+
+    let mut rows = db
+        .query(
+            "SELECT reason FROM content_audit_log
+             WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'
+             ORDER BY log_id DESC LIMIT 1",
+            (),
+        )
+        .await
+        .unwrap();
+    let reason: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'",
+            (),
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let stored_votes: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+
+    ConclusionOutcome {
+        status,
+        reason,
+        stored_votes,
+    }
+}
+
+#[tokio::test]
+async fn test_vote_after_ban_excluded_from_conclusion_tally() {
+    // 投票後に無期限 BAN された Juror の票は集計から除外される。
+    // BAN 前なら 3票（Reject 2 > Approve 1）で Rejected になるが、
+    // 除外後は 2票で定足数未達 → Approved に復帰する。
+    let outcome = conclude_after_banning_juror(&["Approve", "Reject", "Reject"], 1, None).await;
+    assert_eq!(outcome.stored_votes, 3, "票自体は DB に保存されていること");
+    assert_eq!(
+        outcome.status, "Approved",
+        "BAN 済み票を除くと定足数未達になること"
+    );
+    assert!(
+        outcome.reason.contains("quorum not met: 2 votes (need 3)"),
+        "BAN 済み票が集計から除外されていること: {}",
+        outcome.reason
+    );
+}
+
+#[tokio::test]
+async fn test_three_votes_with_one_banned_fails_quorum() {
+    // 3票中1票が有効期限内の BAN（未来の ban_until）→ 実効2票で定足数未達。
+    let outcome =
+        conclude_after_banning_juror(&["Reject", "Reject", "Reject"], 2, Some("+1 day")).await;
+    assert_eq!(outcome.stored_votes, 3, "3票とも保存されていること");
+    assert_eq!(
+        outcome.status, "Approved",
+        "定足数未達なら Approved に復帰すること"
+    );
+    assert!(
+        outcome.reason.contains("quorum not met: 2 votes (need 3)"),
+        "有効な期限付き BAN も除外されること: {}",
+        outcome.reason
+    );
+}
+
+#[tokio::test]
+async fn test_expired_ban_vote_still_counted_in_conclusion() {
+    // ban_until が過去の BAN は判定上解除済み → 3票すべて集計され Rejected。
+    let outcome =
+        conclude_after_banning_juror(&["Reject", "Reject", "Reject"], 0, Some("-1 day")).await;
+    assert_eq!(outcome.stored_votes, 3);
+    assert_eq!(
+        outcome.status, "Rejected",
+        "期限切れ BAN の票は引き続き集計されること"
+    );
+    assert!(
+        outcome.reason.contains("3 Reject"),
+        "全3票が集計されていること: {}",
+        outcome.reason
+    );
+    assert!(
+        !outcome.reason.contains("quorum not met"),
+        "期限切れ BAN で定足数未達になってはいけない: {}",
+        outcome.reason
+    );
+}
+
+#[tokio::test]
+async fn test_mod_stats_quorum_excludes_banned_juror_votes() {
+    // /mod/stats の定足数判定も process_report_conclusion と同じ基準に揃える。
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    let mut jurors = Vec::new();
+    for _ in 0..3 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+        jurors.push(juror);
+    }
+    db.execute(
+        "UPDATE users SET is_banned = TRUE, ban_until = NULL WHERE user_hash = ?",
+        [jurors[0].clone()],
+    )
+    .await
+    .unwrap();
+    // 月次集計は concluded_at を見るため、確定済みとしてマークする。
+    db.execute(
+        "UPDATE reports SET concluded_at = '2026-01-01 00:00:00' WHERE report_id = 1",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = send_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let stats: ModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(stats.totals.concluded, 1);
+    assert_eq!(
+        stats.totals.quorum_not_met, 1,
+        "BAN 済み票を除いた2票は定足数未達として集計されること"
+    );
+}
+
 #[tokio::test]
 async fn test_unpin_records_decision_with_audit() {
     let (app_no_op, _) = setup_mod_app().await;
