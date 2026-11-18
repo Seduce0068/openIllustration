@@ -34,7 +34,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | POST | `/content/:cid/favorite` | Bearer JWT | お気に入り追加。`Claims.sub` のみで識別し、本人の行にだけ作用。重複追加は冪等で200 |
 | DELETE | `/content/:cid/favorite` | Bearer JWT | お気に入り削除。同上の識別。未登録の削除も冪等で200 |
-| GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す。`reason` は `summarize_reason` で要約して返し、`entry_hash` は DB の生値を維持する（ハッシュ検証用） |
+| GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す。最新 MAX_AUDIT_LIST(500) 件を `log_id` 新しい順（DESC）で返し、古い行はAPIから参照不可（完全検証には署名付きエクスポート/DBを使用）。`reason` は `summarize_reason` で要約して返し、`entry_hash` は DB の生値を維持する。レスポンスには `previous_log_hash` が無いため、レスポンス単体でのハッシュ連鎖検証は成立しない（詳細は「6. 監査ハッシュ」） |
 | POST | `/content/upload` | Bearer JWT | コンテンツ投稿。任意の `title` / `description` / `tags` も受理し長さ上限を検査 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
 | POST | `/payments/orders` | Bearer JWT | `cid`・`chain_id`・`wallet_address`・`amount_jpy` を受け取り、コンテンツの提示価格と `amount_jpy` を照合して JPYC注文を作成する。不正CID・不存在/レビュー中コンテンツ・価格不一致は拒否。受取アドレス未設定時は501 |
@@ -430,6 +430,11 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   ハッシュ検証に使う `entry_hash` は DB の生値をそのまま返し、DB の `reason` 全文も変更しない。
   すなわちマスクは API レスポンス時にのみ行い、`calculate_hash_v2` の入力や検証結果には影響しない
   （`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。
+- `get_content_audit` の取得件数は `MAX_AUDIT_LIST`（`server/src/lib.rs`、500件）で制限し、
+  SQL は `ORDER BY log_id DESC LIMIT ?` とする。最新 MAX_AUDIT_LIST(500) 件を log_id 新しい順で
+  返す。古い行はAPIから参照不可、完全検証には署名付きエクスポート/DBを使用。
+  レスポンスには previous_log_hash が無く reason はマスクされるため、レスポンス単体での
+  ハッシュ連鎖検証は成立しない（`get_content_audit_caps_at_max_audit_list`）。
 - `compute_audit_chain_digest` は `log_id` の連続性と entry_hash 列の Merkle root を計算する。`verify_audit_log --expect-root`
   で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
 - `sign_audit_export` は件数と Merkle root を RSA 署名したスナップショットを生成し、`verify_audit_export` は公開鍵 DER のみで署名・完全性を検証する（ADR-0005、

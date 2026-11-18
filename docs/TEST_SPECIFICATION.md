@@ -22,8 +22,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全45件（auth 2 / build-gate 1 / economy 3 /
-  error-paths 6 / export 3 / favorites 5 / integrity 3 / metrics 3 / moderation 10 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全46件（auth 2 / build-gate 1 / economy 3 /
+  error-paths 6 / export 3 / favorites 5 / integrity 4 / metrics 3 / moderation 10 /
   real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   favorites の3件目以降は二重クリック防止と401の再ログイン案内、export の3件目は
   ダウンロード開始失敗時の固定エラー表示を検証する。
@@ -34,15 +34,15 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記40件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
   今回の3CLIへのテスト追加（doctor 24件 / verify_audit_export 17件 / verify_backup 17件）も
-  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は45件のまま変わらない。
-  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は45件のまま。
+  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は46件のまま変わらない。
+  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は46件のまま。
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
    読み取りトランザクションの5件も `server/src/tests.rs` のサーバー側テストであり、
-   E2E 定義数は45件のまま変更なし。
+   E2E 定義数は46件のまま変更なし。
    直近の監査理由マスク1件・投票署名 v2 の4件・一覧の `price` NULL 1件は
    `server/src/tests.rs` のサーバー側テスト、エクスポート解析失敗1件は
    `client/src/lib.rs` のクライアント側単体テストである。いずれも E2E 定義を増やさず、
-   E2E 定義数は45件のまま変更しない。
+   E2E 定義数は46件のまま変更しない。
 
 ## 2. 実装済みテストの概要
 
@@ -68,8 +68,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 | 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 24件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
-| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は45件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
+| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は46件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
 
 ## 3. 必須要件のリリースゲート
 
@@ -116,7 +117,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | EXPORT-09 | `/me/export` の読み取りトランザクション | 12表の全クエリが単一の読み取りトランザクション（`BEGIN DEFERRED`）で実行され、`collect_export_snapshot` の `debug_assert!(!db.is_autocommit())` が発火しない。完了時に `tx.commit()`、エラー時は Drop が ROLLBACK | 実装済み。`me_export_queries_run_inside_read_transaction`（`db.transaction()` / `tx.commit()` を外す mutation で失敗）。下記「エクスポートの読み取りトランザクション検証」を参照 |
-| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は45件のまま |
+| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は46件のまま |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス9件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
@@ -155,6 +156,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | AUDIT-03 | `GET /content/{cid}/audit` の理由マスクと `entry_hash` 維持 | `reason` は `summarize_reason` の結果のみで、メール・URL・4桁数字・DB 全文が漏れない。`entry_hash` は生 `reason` から計算した DB の生値と一致し、DB 全文は不変 | 実装済み（`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。下記「監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証」を参照 |
+| AUDIT-04 | `GET /content/{cid}/audit` の取得上限・新着順と検証限界 | 最新 MAX_AUDIT_LIST(500) 件を `log_id` 新しい順（DESC）で返す。501件投入なら先頭 `log_id=501`・末尾 `2`・全体降順（最古の1は除外）。古い行はAPIから参照不可で、完全検証には署名付きエクスポート/DBを使用。レスポンスには `previous_log_hash` が無く `reason` はマスクされるため、レスポンス単体でのハッシュ連鎖検証は成立しない | 実装済み（`get_content_audit` の `ORDER BY log_id DESC LIMIT ?`）。サーバー側テスト `get_content_audit_caps_at_max_audit_list` が501件投入・500件返却・先頭501・末尾2・降順を検証。E2E は `e2e/tests/integrity.spec.ts` の `/audit` モック（log_id DESC の3件）で FORENSIC_TIMELINE の表示順が新しい順であることを検証。完全な連鎖検証は AUDIT-01（署名付きエクスポート/DB）を参照 |
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。下記同節を参照 |
@@ -174,7 +176,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 TZ の強制変更はプロセス環境を汚さないため、純粋関数 `today_for_policy` / `validate_age_at` に
 基準時刻と TZ を明示して検証する。未知の TZ は UTC へフォールバックする分岐も含める。
 年齢数値の判定は `/auth/verify` の `validate_age` に委ね、callback / refresh では設定エラーのみを
-403 へ変換する。これらはサーバー側テストであり、E2E 定義数は45件のまま変わらない。
+403 へ変換する。これらはサーバー側テストであり、E2E 定義数は46件のまま変わらない。
 
 ### エクスポートの読み取りトランザクション検証（EXPORT-09〜10 / EXPORT-12）
 
@@ -189,12 +191,12 @@ R5-04 の12表エクスポートを単一時点のスナップショットにす
 | `me_export_snapshot_consistent_under_concurrent_ban_write` | 一時 DB の2接続で、書き込み側の `BEGIN IMMEDIATE` 未コミット BAN 更新・監査挿入がエクスポート結果に現れない（`is_banned: false`、BAN 監査なし）。完了後に書き込みを `COMMIT` |
 | `me_export_waits_for_concurrent_write_transaction` | 外部ライターが `write_lock` と BEGIN を保持している間は完了せず（200ms タイムアウト）、解放後に成功する。`begin_write_tx` を素の `db.transaction()` に戻す mutation で失敗 |
 
-これらはサーバー側テスト3件のみで、E2E 定義数は45件のまま変わらない。
+これらはサーバー側テスト3件のみで、E2E 定義数は46件のまま変わらない。
 
 ### 期限再判定とトランザクション直列化の回帰（PAY-06〜08）
 
 共有 `Connection` の BEGIN 直列化と期限判定の回帰テストを `server/src/tests.rs` に追加した。
-すべてサーバー側テストであり、E2E 定義数は45件のまま変わらない。
+すべてサーバー側テストであり、E2E 定義数は46件のまま変わらない。
 
 | テスト関数 | 検証する test oracle |
 | --- | --- |
@@ -267,7 +269,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
-今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は45件のまま
+今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は46件のまま
 変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
 判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 
@@ -547,7 +549,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 ### 監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証（AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11）
 
 直近の未コミット変更7件のうち6件は `server/src/tests.rs`、1件は `client/src/lib.rs` の
-クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は45件のまま。
+クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は46件のまま。
 
 #### AUDIT-03: 監査理由の表示マスクと entry_hash の生値維持
 
@@ -590,6 +592,24 @@ JOIN / WHERE / ORDER には影響しない。
 （`{"version":1,...}`）で従来どおり `エクスポート完了: 1 件のレコードをダウンロードしました。`
 が返ることを検証する。エラー時は `export-error` のみへ表示し `export-status` は空のまま。
 
+### 監査一覧の上限・新着順の検証（AUDIT-04）
+
+`get_content_audit`（`GET /content/{cid}/audit`）は全行を `Vec` 化せず、SQL の
+`ORDER BY log_id DESC LIMIT ?` で最新 `MAX_AUDIT_LIST`（500件）だけを返す。
+レスポンスは `previous_log_hash` を含まず `reason` は `summarize_reason` でマスクされるため、
+レスポンス単体ではハッシュ連鎖を検証できない。古い行を含む完全検証は AUDIT-01 の
+署名付きエクスポートまたは DB 直接読取りを使用する（DB 内ハッシュ連鎖は第三者検証可能な監査ではない）。
+
+| テスト | 配置 | 検証する test oracle |
+| --- | --- | --- |
+| `get_content_audit_caps_at_max_audit_list` | `server/src/tests.rs` | `MAX_AUDIT_LIST == 500`。`log_id` 1〜501 を投入すると返却件数は500、先頭は501、末尾は2、全 `log_id` が `(2..=501).rev()` の降順（最古の1は除外）。`ORDER BY` を ASC へ戻すと失敗 |
+| `test_get_content_audit_masks_reason_but_preserves_entry_hash` | `server/src/tests.rs` | 表示用 `reason` のみマスクし `entry_hash` は DB の生値を維持（AUDIT-03、既存の回帰） |
+| `/audit` モックの FORENSIC_TIMELINE E2E | `e2e/tests/integrity.spec.ts` | `log_id` DESC の3件を返すモックで、`content-card` 内の FORENSIC_TIMELINE の `Reason:` 行が新しい順（3→2→1）に並ぶこと |
+
+サーバー側テストは `server/src/tests.rs`、表示順の確認は `e2e/tests/integrity.spec.ts` に置く。
+既存のハッシュ連鎖検証（`test_audit_log_chain_integrity` 等）は DB を直接読むため、
+LIMIT 追加の影響を受けず、署名付きエクスポートの改ざん検証は AUDIT-01 が継続して担う。
+
 ## 4. 実行コマンド
 
 ```bash
@@ -614,6 +634,7 @@ cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
 cargo test -p common summarize_reason   # 要約の単体テスト（PII除去・境界・日本語）
 cargo test -p server list_reports       # GET /mod/reports の要約適用・全文非漏えいの回帰のみ
 cargo test -p server test_get_content_audit_masks_reason_but_preserves_entry_hash   # AUDIT-03 監査理由マスクと entry_hash 維持
+cargo test -p server get_content_audit_caps_at_max_audit_list   # AUDIT-04 監査一覧の上限・新着順（501件投入で先頭501・末尾2・降順）
 cargo test -p server moderation_vote_message_v2   # MOD-12 メッセージの全フィールド束縛
 cargo test -p server test_vote_v2_signature_accepted   # MOD-12 正常系の受理
 cargo test -p server test_vote_rejects_legacy_v1_signature   # MOD-12 旧形式署名の401拒否
