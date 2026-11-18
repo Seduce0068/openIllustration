@@ -1367,6 +1367,26 @@ where
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
     let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
+    // モーダル化: ダイアログ内の初期フォーカス先兼 Tab トラップの周回先。
+    let audit_close_ref = NodeRef::<leptos::html::Button>::new();
+
+    // Show が true になった後に CLOSE へフォーカスを移す。
+    // <Show> が DOM を挿入するのを待つため requestAnimationFrame で 1 フレーム遅らせる。
+    Effect::new(move |_| {
+        if !show_audit.get() {
+            return;
+        }
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let close_ref = audit_close_ref;
+        let focus_close = Closure::once_into_js(move |_: f64| {
+            if let Some(close) = close_ref.get() {
+                let _ = close.focus();
+            }
+        });
+        let _ = window.request_animation_frame(focus_close.unchecked_ref());
+    });
 
     let token_stored = StoredValue::new(token);
     // For は同じ cid の行を作り直さないため、トグル状態はカード内で保持し、
@@ -1527,6 +1547,16 @@ where
                     if let Some(toggle) = audit_toggle_ref.get() {
                         let _ = toggle.focus();
                     }
+                    return;
+                }
+                // モーダル中の Tab トラップ。パネル内のインタラクティブ要素は
+                // CLOSE ボタンのみなので、Tab / Shift+Tab を CLOSE へ戻し、
+                // 背後のトグルやカード要素へフォーカスが抜けないようにする。
+                if ev.key() == "Tab" && show_audit.get() {
+                    ev.prevent_default();
+                    if let Some(close) = audit_close_ref.get() {
+                        let _ = close.focus();
+                    }
                 }
             }
             class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
@@ -1615,6 +1645,7 @@ where
                 <Show when=move || show_audit.get() fallback=|| ()>
                     <div id="forensic-timeline"
                         role="dialog"
+                        aria-modal="true"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
@@ -1649,6 +1680,7 @@ where
                                     let _ = toggle.focus();
                                 }
                             }
+                            node_ref=audit_close_ref
                             class="mt-4 w-full py-2 border border-white/20 text-[8px] hover:bg-white/10">
                             "CLOSE"
                         </button>
@@ -1819,6 +1851,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         class="absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0 clip-[rect(0,0,0,0)]"
                         id="file-upload" />
                     <label for="file-upload"
+                        role="button"
                         tabindex="0"
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
                             if is_file_picker_activation_key(&ev.key()) {
