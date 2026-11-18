@@ -53,6 +53,22 @@ fn parse_args() -> anyhow::Result<Args> {
     parse_args_from(std::env::args())
 }
 
+/// 必須引数（--backup / --target）の欠落を検証する。
+/// argv の解釈（parse_args_from）と分離したことで、必須性の判定を直接テストできる。
+/// --help は必須引数なしで許可する（run 側で先に処理される）。
+fn validate_args(args: &Args) -> anyhow::Result<()> {
+    if args.help {
+        return Ok(());
+    }
+    if args.backup.is_none() {
+        return Err(anyhow!("--backup is required"));
+    }
+    if args.target.is_none() {
+        return Err(anyhow!("--target is required"));
+    }
+    Ok(())
+}
+
 fn sidecar_of(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_os_string();
     name.push(suffix);
@@ -203,8 +219,9 @@ async fn main() -> anyhow::Result<()> {
         print_help();
         return Ok(());
     }
-    let backup = PathBuf::from(args.backup.ok_or_else(|| anyhow!("--backup is required"))?);
-    let target = PathBuf::from(args.target.ok_or_else(|| anyhow!("--target is required"))?);
+    validate_args(&args)?;
+    let backup = PathBuf::from(args.backup.expect("validated by validate_args"));
+    let target = PathBuf::from(args.target.expect("validated by validate_args"));
 
     if !backup.exists() {
         return Err(anyhow!("backup file does not exist: {}", backup.display()));
@@ -476,11 +493,38 @@ mod tests {
 
     #[test]
     fn parse_args_requires_both_paths() {
+        // parse_args_from は argv の解釈だけを行い、必須性は validate_args が判定する。
+        // --backup のみ → --target が必須。
+        let backup_only = parse_args_from(["restore_db", "--backup", "b"].map(String::from))
+            .expect("backup-only args must parse");
+        let error = validate_args(&backup_only).expect_err("--target must be required");
         assert!(
-            parse_args_from(["restore_db", "--backup", "b"].map(String::from))
-                .unwrap()
-                .target
-                .is_none()
+            error.to_string().contains("--target is required"),
+            "{error:#}"
         );
+
+        // --target のみ → --backup が必須。
+        let target_only = parse_args_from(["restore_db", "--target", "t"].map(String::from))
+            .expect("target-only args must parse");
+        let error = validate_args(&target_only).expect_err("--backup must be required");
+        assert!(
+            error.to_string().contains("--backup is required"),
+            "{error:#}"
+        );
+
+        // 両方欠落 → 先に検査される --backup が必須。
+        let neither = parse_args_from(["restore_db"].map(String::from))
+            .expect("no-path args must still parse");
+        let error = validate_args(&neither).expect_err("--backup must be required");
+        assert!(
+            error.to_string().contains("--backup is required"),
+            "{error:#}"
+        );
+
+        // 両方揃い → 受理。
+        let both =
+            parse_args_from(["restore_db", "--backup", "b", "--target", "t"].map(String::from))
+                .expect("complete args must parse");
+        assert!(validate_args(&both).is_ok());
     }
 }

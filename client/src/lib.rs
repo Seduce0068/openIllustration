@@ -981,7 +981,8 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let on_favorite_changed = move || set_refresh_counter.update(|n| *n += 1);
 
     let token_stored = StoredValue::new(token);
-    let user_hash_stored = StoredValue::new(user_hash);
+    // ContentViewer への受け渡しを廃止したため未使用。StoredValue 自体は残す方針のため保持する。
+    let _user_hash_stored = StoredValue::new(user_hash);
 
     // レスポンスの世代カウンタ。入力変化ごとに進め、古い応答は捨てる。
     // Leptos の StoredValue は SyncStorage を要求するため、ここでは
@@ -1196,7 +1197,6 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                                 content_type=item.content_type.clone()
                                 price=item.price
                                 token=token_stored.get_value()
-                                user_hash=user_hash_stored.get_value()
                                 title=item.title.clone()
                                 description=item.description.clone()
                                 tags=item.tags.clone()
@@ -1340,7 +1340,6 @@ fn ContentViewer<F>(
     content_type: String,
     price: i64,
     token: String,
-    #[allow(unused_variables)] user_hash: String,
     title: String,
     description: String,
     tags: Vec<String>,
