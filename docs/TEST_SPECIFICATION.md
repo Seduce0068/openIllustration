@@ -27,7 +27,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   favorites の3件目以降は二重クリック防止と401の再ログイン案内、export の3件目は
   ダウンロード開始失敗時の固定エラー表示を検証する。
-  moderation の9件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
+  moderation の10件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
   2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）の回帰である。
   integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
   upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
@@ -617,7 +617,7 @@ cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題あ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
-cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック + 投票一覧エラー E2E（9件）
+cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック + 投票一覧エラー・集計解析エラー E2E（10件）
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
 cd e2e && npm test -- metrics.spec.ts   # MET-01 中立化URL件数 E2E のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
@@ -735,7 +735,7 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    前回の通知・エラーが消えること（`vote-error` / `vote-notice` の `toHaveCount(0)`）と、
    `POST /mod/vote` がちょうど3回であることを確認する。
 
-実行例は `cd e2e && npm test -- moderation.spec.ts`。chromium で9件すべて pass を確認済み。
+実行例は `cd e2e && npm test -- moderation.spec.ts`。chromium で10件すべて pass を確認済み。
 
 ### E2E 投票一覧エラーシナリオ（REPORTS-ERR-01〜02）
 
@@ -758,7 +758,7 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 エラーをクリアする。JSON 解析失敗は固定文言 `投票一覧の解析に失敗しました。` を
 表示し、解析エラーの詳細は出さない。この文言はクライアント側単体テスト
 `reports_error_uses_only_fixed_phrases` で担保する。実行例は
-`cd e2e && npm test -- moderation.spec.ts`。chromium で9件すべて pass を確認済み。
+`cd e2e && npm test -- moderation.spec.ts`。chromium で10件すべて pass を確認済み。
 
 ### E2E エクスポートシナリオ（R5-04）
 
