@@ -48,6 +48,13 @@ where
                         .ok_or_else(|| anyhow!("--expect-root requires a value"))?,
                 );
             }
+            // argv は ps 等で公開される。トークン値は受け付けず、
+            // エラーにも値をエコーしない（秘密値を出力しない）。
+            "--database-token" => {
+                return Err(anyhow!(
+                    "--database-token is not accepted; set DATABASE_TOKEN in the environment instead"
+                ));
+            }
             other => return Err(anyhow!("unknown argument: {other}")),
         }
     }
@@ -458,6 +465,17 @@ mod tests {
             error.to_string().contains("unknown argument: --bogus"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn database_token_argument_is_rejected_without_leaking_value() {
+        const SECRET: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        let error =
+            parse_args_from(["verify_audit_export", "--database-token", SECRET].map(String::from))
+                .expect_err("--database-token must never be accepted on argv");
+        let message = error.to_string();
+        assert!(message.contains("DATABASE_TOKEN"), "{message}");
+        assert!(!message.contains(SECRET), "token value leaked: {message}");
     }
 
     #[test]

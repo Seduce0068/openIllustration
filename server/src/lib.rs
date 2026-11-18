@@ -825,7 +825,10 @@ pub async fn run() -> anyhow::Result<()> {
     let allow_mock_auth = std::env::var("ALLOW_MOCK_AUTH")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
-    let oidc = oidc::OidcState::from_env();
+    // `from_env()` は不正な OIDC 設定で panic するため、同じ環境変数読み取りを行う
+    // `from_env_with()` を直接呼び、Err を anyhow エラーとして起動失敗を伝播させる。
+    let oidc = oidc::OidcState::from_env_with(|name| std::env::var(name).ok())
+        .map_err(|message| anyhow::anyhow!("invalid OIDC configuration: {message}"))?;
     let pinata_jwt = std::env::var("PINATA_JWT").ok();
     let config_errors =
         production_config_errors(allow_mock_auth, oidc.is_some(), pinata_jwt.as_deref());
