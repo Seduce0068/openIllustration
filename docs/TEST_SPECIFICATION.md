@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T10:43:36+09:00"
+  at: "2026-11-18T11:43:43+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T10:43:36+09:00"
+  at: "2026-11-18T11:43:43+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -22,9 +22,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全27件（auth 2 / economy 1 /
-  error-paths 4 / export 2 / favorites 1 / integrity 3 / metrics 1 / moderation 4 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全30件（auth 2 / economy 1 /
+  error-paths 4 / export 2 / favorites 1 / integrity 3 / metrics 1 / moderation 7 /
   real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  moderation の7件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）の回帰である。
   integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
   upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
 
@@ -83,9 +84,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で4件 pass、フルスイート27件 pass（webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件を追加した現在は moderation.spec.ts 全7件 pass、フルスイートの定義数は30件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定） |
+| MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"` に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は既存4件と合わせ7件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -243,7 +245,7 @@ cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題あ
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
-cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード E2E のみ
+cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック E2E（7件）
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
 cd e2e && npm test -- metrics.spec.ts   # MET-01 中立化URL件数 E2E のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
@@ -340,6 +342,28 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    メソッド `GET`、パス `/mod/stats`、`Authorization: Bearer mock_jwt_token` であることを
    配列の完全一致で検証する（回数は `statsRequestCount === 2` も確認）。余計な再フェッチや
    未認証リクエストを検出する。
+
+### E2E 投票フィードバックシナリオ（VOTE-FB-01〜03）
+
+`e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` に追加した
+3件が、投票結果の通知・エラー表示を検証する。いずれもモック認証でログインし、
+`GET /mod/reports` に `report_id: 42` の通報1件を返して投票キューを表示した状態から始める。
+文言は `client/src/lib.rs` の `VOTE_NOTICE` と `vote_error_message` の確定値を使用する。
+
+1. VOTE-FB-01: `/mod/vote` を403で応答させ、サーバー本文に非表示確認用の文字列を含める。
+   APPROVE クリック後に `data-testid="vote-error"` が `role="alert"` 付きで表示され、
+   固定文言 `投票に失敗しました (HTTP 403).` になることを確認する。`HTTP 403` を含むことと、
+   サーバー本文が出ないこと、`vote-notice` が出ないことを合わせて検証する。
+   リクエストは `POST /mod/vote`、`Authorization: Bearer mock_jwt_token` の1回のみ。
+2. VOTE-FB-02: `/mod/vote` を `route.abort()` で失敗させる。APPROVE クリック後に
+   `vote-error` へ固定文言 `Network error submitting vote.` が表示され、
+   `vote-notice` が出ないことを確認する。
+3. VOTE-FB-03: 403 → 200 → 403 と応答を切り替えて3回投票する。403 ではエラー、
+   200 では `vote-notice` に `投票を記録しました。` を表示する。各試行で
+   前回の通知・エラーが消えること（`vote-error` / `vote-notice` の `toHaveCount(0)`）と、
+   `POST /mod/vote` がちょうど3回であることを確認する。
+
+実行例は `cd e2e && npm test -- moderation.spec.ts`。chromium で7件すべて pass を確認済み。
 
 ### E2E エクスポートシナリオ（R5-04）
 

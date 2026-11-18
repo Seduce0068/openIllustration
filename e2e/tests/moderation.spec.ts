@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const mockCID = 'QmVPyxX9eKoR9LaKp2Hgt9rVkAffptArJ3zW5hvPLE713h';
@@ -19,6 +19,41 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     created_at: '2026-11-18T00:00:00Z',
     status: 'Pending',
   });
+
+  // client/src/lib.rs の VOTE_NOTICE / vote_error_message で確定した固定文言。
+  // サーバーが返す本文や生のネットワークエラーは画面へ出さない契約を検証する。
+  const voteNoticeText = '投票を記録しました。';
+  const voteForbiddenText = '投票に失敗しました (HTTP 403).';
+  const voteNetworkErrorText = 'Network error submitting vote.';
+
+  // 投票フィードバック用の共通セットアップ。モック認証でログインし、
+  // 投票キューに1件（report_id=42）を表示した状態まで進める。
+  const openModerationWithReport = async (page: Page) => {
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'juror_hash', token: 'mock_jwt_token' })
+      });
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([reportFixture(summarizedReason)]),
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
+  };
 
   test('GOV-01: should report content and transition to Reported status', async ({ page }) => {
     // 認証のモック
@@ -289,6 +324,100 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('VOTE-FB-01: /mod/vote が 403 を返すと vote-error に HTTP 403 を含む固定文言を表示する', async ({ page }) => {
+    const voteRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/vote', async route => {
+      voteRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await openModerationWithReport(page);
+
+    await expect(page.getByTestId('vote-error')).toHaveCount(0);
+    await expect(page.getByTestId('vote-notice')).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
+
+    const voteError = page.getByTestId('vote-error');
+    await expect(voteError).toBeVisible({ timeout: 10000 });
+    await expect(voteError).toHaveAttribute('role', 'alert');
+    await expect(voteError).toHaveText(voteForbiddenText);
+    await expect(voteError).toContainText('HTTP 403');
+    await expect(voteError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    await expect(page.getByTestId('vote-notice')).toHaveCount(0);
+    expect(voteRequests).toEqual([
+      { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('VOTE-FB-02: /mod/vote が network error の場合にも vote-error に固定文言を表示する', async ({ page }) => {
+    await page.route('**/mod/vote', async route => {
+      await route.abort();
+    });
+    await openModerationWithReport(page);
+
+    await expect(page.getByTestId('vote-error')).toHaveCount(0);
+    await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
+
+    const voteError = page.getByTestId('vote-error');
+    await expect(voteError).toBeVisible({ timeout: 10000 });
+    await expect(voteError).toHaveAttribute('role', 'alert');
+    await expect(voteError).toHaveText(voteNetworkErrorText);
+    await expect(page.getByTestId('vote-notice')).toHaveCount(0);
+  });
+
+  test('VOTE-FB-03: 成功時に vote-notice を表示し、新しい試行で通知とエラーをクリアする', async ({ page }) => {
+    let forbidVote = true;
+    const voteRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/vote', async route => {
+      voteRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      if (forbidVote) {
+        await route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'forbidden' }),
+        });
+      } else {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(true) });
+      }
+    });
+    await openModerationWithReport(page);
+
+    // 失敗 → vote-error を表示する。
+    await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
+    await expect(page.getByTestId('vote-error')).toHaveText(voteForbiddenText, { timeout: 10000 });
+    await expect(page.getByTestId('vote-notice')).toHaveCount(0);
+
+    // 成功 → エラーが消え、vote-notice を表示する。
+    forbidVote = false;
+    await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
+    await expect(page.getByTestId('vote-error')).toHaveCount(0);
+    await expect(page.getByTestId('vote-notice')).toHaveText(voteNoticeText, { timeout: 10000 });
+
+    // 再度失敗 → 通知が消え、エラーが表示される（新しい試行でクリア）。
+    forbidVote = true;
+    await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
+    await expect(page.getByTestId('vote-notice')).toHaveCount(0);
+    await expect(page.getByTestId('vote-error')).toHaveText(voteForbiddenText, { timeout: 10000 });
+
+    expect(voteRequests).toEqual([
+      { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
+      { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
+      { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
     ]);
   });
 });

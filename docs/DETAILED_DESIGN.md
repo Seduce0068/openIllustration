@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T10:43:30+09:00"
+  at: "2026-11-18T11:43:43+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -272,6 +272,14 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
   JWT主体と `juror_hash` の一致、結果値、重複投票、期限切れ、対象投稿者（除外）を検査する。存在しない `report_id` は404、対象コンテンツが `Reported`
   でない（確定済み）場合・期限切れ・投稿者の場合は400で拒否する。
+- 投票結果のフィードバック表示（`client/src/lib.rs`）: 投票ボタンの応答を待ち、成功時は
+  `data-testid="vote-notice"` に固定文言 `投票を記録しました。` を表示する。失敗時は
+  `data-testid="vote-error"`（`role="alert"`）に固定文言を表示する。HTTP エラーは
+  `投票に失敗しました (HTTP <status>).`（例: 403 なら `投票に失敗しました (HTTP 403).`）、
+  ステータスを取得できないネットワークエラーは `Network error submitting vote.` とする。
+  サーバーが返すエラー本文や生のネットワークエラー文字列は画面へ出さない。
+  新しい投票試行の開始時に通知とエラーの両方をクリアし、前回の結果が残らないようにする。
+  E2E は `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（chromium で3件 pass）で検証する。
 - 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。
   定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
 - 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
