@@ -215,8 +215,13 @@ impl OidcState {
 
     /// 必須の環境変数が揃っている場合だけ有効化する。
     /// 不完全な設定で中途半端に起動しないよう fail-closed にする。
+    /// 不正な値が設定されていた場合は `from_env_with` が返す Err を伝播させ、
+    /// 起動を拒否する（auth_time / max_age 検証の黙った無効化を防ぐ）。
     pub fn from_env() -> Option<Arc<Self>> {
-        Self::from_env_with(|name| std::env::var(name).ok())
+        match Self::from_env_with(|name| std::env::var(name).ok()) {
+            Ok(state) => state,
+            Err(message) => panic!("invalid OIDC configuration: {message}"),
+        }
     }
 
     /// 環境変数の読み取りを注入した `from_env` の本体。
@@ -224,17 +229,51 @@ impl OidcState {
     /// 本番は `from_env()` が `std::env::var` を渡す。テストは文字列マップを
     /// 渡すことでプロセス環境を汚さずに、必須変数の欠落と各オプションの
     /// 境界値を並列に検証できる。
-    pub(crate) fn from_env_with<F>(lookup: F) -> Option<Arc<Self>>
+    ///
+    /// 必須変数の欠落は `Ok(None)`（OIDC 無効）だが、値が存在するのに不正な
+    /// 場合は `Err` を返す。特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 /
+    /// オーバーフローを捨てると max_age 検証が黙って無効化されるため、
+    /// フォールバックせず起動拒否にする（fail-closed）。
+    pub(crate) fn from_env_with<F>(lookup: F) -> Result<Option<Arc<Self>>, String>
     where
         F: Fn(&str) -> Option<String>,
     {
-        let issuer = lookup("OIDC_ISSUER")?;
-        let client_id = lookup("OIDC_CLIENT_ID")?;
-        let client_secret = lookup("OIDC_CLIENT_SECRET")?;
-        let redirect_uri = lookup("OIDC_REDIRECT_URI")?;
-        let authorization_endpoint = lookup("OIDC_AUTHORIZATION_ENDPOINT")?;
-        let token_endpoint = lookup("OIDC_TOKEN_ENDPOINT")?;
-        let jwks_uri = lookup("OIDC_JWKS_URI")?;
+        let (
+            issuer,
+            client_id,
+            client_secret,
+            redirect_uri,
+            authorization_endpoint,
+            token_endpoint,
+            jwks_uri,
+        ) = match (
+            lookup("OIDC_ISSUER"),
+            lookup("OIDC_CLIENT_ID"),
+            lookup("OIDC_CLIENT_SECRET"),
+            lookup("OIDC_REDIRECT_URI"),
+            lookup("OIDC_AUTHORIZATION_ENDPOINT"),
+            lookup("OIDC_TOKEN_ENDPOINT"),
+            lookup("OIDC_JWKS_URI"),
+        ) {
+            (
+                Some(issuer),
+                Some(client_id),
+                Some(client_secret),
+                Some(redirect_uri),
+                Some(authorization_endpoint),
+                Some(token_endpoint),
+                Some(jwks_uri),
+            ) => (
+                issuer,
+                client_id,
+                client_secret,
+                redirect_uri,
+                authorization_endpoint,
+                token_endpoint,
+                jwks_uri,
+            ),
+            _ => return Ok(None),
+        };
         let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
         let cookie_secure = lookup("OIDC_COOKIE_SECURE")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
@@ -249,11 +288,19 @@ impl OidcState {
         let required_amr = lookup("OIDC_REQUIRED_AMR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
-        let max_auth_age_secs = lookup("OIDC_MAX_AUTH_AGE_SECS")
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0);
+        let max_auth_age_secs = match lookup("OIDC_MAX_AUTH_AGE_SECS") {
+            None => None,
+            Some(value) => match value.parse::<u64>() {
+                Ok(0) => return Err("OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()),
+                Ok(seconds) => Some(seconds),
+                // 負数・非数値・オーバーフローはすべて Err（起動拒否）。
+                Err(_) => {
+                    return Err("OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string());
+                }
+            },
+        };
 
-        Some(Arc::new(Self::new(OidcConfig {
+        Ok(Some(Arc::new(Self::new(OidcConfig {
             issuer,
             client_id,
             client_secret,
@@ -267,7 +314,7 @@ impl OidcState {
             required_acr: std::sync::Arc::new(std::sync::Mutex::new(required_acr)),
             required_amr: std::sync::Arc::new(std::sync::Mutex::new(required_amr)),
             max_auth_age_secs: std::sync::Arc::new(std::sync::Mutex::new(max_auth_age_secs)),
-        })))
+        }))))
     }
 
     /// テスト用: 要求する保証レベルを設定する（本番は環境変数から読む）。
@@ -405,8 +452,10 @@ struct TokenResponse {
     id_token: String,
 }
 
+/// ID トークンのクレーム。すべてのフィールドが検証で使用する。
+/// `exp` / `aud` / `nbf` は `jsonwebtoken::Validation`（leeway と validate_nbf）が、
+/// それ以外は `verify_id_token` の明示チェックが読む。
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct IdTokenClaims {
     iss: String,
     #[serde(deserialize_with = "deserialize_audience")]
@@ -581,6 +630,10 @@ async fn verify_id_token(
     let data = decode::<IdTokenClaims>(id_token, &key, &validation)
         .map_err(|_| AppError::Unauthorized("ID token validation failed".to_string()))?;
     let claims = data.claims;
+
+    // exp / aud / nbf は上の Validation が検証する。ここでも参照して
+    // 「全クレームが検証対象」を明示し、dead_code 警告を避ける（挙動は変えない）。
+    let _ = (&claims.exp, &claims.aud, claims.nbf);
 
     let now = Utc::now().timestamp() as usize;
     if claims.iat > now + oidc.config.clock_skew_secs as usize {

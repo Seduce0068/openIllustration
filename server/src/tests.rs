@@ -14542,6 +14542,7 @@ fn oidc_required_env() -> std::collections::BTreeMap<String, String> {
 fn test_oidc_from_env_with_all_required_present() {
     let env = oidc_required_env();
     let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        .expect("valid optional OIDC values")
         .expect("all required OIDC variables present must enable the provider");
     let config = state.config();
     assert_eq!(config.issuer, "https://issuer.example.jp");
@@ -14574,7 +14575,9 @@ fn test_oidc_from_env_with_missing_required_variable_fails_closed() {
         let mut env = oidc_required_env();
         env.remove(missing);
         assert!(
-            crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned()).is_none(),
+            crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                .expect("no invalid optional values")
+                .is_none(),
             "missing {missing} must disable OIDC (fail-closed)"
         );
     }
@@ -14589,6 +14592,7 @@ fn test_oidc_from_env_with_clock_skew_boundaries() {
             env.insert("OIDC_CLOCK_SKEW_SECS".to_string(), value.to_string());
         }
         let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("valid OIDC configuration")
             .expect("required variables are present");
         assert_eq!(
             state.config().clock_skew_secs,
@@ -14611,30 +14615,53 @@ fn test_oidc_from_env_with_clock_skew_boundaries() {
     assert_skew(Some("abc"), 60);
 }
 
-/// max_auth_age: 0 と不正値は「検証しない」、正の u64 はそのまま保持する。
+/// max_auth_age: 正の整数は保持、0 / 負 / 非数値 / オーバーフローは Err（起動拒否）。
+/// 不正値を捨てて「検証しない」にすると auth_time / max_age 検証が黙って無効化されるため、
+/// fail-closed にする（R2 / OIDC assurance）。
 #[test]
 fn test_oidc_from_env_with_max_auth_age_boundaries() {
-    let assert_age = |value: Option<&str>, expected: Option<u64>| {
+    let parse_age = |value: Option<&str>| {
         let mut env = oidc_required_env();
         if let Some(value) = value {
             env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), value.to_string());
         }
-        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+    };
+
+    // 未設定は「検証しない」（後方互換）。
+    assert_eq!(
+        *parse_age(None)
+            .expect("valid OIDC configuration")
+            .expect("required variables are present")
+            .config()
+            .max_auth_age_secs
+            .lock()
+            .unwrap(),
+        None
+    );
+
+    // 正の整数（境界 1 / 通常値 / u64 の上限）はそのまま保持する。
+    for (raw, expected) in [("1", 1), ("900", 900), ("18446744073709551615", u64::MAX)] {
+        let state = parse_age(Some(raw))
+            .expect("valid OIDC configuration")
             .expect("required variables are present");
         assert_eq!(
             *state.config().max_auth_age_secs.lock().unwrap(),
-            expected,
-            "OIDC_MAX_AUTH_AGE_SECS={value:?}"
+            Some(expected),
+            "OIDC_MAX_AUTH_AGE_SECS={raw}"
         );
-    };
-    assert_age(None, None);
-    assert_age(Some("0"), None); // 0 秒は「検証しない」扱い
-    assert_age(Some("1"), Some(1));
-    assert_age(Some("900"), Some(900));
-    assert_age(Some("18446744073709551615"), Some(u64::MAX));
-    assert_age(Some("18446744073709551616"), None);
-    assert_age(Some("-1"), None);
-    assert_age(Some("abc"), None);
+    }
+
+    // 不正値は Err。None にフォールバックして検証を黙って無効化してはならない。
+    for raw in ["0", "-1", "abc", "", "18446744073709551616"] {
+        let err = parse_age(Some(raw))
+            .err()
+            .expect("invalid OIDC_MAX_AUTH_AGE_SECS must be rejected");
+        assert!(
+            err.contains("OIDC_MAX_AUTH_AGE_SECS"),
+            "error must identify the invalid variable: {err}"
+        );
+    }
 }
 
 /// required_acr / required_amr: カンマ区切りを trim し空要素を除く。
@@ -14650,6 +14677,7 @@ fn test_oidc_from_env_with_required_acr_amr_normalization() {
                 env.insert("OIDC_REQUIRED_AMR".to_string(), amr.to_string());
             }
             let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                .expect("valid OIDC configuration")
                 .expect("required variables are present");
             let config = state.config();
             assert_eq!(
@@ -14684,6 +14712,7 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
             env.insert("OIDC_COOKIE_SECURE".to_string(), value.to_string());
         }
         let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("valid OIDC configuration")
             .expect("required variables are present");
         assert_eq!(state.config().scopes, "openid profile");
         assert_eq!(
