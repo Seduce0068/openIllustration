@@ -1834,8 +1834,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 </div>
 
                 <div class="space-y-2">
-                    <label class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
+                    <label for="upload-price" class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
                     <input type="number"
+                        id="upload-price"
+                        name="price"
+                        min="1"
+                        max="1000000"
                         on:input=move |ev| set_price.set(event_target_value(&ev).parse().unwrap_or(0))
                         prop:value=price
                         class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />

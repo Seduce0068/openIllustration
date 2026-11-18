@@ -182,6 +182,8 @@ P2（品質・保守・プロダクト拡張）:
 - [x] fail-open・境界・アクセシビリティ（2026-11-18）: Chromeバージョン抽出ガード、
   amount_jpy_from_wei境界テスト、監査パネル/ファイル選択/Moderation/upload のARIA、
   backup-rotate のディレクトリ権限 fail-closed、運用記述を是正。
+- [x] wei変換と価格フォームの整合（2026-11-18）: amount_jpy_from_wei の0円をfail-closed拒否、
+  アップロード価格inputへid/name/min/maxとラベル関連付けを追加。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
