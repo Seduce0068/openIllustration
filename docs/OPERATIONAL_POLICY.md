@@ -106,8 +106,9 @@ generated:
   `0700` でなければ警告する。リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ
   読み、`--database-token` は受け付けない（`argv` 露出対策）。出力先は `create_new` で原子的に
   生成し、既存ファイルの上書きを拒否する。手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
-- 監査 CLI の権限・トークン・上書き拒否は実装済みだが、専用の自動テストはまだない。
-  運用では鍵権限・親ディレクトリ権限・`DATABASE_TOKEN` 設定・既存出力の有無をRunbookの手順で確認する。
+- 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト9件を追加済み
+  （TEST_SPECIFICATION AUDIT-02）。Runbook の手動確認（鍵権限・親ディレクトリ権限・
+  `DATABASE_TOKEN` 設定・既存出力の有無）は補助的な確認として扱う。
 - 本番前に署名鍵の HSM 管理とローテーション、監査対象・公開範囲、外部アンカー、個人情報保護、障害時運用を定めて試験する。
 
 ## 4. 支援・決済

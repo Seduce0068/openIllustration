@@ -8,6 +8,9 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 mkdir -p "${work}/bin" "${work}/backups" "${work}/offsite"
+# backup-rotate.sh は既存のバックアップ先が 0700 でない場合に拒否するため、
+# テスト用ディレクトリも本番と同じ権限に揃える（umask 022 環境での誤失敗を防ぐ）。
+chmod 700 "${work}/backups"
 
 # 実際の DB 操作の代わりに成果物を作るダミーコマンド。
 cat >"${work}/bin/backup_db" <<'EOF'
@@ -85,6 +88,18 @@ expect_failure "zero min_keep" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=0 "$script
 expect_failure "alert without dest" env BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD=/bin/true "$script"
 expect_failure "missing gpg" env BACKUP_GPG_RECIPIENT=test GPG_BIN=/no/such/gpg "$script"
 expect_failure "missing alert cmd" env BACKUP_GPG_RECIPIENT=test ALERT_CMD=/no/such/cmd "$script"
+
+echo "=== バックアップ先ディレクトリの権限 fail-closed ==="
+loose_dir="${work}/backups-loose"
+mkdir -p "$loose_dir"
+chmod 755 "$loose_dir"
+expect_failure "loose (0755) backup dir rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$loose_dir" "$script"
+if compgen -G "${loose_dir}/openillustration-*" >/dev/null; then
+	echo "FAIL artifact written to loosely-permissioned directory"
+	failures=$((failures + 1))
+else
+	echo "PASS no artifact written to loosely-permissioned directory"
+fi
 
 echo "=== 正常系 ==="
 expect_success "plain backup (opt-out)" env -u BACKUP_GPG_RECIPIENT ALLOW_UNENCRYPTED_BACKUP=1 "$script"

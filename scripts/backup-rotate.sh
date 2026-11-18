@@ -97,8 +97,25 @@ on_failure() {
 }
 trap on_failure EXIT
 
+# 既存のバックアップ先が 0700 より開いている場合は暗黙に修正せず拒否する（fail-closed）。
+if [[ -e "$backup_dir" ]]; then
+	existing_mode="$(stat -c %a "$backup_dir")"
+	if [[ "$existing_mode" != "700" ]]; then
+		echo "error: backup directory ${backup_dir} has mode ${existing_mode}; expected 700" >&2
+		exit 1
+	fi
+fi
 mkdir -p "$backup_dir"
-chmod 700 "$backup_dir" || echo "warning: failed to restrict permissions on ${backup_dir}" >&2
+if ! chmod 700 "$backup_dir"; then
+	echo "error: failed to restrict permissions on ${backup_dir}" >&2
+	exit 1
+fi
+# chmod の成否にかかわらず最終的な mode を stat で検証する（特殊フラグ等の取りこぼし防止）。
+actual_mode="$(stat -c %a "$backup_dir")"
+if [[ "$actual_mode" != "700" ]]; then
+	echo "error: backup directory ${backup_dir} has mode ${actual_mode}; expected 700" >&2
+	exit 1
+fi
 
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 output="${backup_dir}/${prefix}-${stamp}.db"

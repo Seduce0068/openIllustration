@@ -89,10 +89,16 @@ chrome_version="$($chrome_bin --version)"
 echo "$chrome_version"
 min_chrome_major="${MIN_CHROME_MAJOR:-120}"
 chrome_major="$(echo "$chrome_version" | grep -oE '[0-9]+' | head -1)"
-if [[ "$chrome_major" =~ ^[0-9]+$ ]] && ((chrome_major < min_chrome_major)); then
+# 非数値なら下限チェックと上限警告が黙ってスキップされるため、明示的に失敗させる。
+if [[ ! "$chrome_major" =~ ^[0-9]+$ ]]; then
+	echo "Chrome major version is not numeric: '${chrome_major}'." >&2
+	exit 1
+fi
+if ((chrome_major < min_chrome_major)); then
 	echo "Chrome ${chrome_major} is older than the required major ${min_chrome_major}." >&2
 	exit 1
 fi
+# 上側警告は非数値なら上の抽出エラーで既に失敗しているため追加対応不要（既存条件は維持）。
 max_chrome_major="${MAX_CHROME_MAJOR:-}"
 if [[ -n "$max_chrome_major" && "$chrome_major" =~ ^[0-9]+$ ]] && ((chrome_major > max_chrome_major)); then
 	echo "warning: Chrome ${chrome_major} is newer than the validated major ${max_chrome_major}." >&2
