@@ -92,4 +92,32 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByRole('alert')).toHaveText('ログインが必要です');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
   });
+
+  test('R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと', async ({ page }) => {
+    await page.route('**/me/export', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(exportFixture),
+      });
+    });
+
+    await loginAndOpenDashboard(page);
+
+    // ネットワーク応答は成功のまま、ダウンロード開始だけを失敗させる。
+    await page.evaluate(() => {
+      HTMLAnchorElement.prototype.click = () => {
+        throw new Error('E2E: download blocked');
+      };
+    });
+
+    await page.getByTestId('export-my-data').click();
+
+    await expect(page.getByTestId('export-error')).toHaveText(
+      'ダウンロードの開始に失敗しました。',
+      { timeout: 10000 }
+    );
+    await expect(page.getByTestId('export-error')).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('export-status')).toHaveCount(0);
+  });
 });

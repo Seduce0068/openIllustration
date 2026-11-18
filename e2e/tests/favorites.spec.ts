@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page, type Route } from '@playwright/test';
 import * as crypto from 'crypto';
 
 /**
@@ -242,5 +242,150 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
       { q: null, tag: null, type: null, favorite_only: null },
       { q: null, tag: null, type: null, favorite_only: null },
     ]);
+  });
+
+  // 追加ケースは上記のリクエスト回数完全一致アサーション（2回/8回）を壊さないよう
+  // 独立した test にし、モックも各 test 内で完結させる。
+  const GUARD_CID = 'QmYwAPJzv5CZsnAztHZk3RQ3m2YgFf9pRnvNsYQ7nBTeS';
+  type FavoriteCall = { method: string; path: string };
+  type FavoriteFixture = { isFavorite: boolean };
+
+  async function setupFavoriteGuardPage(
+    page: Page,
+    handleFavorite: (route: Route, fixture: FavoriteFixture) => Promise<void>,
+  ) {
+    const body = 'favorite guard body';
+    const item = {
+      cid: GUARD_CID,
+      checksum: computeHash(body),
+      type: 'Novel',
+      status: 'Approved',
+      price: 0,
+      title: 'Guard Story',
+      description: 'Favorite guard fixture',
+      tags: ['guard'],
+      is_favorite: false,
+    };
+    const fixture: FavoriteFixture = { isFavorite: false };
+    const favoriteCalls: FavoriteCall[] = [];
+    const contentRequests: string[] = [];
+
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ nonce: 'test-nonce' }),
+      });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          authorized: true,
+          user_hash: 'mock_user_hash',
+          token: 'mock_jwt_token',
+        }),
+      });
+    });
+    await page.route(url => url.pathname === '/content', async route => {
+      contentRequests.push(route.request().url());
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{ ...item, is_favorite: fixture.isFavorite }]),
+      });
+    });
+    await page.route(
+      url => url.pathname.startsWith('/content/') && url.pathname.endsWith('/favorite'),
+      async route => {
+        favoriteCalls.push({
+          method: route.request().method(),
+          path: new URL(route.request().url()).pathname,
+        });
+        await handleFavorite(route, fixture);
+      },
+    );
+    await page.route(
+      url => url.pathname === `/content/${item.cid}`,
+      async route => {
+        await route.fulfill({ status: 200, contentType: 'text/markdown', body });
+      },
+    );
+    await page.route(
+      url => url.pathname === `/content/${item.cid}/audit`,
+      async route => {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+      },
+    );
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('Guard Story')).toBeVisible({ timeout: 20000 });
+
+    const card = page.locator('div[data-testid="content-card"]').filter({ hasText: 'Guard Story' });
+    const toggle = card.getByTestId('favorite-toggle');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    return { favoriteCalls, contentRequests, toggle, card };
+  }
+
+  test('double click sends only one toggle request', async ({ page }) => {
+    let releaseResponse = (): void => {};
+    const responseGate = new Promise<void>(resolve => {
+      releaseResponse = resolve;
+    });
+    const { favoriteCalls, toggle } = await setupFavoriteGuardPage(page, async (route, fixture) => {
+      // レスポンスを保留し、送信中ガードが効いている間は busy 状態を維持する。
+      await responseGate;
+      fixture.isFavorite = route.request().method() === 'POST';
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ is_favorite: fixture.isFavorite }),
+      });
+    });
+
+    // 予告なしの高速2クリック（同一タスクで2回 dispatch）。
+    await toggle.evaluate((el: HTMLElement) => {
+      el.click();
+      el.click();
+    });
+    await expect.poll(() => favoriteCalls.length).toBe(1);
+
+    // 少し gap を空けて2回目。レスポンス保留中は disabled で送られない。
+    await page.waitForTimeout(100);
+    await toggle.evaluate((el: HTMLElement) => el.click());
+    await expect(toggle).toBeDisabled();
+    await expect.poll(() => favoriteCalls.length).toBe(1);
+
+    // 完了後も再送されず、ガードが解除されて次の操作を受け付ける。
+    releaseResponse();
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => favoriteCalls.length).toBe(1);
+  });
+
+  test('401 shows re-login guidance in favorite-error', async ({ page }) => {
+    const { favoriteCalls, contentRequests, toggle, card } =
+      await setupFavoriteGuardPage(page, async route => {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'unauthorized' }),
+        });
+      });
+
+    await toggle.click();
+    const error = card.getByTestId('favorite-error');
+    await expect(error).toHaveAttribute('role', 'alert');
+    await expect(error).toContainText('再ログインが必要です。');
+    await expect.poll(() => favoriteCalls).toEqual([
+      { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
+    ]);
+    // 失敗時は再取得せず、ガードも解除される。
+    await expect.poll(() => contentRequests.length).toBe(1);
+    await expect(toggle).toBeEnabled();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'false');
   });
 });

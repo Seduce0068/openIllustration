@@ -22,9 +22,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全32件（auth 2 / economy 1 /
-  error-paths 4 / export 2 / favorites 1 / integrity 3 / metrics 1 / moderation 9 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全35件（auth 2 / economy 1 /
+  error-paths 4 / export 3 / favorites 3 / integrity 3 / metrics 1 / moderation 9 /
   real-api 4 / search 1 / upload 4）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  favorites の3件目以降は二重クリック防止と401の再ログイン案内、export の3件目は
+  ダウンロード開始失敗時の固定エラー表示を検証する。
   moderation の9件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
   2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）の回帰である。
   integrity の3件目は R1-13（チェックサム一致だが JXL デコード失敗時に VERIFIED にしない）の回帰である。
