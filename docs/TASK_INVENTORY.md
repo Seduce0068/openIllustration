@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 status: current
 ---
 
@@ -21,7 +21,7 @@ status: current
 
 - 確認: 2026-11-18T14:13:12+09:00、ブランチ `master` の HEAD は `8c1d88e`（`origin/master` と一致）。
   前回確認時点 `2cd2ab6` 以降のドキュメント更新コミットは master へ反映済み。
-- 直近の未コミット変更の反映（2026-11-18 確認、コードは `server/src/` に未コミットで存在）:
+- 直近の未コミット変更の反映（2026-11-18 確認、コードは `server/src/` と `client/src/` に未コミットで存在）:
   - [対応済み（未コミット）] メトリクス最外側化: `observe_metrics` を `Router` の最も外側へ移動し、
     内側で短絡するレート制限 429 / IP ゲート 403 / 本文サイズ 413 / CORS プリフライト OPTIONS 204 を
     取りこぼさず HTTP カウンタへ計上。サーバー側テスト4件を追加（MET-02、
@@ -82,6 +82,23 @@ status: current
     スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
     今回の5件はいずれもサーバー側テストであり、E2E 定義数は35件のまま変更しない。
+  - [対応済み（未コミット）] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
+    `common::summarize_reason` を適用し、`entry_hash` は DB の生値を維持（DB 全文も不変）。
+    サーバー側テスト1件（AUDIT-03、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
+    [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] 投票署名 v2: `moderation_vote_message_v2` がドメイン分離子
+    `moderation-vote-v2` と `report_id` / `result` / `juror_hash` を署名対象とし、
+    `mod_vote` は v2 のみ受理。旧形式署名と他投票者向け署名の転用は401拒否。サーバー側テスト4件
+    （MOD-12、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
+    [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md),
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] 一覧の価格 NULL: `build_content_query` が
+    `COALESCE(price, 0) AS price` で NULL を購入不可0として返す。サーバー側テスト1件（CONTENT-10、
+    [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
+    固定文言 `エクスポート結果の解析に失敗しました。` を返し、「0 件」成功表示へ落とさない。
+    クライアント側単体テスト1件（EXPORT-11、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は35件のまま変更しない。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -282,6 +299,13 @@ status: current
 - [対応済み fefa49a] 投票入力の基本検証テスト: `POST /mod/vote` で `report_id <= 0` と未知の `result` を `400` で拒否すること、トークン `sub` と
   `vote.juror_hash` の不一致（署名が正しくても）を `401` で拒否し票を記録しないことを回帰テストで保護（`test_vote_with_invalid_payload_rejected`,
   `test_vote_with_sub_mismatch_rejected`）。ハンドラ自体の挙動変更はない。
+- [対応済み（未コミット）] **投票署名 v2 と投票者束縛**: `moderation_vote_message_v2` が
+  `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash` を署名対象とし、
+  `mod_vote` は v2 のみ受理。旧 `moderation_vote_message` は `#[deprecated]` で残すが
+  旧形式署名は401拒否、別投票者向け署名の転用も401拒否（4テスト、MOD-12）。
+- [対応済み（未コミット）] **監査タイムラインの理由マスク**: `GET /content/{cid}/audit` の
+  `reason` に `summarize_reason` を適用しつつ `entry_hash` は DB の生値を維持。
+  DB の生 reason とハッシュは変更しない（1テスト、AUDIT-03）。
 
 ### 3.4 監査（DEC-04）
 
@@ -394,7 +418,10 @@ status: current
 - [対応済み] 単一ライター起動の強制: ローカル DB 起動時に `<DB path>.instance.lock` を原子的作成し、生存 PID のロックでは第二インスタンスを拒否。stale ロックは自動回収、停止時に削除（
   [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。リモート DB は警告のみ。
 - [対応済み] 投票署名メッセージの共有化: `moderation_vote_message(report_id, result)` を導入し、生成側と検証側の整合を一箇所で保証。report_id/result
-  の両方への束縛を回帰テスト化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。※署名プロトコル自体のドメイン分離は破壊的変更のため未実施。
+  の両方への束縛を回帰テスト化（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  2026-11-18 に `moderation_vote_message_v2` へ更新し、ドメイン分離子と `juror_hash` を
+  署名対象へ含めた（旧 v1 は `mod_vote` で受理しない。MOD-12、
+  [adr/ADR-0004](adr/ADR-0004-moderation-procedure.md)）。
 - [対応済み] ロールバック判断手順: 前方のみ（down migration なし）の方針を明示し、適用前バックアップ＋旧バイナリへの復帰手順、失われるデータと監査ログの範囲を
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) に記載。
 - [対応済み] マイグレーション検証の fail-closed 強化: ディレクトリ欠落時に `verify_migrations` が `Ok(())` を返し「適用済みファイル欠落」検査をすり抜けていた問題を修正。
@@ -461,6 +488,9 @@ status: current
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] アップロード重複フィールド: `price` に加え `file` / `owner_hash` / `signature` の二重送信も 400（Duplicate ... field）で拒否される回帰テストを追加（
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み（未コミット）] 一覧の価格 NULL を0として返す: `build_content_query` の `SELECT` を
+  `COALESCE(price, 0) AS price` とし、NULL の Approved 行でも500にならず購入不可0を返す
+  （サーバー側テスト1件、CONTENT-10、[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [対応済み] 実鍵署名試験: 実 RSA 秘密鍵で署名したアップロードの受理と、署名を別バイト列へ使い回した場合の 401 拒否を検証（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] JXL デコード検証の技術選定: `jxl-oxide` 0.12.6 を第一候補とし、現時点では依存追加しない判断を [ADR-0006](adr/ADR-0006-jxl-decoding.md) に記録。
 - [低] 本番受入要件確定後の完全なJPEG XLデコード検証の実装（[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
@@ -487,6 +517,10 @@ status: current
   秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- [対応済み（未コミット）] エクスポート解析失敗の固定文言: `export_status_message` が
+  `DataExport` として読めないレスポンスを「0 件」成功にせず、`export-error` に固定文言
+  `エクスポート結果の解析に失敗しました。` を表示する（クライアント側単体テスト1件、EXPORT-11、
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.8 依存・セキュリティ衛生
 

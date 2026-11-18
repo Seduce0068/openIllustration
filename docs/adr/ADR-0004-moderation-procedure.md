@@ -5,7 +5,7 @@ description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決
 tags: [adr, moderation, governance, accepted]
 generated:
   by: dsh
-  at: "2026-11-18T03:49:23+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 ---
 
 ## ADR-0004: モデレーション手続
@@ -69,6 +69,13 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
     セルフホストする各デプロイの所有者（個人・企業のいずれでも可）が運用者となり、
     `MODERATION_OPERATOR_HASHES`（JPKI 由来の user_hash をカンマ区切り）で設定する。
     未設定なら特権操作は実行できない（フェイルクローズ）。
+12. **投票署名の投票者束縛（2026-11-18 更新）**: `/mod/vote` の署名対象メッセージは
+    `moderation_vote_message_v2` が生成する JSON とし、`domain: "moderation-vote-v2"` /
+    `report_id` / `result` / `juror_hash` を含める。投票者（`juror_hash`）をメッセージへ
+    束縛することで他の投票者への署名転用と、同じ公開鍵で署名したアップロードなど
+    他プロトコル由来の署名の再生（クロスプロトコル再生）を防ぐ。旧
+    `moderation_vote_message`（`report_id` / `result` のみ）は互換のため残すが、
+    `mod_vote` は v2 のみを検証し、旧形式の署名は `401 Unauthorized` で拒否する。
 
 ### 実装状況（2026-11-16）
 
@@ -120,6 +127,12 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
   - 決定9の要約は公開（`GET /mod/reports`）だが、本集計は運用者限定とする。
     署名付き監査エクスポートの形式・検証方式は [ADR-0005](ADR-0005-audit-export.md) に
     集約し、ここでは重複して記載しない。
+- **採用済み・実装済み（2026-11-18 追加）**: 投票署名を決定12の v2 へ更新した。
+  - `moderation_vote_message_v2` がドメイン分離子 `moderation-vote-v2` と
+    `report_id` / `result` / `juror_hash` を署名対象とし、`mod_vote` は v2 のみ受理する。
+  - 旧 `moderation_vote_message` は `#[deprecated]` で残すが検証には使わず、旧形式署名は
+    `401 Unauthorized` で拒否する。
+  - 4テストで正常系の受理・旧形式拒否・別投票者向け署名の転用拒否・全フィールド束縛を検証する。
 - **採用済み・未実装（本番有効化の前提）**:
   - `governance_audit_log` は運用ログであり、DEC-04 の第三者検証可能な監査ではない。
     監査要件が決定するまで本番の監査証跡として扱わない。

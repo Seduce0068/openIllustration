@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -82,6 +82,13 @@ generated:
   置換後に最大120 Unicode 文字（超過は先頭119文字+`…`）。
   DB の全文と監査エクスポートの本文は変更せず、要約は API レスポンス時のみ適用する。
   これらはデプロイ内の参加者向けの閲覧機能であり、第三者への公開範囲（DEC-04 未決定）を意図するものではない。本番公開前に公開範囲を確定する。
+- `GET /content/{cid}/audit`（監査タイムライン）の `reason` も `common::summarize_reason` で
+  要約して返す。要約規則は `GET /mod/reports` と同じ（PII トークンを `[redacted]` に置換し、
+  最大120 Unicode 文字）。**DB の `content_audit_log.reason` は全文のまま保持し、
+  ハッシュ検証に使う `entry_hash` は DB の生値をそのまま返す**。マスクは API レスポンス時のみで、
+  マスク後の文字列からハッシュを再計算したり DB を書き換えたりしない
+  （`test_get_content_audit_masks_reason_but_preserves_entry_hash` で回帰）。
+  これも認証済み参加者向けの表示であり、第三者公開（DEC-04 未決定）を意図するものではない。
 - `GET /mod/stats` は運用者限定の集計。`AuthClaims` 必須かつ `require_moderation_operator` で認可し、
   未認証は401、`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403を返す。
   `generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返し、CID・reason・`user_hash` は露出しない。

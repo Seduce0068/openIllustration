@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -39,6 +39,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
    読み取りトランザクションの5件も `server/src/tests.rs` のサーバー側テストであり、
    E2E 定義数は35件のまま変更なし。
+   直近の監査理由マスク1件・投票署名 v2 の4件・一覧の `price` NULL 1件は
+   `server/src/tests.rs` のサーバー側テスト、エクスポート解析失敗1件は
+   `client/src/lib.rs` のクライアント側単体テストである。いずれも E2E 定義を増やさず、
+   E2E 定義数は35件のまま変更しない。
 
 ## 2. 実装済みテストの概要
 
@@ -65,6 +69,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 | 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 24件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
+| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は35件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
 
 ## 3. 必須要件のリリースゲート
 
@@ -148,6 +153,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。13カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に24テストを追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| AUDIT-03 | `GET /content/{cid}/audit` の理由マスクと `entry_hash` 維持 | `reason` は `summarize_reason` の結果のみで、メール・URL・4桁数字・DB 全文が漏れない。`entry_hash` は生 `reason` から計算した DB の生値と一致し、DB 全文は不変 | 実装済み（`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。下記「監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証」を参照 |
+| MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
+| CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
+| EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。下記同節を参照 |
 
 ### 年齢ゲート共通化と TZ 境界の検証（AGE-02〜04）
 
@@ -513,6 +522,52 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 要約が MOD-08 の120文字上限と PII 除去の方針。設計技法はプロパティベーステストによる
 不変条件の検証と、仕様から導いた独立 oracle との照合である。
 
+### 監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証（AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11）
+
+直近の未コミット変更7件のうち6件は `server/src/tests.rs`、1件は `client/src/lib.rs` の
+クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は35件のまま。
+
+#### AUDIT-03: 監査理由の表示マスクと entry_hash の生値維持
+
+`test_get_content_audit_masks_reason_but_preserves_entry_hash` が、PII を含む生 reason
+（`contact user@example.com https://example.com/a code 1234`）を登録した上で
+`GET /content/{cid}/audit` を呼び、次を検証する。
+
+| 検証点 | 期待結果 |
+| --- | --- |
+| レスポンスの `reason` | `common::summarize_reason(raw_reason)` と一致し、`[redacted]` を含む。生 reason・メール・URL・4桁数字は本文に現れない |
+| レスポンスの `entry_hash` | 生 reason から `calculate_hash_v2()` で計算した値と一致（マスク後では再計算しない） |
+| DB の `reason` / `entry_hash` | 更新前と同じ生値。再計算値も DB の `entry_hash` と一致 |
+
+#### MOD-12: 投票署名 v2 の4件
+
+`moderation_vote_message_v2` は `domain` / `report_id` / `result` / `juror_hash` の4項目を
+含む JSON（`domain` の値は `moderation-vote-v2`）を生成する。`mod_vote` はこの v2
+メッセージのみを署名検証に使い、旧形式は受理しない。
+
+| テスト | 操作 | 期待結果 |
+| --- | --- | --- |
+| `test_moderation_vote_message_v2_binds_all_fields` | report_id / result / juror_hash を1つずつ変えてメッセージを比較 | 各々で不一致。同一入力は一致。JSON の4項目は確定値どおり。旧 v1 形式とも不一致 |
+| `test_vote_v2_signature_accepted` | v2 メッセージへ正しい秘密鍵で署名して投票 | 200、`votes` に1行記録 |
+| `test_vote_rejects_legacy_v1_signature` | 旧 `moderation_vote_message` のメッセージへ署名 | 401（UNAUTHORIZED）、票は0行 |
+| `test_vote_rejects_signature_bound_to_other_juror` | B の鍵で A の juror_hash に束縛したメッセージへ署名し B として投票 | 401、票は0行 |
+
+#### CONTENT-10: 一覧の price NULL
+
+`test_list_contents_null_price_is_returned_as_zero` が、`price` が NULL の Approved 行を
+挿入して `GET /content` を呼ぶ。200 で1件返り、`price` は0（購入不可）であることを検証する。
+実装は `build_content_query` の `SELECT` を `COALESCE(price, 0) AS price` とし、
+JOIN / WHERE / ORDER には影響しない。
+
+#### EXPORT-11: エクスポート解析失敗の固定文言
+
+`client/src/lib.rs` の `export_status_message` はレスポンスを `DataExport` へ解析し、
+失敗時は `EXPORT_PARSE_ERROR`（`エクスポート結果の解析に失敗しました。`）を返す。
+`export_parse_failure_uses_fixed_phrase_without_success_status` が、
+`{"version":"invalid","contents":[]}` で固定文言が返ることと、正常系
+（`{"version":1,...}`）で従来どおり `エクスポート完了: 1 件のレコードをダウンロードしました。`
+が返ることを検証する。エラー時は `export-error` のみへ表示し `export-status` は空のまま。
+
 ## 4. 実行コマンド
 
 ```bash
@@ -536,6 +591,13 @@ cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシ
 cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
 cargo test -p common summarize_reason   # 要約の単体テスト（PII除去・境界・日本語）
 cargo test -p server list_reports       # GET /mod/reports の要約適用・全文非漏えいの回帰のみ
+cargo test -p server test_get_content_audit_masks_reason_but_preserves_entry_hash   # AUDIT-03 監査理由マスクと entry_hash 維持
+cargo test -p server moderation_vote_message_v2   # MOD-12 メッセージの全フィールド束縛
+cargo test -p server test_vote_v2_signature_accepted   # MOD-12 正常系の受理
+cargo test -p server test_vote_rejects_legacy_v1_signature   # MOD-12 旧形式署名の401拒否
+cargo test -p server test_vote_rejects_signature_bound_to_other_juror   # MOD-12 別投票者向け署名の転用拒否
+cargo test -p server test_list_contents_null_price_is_returned_as_zero   # CONTENT-10 価格 NULL の0扱い
+cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_status   # EXPORT-11 クライアント側
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 cd e2e && npm test
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ

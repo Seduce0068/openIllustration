@@ -8,7 +8,7 @@ tags:
   - tasks
 generated:
   by: dsh (lead)
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 status: current
 ---
 
@@ -72,6 +72,13 @@ P1（本番運用の健全性）:
    EXPORT-09 / EXPORT-10）: `BEGIN DEFERRED` で包み、`debug_assert!(!db.is_autocommit())` と明示
    `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点スナップショットを
    返す検証を含むサーバー側テスト2件。E2E は35件のまま
+- [x] 監査タイムラインの理由マスク（2026-11-18 対応済み・未コミット、AUDIT-03）:
+   `get_content_audit` が `reason` に `summarize_reason` を適用し、ハッシュ検証用の `entry_hash`
+   は DB の生値を維持。DB 全文も不変。サーバー側テスト1件
+- [x] 投票署名を v2 化（2026-11-18 対応済み・未コミット、MOD-12）:
+   `moderation_vote_message_v2` が `domain: "moderation-vote-v2"` / `report_id` / `result` /
+   `juror_hash` を署名対象とし、`mod_vote` は v2 のみ受理。旧形式署名と別投票者向け署名の
+   転用は401拒否。ADR-0004 の決定事項として追記、サーバー側テスト4件
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
@@ -130,6 +137,11 @@ P2（品質・保守・プロダクト拡張）:
   favorites の固定sleep/`toHaveLength` と economy の opacity 待ちを修正（3回連続安定）。
 - [x] 年齢 property test の実効化（2026-11-18）: 2/29・不正日・未来日・全角・TZ境界を追加、
   独立オラクルを同語反復から実判定へ変更。国別しきい値は AgePolicy 責務として現行仕様を維持。
+- [x] 一覧の価格 NULL を購入不可0として返す（2026-11-18 対応済み・未コミット、CONTENT-10）:
+   `COALESCE(price, 0) AS price` で NULL 行も500にならず0を返す。サーバー側テスト1件
+- [x] エクスポート解析失敗の固定文言表示（2026-11-18 対応済み・未コミット、EXPORT-11）:
+   `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
+   「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
@@ -160,6 +172,12 @@ P2（品質・保守・プロダクト拡張）:
    OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY へ記載。新規テスト5件は
    AGE-03 / AGE-04 / EXPORT-09 / EXPORT-10 の各ゲートへ反映し、E2E 定義は35件のまま。
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
+- [x] 監査マスク・投票署名 v2・価格 NULL・エクスポート解析のドキュメント反映（2026-11-18）:
+   実コード（`server/src/lib.rs` / `server/src/tests.rs` / `client/src/lib.rs`）を grep して確定した
+   値のみを DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY /
+   ADR-0004 へ記載。新規テスト7件（監査マスク1件・投票 v2 4件・価格 NULL 1件・クライアント解析1件）は
+   AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 の各ゲートへ反映し、E2E 定義は35件のまま。
+   frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
 
@@ -168,5 +186,6 @@ P2（品質・保守・プロダクト拡張）:
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。
 - P0 の R1-17 / R1-18 / R2-09 はコード上確定（Runtime Proof 済み）。
   他の項目はレポートの静的推論を含むため、着手時に事実確認する。
-- 今回の反映は未コミットの `server/src/lib.rs` / `oidc.rs` / `tests.rs` を grep した確定値に基づく。
+- 今回の反映は未コミットの `server/src/lib.rs` / `oidc.rs` / `tests.rs` と
+  `client/src/lib.rs` を grep した確定値に基づく。
   E2E 定義数35件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。

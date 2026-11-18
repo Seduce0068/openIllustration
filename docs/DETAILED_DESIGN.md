@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T16:37:20+09:00"
+  at: "2026-11-18T17:18:25+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -34,7 +34,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | POST | `/content/:cid/favorite` | Bearer JWT | お気に入り追加。`Claims.sub` のみで識別し、本人の行にだけ作用。重複追加は冪等で200 |
 | DELETE | `/content/:cid/favorite` | Bearer JWT | お気に入り削除。同上の識別。未登録の削除も冪等で200 |
-| GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す |
+| GET | `/content/:cid/audit` | Bearer JWT | DB内監査記録を返す。`reason` は `summarize_reason` で要約して返し、`entry_hash` は DB の生値を維持する（ハッシュ検証用） |
 | POST | `/content/upload` | Bearer JWT | コンテンツ投稿。任意の `title` / `description` / `tags` も受理し長さ上限を検査 |
 | GET | `/transactions` | Bearer JWT | 既存の記録を最大100件返す。実決済証明ではない |
 | POST | `/payments/orders` | Bearer JWT | `cid`・`chain_id`・`wallet_address`・`amount_jpy` を受け取り、コンテンツの提示価格と `amount_jpy` を照合して JPYC注文を作成する。不正CID・不存在/レビュー中コンテンツ・価格不一致は拒否。受取アドレス未設定時は501 |
@@ -250,6 +250,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 ### 一覧 `GET /content`
 
 - `status = 'Approved'` のみを対象とし、`created_at DESC` で返す（既存の並び順を維持）。
+- `price` が NULL の行は `COALESCE(price, 0) AS price` で 0（購入不可）として返す。一覧は価格を
+  `i64` で返すため NULL のまま読むと500になるところを防ぐ。SELECT 句のみの読み替えで JOIN /
+  WHERE / ORDER には影響せず、エクスポート側の `Option<i64>` も NULL を0として扱う経路と揃える
+  （`test_list_contents_null_price_is_returned_as_zero`）。
 - 省略可のクエリパラメータ: `q` は `title` / `description` への `LIKE` 部分一致（OR 条件、
   SQLite 既定の大小文字非区別）、`tag` はカンマ区切り `tags` の前方一致（先頭タグまたは
   カンマ直後のタグが対象）、`type` は `Illustration` / `Novel` の完全一致。
@@ -314,6 +318,14 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 投票は `/mod/vote` に `report_id`、`juror_hash`、`result`、署名を送る。
   JWT主体と `juror_hash` の一致、結果値、重複投票、期限切れ、対象投稿者（除外）を検査する。存在しない `report_id` は404、対象コンテンツが `Reported`
   でない（確定済み）場合・期限切れ・投稿者の場合は400で拒否する。
+- 投票署名は `moderation_vote_message_v2`（`server/src/lib.rs`）のみを受理する。署名対象メッセージは
+  `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash` の4項目から成る JSON で、
+  投票者ハッシュを束縛することで別投票者への署名転用と、アップロード署名など他プロトコル由来の署名の
+  再生（クロスプロトコル再生）を防ぐ。旧 `moderation_vote_message`（`report_id` / `result` のみ）は
+  `#[deprecated]` 付きで残すが、`mod_vote` は検証に使わず旧形式の署名は `401 Unauthorized` で拒否する。
+  テストは4件（`test_moderation_vote_message_v2_binds_all_fields` /
+  `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` /
+  `test_vote_rejects_signature_bound_to_other_juror`）。
 - 投票結果のフィードバック表示（`client/src/lib.rs`）: 投票ボタンの応答を待ち、成功時は
   `data-testid="vote-notice"` に固定文言 `投票を記録しました。` を表示する。失敗時は
   `data-testid="vote-error"`（`role="alert"`）に固定文言を表示する。HTTP エラーは
@@ -404,6 +416,11 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
 
 - 新規エントリは `AuditLogEntry::calculate_hash_v2` で生成する。CID、状態、主体、理由、前エントリーハッシュに長さプレフィックスを付け、ドメイン分離ラベルを付与した上でSHA-256化するため、
   フィールド境界の曖昧さによる衝突を排除する。既存DB向けに旧 `calculate_hash`（v1）も残し、`verify_audit_log` は v1/v2 の両方を検証する。
+- `get_content_audit`（`GET /content/:cid/audit`）は表示用の `reason` に `common::summarize_reason`
+  を適用する（[PII 除去と120 Unicode 文字上限](OPERATIONAL_POLICY.md) の「3. 監査・モデレーション」を参照）。
+  ハッシュ検証に使う `entry_hash` は DB の生値をそのまま返し、DB の `reason` 全文も変更しない。
+  すなわちマスクは API レスポンス時にのみ行い、`calculate_hash_v2` の入力や検証結果には影響しない
+  （`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。
 - `compute_audit_chain_digest` は `log_id` の連続性と entry_hash 列の Merkle root を計算する。`verify_audit_log --expect-root`
   で外部保存した root と照合すると、行の欠落・順序入替・末尾切り詰めを検出できる（実DBで確認済み）。
 - `sign_audit_export` は件数と Merkle root を RSA 署名したスナップショットを生成し、`verify_audit_export` は公開鍵 DER のみで署名・完全性を検証する（ADR-0005、
