@@ -1081,6 +1081,17 @@ fn ExportMyData(token: String) -> impl IntoView {
 
 mod jxl;
 
+/// 検証状態からバッジ文言を決める（表示ロジックをテスト可能にするため分離）。
+/// チェックサム一致・JXL デコード失敗は「改ざん検知」とは別の状態として扱う。
+fn verification_badge_text(verified: Option<bool>, decode_failed: bool) -> &'static str {
+    match (verified, decode_failed) {
+        (Some(true), _) => "● VERIFIED",
+        (Some(false), true) => "× DECODE FAILED",
+        (Some(false), false) => "× COMPROMISED",
+        (None, _) => "○ PENDING",
+    }
+}
+
 #[component]
 fn ContentViewer<F>(
     cid: String,
@@ -1103,6 +1114,8 @@ where
     // inner_html へ渡す（Markdown 本文/TOC の既存レンダリングには触れない）。
     let meta_html = render_content_meta_html(&title, &description, &tags);
     let (verified, set_verified) = signal(None::<bool>);
+    // チェックサムは正常だが JXL のデコードに失敗した場合を改ざん検知と区別する。
+    let (decode_error, set_decode_error) = signal(false);
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
@@ -1160,6 +1173,8 @@ where
         let ct = ct_ef.clone();
         let token = token_stored.get_value();
         spawn_local(async move {
+            // 再取得や cid 切り替えで前回のデコード失敗表示が残らないようにする。
+            set_decode_error.set(false);
             let url = format!("{}/content/{}", API_BASE, cid);
             let res = Request::get(&url)
                 .header("Authorization", &format!("Bearer {}", token))
@@ -1169,6 +1184,7 @@ where
             if let Ok(response) = res {
                 let bytes = response.binary().await.unwrap_or_default();
                 let is_ok = common::verify_checksum(&bytes, &expected_checksum);
+                // チェックサム検証時点の値を入れ、Illustration ではデコード結果で上書きする。
                 set_verified.set(Some(is_ok));
 
                 if is_ok && !bytes.is_empty() {
@@ -1176,7 +1192,19 @@ where
                         if let Some(canvas) = canvas_ref.get() {
                             use wasm_bindgen::JsCast;
                             let el: web_sys::HtmlCanvasElement = (*canvas).clone().unchecked_into();
-                            let _ = jxl::decode_jxl_to_canvas(&bytes, el);
+                            match jxl::decode_jxl_to_canvas(&bytes, el) {
+                                Ok(()) => set_verified.set(Some(true)),
+                                Err(_) => {
+                                    // デコーダのエラー値には内部情報が含まれ得るため表示せず、
+                                    // 固定文言の専用エラーに切り替える。
+                                    set_decode_error.set(true);
+                                    set_verified.set(Some(false));
+                                }
+                            }
+                        } else {
+                            // キャンバスが未取得では描画できず、成功として扱えない。
+                            set_decode_error.set(true);
+                            set_verified.set(Some(false));
                         }
                     } else {
                         let text = String::from_utf8_lossy(&bytes).to_string();
@@ -1184,6 +1212,10 @@ where
                         set_novel_toc.set(render_toc(&text));
                         set_novel_html.set(render_markdown(&text));
                     }
+                } else if is_ok && ct == "Illustration" {
+                    // チェックサムが一致しても空バイトでは JXL をデコードできない。
+                    set_decode_error.set(true);
+                    set_verified.set(Some(false));
                 }
             } else {
                 set_verified.set(Some(false));
@@ -1268,9 +1300,19 @@ where
                         </div>
                     }.into_any(),
                     Some(false) => view! {
-                        <div class="text-center p-4">
-                            <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
-                            <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
+                        <div class="text-center p-4" data-testid="content-verification-error">
+                            <Show when=move || decode_error.get() fallback=|| ()>
+                                <p role="alert" data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                    "JXL Decode Failed"
+                                </p>
+                                <p data-testid="jxl-decode-error-detail" class="text-gray-500 text-[8px]">
+                                    "JXL のデコードに失敗しました。"
+                                </p>
+                            </Show>
+                            <Show when=move || !decode_error.get() fallback=|| ()>
+                                <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
+                                <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
+                            </Show>
                         </div>
                     }.into_any(),
                     None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
@@ -1312,16 +1354,12 @@ where
             </div>
             <div class="text-[10px] tracking-widest font-bold mt-auto flex justify-between items-center">
                 <div class="flex items-center gap-4">
-                    <span class=move || match verified.get() {
+                    <span data-testid="content-verification-badge" class=move || match verified.get() {
                         Some(true) => "text-green-500",
                         Some(false) => "text-red-500",
                         None => "text-gray-600",
                     }>
-                        {move || match verified.get() {
-                            Some(true) => "● VERIFIED",
-                            Some(false) => "× COMPROMISED",
-                            None => "○ PENDING",
-                        }}
+                        {move || verification_badge_text(verified.get(), decode_error.get())}
                     </span>
                     <span class="text-gray-500 border border-gray-500/20 px-1">{ct_bad.to_uppercase()}</span>
                 </div>
@@ -2186,6 +2224,17 @@ mod tests {
         assert!(html.contains(">1</p>"), "{html}");
         assert!(html.contains("moderation-stats-totals"), "{html}");
         assert!(html.contains("moderation-stats-monthly"), "{html}");
+    }
+
+    #[test]
+    fn verification_badge_distinguishes_decode_failure_from_checksum_mismatch() {
+        let badge = super::verification_badge_text;
+        assert_eq!(badge(None, false), "○ PENDING");
+        assert_eq!(badge(Some(true), false), "● VERIFIED");
+        // デコード成功時は古い失敗フラグが残っていても VERIFIED。
+        assert_eq!(badge(Some(true), true), "● VERIFIED");
+        assert_eq!(badge(Some(false), false), "× COMPROMISED");
+        assert_eq!(badge(Some(false), true), "× DECODE FAILED");
     }
 
     #[test]
