@@ -447,10 +447,10 @@ impl IntoResponse for AppError {
 }
 
 /// 内部エラーの詳細をクライアントへ公開するか。未設定時は一般化メッセージを返す。
-/// 開発時は `EXPOSE_INTERNAL_ERRORS=1` で詳細を確認できる。
+/// 開発時は `EXPOSE_INTERNAL_ERRORS=1` または `true`（大文字小文字不問）で詳細を確認できる。
 fn expose_internal_errors() -> bool {
     std::env::var("EXPOSE_INTERNAL_ERRORS")
-        .map(|value| value == "1")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
 }
 

@@ -2192,32 +2192,55 @@ fn test_pinata_response_rejects_invalid_ipfs_hash() {
     ));
 }
 
-/// SEC-04: 500系エラーの内部詳細は既定で隠し、EXPOSE_INTERNAL_ERRORS=1 で公開する
+/// SEC-04: 500系エラーの内部詳細は既定で隠し、`1`/`true`（大小文字不問）で公開する。
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
     let _env_guard = ENV_LOCK.lock().await;
-    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 
-    // Default: generic message without internal details
-    let hidden = AppError::Internal("no such table: users".to_string()).into_response();
-    assert_eq!(hidden.status(), StatusCode::INTERNAL_SERVER_ERROR);
-    let body = to_bytes(hidden.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8_lossy(&body);
+    async fn error_body() -> (StatusCode, String) {
+        let response = AppError::Internal("no such table: users".to_string()).into_response();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    // 既定（未設定）: 内部詳細は出さず一般化メッセージのみ
+    test_remove_env("EXPOSE_INTERNAL_ERRORS");
+    let (status, text) = error_body().await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
         !text.contains("no such table"),
         "details must be hidden: {text}"
     );
-    assert!(text.contains("Internal server error"));
-
-    // Opt-in: details visible for debugging
-    test_set_env("EXPOSE_INTERNAL_ERRORS", "1");
-    let exposed = AppError::Internal("no such table: users".to_string()).into_response();
-    let body = to_bytes(exposed.into_body(), usize::MAX).await.unwrap();
-    let text = String::from_utf8_lossy(&body);
     assert!(
-        text.contains("no such table"),
-        "details must be visible: {text}"
+        text.contains("Internal server error"),
+        "generic message expected: {text}"
     );
+
+    // 偽の値: マスクのまま（既定値を壊さない）
+    for value in ["0", "false", "FALSE"] {
+        test_set_env("EXPOSE_INTERNAL_ERRORS", value);
+        let (_, text) = error_body().await;
+        assert!(
+            !text.contains("no such table"),
+            "details must be hidden for {value:?}: {text}"
+        );
+        assert!(
+            text.contains("Internal server error"),
+            "generic message expected for {value:?}: {text}"
+        );
+    }
+
+    // 真の値: `1` と `true`（大文字小文字を問わず）で詳細を公開
+    for value in ["1", "true", "TRUE", "TrUe"] {
+        test_set_env("EXPOSE_INTERNAL_ERRORS", value);
+        let (status, text) = error_body().await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(
+            text.contains("no such table"),
+            "details must be visible for {value:?}: {text}"
+        );
+    }
 
     test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
