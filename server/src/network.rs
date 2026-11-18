@@ -5,7 +5,7 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::OnceLock;
 
 /// SEC-01: IPv4 接続を拒否（開発時はループバック IPv4 のみ許可可能）
@@ -185,42 +185,88 @@ fn ipv6_mask(prefix: u8) -> u128 {
     u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0)
 }
 
-/// IPv4-mapped IPv6（`::ffff:a.b.c.d`）を IPv4 として扱う。dual-stack で
-/// bind した場合、IPv4 接続のピアはこの形式で届くため、正規化しないと
-/// IPv4 拒否ゲート（SEC-01）が機能しない。
+/// IPv4-mapped IPv6（`::ffff:a.b.c.d`）と IPv4-compatible IPv6（`::a.b.c.d`）
+/// を IPv4 として扱う。dual-stack で bind した場合、IPv4 接続のピアは mapped
+/// 形式で届く。compatible 形式を放置すると IPv4 拒否ゲート（SEC-01）を
+/// `::192.0.2.1` のような表記ですり抜けられるため、mapped と同じく正規化する。
 fn canonical_ip(ip: IpAddr) -> IpAddr {
     match ip {
-        IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or(ip, IpAddr::V4),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .or_else(|| ipv4_compatible(v6))
+            .map_or(ip, IpAddr::V4),
         v4 => v4,
     }
 }
 
+/// IPv4-compatible IPv6（`::a.b.c.d`）を IPv4 として解釈する。
+///
+/// `::`（unspecified）と `::1`（loopback）は形式上は `::0.0.0.0` /
+/// `::0.0.0.1` と読めるが、正規の IPv6 アドレスとして保持する。これらを
+/// IPv4 化すると IPv6 ループバックの許可（既存運用）が壊れるためである。
+fn ipv4_compatible(v6: Ipv6Addr) -> Option<Ipv4Addr> {
+    if v6 == Ipv6Addr::UNSPECIFIED || v6 == Ipv6Addr::LOCALHOST {
+        return None;
+    }
+    let segments = v6.segments();
+    // compatible 形式は上位 6 セグメントがすべて 0（mapped はセグメント 5 が 0xffff）。
+    if segments[..6] != [0; 6] {
+        return None;
+    }
+    let bits = (u32::from(segments[6]) << 16) | u32::from(segments[7]);
+    Some(Ipv4Addr::from(bits))
+}
+
 /// 接続元 IP を決定する。`trust_forwarded` が true のときに限り
-/// `X-Forwarded-For` の末尾値（信頼済みプロキシが追記・上書きした値）を
-/// 採用し、解決できない場合は None を返して呼び出し側で拒否する
-/// （fail-closed）。false のときはピアアドレスを使う。クライアントが
-/// 注入できる先頭値は使用しない（NET-02）。
+/// `X-Forwarded-For` を採用し、解決できない場合は None を返して呼び出し側で
+/// 拒否する（fail-closed）。false のときはヘッダー全体を無視し、ピアアドレスを
+/// 使う。クライアントが注入できる値は信頼済みプロキシ経由でも安易に使わない
+/// （NET-02）。
 pub fn client_ip_from_request(
     headers: &HeaderMap,
     connect_ip: Option<IpAddr>,
     trust_forwarded: bool,
 ) -> Option<IpAddr> {
     if trust_forwarded {
-        return last_forwarded_ip(headers).map(canonical_ip);
+        return forwarded_client_ip(headers, connect_ip);
     }
     connect_ip.map(canonical_ip)
 }
 
-/// `X-Forwarded-For` の末尾エントリを IP として解釈する。
-/// 欠落・形式不正の場合は None を返し、呼び出し側で拒否する。
-fn last_forwarded_ip(headers: &HeaderMap) -> Option<IpAddr> {
-    headers
+/// 信頼済みプロキシ経由のクライアント IP を解決する。
+///
+/// 2 つの XFF 運用を区別する（NET-02）。
+///
+/// - 追記型: 末尾が接続元ピア（信頼プロキシ自身）と一致する。末尾のピア
+///   エントリを除いたチェーンの最左値を元のクライアントとして採用する。
+///   単一ホップではこれは「末尾を除いた直前の値」と一致し、複数ホップでも
+///   本来のクライアントを取り出せる。
+/// - 上書き型: 末尾がピアと一致しない。従来どおり末尾を採用する。
+///
+/// カンマ区切り・前後の空白は正規化し、1 つでも IP として解釈できない
+/// エントリがある場合は None（fail-closed）とする。
+fn forwarded_client_ip(headers: &HeaderMap, connect_ip: Option<IpAddr>) -> Option<IpAddr> {
+    let mut entries: Vec<IpAddr> = headers
         .get_all("x-forwarded-for")
         .iter()
         .filter_map(|value| value.to_str().ok())
         .flat_map(|value| value.split(','))
-        .next_back()
-        .and_then(|entry| entry.trim().parse::<IpAddr>().ok())
+        .map(|entry| entry.trim().parse::<IpAddr>().ok().map(canonical_ip))
+        .collect::<Option<Vec<_>>>()?;
+    let peer = connect_ip.map(canonical_ip);
+    let is_peer = |ip: IpAddr| peer.is_some_and(|peer| peer == ip);
+
+    if entries.last().copied().is_some_and(is_peer) {
+        // 追記型: 末尾のピア（複数ホップで連続し得る）をすべて除き、
+        // 残ったチェーンの最左値＝元のクライアントを採用する。
+        while entries.last().copied().is_some_and(is_peer) {
+            entries.pop();
+        }
+        return entries.first().copied();
+    }
+
+    // 上書き型: 従来どおり末尾を採用。
+    entries.last().copied()
 }
 
 pub fn is_ipv4(ip: IpAddr) -> bool {
@@ -280,7 +326,93 @@ mod tests {
         );
     }
 
-    /// 信頼済みプロキシで `X-Forwarded-For` を解決できない場合は拒否（fail-closed）
+    /// NET-02: 追記型 XFF では末尾のピア（信頼プロキシ自身）を除き、
+    /// 元のクライアントを採用する。`client, proxy1, peer` なら client。
+    #[test]
+    fn trusted_forwarded_header_drops_trailing_peer_and_uses_original_client() {
+        let peer: IpAddr = "2001:db8::1".parse().unwrap();
+        let client: IpAddr = "2001:db8::a".parse().unwrap();
+        let proxy1: IpAddr = "2001:db8::b".parse().unwrap();
+
+        // 3 ホップ: 末尾がピアなので、その直前だけでなく元のクライアントを採用。
+        let headers = xff_headers(&format!("{client}, {proxy1}, {peer}"));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(client)
+        );
+
+        // 単一ホップ: 「末尾を除いた直前の値」＝元のクライアント。
+        let headers = xff_headers(&format!("{client}, {peer}"));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(client)
+        );
+
+        // ピアが末尾に連続して追記されても元のクライアントを採用。
+        let headers = xff_headers(&format!("{client}, {peer}, {peer}"));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(client)
+        );
+
+        // 空白・IPv4/IPv6 混在・mapped ピアにも対応する。
+        let peer: IpAddr = "::ffff:203.0.113.1".parse().unwrap();
+        let client: IpAddr = "2001:db8::c".parse().unwrap();
+        let headers = xff_headers(&format!("  {client} , 203.0.113.9 , 203.0.113.1 "));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(client)
+        );
+    }
+
+    /// NET-02: 上書き型 XFF（末尾がピアでない）では従来どおり末尾を採用する。
+    #[test]
+    fn trusted_forwarded_header_overwrite_style_uses_last_entry() {
+        let peer: IpAddr = "2001:db8::1".parse().unwrap();
+        let last: IpAddr = "2001:db8::2".parse().unwrap();
+        let headers = xff_headers(&format!("203.0.113.5, {last}"));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(last)
+        );
+
+        // 追記型と誤判定しないよう、途中にピアが現れても末尾を採用する。
+        let headers = xff_headers(&format!("203.0.113.5, {peer}, {last}"));
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), true),
+            Some(last)
+        );
+    }
+
+    /// NET-02: 信頼プロキシ未設定時は複数値の XFF 全体が無視される。
+    #[test]
+    fn forwarded_header_ignored_when_proxy_untrusted_multi_value() {
+        let peer: IpAddr = "2001:db8::9".parse().unwrap();
+        let headers = xff_headers("203.0.113.1, 2001:db8::2, 2001:db8::1");
+        assert_eq!(
+            client_ip_from_request(&headers, Some(peer), false),
+            Some(peer)
+        );
+    }
+
+    /// 不正なエントリが混ざる XFF は fail-closed とする。
+    #[test]
+    fn trusted_forwarded_header_with_invalid_entry_is_rejected() {
+        let peer: IpAddr = "2001:db8::1".parse().unwrap();
+        for value in [
+            "2001:db8::a, not-an-ip, 2001:db8::1",
+            "2001:db8::a,,2001:db8::1",
+            "2001:db8::a, 2001:db8::1, not-an-ip",
+        ] {
+            assert_eq!(
+                client_ip_from_request(&xff_headers(value), Some(peer), true),
+                None,
+                "{value} must be rejected"
+            );
+        }
+    }
+
+    /// NET-02: 信頼済みプロキシで `X-Forwarded-For` を解決できない場合は拒否（fail-closed）
     #[test]
     fn trusted_forwarded_header_unresolved_is_rejected() {
         let connect = "2001:db8::ff".parse::<IpAddr>().unwrap();
@@ -310,6 +442,48 @@ mod tests {
         assert_eq!(
             client_ip_from_request(&xff_headers("::ffff:203.0.113.9"), None, true),
             Some(v4)
+        );
+    }
+
+    /// SEC-01: IPv4-compatible IPv6（`::a.b.c.d`）は IPv4 として正規化し、
+    /// mapped 形式と同じく拒否する。`::` / `::1` は IPv6 のまま保持する。
+    #[test]
+    fn ipv4_compatible_form_is_canonicalized_to_ipv4() {
+        let compatible: IpAddr = "::192.0.2.1".parse().unwrap();
+        let v4: IpAddr = "192.0.2.1".parse().unwrap();
+        assert_eq!(canonical_ip(compatible), v4);
+        assert_eq!(
+            client_ip_from_request(&HeaderMap::new(), Some(compatible), false),
+            Some(v4)
+        );
+        assert_eq!(
+            client_ip_from_request(&xff_headers("::192.0.2.1"), None, true),
+            Some(v4)
+        );
+
+        // 正規の IPv6 アドレス（unspecified / loopback / 通常のグローバル）は維持。
+        for original in ["::", "::1", "2001:db8::1"] {
+            let ip: IpAddr = original.parse().unwrap();
+            assert_eq!(canonical_ip(ip), ip, "{original} must stay IPv6");
+        }
+    }
+
+    /// SEC-01: IPv4-compatible 形式のクライアントは IPv4 ゲートで拒否される。
+    #[test]
+    fn evaluate_access_rejects_ipv4_compatible_form() {
+        let v6_peer: IpAddr = "2001:db8::9".parse().unwrap();
+        assert_eq!(
+            evaluate_access(&HeaderMap::new(), "::192.0.2.1".parse().unwrap(), false),
+            AccessDecision::Ipv4Forbidden
+        );
+        assert_eq!(
+            evaluate_access(&xff_headers("::192.0.2.1"), v6_peer, true),
+            AccessDecision::Ipv4Forbidden
+        );
+        // 上書き型 XFF の末尾が compatible 形式でも同样的に拒否する。
+        assert_eq!(
+            evaluate_access(&xff_headers("2001:db8::a, ::192.0.2.1"), v6_peer, true),
+            AccessDecision::Ipv4Forbidden
         );
     }
 
