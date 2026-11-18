@@ -844,6 +844,9 @@ pub async fn callback(
     }
 
     let user_hash = id_claims.sub;
+    // BAN 済み subject にはセッションを発行しない。INSERT / JWT 発行の前に
+    // refresh と同じ共通ゲートで拒否する（年齢ゲートの呼び出し順は変更しない）。
+    crate::ensure_user_not_banned(&state.db, &user_hash).await?;
     // 外部 HTTP（token exchange / JWKS 検証）はすべて上述で完了している。
     // 書き込みだけを write_lock 配下の tx で行い、HTTP 待ちでロックを保持しない。
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;

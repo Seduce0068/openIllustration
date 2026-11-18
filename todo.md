@@ -210,8 +210,9 @@ P2（品質・保守・プロダクト拡張）:
 
 - [ ] **JPKI 提示に所有証明（nonce 署名検証）を追加** — 根拠 `server/src/jpki.rs:27-45` / R3-AU01 / 重大度 critical。
   現状は証明書の公開鍵を取り出すだけで秘密鍵保持を検証せず、他人の公開証明書でなりすまし可能。
-- [ ] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
+- [x] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
   auth_verify/refresh は確認するが callback は欠落し、BAN 済み sub が再認証でセッション取得可能。
+  2026-11-19 対応: INSERT 前に ensure_user_not_banned、mutation 検証・回帰テスト追加。
 - [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:208-212` / R1-ST01 / 重大度 high。
   security_headers は X-Content-Type-Options/X-Frame-Options のみ。CSP は本番構成確定時に別途設計と明記済み。
 - [ ] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。

@@ -6722,6 +6722,97 @@ async fn test_oidc_start_and_callback() {
     assert!(body["token"].as_str().unwrap().len() > 20);
 }
 
+/// BAN 済み subject では OIDC callback がセッションを発行しない。
+/// `refresh` と同じく `ensure_user_not_banned` の固定文言 ("User is banned") で
+/// 403 を返し、INSERT / JWT 発行前に拒否されることを検証する。
+#[tokio::test]
+async fn test_oidc_callback_rejects_banned_user() {
+    for (kind, ban_until) in [("perm", "NULL"), ("timed", "datetime('now', '+1 day')")] {
+        let (app, oidc, mock, db) = setup_app_with_oidc().await;
+
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/auth/oidc/start")
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let started: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        let auth_state = started["state"].as_str().unwrap().to_string();
+        let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+        *mock.nonce.lock().unwrap() = Some(nonce);
+
+        // mock_token が発行する ID トークンの sub は "test-ppid"。
+        db.execute(
+            &format!(
+                "INSERT INTO users (user_hash, is_banned, ban_until) \
+                 VALUES ('test-ppid', TRUE, {ban_until})"
+            ),
+            (),
+        )
+        .await
+        .unwrap();
+
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get(format!(
+                    "/auth/oidc/callback?code=test-code&state={auth_state}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "{kind}: BAN 済み subject は 403 で拒否されること"
+        );
+
+        // セッション JWT / refresh token の Cookie が付いてはならない。
+        let cookies: Vec<String> = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .map(str::to_string)
+            .collect();
+        assert!(
+            cookies.iter().all(|cookie| !cookie.contains("session=")),
+            "{kind}: session JWT が発行されてはならない: {cookies:?}"
+        );
+        assert!(
+            cookies
+                .iter()
+                .all(|cookie| !cookie.contains("refresh_token=")),
+            "{kind}: refresh token が発行されてはならない: {cookies:?}"
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+        assert_eq!(
+            body["error"].as_str(),
+            Some("User is banned"),
+            "{kind}: BAN 理由は refresh と同じ固定文言であること"
+        );
+
+        // トークン発行前に拒否されているため refresh_tokens は空のまま。
+        let mut rows = db
+            .query("SELECT COUNT(*) FROM refresh_tokens", ())
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0, "{kind}: refresh token が保存されてはならない");
+    }
+}
+
 /// R1-23: pending は上限まで登録でき、上限超過は 429 で拒否される。
 #[tokio::test]
 async fn test_oidc_pending_limit_rejects_excess_registration() {
