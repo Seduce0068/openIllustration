@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T11:58:51+09:00"
+  at: "2026-11-18T13:19:58+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T11:58:51+09:00"
+  at: "2026-11-18T13:19:58+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -36,9 +36,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
-| セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与（IP ゲートの 403 を含む） | 単体テストと実サーバーで確認済み。CSP は未設計 |
-| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
-| ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、CORSオリジン解析テスト | 実プロキシ、多段構成、WAFは未検証 |
+| セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は未設計 |
+| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限のエラーパス5件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
+| ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証 | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
@@ -55,6 +55,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
+| 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 
 ## 3. 必須要件のリリースゲート
 
@@ -101,9 +102,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される | 実装済み・検証済み（chromium / firefox で2/2 pass。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `e2e/tests/export.spec.ts` の `R5-04: Export My Data` 内、`R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
-| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。実JPKI実機・失効確認は未検証 |
+| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス5件（`invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected`）を追加し、いずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。実JPKIの失効・期限切れは未検証 |
-| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。永続化・実OP連携は未検証 |
+| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_cookie_secure_setting`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ） | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装 |
@@ -116,9 +117,15 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
 | CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。下記「設定診断（`doctor`）の検証」を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
+| NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を全レスポンスへ付与する。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は未設計 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
+| PROP-01 | `prop_jpy_to_wei_boundaries_and_reference` | 任意の `u64` で panic しない。`0` と `MAX_ORDER_JPY` 超（上限+1 と `u64::MAX`）は `Err`、範囲内は `WEI_PER_JPY = 10^18` の独立参照値（u128 計算）と一致 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
+| PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
+| PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
+| PROP-04 | `prop_summarize_reason_truncates_safe_text_at_char_boundary` | PII を含まない文字（あ / 知 / A / b / 空白 / 改行 / 🍣 / 。、0..=160個）で、120文字以下は等価、超過は先頭119文字＋`…` に切り詰め（Unicode 境界を維持） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -236,10 +243,91 @@ P4 の jwt 警告はダミー PEM が無効なことによるもので、mock �
   27/28 形式を同じアドレスへ復元。
 - `test_order_expiry_boundary_is_inclusive`: `expires_at == now` も期限切れ（<= 判定）。
 
+### JPKI 証明書エラーパスの検証（ID-01）
+
+`server/src/jpki.rs` の `verify_presentation` を対象に、base64 デコード・X.509 パース・
+有効期限のエラーパス5件を検証する（a6eba14）。`assert_unauthorized_contains` が
+`AppError::Unauthorized` と固定メッセージの部分列を確認する。
+
+| テスト | 入力 | 期待 Unauthorized メッセージ |
+| --- | --- | --- |
+| `invalid_base64_token_is_unauthorized` | `!!!not-base64!!!` | `Invalid JPKI presentation token` |
+| `non_x509_bytes_are_rejected` | `AAECAw==`（base64 で `00 01 02 03`） | `X.509 parse failed` |
+| `expired_certificate_is_rejected` | rcgen で `not_before=2020-01-01` / `not_after=2021-01-01` の証明書 | `Certificate is expired or not yet valid` |
+| `envelope_without_credentials_falls_back_to_raw_token` | `{"certificate":null,"verifiableCredential":null}` | `Invalid JPKI presentation token`（JSON テキストを生 base64 としてデコードし失敗） |
+| `empty_token_is_rejected` | `""`（空バイト列は有効な base64） | `X.509 parse failed` |
+
+正常系の対照として `mock_token_requires_allow_flag` / `mock_token_with_key_succeeds` /
+`parses_rcgen_certificate` も維持する。実JPKI実機・失効確認は未検証。
+
+### ログアウト削除 Cookie の検証（ID-03）
+
+`POST /auth/logout` は DB 側のファミリ失効に加え、ブラウザへ残った Cookie を即時削除する。
+
+- `test_logout_clears_refresh_cookie`: 提示した `refresh_token` の値をエコーせず、
+  `refresh_token=;`（空値）、`Path=/auth;`、`HttpOnly`、`SameSite=Strict`、`Max-Age=0`
+  を含む `Set-Cookie` を返す。ステータスは200、本文は既存の `true` を維持する。
+- `test_logout_deletion_cookie_follows_cookie_secure_setting`: `OIDC_COOKIE_SECURE` が
+  `0` / `false` のときは Secure なし、`1` / 未設定のときは Secure 付き（未設定は fail-closed）。
+
+### 全レスポンスのセキュリティヘッダの検証（ID-06）
+
+`security_headers` を CORS 層の外側にも置き、CorsLayer が短絡するプリフライトにも
+`X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する。
+`assert_security_headers` で次の応答を検証する。
+
+| テスト | 対象応答 |
+| --- | --- |
+| `test_security_headers_on_error_response` | IP ゲートの 403 |
+| `test_security_headers_on_cors_preflight` | OPTIONS プリフライト（CorsLayer の短絡、成功ステータス 200/204） |
+| `test_security_headers_on_rate_limited_response` | レート制限の 429（1回目 404、2回目 429） |
+| `test_security_headers_on_internal_error_response` | IPFS ゲートウェイ未設定の 500 |
+| `test_security_headers_on_no_content_response` | `POST /metrics/client-events` の本文なし 204 |
+| 既存アサーション | 通常 200 のコンテンツ応答 |
+
+### 同時リクエスト上限の検証（NET-04）
+
+- `test_max_concurrent_requests_defaults_and_bounds`: 実装は
+  `.filter(|n| (1..=256).contains(n)).unwrap_or(DEFAULT)`。未設定 / `16` / `1` / `256` は
+  それぞれ 16 / 16 / 1 / 256。`0` / `-1` / `bad` / 空 / `257` /
+  `999999999999999999999999` はすべて既定16へフォールバック（上限へクランプしない）。
+- `test_concurrent_request_limit_rejects_second_and_releases_permit`: 同時実行上限1、
+  レート制限100/min の状態で `/hold` を `Notify` で保持する。`available_permits()` が 0 の間に
+  `/fast` の2件目は429、1件目を解放して200で完了すると permit が1に戻り3件目は200。
+
+### proptest の検証（PROP-01〜04）
+
+`server/src/tests.rs` の `mod property_tests` に4件。モジュールへ
+`#![proptest_config(ProptestConfig::with_cases(128))]` を設定しているため各128ケース。
+`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）で、テスト専用とする（79ca230）。
+
+- `prop_jpy_to_wei_boundaries_and_reference`: `0` / `MAX_ORDER_JPY` / `MAX_ORDER_JPY + 1` /
+  `u64::MAX` / 任意の `u64` で panic しない。0 と上限超は `Err`、範囲内は
+  ADR-0003 の `WEI_PER_JPY = 1_000_000_000_000_000_000` で乗じた独立参照値と一致する。
+- `prop_is_valid_cid_only_accepts_canonical_ascii`: 既知 CID（v0/v1）、空文字、
+  `🍣` 50連続、`a` 129連続、任意文字列で panic しない。空・非ASCII・128バイト超は拒否し、
+  受理値は v0（`Qm` + base58btc 計46文字）または v1（`b` + base32lower 1文字以上）の
+  独立 oracle を満たす。既知の正規 CID は必ず受理する。
+- `prop_summarize_reason_is_bounded_and_idempotent`: 任意の `String` で panic せず、
+  結果は120 Unicode 文字以下、空文字の対応を保持、再適用で値が変わらない（冪等）。
+- `prop_summarize_reason_truncates_safe_text_at_char_boundary`: あ / 知 / A / b / 空白 /
+  改行 / 🍣 / 。から0..=160個を連結した PII 非含有入力で、120文字以下は等価、
+  超過は先頭119文字＋`…` となる（Unicode 境界を維持）。
+
+根拠は金額が ADR-0003 の 10^18 最小単位、CID が v0/v1 の文字集合と形式、
+要約が MOD-08 の120文字上限と PII 除去の方針。設計技法はプロパティベーステストによる
+不変条件の検証と、仕様から導いた独立 oracle との照合である。
+
 ## 4. 実行コマンド
 
 ```bash
 cargo test --workspace
+cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（5件）
+cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
+cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
+cargo test -p server max_concurrent_requests_defaults_and_bounds   # NET-04 境界値
+cargo test -p server concurrent_request_limit_rejects_second_and_releases_permit   # NET-04 実リクエスト
+cargo test -p server property_tests   # PROP-01〜04（各128ケース）
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシーの回帰のみ
 cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
