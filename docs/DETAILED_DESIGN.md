@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T15:50:33+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -50,7 +50,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
 | GET | `/mod/stats` | Bearer JWT + 運用者 | 認証内集計。`AuthClaims` 必須かつ `require_moderation_operator`（未設定・未登録・BAN済みは403）。`generated_at` / `totals` / `monthly` のみをホワイトリスト方式で返し、CID・reason・`user_hash` は返さない |
-| GET | `/me/export` | Bearer JWT (`AuthClaims` 必須) | 自分のデータのエクスポート（R5-04）。`version:1` / `generated_at` / `sub` と12表（`users`, `contents`, `favorites`, `transactions`, `signatures`, `content_audit_log`, `reports`, `votes`, `payment_orders`, `governance_audit_log`, `refresh_tokens`, `revoked_subs`）の配列を返す。全行を返し行数上限・`truncated` フラグは設けない。`reason` / `details` は `mask_reason`（既定でマスク）、`token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID は除外。`Content-Disposition: attachment`、`Cache-Control: no-store`。本文はログへ出さない |
+| GET | `/me/export` | Bearer JWT (`AuthClaims` 必須) | 自分のデータのエクスポート（R5-04）。`version:1` / `generated_at` / `sub` と12表（`users`, `contents`, `favorites`, `transactions`, `signatures`, `content_audit_log`, `reports`, `votes`, `payment_orders`, `governance_audit_log`, `refresh_tokens`, `revoked_subs`）の配列を返す。全行を返し行数上限・`truncated` フラグは設けない。`reason` / `details` は `mask_reason`（既定でマスク）、`token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID は除外。`Content-Disposition: attachment`、`Cache-Control: no-store`。本文はログへ出さない。12表は単一の読み取りトランザクション（`BEGIN DEFERRED`）で読み切る |
 
 ### API横断規則
 
@@ -159,9 +159,17 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、
   モック環境を含め本人確認済み属性として信頼しない。詳細は [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) を参照。
-- 年齢ゲートは fail-closed。`AGE_ENFORCEMENT_MODE=trusted_attribute_required` では
-  検証済み属性の入力経路が未実装のため、`/auth/oidc/callback` と `/auth/refresh` を
-  `TrustedAttributeRequired` により 403 で拒否し、年齢判定のバイパスを防ぐ（R1-17）。
+- 年齢判定の基準日は `TZ` 環境変数で指定したローカルの「今日」。`validate_age`（`/auth/verify`）は
+  `std::env::var("TZ")` を読み、`validate_age_at` → `today_for_policy` で日付を求める。`Asia/Tokyo` は
+  日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号を反転（`Etc/GMT-9` = UTC+9）して解釈し、
+  未設定・未対応の TZ 名は UTC の日付へフォールバックする（fail-safe）。例: UTC 2024-01-01T16:00Z は
+  JST では 2024-01-02 01:00 となり、2003-01-02 生まれは JST 基準で 21 歳、UTC 基準では 20 歳として判定される。
+- 年齢ゲートは fail-closed。セッションを発行する全経路が共通ゲート `ensure_age_policy_configured`
+  （`server/src/lib.rs`）を通る。`AGE_ENFORCEMENT_MODE=trusted_attribute_required` では
+  `/auth/oidc/callback` と `/auth/refresh` が `TrustedAttributeRequired` を 403 で拒否し（R1-17）、
+  `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/0 のときは
+  `ConfigurationRequired` を 403 で拒否する。両経路は state / Cookie の消費より前にゲートを適用し、
+  数値年齢の判定は `/auth/verify` の `validate_age` に委ねる。
 
 ### OIDC認証フロー（実装済み・モックOPで検証）
 
@@ -499,6 +507,11 @@ INSERT を同じトランザクションでコミットする。この原子的�
   `governance_audit_log` / `refresh_tokens` / `revoked_subs` の12表。
 - トップレベル項目は `version:1` / `generated_at`（RFC 3339）/ `sub` と上記12表の配列。
   `revoked_sessions` は対象外。行数上限・`truncated` フラグは設けず全行を返す。
+- 12表の読み取りは単一の読み取りトランザクション（`Connection::transaction()` = `BEGIN DEFERRED`）内で実行する。
+  `collect_export_snapshot` が全クエリを同じトランザクションへ閉じ込め、`debug_assert!(!db.is_autocommit())`
+  で検証する（cargo test の debug ビルドで有効）。完了時に `tx.commit()` で共有ロックを解放し、
+  途中のクエリが失敗した場合は `libsql::Transaction` の Drop が ROLLBACK する。書き込みロックは取得せず、
+  実行中に別接続が書き込んでも全12表は単一時点のスナップショットになる。
 - `reason` / `details` は `mask_reason` により既定でマスクする（例: `[redacted:N bytes]`）。
 - `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` /
   他ユーザーID はレスポンスへ含めない。

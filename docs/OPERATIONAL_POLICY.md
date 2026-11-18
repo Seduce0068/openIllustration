@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-18T15:50:33+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -27,6 +27,11 @@ generated:
 - JWT署名鍵、JPKI信頼情報、JPYC運用鍵等の保管者、最小権限、ローテーション、漏えい時失効・再発行手順を定める。秘密をログや監査公開データへ出さない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*`）は非秘密情報として `GET /policy/age` で常時公開する。公開対象に秘密情報（`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`,
   `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン等）を含めない。ポリシー設定変更は運用者の責任で管理し、適用法令・専門家レビューの根拠を記録する。
+- `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` で `AGE_POLICY_CONFIGURED` が未設定/`0` のときは、
+  `/auth/verify` だけでなく `/auth/oidc/callback` と `/auth/refresh` も共通ゲート
+  `ensure_age_policy_configured` が `ConfigurationRequired` を 403 にして全経路 fail-closed とする。
+  `AGE_ENFORCEMENT_MODE=trusted_attribute_required` も同様に `TrustedAttributeRequired` を 403 にする。
+  設定ゲートは state / Cookie の消費より前に適用し、年齢数値判定は `/auth/verify` に委ねる。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
 - 実JPKI/マイナアプリの信頼検証が未完成の現行プロトタイプは、本番利用資格判定に使わない。
 - ログアウト時は `sid` とリフレッシュファミリの失効に加え、`/auth/logout` が
@@ -228,7 +233,8 @@ generated:
 | `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |
 | `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。 |
-| `AGE_POLICY_CONFIGURED` | 任意（非秘密） | `false` | 運用者が設定を確認/確定したことを示すフラグ。 |
+| `AGE_POLICY_CONFIGURED` | 任意（非秘密） | `false` | 運用者が設定を確認/確定したことを示すフラグ。`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` と併用し、未設定/`0` では `/auth/verify` / OIDC callback / refresh の全経路が 403（fail-closed）。 |
+| `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
 | `PAYMENT_RECEIVING_XPRV` | 任意 | 未設定 | BIP44派生用のxprv。設定時は注文ごとの受取アドレスを派生し、`PAYMENT_RECEIVING_ADDRESS` より優先する。秘密管理基盤から注入し、ログへ出さない。 |
 | `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。 |

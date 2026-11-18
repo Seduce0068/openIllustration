@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -25,6 +25,8 @@ generated:
    - 既定値は保守的に保つ。運用者が設定を変更/緩和する場合は、適用法令・利用規約・対象コンテンツ・専門家レビューに基づく責任で行う。
 3. **フェイルクローズ選択肢（明示設定の要求）**
    - `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED=0` の場合、年齢検証は通過させず拒否する（設定未完了としてフェイルクローズ）。
+   - セッション発行の全経路（`/auth/verify` と OIDC の callback / refresh）が同じ設定ゲートで
+     拒否する（後者は `ConfigurationRequired` / `TrustedAttributeRequired` を 403 に変換）。
 4. **信頼できる属性に依存する検証方向（DEC-01連携）**
    - `AGE_ENFORCEMENT_MODE=trusted_attribute_required`（別名 `trusted_attribute`）は、検証済み年齢/居住地属性の入力経路が実装・接続されるまでフェイルクローズとする。
    - 現行API入力（`birth_date`, `country_code`）は自己申告であり、本人確認済み属性ではない（モック環境では特に信頼しない）。
@@ -41,8 +43,13 @@ generated:
 - [common/src/age.rs](../common/src/age.rs): `AgePolicy`, `AgeEnforcementMode`, `AgeValidationError`,
   `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`。
 - [server/src/lib.rs](../server/src/lib.rs): 起動時に `AgePolicy::from_env()` を読み込み検証（不正値は起動失敗）、`AppState.age_policy` に保持、
-  `GET /policy/age` を公開、投稿時の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
-- [server/src/tests.rs](../server/src/tests.rs): `GET /policy/age` の公開応答、明示設定必須/信頼属性必須モードのフェイルクローズ等を検証。
+  `GET /policy/age` を公開、`/auth/verify` の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
+  `validate_age_at` / `today_for_policy` が基準日をローカル TZ で求め、`ensure_age_policy_configured` が
+  セッション発行経路の設定ゲートを共通化する。
+- [server/src/oidc.rs](../server/src/oidc.rs): `/auth/oidc/callback` と `/auth/refresh` が
+  `ensure_age_policy_configured(&state.age_policy)?` を state / Cookie の消費より前に呼ぶ。
+- [server/src/tests.rs](../server/src/tests.rs): `GET /policy/age` の公開応答、明示設定必須/信頼属性必須モードのフェイルクローズ、
+  callback / refresh の共通ゲート拒否、TZ 境界の基準日を検証。
 
 ### 2.2 設定（すべて非秘密）
 
@@ -62,6 +69,23 @@ generated:
 - `GET /policy/age`（認証不要）: 有効な年齢/地域ポリシー設定値を返す。設定値は常に公開される前提のため、秘密情報を含めない。
 - 応答例の主なフィールド: `default_minimum_age`, `country_minimums`, `target_regions`, `operator_configured`,
   `require_explicit_configuration`, `enforcement_mode`, `settings_always_public`, `notes`。
+
+### 2.4 基準日（ローカル TZ）
+
+年齢判定の基準日は UTC の日付ではなく `TZ` 環境変数が指定するローカルの「今日」である。
+`validate_age` は `std::env::var("TZ")` を読み、`today_for_policy` が次の規則で日付を求める。
+
+| `TZ` の値 | 解釈される基準日 | 根拠 |
+| --- | --- | --- |
+| 未設定 / `UTC` / 未対応名（例: `America/New_York`） | UTC の現在日 | 未知の TZ で境界を意図せず早めない fail-safe な既定 |
+| `Asia/Tokyo`（前後の空白は除去、大文字小文字を問わない） | 固定オフセット UTC+9 の現在日 | 日本に夏時間がなくオフセットが変化しないため |
+| `Etc/GMT±N` | POSIX 規約に従い符号を反転（例: `Etc/GMT-9` = UTC+9、`Etc/GMT+5` = UTC-5） | `chrono::FixedOffset` への変換 |
+
+JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01:00` になる。
+既定の最低年齢 21 歳に対し、`2003-01-02` 生まれは JST（`Asia/Tokyo` / `Etc/GMT-9`）基準では
+2024-01-02 時点で 21 歳として受理され、UTC（`TZ` 未設定 / `UTC`）基準では 2024-01-01 時点で
+20 歳として 403 で拒否される。基準日が 1 日ずれるだけでも判定が反転し得るため、
+本番では `TZ` を対象地域に合わせて明示設定する（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) 参照）。
 
 ## 3. 現行の制約・未完了事項
 

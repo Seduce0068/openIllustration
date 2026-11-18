@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T15:50:33+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T15:50:33+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 status: current
 ---
 
@@ -66,6 +66,22 @@ status: current
     検査は11→13カテゴリ、bin テストは20→24件。`env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
     の実出力で13 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+  - [対応済み（未コミット）] 年齢ゲートの共通化: `ensure_age_policy_configured` を
+    `/auth/oidc/callback` と `/auth/refresh` の state / Cookie 消費前に適用。`ConfigurationRequired`
+    （`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/0）と
+    `TrustedAttributeRequired` を 403 に変換し、数値判定は `/auth/verify` に委ねる。
+    サーバー側テスト1件（AGE-03、
+    [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  - [対応済み（未コミット）] 年齢基準日のローカル TZ 化: `validate_age` が `TZ` を読み、
+    `today_for_policy` が `Asia/Tokyo`（UTC+9）と `Etc/GMT±N`（POSIX 符号反転）を解釈、
+    未設定・未対応名は UTC へフォールバック。JST 深夜の境界例を含むサーバー側テスト2件（AGE-04、
+    [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+  - [対応済み（未コミット）] `/me/export` の読み取りトランザクション化: 12表を
+    `Connection::transaction()`（`BEGIN DEFERRED`）で包み、`debug_assert!(!db.is_autocommit())` と
+    明示 `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点
+    スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
+    [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+    今回の5件はいずれもサーバー側テストであり、E2E 定義数は35件のまま変更しない。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -339,8 +355,10 @@ status: current
   OIDC の HTTP クライアントへ適用。境界値テストを追加し、mutation（範囲検査削除）で
   テスト失敗を確認。
 - [対応済み] C2 / R1-21: `/auth/login` を `ALLOW_MOCK_AUTH` でゲートし、無効時は 501 を返すよう修正。設計書の「開発用モック経路は `ALLOW_MOCK_AUTH=1` の場合のみ有効」と整合。mutation（ゲート削除）でテスト失敗を確認。
-- [対応済み] R1-17（fail-closed 側）: `TrustedAttributeRequired` モードで OIDC callback / refresh を
-  403 で拒否し年齢ゲートのバイパスを遮断。mutation（ゲート削除）でテスト失敗を確認。
+- [対応済み] R1-17（fail-closed 側）: OIDC callback / refresh を共通ゲート
+  `ensure_age_policy_configured` で保護。`TrustedAttributeRequired` と
+  `ConfigurationRequired`（`AGE_POLICY_CONFIGURED` 未設定）の両方を 403 で拒否し年齢ゲートの
+  バイパスを遮断。mutation（ゲート削除）でテスト失敗を確認。
   信頼属性の実入力経路は外部 OP のクレーム仕様待ち（DEC-01）。
 - [対応済み] R1-10: Tailwind をビルド時 CSS 化（`@tailwindcss/cli` 4.3.5、MIT、一次情報確認済み）。実行時 CDN と外部フォントを除去し、E2E ビルドで外部参照の残存をゲート。
 - [対応済み] R1-24: ウォレット所有証明（bind）を `wallet_bound` 列へ永続化（migration 010）。未バインド注文は verify を 400 で拒否。既存注文は既定 0 で fail-closed。mutation（必須条件削除）でテスト失敗を確認。

@@ -8,7 +8,7 @@ tags:
   - tasks
 generated:
   by: dsh (lead)
-  at: "2026-11-18T15:50:33+09:00"
+  at: "2026-11-18T16:37:20+09:00"
 status: current
 ---
 
@@ -23,7 +23,14 @@ status: current
 
 P0（本番公開前に解消すべきセキュリティ／データ完全性）:
 
-- [x] 年齢ゲートの OIDC バイパスを遮断（R1-17、信頼属性必須モードで callback/refresh を 403。2026-11-17 対応済み）
+- [x] 年齢ゲートの OIDC バイパスを遮断（R1-17、2026-11-18 未コミット対応）: callback / refresh が
+  共通ゲート `ensure_age_policy_configured` を state / Cookie の消費前に呼び、
+  `TrustedAttributeRequired` と `ConfigurationRequired`（`AGE_POLICY_CONFIGURED` 未設定）を 403 にする。
+  AGE-03 のサーバー側テスト1件（AGE-02 の旧ゲートは 2026-11-17 対応済み）
+- [x] 年齢判定の基準日を `TZ` ローカル日付へ（2026-11-18 対応済み・未コミット、AGE-04）:
+  `validate_age` が `TZ` を読み、`Asia/Tokyo`（UTC+9）/`Etc/GMT±N`（POSIX 符号反転）を解釈、
+  未設定・未対応名は UTC へフォールバック。JST 深夜境界（`2003-01-02` 生まれが JST で21歳・UTC で20歳）
+  を含むサーバー側テスト2件
 - [ ] 信頼できる年齢属性の実入力経路（外部 OP/JPKI のクレーム仕様確定後: DEC-01）
 - [x] 通報中・却下コンテンツの直接 CID 取得を 404 化（R2-09、2026-11-17 対応済み）
 - [x] refresh Cookie の `Path` を `/auth` へ広げ、logout 時のファミリ失効を有効化（R1-18、2026-11-17 対応済み）
@@ -61,6 +68,10 @@ P1（本番運用の健全性）:
   `Policy::none()` で 3xx は追従せずフェイルオーバー、NET-05 / NET-06）
 - [x] `doctor --strict` の警告対象へ `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` を追加
   （2026-11-18 対応済み・未コミット、11→13カテゴリ・20→24テスト、CLI-01 / CFG-01）
+- [x] `/me/export` の12表読み取りを単一の読み取りトランザクション化（2026-11-18 対応済み・未コミット、
+   EXPORT-09 / EXPORT-10）: `BEGIN DEFERRED` で包み、`debug_assert!(!db.is_autocommit())` と明示
+   `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点スナップショットを
+   返す検証を含むサーバー側テスト2件。E2E は35件のまま
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
@@ -142,6 +153,11 @@ P2（品質・保守・プロダクト拡張）:
   DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / INFRA_NETWORK /
   TASK_INVENTORY へ記載。E2E は35件のまま。frontmatter 日時は `date` 実測値へ更新。
   git commit/push は親エージェントが実施。
+- [x] 年齢ゲート共通化・TZ ローカル日付・`/me/export` 読み取りトランザクションのドキュメント反映
+   （2026-11-18）: 実コードを grep して確定した値のみを DETAILED_DESIGN / AGE_VALIDATION_POLICY /
+   OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY へ記載。新規テスト5件は
+   AGE-03 / AGE-04 / EXPORT-09 / EXPORT-10 の各ゲートへ反映し、E2E 定義は35件のまま。
+   frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
 
@@ -150,3 +166,5 @@ P2（品質・保守・プロダクト拡張）:
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。
 - P0 の R1-17 / R1-18 / R2-09 はコード上確定（Runtime Proof 済み）。
   他の項目はレポートの静的推論を含むため、着手時に事実確認する。
+- 今回の反映は未コミットの `server/src/lib.rs` / `oidc.rs` / `tests.rs` を grep した確定値に基づく。
+  E2E 定義数35件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。
