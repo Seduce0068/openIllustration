@@ -35,18 +35,46 @@ assert_numbers_match "e2e total" "$e2e_total" "$measured_n"
 
 # 内訳は「実測は全...件」から「この内訳は...」までの行に限定して抽出する。
 breakdown_block="$(awk '/実測は全[0-9]+件/{inside=1} inside{print} /この内訳は/{inside=0}' "$spec")"
-e2e_labels=(auth build-gate economy error-paths export favorites integrity metrics moderation real-api search upload)
+
+# ドキュメント内訳は "<label> <count>"（例: auth 2 / build-gate 1）で書かれる。
+# 行の順序に依存せず label -> count の連想配列へパースする。
+declare -A documented_breakdown=()
+while IFS= read -r pair; do
+	[[ -z "$pair" ]] && continue
+	documented_breakdown["${pair%% *}"]="${pair##* }"
+done < <(grep -oE '[A-Za-z0-9][A-Za-z0-9_-]* [0-9]+' <<<"$breakdown_block" || true)
+
+# ラベルは e2e/tests/*.spec.ts の basename（.spec.ts を除く）から動的生成する。
+# 固定配列だと新規 spec 追加時にドキュメント側の新ラベルが照合されず誤 FAIL になる。
+mapfile -t e2e_labels < <(
+	for spec_file in e2e/tests/*.spec.ts; do
+		[[ -f "$spec_file" ]] || continue
+		name="${spec_file##*/}"
+		printf '%s\n' "${name%.spec.ts}"
+	done | sort
+)
+
+# ドキュメント側に実 spec が存在しないラベルが残っていないことも照合する。
+for label in "${!documented_breakdown[@]}"; do
+	if [[ ! -f "e2e/tests/${label}.spec.ts" ]]; then
+		echo "FAIL e2e breakdown: documented label '${label}' has no matching spec file" >&2
+		failures=$((failures + 1))
+	fi
+done
+
 breakdown_sum=0
 for label in "${e2e_labels[@]}"; do
-	documented="$(grep -oE "${label} [0-9]+" <<<"$breakdown_block" | grep -oE '[0-9]+' | head -n1 || true)"
+	documented="${documented_breakdown[$label]:-}"
 	actual="$(grep -c '^  test(' "e2e/tests/${label}.spec.ts" || true)"
 	assert_numbers_match "e2e ${label}" "$actual" "$documented"
-	breakdown_sum=$((breakdown_sum + ${documented:-0}))
+	# 先頭ゼロ付き数値を8進数として解釈しないよう 10# を付ける。
+	breakdown_sum=$((breakdown_sum + 10#${documented:-0}))
 done
 assert_numbers_match "e2e breakdown sum" "$e2e_total" "$breakdown_sum"
 
 # --- 2. doctor チェック数 -------------------------------------------------
-doctor_checks="$(grep -c 'results.push' server/src/bin/doctor.rs || true)"
+# コメント行の "results.push" を数えないよう、行頭（空白 + results.push(）に限定する。
+doctor_checks="$(grep -cE '^[[:space:]]*results\.push\(' server/src/bin/doctor.rs || true)"
 doctor_lines="$(grep -rnE --include='*.md' '[0-9]+ check\(s\)' docs || true)"
 if [[ -z "$doctor_lines" ]]; then
 	echo "FAIL doctor check(s): no documented 'N check(s)' line found in docs" >&2
