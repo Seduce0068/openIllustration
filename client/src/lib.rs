@@ -57,6 +57,9 @@ const API_BASE: ApiOrigin = ApiOrigin;
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
+/// エクスポートの保存ファイル名。ユーザー入力を一切使わない固定値（パス注入対策）。
+const EXPORT_FILENAME: &str = "openillustration-export.json";
+
 /// 本文と TOC で共有する見出し情報。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeadingEntry {
@@ -671,6 +674,24 @@ impl DataExport {
     }
 }
 
+/// ダウンロード開始に失敗したときに表示する固定文言。
+/// JS 側の例外メッセージは機微情報を含み得るため表示には使わない。
+fn download_start_error_message() -> &'static str {
+    "ダウンロードの開始に失敗しました。"
+}
+
+/// `anchor.click()` が投げる JS 例外を Rust の `Err` へ変換して捕捉する。
+/// web-sys の `click()` は例外を catch できないため、catch 付きの薄い JS ラッパーを介する。
+#[wasm_bindgen(inline_js = r#"
+export function click_download_anchor(anchor) {
+    anchor.click();
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(catch, js_name = click_download_anchor)]
+    fn click_download_anchor(anchor: &web_sys::HtmlAnchorElement) -> Result<(), JsValue>;
+}
+
 /// レスポンスの JSON をそのまま（未知のフィールドも含めて）pretty print して
 /// Blob → object URL → `<a download>` で保存する。object URL はダウンロード
 /// 開始後に revoke する（同期的な revoke は一部ブラウザで保存を中断するため）。
@@ -703,7 +724,10 @@ fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(),
     if let Some(body) = &body {
         let _ = body.append_child(&anchor);
     }
-    anchor.click();
+    // click が例外を投げても Err に変換して保持する。アンカーの後始末と
+    // object URL の revoke 予約は失敗時も済ませてから呼び出し元へ返す。
+    let click_result =
+        click_download_anchor(&anchor).map_err(|_| download_start_error_message().to_string());
     if let Some(body) = &body {
         let _ = body.remove_child(&anchor);
     }
@@ -713,8 +737,12 @@ fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(),
         let _ = web_sys::Url::revoke_object_url(&url_to_revoke);
     });
     // 保存が開始される前に revoke するとダウンロードがキャンセルされるため遅延させる。
-    let _ =
-        window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 1_000);
+    // 1 秒では保存開始が遅いブラウザ（低速ストレージやセキュリティスキャン等）で
+    // object URL が失効し得るため、10 秒に延長する。
+    let _ = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000);
+
+    click_result?;
     Ok(())
 }
 
@@ -1151,7 +1179,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 let count = serde_json::from_value::<DataExport>(payload.clone())
                     .map(|data| data.record_count())
                     .unwrap_or(0);
-                download_json_file(&payload, "openillustration-export.json")?;
+                download_json_file(&payload, EXPORT_FILENAME)?;
                 Ok(format!(
                     "エクスポート完了: {count} 件のレコードをダウンロードしました。"
                 ))
@@ -1204,6 +1232,17 @@ fn verification_badge_text(verified: Option<bool>, decode_failed: bool) -> &'sta
     }
 }
 
+/// お気に入り更新の失敗文言を状態から決める純粋ヘルパー。
+/// 401 だけ再ログインを案内し、それ以外は従来の文言を維持する。
+/// `None` は通信エラー（HTTP ステータスが無い）を表す。
+fn favorite_error_message(status: Option<u16>) -> String {
+    match status {
+        Some(401) => "再ログインが必要です。".to_string(),
+        Some(status) => format!("Failed to update favorite (HTTP {status})."),
+        None => "Network error updating favorite.".to_string(),
+    }
+}
+
 #[component]
 fn ContentViewer<F>(
     cid: String,
@@ -1240,9 +1279,16 @@ where
     // 成功時に親へ通知して一覧を再取得する。
     let (favorite, set_favorite) = signal(is_favorite);
     let (favorite_error, set_favorite_error) = signal(String::new());
+    // 送信中の二重クリックを防ぐガード。成功・失敗いずれでも必ず解除する。
+    let (favorite_busy, set_favorite_busy) = signal(false);
 
     let favorite_cid = cid.clone();
     let toggle_favorite = move |_| {
+        // 同期ガード。DOM の disabled 反映より前に届く2回目のクリックもここで止める。
+        if favorite_busy.get() {
+            return;
+        }
+        set_favorite_busy.set(true);
         let cid = favorite_cid.clone();
         let token = token_stored.get_value();
         let turning_on = !favorite.get();
@@ -1266,15 +1312,14 @@ where
                     on_favorite_changed();
                 }
                 Ok(response) => {
-                    set_favorite_error.set(format!(
-                        "Failed to update favorite (HTTP {}).",
-                        response.status()
-                    ));
+                    set_favorite_error.set(favorite_error_message(Some(response.status())));
                 }
                 Err(_) => {
-                    set_favorite_error.set("Network error updating favorite.".to_string());
+                    set_favorite_error.set(favorite_error_message(None));
                 }
             }
+            // 成否にかかわらずガードを解除し、次のトグルを受け付けられるようにする。
+            set_favorite_busy.set(false);
         });
     };
 
@@ -1367,9 +1412,11 @@ where
                     <button
                         type="button"
                         on:click=toggle_favorite
+                        data-testid="favorite-toggle"
+                        disabled=move || favorite_busy.get()
                         aria-label=move || if favorite.get() { "Remove from favorites" } else { "Add to favorites" }
                         aria-pressed=move || if favorite.get() { "true" } else { "false" }
-                        class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors">
+                        class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
                         {move || if favorite.get() { "★" } else { "☆" }}
                     </button>
                     <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
@@ -1379,7 +1426,7 @@ where
                 </div>
             </div>
             <Show when=move || !favorite_error.get().is_empty() fallback=|| ()>
-                <p role="alert" class="text-[8px] text-red-500">{move || favorite_error.get()}</p>
+                <p role="alert" data-testid="favorite-error" class="text-[8px] text-red-500">{move || favorite_error.get()}</p>
             </Show>
             <div class="border-b border-white/10 pb-3" inner_html=meta_html />
 
@@ -2053,6 +2100,30 @@ mod tests {
     }
 
     #[test]
+    fn favorite_error_message_uses_dedicated_401_text() {
+        assert_eq!(
+            super::favorite_error_message(Some(401)),
+            "再ログインが必要です。"
+        );
+    }
+
+    #[test]
+    fn favorite_error_message_keeps_existing_http_and_network_text() {
+        assert_eq!(
+            super::favorite_error_message(Some(500)),
+            "Failed to update favorite (HTTP 500)."
+        );
+        assert_eq!(
+            super::favorite_error_message(Some(403)),
+            "Failed to update favorite (HTTP 403)."
+        );
+        assert_eq!(
+            super::favorite_error_message(None),
+            "Network error updating favorite."
+        );
+    }
+
+    #[test]
     fn markdown_headings_get_ids_for_h1_h2_h3() {
         let rendered = super::render_markdown("# Alpha\n\n## Beta\n\n### Gamma\n");
         assert!(rendered.contains("<h1 id=\"alpha\">"), "{rendered}");
@@ -2628,6 +2699,21 @@ mod tests {
         assert_eq!(data.generated_at, "");
         assert!(data.contents.is_empty());
         assert_eq!(data.record_count(), 0);
+    }
+
+    /// ダウンロード開始失敗時は JS 例外の詳細を出さず固定文言だけを表示する。
+    #[test]
+    fn download_start_error_message_is_fixed_phrase() {
+        assert_eq!(
+            super::download_start_error_message(),
+            "ダウンロードの開始に失敗しました。"
+        );
+    }
+
+    /// 保存ファイル名は固定値で、ユーザー入力から組み立てられないこと。
+    #[test]
+    fn export_filename_is_fixed_constant() {
+        assert_eq!(super::EXPORT_FILENAME, "openillustration-export.json");
     }
 }
 
