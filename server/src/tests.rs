@@ -741,6 +741,62 @@ fn test_rate_limit_configuration() {
     assert_eq!(crate::max_concurrent_requests(Some("bad")), 16);
 }
 
+/// R4-02: `MAX_CONCURRENT_REQUESTS` の境界値。
+/// 実装は `.filter(|n| (1..=256).contains(n)).unwrap_or(DEFAULT)` なので、
+/// 範囲外の値は上限 256 へクランプせず既定値 16 に倒れる（安全側の既定）。
+#[test]
+fn test_max_concurrent_requests_defaults_and_bounds() {
+    // 未設定と有効範囲内の値。
+    assert_eq!(
+        crate::max_concurrent_requests(None),
+        16,
+        "未設定は既定値 16"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("1")),
+        1,
+        "下限 1 は有効"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("16")),
+        16,
+        "既定値そのもの"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("256")),
+        256,
+        "上限 256 は有効"
+    );
+
+    // 不正値・範囲外はすべて既定値 16 にフォールバックする。
+    assert_eq!(crate::max_concurrent_requests(Some("0")), 16, "0 は範囲外");
+    assert_eq!(
+        crate::max_concurrent_requests(Some("-1")),
+        16,
+        "負数はパース失敗"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("bad")),
+        16,
+        "非数値はパース失敗"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("")),
+        16,
+        "空文字はパース失敗"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("257")),
+        16,
+        "上限超過はクランプではなく既定値に倒れる"
+    );
+    assert_eq!(
+        crate::max_concurrent_requests(Some("999999999999999999999999")),
+        16,
+        "極端な過大値（usize オーバーフロー）も既定値に倒れる"
+    );
+}
+
 /// CORS プリフライト（OPTIONS）はレート制限のクォータを消費しない。
 #[tokio::test]
 async fn test_rate_limit_ignores_preflight() {
@@ -915,6 +971,14 @@ async fn untrusted_network_middleware(
 }
 
 async fn rate_limit_test_state(per_minute: u32) -> Arc<AppState> {
+    rate_limit_test_state_with_concurrency(per_minute, 16).await
+}
+
+/// 同時実行上限を明示してレート制限テスト用の状態を作る。
+async fn rate_limit_test_state_with_concurrency(
+    per_minute: u32,
+    concurrency: usize,
+) -> Arc<AppState> {
     use std::num::NonZeroU32;
     let db = Arc::new(
         Builder::new_local(":memory:")
@@ -947,7 +1011,7 @@ async fn rate_limit_test_state(per_minute: u32) -> Arc<AppState> {
             limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
                 NonZeroU32::new(per_minute).unwrap(),
             )),
-            concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
+            concurrency: Arc::new(tokio::sync::Semaphore::new(concurrency)),
         })),
     })
 }
@@ -1051,6 +1115,100 @@ async fn test_rate_limit_key_falls_back_to_peer_without_trusted_proxy() {
     assert_eq!(
         rate_limit_request(app, RATE_LIMIT_UNTRUSTED_PEER, None).await,
         StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+/// R4-02: 同時実行上限 1 の動作を実リクエストで検証する。
+///
+/// 1 個目を遅延ハンドラで保持している間は 2 個目が 429 になり、
+/// 1 個目を解放して permit が返却されると再リクエストが通る。
+/// レート制限（IP 単位クォータ）は十分大きくして同時実行上限だけを切り分ける。
+#[tokio::test]
+async fn test_concurrent_request_limit_rejects_second_and_releases_permit() {
+    // ハンドラの開始通知と、1 個目を保持するための通知。
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let handler_entered = Arc::clone(&entered);
+    let handler_release = Arc::clone(&release);
+
+    let state = rate_limit_test_state_with_concurrency(100, 1).await;
+    // permit の取得／返却を直接観測するためのハンドル（layer に渡す前に複製）。
+    let concurrency = Arc::clone(&state.rate_limit.as_ref().unwrap().concurrency);
+    let app = Router::new()
+        .route(
+            "/hold",
+            axum::routing::get(move || {
+                let entered = Arc::clone(&handler_entered);
+                let release = Arc::clone(&handler_release);
+                async move {
+                    entered.notify_one();
+                    release.notified().await;
+                    StatusCode::OK
+                }
+            }),
+        )
+        .route("/fast", axum::routing::get(|| async { StatusCode::OK }))
+        .layer(axum::middleware::from_fn_with_state(
+            state,
+            crate::rate_limit_middleware,
+        ));
+
+    let peer = test_ipv6_peer();
+    let hold_request = || Request::get("/hold").body(Body::empty()).unwrap();
+    let fast_request = || Request::get("/fast").body(Body::empty()).unwrap();
+
+    // 1 個目を別タスクで開始し、ハンドラ到達（permit 取得済み）まで待つ。
+    let first = tokio::spawn({
+        let app = app.clone();
+        async move {
+            app.oneshot(with_peer(hold_request(), peer))
+                .await
+                .unwrap()
+                .status()
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified())
+        .await
+        .expect("1 個目のリクエストがハンドラに到達しなかった");
+    assert_eq!(
+        concurrency.available_permits(),
+        0,
+        "1 個目が唯一の permit を保持していること"
+    );
+
+    // 2 個目は /fast（即座に応答する）へ送る。permit が無いため 429 になる。
+    // /fast を使うことで、失敗分岐が外れた mutation ではハングせず 200 となり即検知できる。
+    let second = app
+        .clone()
+        .oneshot(with_peer(fast_request(), peer))
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(
+        second,
+        StatusCode::TOO_MANY_REQUESTS,
+        "同時実行上限を超えた 2 個目は 429 で拒否されること"
+    );
+
+    // 1 個目を解放して完了を待つ。
+    release.notify_one();
+    assert_eq!(first.await.unwrap(), StatusCode::OK);
+    assert_eq!(
+        concurrency.available_permits(),
+        1,
+        "1 個目の完了で permit が返却されること"
+    );
+
+    // permit が返却されているので、次のリクエストは通る。
+    let third = app
+        .oneshot(with_peer(fast_request(), peer))
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(
+        third,
+        StatusCode::OK,
+        "permit 解放後は再リクエストが通ること"
     );
 }
 
@@ -1380,8 +1538,102 @@ async fn test_security_headers_on_error_response() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert_security_headers(&response);
+}
+
+/// 全レスポンスに必須のセキュリティヘッダが付いていることを検証する。
+fn assert_security_headers(response: &Response) {
     assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
     assert_eq!(response.headers()["X-Frame-Options"], "DENY");
+}
+
+/// SEC-01: CORS プリフライト（OPTIONS）にもセキュリティヘッダを付与する。
+/// CorsLayer は OPTIONS を短絡して内側のミドルウェアを通さないため、
+/// 外側の security_headers が無いとヘッダが欠落する。
+#[tokio::test]
+async fn test_security_headers_on_cors_preflight() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::options("/auth/login")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    // tower-http のプリフライトは内側を通らず短絡する（200 または 204）。
+    assert!(
+        response.status().is_success(),
+        "preflight must be short-circuited by CorsLayer: {}",
+        response.status()
+    );
+    assert_security_headers(&response);
+}
+
+/// SEC-01: レート制限の 429 レスポンスにもセキュリティヘッダを付与する。
+#[tokio::test]
+async fn test_security_headers_on_rate_limited_response() {
+    let state = rate_limit_test_state(1).await;
+    let app = build_router(state);
+    let peer = test_ipv6_peer();
+    let request = || {
+        with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            peer,
+        )
+    };
+    assert_eq!(
+        app.clone().oneshot(request()).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    let response = app.oneshot(request()).await.unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_security_headers(&response);
+}
+
+/// SEC-01: IPFS ゲートウェイ未設定の 500 レスポンスにもセキュリティヘッダを付与する。
+#[tokio::test]
+async fn test_security_headers_on_internal_error_response() {
+    let (app, db) = setup_app_with_options(Vec::new(), Duration::from_secs(1), true).await;
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Illustration', 'test_user', 'unused', 'Approved');",
+        (),
+    )
+    .await
+    .unwrap();
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content/QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_security_headers(&response);
+}
+
+/// SEC-01: 本文なしの 204 レスポンスにもセキュリティヘッダを付与する。
+#[tokio::test]
+async fn test_security_headers_on_no_content_response() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"neutralized_url"}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_security_headers(&response);
 }
 
 /// SEC-01: パブリック IPv4 は 403
@@ -6116,6 +6368,107 @@ async fn test_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// R1-18: ログアウト時に refresh_token Cookie を Max-Age=0 で削除する。
+/// DB 側のファミリ失効だけではブラウザに 30 日残ってしまう。
+#[tokio::test]
+async fn test_logout_clears_refresh_cookie() {
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    const SENT_REFRESH: &str = "sent_refresh_token_must_not_be_echoed";
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .header(header::COOKIE, format!("refresh_token={SENT_REFRESH}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .collect();
+    let deletion = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("refresh_token="))
+        .expect("logout must set a refresh_token deletion cookie");
+    assert!(
+        deletion.starts_with("refresh_token=;"),
+        "deletion cookie must have an empty value: {deletion}"
+    );
+    assert!(deletion.contains("Path=/auth;"), "{deletion}");
+    assert!(deletion.contains("HttpOnly"), "{deletion}");
+    assert!(deletion.contains("SameSite=Strict"), "{deletion}");
+    assert!(deletion.contains("Max-Age=0"), "{deletion}");
+    assert!(
+        !deletion.contains(SENT_REFRESH),
+        "the presented token must not be echoed: {deletion}"
+    );
+
+    let body = to_bytes(response.into_body(), 64).await.unwrap();
+    assert_eq!(body.as_ref(), b"true", "既存の Json(true) 本文を維持する");
+}
+
+/// R1-18: 削除 Cookie の Secure 属性は OIDC_COOKIE_SECURE に追随し、
+/// 未設定なら refresh_cookie と同じく Secure を付与する。
+#[tokio::test]
+async fn test_logout_deletion_cookie_follows_cookie_secure_setting() {
+    let _env_guard = ENV_LOCK.lock().await;
+    let previous = std::env::var("OIDC_COOKIE_SECURE").ok();
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    for (env_value, expect_secure) in [
+        (Some("0"), false),
+        (Some("false"), false),
+        (Some("1"), true),
+        (None, true),
+    ] {
+        match env_value {
+            Some(value) => test_set_env("OIDC_COOKIE_SECURE", value),
+            None => test_remove_env("OIDC_COOKIE_SECURE"),
+        }
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/logout")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let cookie = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("refresh_token="))
+            .expect("deletion cookie")
+            .to_owned();
+        assert_eq!(
+            cookie.contains("; Secure"),
+            expect_secure,
+            "OIDC_COOKIE_SECURE={env_value:?}: {cookie}"
+        );
+    }
+
+    match previous {
+        Some(value) => test_set_env("OIDC_COOKIE_SECURE", &value),
+        None => test_remove_env("OIDC_COOKIE_SECURE"),
+    }
 }
 
 /// sid を持たないトークンのログアウトは 200 で受け付けるが、失効対象がなくセッションは有効のまま

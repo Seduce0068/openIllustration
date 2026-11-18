@@ -1543,9 +1543,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             rate_limit_middleware,
         ))
         .layer(from_fn(network::ipv6_only_middleware))
-        // 最外側に置き、IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
+        // IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
         .layer(from_fn(security_headers))
-        // CORS を最外側に置く。レート/403 の応答にも ACAO が付き、
+        // CORS を内側に置く。レート/403 の応答にも ACAO が付き、
         // プリフライトが内側のミドルウェアを通過しないようにする。
         .layer(
             CorsLayer::new()
@@ -1556,6 +1556,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
+        // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
+        // 最外側にもう一段置く。これで 429/403/500/204 に加えプリフライト応答にも
+        // nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
+        .layer(from_fn(security_headers))
         .with_state(state)
 }
 
@@ -1831,7 +1835,7 @@ pub async fn logout(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
     headers: axum::http::HeaderMap,
-) -> Result<Json<bool>, AppError> {
+) -> Result<Response, AppError> {
     if let Some(sid) = &claims.sid {
         revoke_session(&state, sid).await?;
     }
@@ -1865,7 +1869,23 @@ pub async fn logout(
                 .await?;
         }
     }
-    Ok(Json(true))
+    // DB 側のファミリ失効だけではブラウザの Cookie が 30 日残るため、
+    // 同じ Path/SameSite 属性の空 Cookie で即時削除する。
+    // Secure 属性は refresh_cookie と同じ OIDC 設定（OIDC_COOKIE_SECURE）に合わせる。
+    // 本番の OidcState は from_env でこの値を読み込むため、同一の判定を使う。
+    // 未設定なら Secure を付与する（cookie_secure の既定と同じ fail-closed）。
+    let secure = std::env::var("OIDC_COOKIE_SECURE")
+        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    let delete_cookie = format!(
+        "refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0{}",
+        if secure { "; Secure" } else { "" }
+    );
+    let cookie = HeaderValue::from_str(&delete_cookie)
+        .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))?;
+    let mut response = Json(true).into_response();
+    response.headers_mut().append(header::SET_COOKIE, cookie);
+    Ok(response)
 }
 
 /// ログへ出す URL から userinfo と query を除去する。
