@@ -170,7 +170,7 @@ async fn rate_limit_middleware(
     let Some(limit) = state.rate_limit.as_ref() else {
         return next.run(request).await;
     };
-    // CORS プリフライトはレートを消費しない（CorsLayer は最外側で処理する）。
+    // CORS プリフライトはレートを消費しない（CorsLayer はより外側で短絡する）。
     if request.method() == axum::http::Method::OPTIONS {
         return next.run(request).await;
     }
@@ -225,6 +225,8 @@ async fn security_headers(
 }
 
 /// リクエスト数と 4xx/5xx 応答数を記録するミドルウェア。
+/// Router の最も外側に積むことで、CorsLayer が短絡する OPTIONS 204 や
+/// 内側のミドルウェアが返す 429 / 403 / 413 も取りこぼさず計上する。
 async fn observe_metrics(
     State(state): State<Arc<AppState>>,
     request: axum::extract::Request,
@@ -1533,10 +1535,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/policy/age", get(get_age_policy))
         .route("/me/export", get(me_export))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            observe_metrics,
-        ))
         .layer(from_fn(reject_oversized_body))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
@@ -1545,8 +1543,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(from_fn(network::ipv6_only_middleware))
         // IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
         .layer(from_fn(security_headers))
-        // CORS を内側に置く。レート/403 の応答にも ACAO が付き、
-        // プリフライトが内側のミドルウェアを通過しないようにする。
+        // CORS はミドルウェア群の外側に置く。レート超過 429 / IP ゲート 403 の
+        // 応答にも ACAO が付き、プリフライトは内側のミドルウェアを通過しない。
         .layer(
             CorsLayer::new()
                 .allow_origin(allowed_origins(
@@ -1557,9 +1555,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
         )
         // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
-        // 最外側にもう一段置く。これで 429/403/500/204 に加えプリフライト応答にも
-        // nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
+        // CorsLayer の外側にもう一段置く。これで 429/403/500/204 に加え
+        // プリフライト応答にも nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
         .layer(from_fn(security_headers))
+        // メトリクスは最も外側で観測する。OPTIONS 204 や 429 / 403 / 413 は
+        // 内側のミドルウェアで短絡するため、ここで初めて全レスポンスを捕捉できる。
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            observe_metrics,
+        ))
         .with_state(state)
 }
 

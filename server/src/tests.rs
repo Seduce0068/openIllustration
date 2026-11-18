@@ -4802,7 +4802,7 @@ async fn test_payment_order_lifecycle() {
     assert_eq!(created["recipient_address"], receiving);
     let order_id = created["order_id"].as_str().unwrap().to_string();
 
-    let message = crate::payments::wallet_bind_message(&order_id);
+    let message = crate::payments::wallet_bind_message_v2(&order_id, 137, &wallet, receiving, 1000);
     let mut hasher = Keccak256::new();
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
@@ -4922,7 +4922,7 @@ async fn test_payment_order_rejects_wrong_wallet_signature() {
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
     let order_id = created["order_id"].as_str().unwrap().to_string();
 
-    let message = crate::payments::wallet_bind_message(&order_id);
+    let message = crate::payments::wallet_bind_message_v2(&order_id, 137, &wallet, receiving, 1000);
     let mut hasher = Keccak256::new();
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
@@ -5051,7 +5051,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     let response = verify_payment_order(&app, &token, &order_id).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
@@ -5135,7 +5135,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     // 他ノードのコミット済み書き換えを模して、先に status を MISMATCH にする。
     // この値は verify_order のトランザクション外なので 409 後も残る。
@@ -5211,14 +5211,30 @@ async fn test_payment_verify_requires_wallet_binding() {
     assert!(String::from_utf8_lossy(&body).contains("wallet ownership is not bound"));
 
     // バインド後は受理される（金額は注文と一致させる）。
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
     let response = verify_payment_order(&app, &token, &order_id).await;
     assert_eq!(response.status(), StatusCode::OK);
 }
 
 /// テスト用にウォレット所有証明を記録する（verify の必須条件）。
-async fn bind_payment_order(app: &Router, token: &str, order_id: &str, wallet_key: &SigningKey) {
-    let message = crate::payments::wallet_bind_message(order_id);
+#[allow(clippy::too_many_arguments)]
+async fn bind_payment_order(
+    app: &Router,
+    token: &str,
+    order_id: &str,
+    wallet_key: &SigningKey,
+    chain_id: i64,
+    recipient_address: &str,
+    amount_jpy: u64,
+) {
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let message = crate::payments::wallet_bind_message_v2(
+        order_id,
+        chain_id,
+        &wallet,
+        recipient_address,
+        amount_jpy,
+    );
     let mut hasher = Keccak256::new();
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
@@ -5267,7 +5283,7 @@ async fn test_payment_verify_rejects_transfer_mismatch() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     // 金額だけが注文と異なる送金検証結果を設定する。
     let wrong_amount = (amount_wei.parse::<u128>().unwrap() + 1).to_string();
@@ -5316,9 +5332,9 @@ async fn test_payment_verify_rejects_reused_transaction() {
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_a, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_a, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_a, &wallet_key, 137, receiving, 1000).await;
     let (order_b, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_b, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_b, &wallet_key, 137, receiving, 1000).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -5354,7 +5370,7 @@ async fn test_bind_wallet_rejects_elapsed_expiry() {
     let (app, db) = setup_app_with_payments(receiving, verifier).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, _amount) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     db.execute(
         "UPDATE payment_orders SET expires_at = ? WHERE order_id = ?",
@@ -5363,7 +5379,7 @@ async fn test_bind_wallet_rejects_elapsed_expiry() {
     .await
     .unwrap();
 
-    let message = crate::payments::wallet_bind_message(&order_id);
+    let message = crate::payments::wallet_bind_message_v2(&order_id, 137, &wallet, receiving, 1000);
     let mut hasher = Keccak256::new();
     hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
     hasher.update(message.as_bytes());
@@ -5388,6 +5404,44 @@ async fn test_bind_wallet_rejects_elapsed_expiry() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// 盲署名対策: 注文IDのみを署名対象にした旧形式の署名は受理されない。
+#[tokio::test]
+async fn test_bind_wallet_rejects_legacy_order_only_signature() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+
+    // 旧形式（注文IDのみ）で署名する。金額・送金先・チェーンが確認できないため拒否される。
+    let message = format!("openIllustration payment order {order_id}");
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// 決済: status が PENDING のまま expires_at を過ぎた注文を拒否し EXPIRED へ更新する。
 #[tokio::test]
 async fn test_payment_verify_rejects_elapsed_expiry() {
@@ -5398,7 +5452,7 @@ async fn test_payment_verify_rejects_elapsed_expiry() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -5449,7 +5503,7 @@ async fn test_payment_verify_rejects_expired_order() {
     let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
         chain_id: 137,
@@ -5489,7 +5543,7 @@ async fn test_payment_verify_keeps_confirming_until_threshold() {
     let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
-    bind_payment_order(&app, &token, &order_id, &wallet_key).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
 
     // Polygon (chain 137) の必要確認数は 256。1 不足の状態を再現する。
     *verifier.verification.lock().unwrap() = Some(PaymentVerification {
@@ -9879,6 +9933,26 @@ fn read_metric(body: &str, name: &str) -> u64 {
         .unwrap()
 }
 
+/// `/metrics` から HTTP カウンタ（requests, errors）を一組で読み取る。
+/// この読み取り自体も最外側の observe_metrics でカウントされる点に注意。
+async fn read_http_metrics(app: &Router) -> (u64, u64) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body =
+        String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+    (
+        read_metric(&body, "openillustration_http_requests_total"),
+        read_metric(&body, "openillustration_http_errors_total"),
+    )
+}
+
 /// 現在の中立化 URL カウンタ値を `/metrics` から読み取る。
 async fn read_neutralized_metric(app: &Router) -> u64 {
     let response = app
@@ -9976,6 +10050,120 @@ async fn test_metrics_expose_prometheus_counters() {
         neutralized_before + 3,
         "neutralized URL counter must advance by exactly the reported count"
     );
+}
+
+// ---- observe_metrics は最外側で全レスポンスを捕捉する ----
+
+/// レート制限の 429 は内側で短絡するが、最外側の observe_metrics に計上される。
+#[tokio::test]
+async fn test_metrics_count_rate_limited_response() {
+    let app = build_router(rate_limit_test_state(1).await);
+    let peer = test_ipv6_peer();
+
+    // 先にクォータを使い切り、計測開始直後から 429 が返る状態にする。
+    let first = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::NOT_FOUND);
+
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
+            peer,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    // 429 と事後計測の GET /metrics の 2 件が増え、エラーは 429 の 1 件だけ。
+    assert_eq!(requests_after, requests_before + 2);
+    assert_eq!(errors_after, errors_before + 1);
+}
+
+/// IP ゲートの 403 は内側で短絡するが、最外側の observe_metrics に計上される。
+#[tokio::test]
+async fn test_metrics_count_ipv4_forbidden_response() {
+    let _env_guard = ENV_LOCK.lock().await;
+    test_remove_env("ALLOW_IPV4_LOCALHOST");
+    let app = setup_app().await;
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/health").body(Body::empty()).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    assert_eq!(requests_after, requests_before + 2);
+    assert_eq!(errors_after, errors_before + 1);
+}
+
+/// サイズ拒否の 413 は内側で短絡するが、最外側の observe_metrics に計上される。
+#[tokio::test]
+async fn test_metrics_count_oversized_body_rejection() {
+    let app = setup_app().await;
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    // Content-Length だけを 10 MiB 超に宣言すれば reject_oversized_body が 413 を返す。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/content/upload")
+                .header(header::CONTENT_LENGTH, (10 * 1024 * 1024 + 1).to_string())
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    assert_eq!(requests_after, requests_before + 2);
+    assert_eq!(errors_after, errors_before + 1);
+}
+
+/// CORS プリフライトの短絡レスポンスも最外側の observe_metrics に計上される。
+#[tokio::test]
+async fn test_metrics_count_cors_preflight() {
+    let app = setup_app().await;
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::options("/auth/login")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "preflight must be short-circuited by CorsLayer: {}",
+        response.status()
+    );
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    assert_eq!(requests_after, requests_before + 2);
+    assert_eq!(errors_after, errors_before);
 }
 
 // ---- クライアントイベント集計（URL 本文を送らず件数だけを集計する） ----
