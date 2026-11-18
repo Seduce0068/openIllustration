@@ -1365,6 +1365,8 @@ where
     let (audit_error, set_audit_error) = signal(String::new());
     let (show_audit, set_show_audit) = signal(false);
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
+    // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
+    let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
 
     let token_stored = StoredValue::new(token);
     // For は同じ cid の行を作り直さないため、トグル状態はカード内で保持し、
@@ -1517,7 +1519,17 @@ where
     let ct_toc = content_type.clone();
 
     view! {
-        <div data-testid="content-card" class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
+        <div data-testid="content-card"
+            on:keydown=move |ev: web_sys::KeyboardEvent| {
+                // ダイアログ内（トグル含む）で Escape が押されたら閉じてフォーカスを戻す。
+                if ev.key() == "Escape" && show_audit.get() {
+                    set_show_audit.set(false);
+                    if let Some(toggle) = audit_toggle_ref.get() {
+                        let _ = toggle.focus();
+                    }
+                }
+            }
+            class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
             <div class="flex justify-between items-start">
                 <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
                 <div class="flex gap-2">
@@ -1532,6 +1544,9 @@ where
                         {move || if favorite.get() { "★" } else { "☆" }}
                     </button>
                     <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
+                        node_ref=audit_toggle_ref
+                        aria-expanded=move || show_audit.get()
+                        aria-controls="forensic-timeline"
                         class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
                     </button>
@@ -1598,7 +1613,10 @@ where
                 }}
 
                 <Show when=move || show_audit.get() fallback=|| ()>
-                    <div class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
+                    <div id="forensic-timeline"
+                        role="dialog"
+                        aria-label="Forensic Timeline"
+                        class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
                         <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
                             <p role="alert" data-testid="audit-error" class="text-[8px] text-red-500">
@@ -1624,7 +1642,13 @@ where
                                 }
                             />
                         </div>
-                        <button on:click=move |_| set_show_audit.set(false)
+                        <button on:click=move |_| {
+                                set_show_audit.set(false);
+                                // ダイアログを閉じた後、呼び出し元のトグルへフォーカスを戻す。
+                                if let Some(toggle) = audit_toggle_ref.get() {
+                                    let _ = toggle.focus();
+                                }
+                            }
                             class="mt-4 w-full py-2 border border-white/20 text-[8px] hover:bg-white/10">
                             "CLOSE"
                         </button>
@@ -1652,6 +1676,12 @@ where
     }
 }
 
+/// ファイル選択ラベルでネイティブの file input を開くキーかどうか。
+/// Enter / Space のみを扱い、Space のページスクロールは呼び出し側で防ぐ。
+fn is_file_picker_activation_key(key: &str) -> bool {
+    matches!(key, "Enter" | " " | "Spacebar")
+}
+
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = signal(String::new());
@@ -1661,6 +1691,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (title, set_title) = signal(String::new());
     let (description, set_description) = signal(String::new());
     let (tags, set_tags) = signal(String::new());
+    // ラベルをキーボードで操作したときに file input へclick()を渡すための参照。
+    let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
     let on_file_change = move |ev| {
         let input: HtmlInputElement = event_target(&ev);
@@ -1781,8 +1813,22 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             <h2 class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine (Rust)"</h2>
             <div class="space-y-6">
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
-                    <input type="file" on:change=on_file_change class="hidden" id="file-upload" />
-                    <label for="file-upload" class="cursor-pointer">
+                    // display:none の代わりに 1px + clip で隠し、フォーカス可能なままにする。
+                    <input type="file" on:change=on_file_change
+                        node_ref=file_input_ref
+                        class="absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0 clip-[rect(0,0,0,0)]"
+                        id="file-upload" />
+                    <label for="file-upload"
+                        tabindex="0"
+                        on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if is_file_picker_activation_key(&ev.key()) {
+                                ev.prevent_default();
+                                if let Some(input) = file_input_ref.get() {
+                                    input.click();
+                                }
+                            }
+                        }
+                        class="cursor-pointer">
                         {move || file.get().map(|f| f.name()).unwrap_or_else(|| "SELECT JXL OR MARKDOWN".to_string())}
                     </label>
                 </div>
@@ -1847,7 +1893,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     {move || if loading.get() { "Processing..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
-                    <div data-testid="upload-status" class="p-4 bg-white/5 border border-white/20 text-xs">
+                    <div data-testid="upload-status" role="status" aria-live="polite" class="p-4 bg-white/5 border border-white/20 text-xs">
                         <span class="text-gray-500 mr-2">"[STATUS]"</span> {move || status.get()}
                     </div>
                 </Show>
@@ -2171,11 +2217,13 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 </p>
                 <input
                     type="text"
+                    aria-label="TARGET CID"
                     placeholder="TARGET CID"
                     on:input=move |ev| set_cid.set(event_target_value(&ev))
                     class="w-full bg-black border border-white/20 p-3 text-sm"
                 />
                 <textarea
+                    aria-label="REASON"
                     placeholder="REASON"
                     on:input=move |ev| set_reason.set(event_target_value(&ev))
                     class="w-full bg-black border border-white/20 p-3 text-sm h-24"
@@ -2185,7 +2233,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     "SUBMIT FORENSIC REPORT"
                 </button>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
-                    <p class="text-xs text-gray-400">{move || status.get()}</p>
+                    <p role="status" class="text-xs text-gray-400">{move || status.get()}</p>
                 </Show>
             </div>
 
@@ -2270,6 +2318,15 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn file_picker_activates_only_on_enter_or_space() {
+        assert!(super::is_file_picker_activation_key("Enter"));
+        assert!(super::is_file_picker_activation_key(" "));
+        assert!(super::is_file_picker_activation_key("Spacebar"));
+        assert!(!super::is_file_picker_activation_key("Escape"));
+        assert!(!super::is_file_picker_activation_key("a"));
     }
 
     #[test]
