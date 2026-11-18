@@ -5,30 +5,31 @@ use libsql::Builder;
 #[derive(Debug, Default)]
 struct Args {
     database_url: Option<String>,
-    database_token: Option<String>,
     cid: Option<String>,
     expect_root: Option<String>,
     include_reasons: bool,
     help: bool,
 }
 
+const HELP: &str = "Usage: verify_audit_log [--database-url URL] [--cid CID] [--expect-root HEX] [--include-reasons]\n\
+     \n\
+     Verifies content_audit_log hash-chain integrity (read-only).\n\
+     Accepts v2 (length-prefixed) and legacy v1 entry hashes.\n\
+     Scope: this v1/v2 tolerance applies to DB audit log entries only. Signed\n\
+     audit snapshots are verified by verify_audit_export and require version 3;\n\
+     v1/v2 snapshots are rejected there. `legacy_v1=true` in this tool's output\n\
+     is a DB-entry classification, not a claim about snapshot compatibility.\n\
+     Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
+     --expect-root compares the root against a previously recorded value to detect\n\
+     truncation or omission (the root must have been published out of band).\n\
+     Reasons are redacted by default; --include-reasons exposes them (opt-in).\n\
+     The remote libSQL token is read only from the DATABASE_TOKEN environment\n\
+     variable (argv is public, so secrets are never accepted there).\n\
+     Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
+     Exit code: 0 if valid, 1 if invalid or on error.";
+
 fn print_help() {
-    eprintln!(
-        "Usage: verify_audit_log [--database-url URL] [--database-token TOKEN] [--cid CID] [--expect-root HEX] [--include-reasons]\n\
-         \n\
-         Verifies content_audit_log hash-chain integrity (read-only).
-         Accepts v2 (length-prefixed) and legacy v1 entry hashes.\n\
-         Scope: this v1/v2 tolerance applies to DB audit log entries only. Signed\n\
-         audit snapshots are verified by verify_audit_export and require version 3;\n\
-         v1/v2 snapshots are rejected there. `legacy_v1=true` in this tool's output\n\
-         is a DB-entry classification, not a claim about snapshot compatibility.\n\
-         Also checks contiguous log_id and prints a Merkle root over entry hashes.\n\
-         --expect-root compares the root against a previously recorded value to detect\n\
-         truncation or omission (the root must have been published out of band).\n\
-         Reasons are redacted by default; --include-reasons exposes them (opt-in).\n\
-         Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
-         Exit code: 0 if valid, 1 if invalid or on error."
-    );
+    eprintln!("{HELP}");
 }
 
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
@@ -46,11 +47,12 @@ where
                         .ok_or_else(|| anyhow!("--database-url requires a value"))?,
                 );
             }
+            // argv は ps 等で公開される。トークン値は受け付けず、
+            // エラーにも値をエコーしない（秘密値を出力しない）。
             "--database-token" => {
-                args.database_token = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--database-token requires a value"))?,
-                );
+                return Err(anyhow!(
+                    "--database-token is not accepted; set DATABASE_TOKEN in the environment instead"
+                ));
             }
             "--cid" => {
                 args.cid = Some(it.next().ok_or_else(|| anyhow!("--cid requires a value"))?);
@@ -100,10 +102,8 @@ async fn main() -> anyhow::Result<()> {
         .database_url
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .unwrap_or_else(|| "file:local.db".to_string());
-    let database_token = args
-        .database_token
-        .or_else(|| std::env::var("DATABASE_TOKEN").ok())
-        .unwrap_or_else(String::new);
+    // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
+    let database_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
 
     let db = open_db(database_url, database_token)
         .await
@@ -219,6 +219,53 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- parse_args_from: 認証トークンを argv で受け付けない ---
+
+    #[test]
+    fn database_token_argument_is_rejected_without_leaking_value() {
+        const SECRET: &str = "TOP_SECRET_DATABASE_TOKEN_VALUE";
+        let error =
+            parse_args_from(["verify_audit_log", "--database-token", SECRET].map(String::from))
+                .expect_err("--database-token must never be accepted on argv");
+        let message = error.to_string();
+        assert!(message.contains("DATABASE_TOKEN"), "{message}");
+        assert!(!message.contains(SECRET), "token value leaked: {message}");
+    }
+
+    #[test]
+    fn database_token_argument_without_value_is_also_rejected() {
+        let error = parse_args_from(["verify_audit_log", "--database-token"].map(String::from))
+            .expect_err("--database-token must be rejected even without a value");
+        assert!(error.to_string().contains("DATABASE_TOKEN"), "{error:#}");
+    }
+
+    #[test]
+    fn database_url_and_cid_are_still_parsed() {
+        let args = parse_args_from(
+            [
+                "verify_audit_log",
+                "--database-url",
+                "file:app.db",
+                "--cid",
+                "bafy-test",
+                "--expect-root",
+                "deadbeef",
+            ]
+            .map(String::from),
+        )
+        .expect("documented flags must parse");
+        assert_eq!(args.database_url.as_deref(), Some("file:app.db"));
+        assert_eq!(args.cid.as_deref(), Some("bafy-test"));
+        assert_eq!(args.expect_root.as_deref(), Some("deadbeef"));
+        assert!(!args.help);
+    }
+
+    #[test]
+    fn help_text_does_not_advertise_database_token() {
+        assert!(!HELP.contains("--database-token"), "{HELP}");
+        assert!(HELP.contains("DATABASE_TOKEN"), "{HELP}");
+    }
 
     #[test]
     fn reasons_are_masked_by_default() {

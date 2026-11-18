@@ -15,7 +15,7 @@ fn print_help() {
         "Usage: restore_db --backup PATH --target PATH [--force]\n\
          \n\
          Restores a backup produced by backup_db. The server must be stopped\n\
-         (WAL/SHM/journal sidecars cause an immediate refusal). By default an existing\n\
+         (WAL/SHM/journal sidecars and a live <db>.instance.lock cause an immediate refusal). By default an existing\n\
          target is never overwritten; --force keeps a timestamped safety copy.\n\
          Exit code: 0 on success, 1 on error."
     );
@@ -75,6 +75,88 @@ fn ensure_no_sidecars(path: &Path, side: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// ロックファイルの内容から `(PID, プロセス開始時刻)` を取り出す。
+/// backup_db / server/src/lib.rs の `parse_instance_lock` と同じ形式。bin から
+/// `pub(crate)` ヘルパーは参照できないため、ここで素直に再実装する。
+fn parse_instance_lock(contents: &str) -> (u32, Option<u64>) {
+    let mut lines = contents.lines();
+    let pid = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let starttime = lines
+        .next()
+        .and_then(|line| line.trim().parse::<u64>().ok());
+    (pid, starttime)
+}
+
+/// `/proc/<pid>/stat` の field 22 (starttime) を読む。
+/// `/proc` が無い環境・プロセスが消えた場合・形式が読めない場合は `None`。
+fn read_proc_starttime(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // comm (field 2) は空白や ')' を含み得るため、最後の ')' より後だけを解析する。
+    let after_comm = stat.rfind(')')?;
+    stat.get(after_comm + 1..)?
+        .split_whitespace()
+        .nth(19)?
+        .parse::<u64>()
+        .ok()
+}
+
+/// ロック所有者が生存中かを判定する。`/proc` が読めず判定不能な場合は
+/// 「生存」として扱い、復元を拒否する（fail-closed）。
+fn instance_lock_owner_alive(pid: u32, starttime: Option<u64>) -> bool {
+    if read_proc_starttime(std::process::id()).is_none() {
+        return true;
+    }
+    match starttime {
+        // PID 再利用を防ぐため、開始時刻が一致したときだけ生存とみなす。
+        Some(expected) => match read_proc_starttime(pid) {
+            Some(actual) => actual == expected,
+            // /proc/<pid> はあるのに stat が読めない場合は確認不能なので拒否側へ倒す。
+            None => Path::new(&format!("/proc/{pid}")).exists(),
+        },
+        // 旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
+        None => Path::new(&format!("/proc/{pid}")).exists(),
+    }
+}
+
+/// `<db>.instance.lock` が生存中のサーバーに保持されていないか検査する。
+/// ロックが無い、または明らかに stale（PID 不存在）なら続行を許可する。
+/// ロックの読み取りや生存判定が不能な場合は拒否する（fail-closed）。
+fn ensure_no_live_instance(db_path: &Path, side: &str) -> anyhow::Result<()> {
+    let lock = sidecar_of(db_path, ".instance.lock");
+    let lock_display = lock.display();
+    match std::fs::symlink_metadata(&lock) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("cannot inspect {side} instance lock: {lock_display}"));
+        }
+    }
+    let contents = std::fs::read_to_string(&lock)
+        .with_context(|| format!("cannot read {side} instance lock: {lock_display}"))?;
+    let (pid, starttime) = parse_instance_lock(&contents);
+    if instance_lock_owner_alive(pid, starttime) {
+        anyhow::bail!(
+            "refusing restore: a live server instance holds the {side} instance lock \
+             ({lock_display}, pid {pid}); stop the server or wait until startup/migration has finished"
+        );
+    }
+    Ok(())
+}
+
+/// 復元前の安全検査。既存のサイドカー検査を維持しつつ、生存中の instance lock
+/// も拒否する。backup_db と同じ PID + starttime の生存判定を使う。
+fn ensure_restore_is_safe(backup: &Path, target: &Path) -> anyhow::Result<()> {
+    ensure_no_sidecars(backup, "backup")?;
+    ensure_no_sidecars(target, "target")?;
+    ensure_no_live_instance(backup, "backup")?;
+    ensure_no_live_instance(target, "target")?;
+    Ok(())
+}
+
 async fn validate_backup(path: &Path) -> anyhow::Result<(i64, i64)> {
     let db = Builder::new_local(path)
         .build()
@@ -128,9 +210,9 @@ async fn main() -> anyhow::Result<()> {
         return Err(anyhow!("backup file does not exist: {}", backup.display()));
     }
     // validate_backup の前に検査する。libsql が WAL を checkpoint して
-    // サイドカーを消す前に、元の状態を確認するため。
-    ensure_no_sidecars(&backup, "backup")?;
-    ensure_no_sidecars(&target, "target")?;
+    // サイドカーを消す前に、元の状態を確認するため。生存中の instance lock
+    // もここで拒否する（backup_db と同じ PID + starttime 判定）。
+    ensure_restore_is_safe(&backup, &target)?;
     if target.exists() && !args.force {
         return Err(anyhow!(
             "target already exists: {} (pass --force to replace with a safety copy)",
@@ -194,6 +276,147 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "restore-db-lock-test-{}-{nanos}-{seq}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).expect("create temp dir");
+            Self(path)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_lock(db_path: &Path, contents: &str) {
+        std::fs::write(sidecar_of(db_path, ".instance.lock"), contents).expect("write lock");
+    }
+
+    /// 実在しない PID を返す（stale ロックのテスト用）。
+    fn unused_pid() -> u32 {
+        (1..u32::MAX)
+            .rev()
+            .find(|pid| !Path::new(&format!("/proc/{pid}")).exists())
+            .expect("find an unused pid")
+    }
+
+    /// 自プロセスの PID + starttime をロック内容として作る。
+    fn live_lock_contents() -> String {
+        let pid = std::process::id();
+        match read_proc_starttime(pid) {
+            Some(starttime) => format!("{pid}\n{starttime}\n"),
+            // /proc が読めない環境でも fail-closed で拒否される。
+            None => format!("{pid}\n"),
+        }
+    }
+
+    // --- parse_instance_lock: backup_db と同じ形式 ---
+
+    #[test]
+    fn parse_instance_lock_reads_new_and_legacy_formats() {
+        assert_eq!(parse_instance_lock("12345\n67890\n"), (12345, Some(67890)));
+        assert_eq!(
+            parse_instance_lock(" 12345 \n 67890 \n"),
+            (12345, Some(67890))
+        );
+        assert_eq!(parse_instance_lock("12345\n"), (12345, None));
+        assert_eq!(parse_instance_lock("not-a-pid\n"), (0, None));
+    }
+
+    // --- ensure_restore_is_safe: 生存 instance lock の拒否 ---
+
+    #[test]
+    fn no_lock_and_no_sidecar_allows_restore() {
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        assert!(ensure_restore_is_safe(&backup, &target).is_ok());
+    }
+
+    #[test]
+    fn live_target_lock_is_rejected() {
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        write_lock(&target, &live_lock_contents());
+        let error = ensure_restore_is_safe(&backup, &target)
+            .expect_err("a live target lock must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("refusing restore"), "{message}");
+        assert!(message.contains("target"), "{message}");
+    }
+
+    #[test]
+    fn live_backup_lock_is_rejected() {
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        write_lock(&backup, &live_lock_contents());
+        let error = ensure_restore_is_safe(&backup, &target)
+            .expect_err("a live backup lock must be rejected");
+        let message = error.to_string();
+        assert!(message.contains("refusing restore"), "{message}");
+        assert!(message.contains("backup"), "{message}");
+    }
+
+    #[test]
+    fn legacy_pid_only_lock_is_rejected() {
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        write_lock(&target, &format!("{}\n", std::process::id()));
+        assert!(ensure_restore_is_safe(&backup, &target).is_err());
+    }
+
+    #[test]
+    fn stale_lock_is_allowed() {
+        // /proc が読めない環境では判定不能のため fail-closed で拒否される。
+        if read_proc_starttime(std::process::id()).is_none() {
+            return;
+        }
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        let stale = unused_pid();
+        write_lock(&target, &format!("{stale}\n"));
+        assert!(ensure_restore_is_safe(&backup, &target).is_ok());
+        write_lock(&target, &format!("{stale}\n123456789\n"));
+        assert!(ensure_restore_is_safe(&backup, &target).is_ok());
+    }
+
+    #[test]
+    fn sidecar_check_is_still_enforced_by_preflight() {
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        let sidecar = sidecar_of(&target, "-wal");
+        std::fs::write(&sidecar, b"x").expect("create sidecar");
+        let error =
+            ensure_restore_is_safe(&backup, &target).expect_err("sidecar must still be rejected");
+        let message = error.to_string();
+        assert!(message.contains("sidecar"), "{message}");
+        assert!(message.contains("target"), "{message}");
+    }
 
     #[test]
     fn sidecar_suffixes_are_appended_to_full_path() {

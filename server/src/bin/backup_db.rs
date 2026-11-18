@@ -5,26 +5,32 @@ use std::path::Path;
 #[derive(Debug, Default)]
 struct Args {
     database_url: Option<String>,
-    database_token: Option<String>,
     output: Option<String>,
     help: bool,
 }
 
+const HELP: &str = "Usage: backup_db --output PATH [--database-url URL]\n\
+     \n\
+     Creates a consistent SQLite snapshot of a local libSQL database using\n\
+     VACUUM INTO, then verifies tables and the migration ledger.\n\
+     The output file must not already exist (no overwrite).\n\
+     The remote libSQL token is read only from the DATABASE_TOKEN environment\n\
+     variable (argv is public, so secrets are never accepted there).\n\
+     Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
+     Exit code: 0 on success, 1 on error.";
+
 fn print_help() {
-    eprintln!(
-        "Usage: backup_db --output PATH [--database-url URL] [--database-token TOKEN]\n\
-         \n\
-         Creates a consistent SQLite snapshot of a local libSQL database using\n\
-         VACUUM INTO, then verifies tables and the migration ledger.\n\
-         The output file must not already exist (no overwrite).\n\
-         Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
-         Exit code: 0 on success, 1 on error."
-    );
+    eprintln!("{HELP}");
 }
 
-fn parse_args() -> anyhow::Result<Args> {
+/// argv の解釈だけを行う純粋関数。環境変数・プロセス引数を読まないため、
+/// テストから直接呼べる。認証トークンは argv で受け付けない。
+fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
+where
+    I: IntoIterator<Item = String>,
+{
     let mut args = Args::default();
-    let mut it = std::env::args().skip(1);
+    let mut it = items.into_iter().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => args.help = true,
@@ -34,11 +40,12 @@ fn parse_args() -> anyhow::Result<Args> {
                         .ok_or_else(|| anyhow!("--database-url requires a value"))?,
                 );
             }
+            // argv は ps 等で公開される。トークン値は受け付けず、
+            // エラーにも値をエコーしない（秘密値を出力しない）。
             "--database-token" => {
-                args.database_token = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--database-token requires a value"))?,
-                );
+                return Err(anyhow!(
+                    "--database-token is not accepted; set DATABASE_TOKEN in the environment instead"
+                ));
             }
             "--output" => {
                 args.output = Some(
@@ -50,6 +57,10 @@ fn parse_args() -> anyhow::Result<Args> {
         }
     }
     Ok(args)
+}
+
+fn parse_args() -> anyhow::Result<Args> {
+    parse_args_from(std::env::args())
 }
 
 async fn open_db(
@@ -183,10 +194,8 @@ async fn main() -> anyhow::Result<()> {
         .database_url
         .or_else(|| std::env::var("DATABASE_URL").ok())
         .unwrap_or_else(|| "file:local.db".to_string());
-    let database_token = args
-        .database_token
-        .or_else(|| std::env::var("DATABASE_TOKEN").ok())
-        .unwrap_or_default();
+    // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
+    let database_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
 
     // サーバー起動時（特にマイグレーション実行中）は VACUUM INTO と競合し、
     // BUSY や旧スナップショットになる恐れがある。サーバーが <db>.instance.lock
@@ -248,7 +257,10 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_no_live_instance, local_db_path, parse_instance_lock, read_proc_starttime};
+    use super::{
+        HELP, ensure_no_live_instance, local_db_path, parse_args_from, parse_instance_lock,
+        read_proc_starttime,
+    };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -293,6 +305,52 @@ mod tests {
             .find(|pid| !Path::new(&format!("/proc/{pid}")).exists())
             .expect("find an unused pid")
     }
+
+    // --- parse_args_from: 認証トークンを argv で受け付けない ---
+
+    #[test]
+    fn database_token_argument_is_rejected_without_leaking_value() {
+        const SECRET: &str = "TOP_SECRET_DATABASE_TOKEN_VALUE";
+        let error = parse_args_from(["backup_db", "--database-token", SECRET].map(String::from))
+            .expect_err("--database-token must never be accepted on argv");
+        let message = error.to_string();
+        assert!(message.contains("DATABASE_TOKEN"), "{message}");
+        assert!(!message.contains(SECRET), "token value leaked: {message}");
+    }
+
+    #[test]
+    fn database_token_argument_without_value_is_also_rejected() {
+        let error = parse_args_from(["backup_db", "--database-token"].map(String::from))
+            .expect_err("--database-token must be rejected even without a value");
+        assert!(error.to_string().contains("DATABASE_TOKEN"), "{error:#}");
+    }
+
+    #[test]
+    fn documented_arguments_are_still_parsed() {
+        let args = parse_args_from(
+            [
+                "backup_db",
+                "--output",
+                "backup.db",
+                "--database-url",
+                "file:app.db",
+                "-h",
+            ]
+            .map(String::from),
+        )
+        .expect("documented flags must parse");
+        assert_eq!(args.output.as_deref(), Some("backup.db"));
+        assert_eq!(args.database_url.as_deref(), Some("file:app.db"));
+        assert!(args.help);
+    }
+
+    #[test]
+    fn help_text_does_not_advertise_database_token() {
+        assert!(!HELP.contains("--database-token"), "{HELP}");
+        assert!(HELP.contains("DATABASE_TOKEN"), "{HELP}");
+    }
+
+    // --- instance lock ---
 
     #[test]
     fn local_db_path_matches_open_db_selection() {
