@@ -964,6 +964,7 @@ pub async fn run() -> anyhow::Result<()> {
     });
 
     let worker_db = Arc::clone(&shared_state.db);
+    let worker_oidc = shared_state.oidc.clone();
     let shutdown_flag = Arc::clone(&shared_state.shutting_down);
     let app = build_router(shared_state);
 
@@ -972,6 +973,7 @@ pub async fn run() -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
     let finalizer = tokio::spawn(run_moderation_finalizer(
         worker_db,
+        worker_oidc,
         finalize_interval,
         shutdown_rx,
     ));
@@ -1352,6 +1354,7 @@ async fn purge_stale_revoked_subs(db: &Connection) -> Result<u64, libsql::Error>
 
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
+    oidc: Option<Arc<oidc::OidcState>>,
     interval: Duration,
     mut shutdown: tokio::sync::watch::Receiver<()>,
 ) {
@@ -1374,6 +1377,17 @@ async fn run_moderation_finalizer(
         Ok(0) => {}
         Ok(count) => tracing::info!("Purged {} stale revoked sub(s) on startup", count),
         Err(error) => tracing::warn!("Revoked sub purge failed on startup: {}", error),
+    }
+    // pending はメモリ上にあり再起動時は空だが、register/take 以外の経路でも
+    // 期限切れを回収できるよう起動時にも sweep しておく。
+    if let Some(oidc) = &oidc {
+        let count = oidc.sweep_expired_pending();
+        if count > 0 {
+            tracing::info!(
+                "Purged {} expired OIDC pending authorization(s) on startup",
+                count
+            );
+        }
     }
 
     // 最初の tick まで待つと再起動直後の期限切れ通報が最大 interval のあいだ
@@ -1405,6 +1419,14 @@ async fn run_moderation_finalizer(
                     Ok(0) => {}
                     Ok(count) => tracing::info!("Purged {} stale revoked sub(s)", count),
                     Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
+                }
+                // 認証リクエストが来ないままだと register/take の掃除が走らないため、
+                // 周期 tick でも期限切れ pending を回収する。
+                if let Some(oidc) = &oidc {
+                    let count = oidc.sweep_expired_pending();
+                    if count > 0 {
+                        tracing::info!("Purged {} expired OIDC pending authorization(s)", count);
+                    }
                 }
                 match finalize_due_reports(db.as_ref()).await {
                     Ok(0) => {}

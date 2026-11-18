@@ -154,11 +154,13 @@ pub(crate) struct PendingAuth {
     created_at: Instant,
 }
 
-/// TTL を過ぎた pending を一括削除する。
+/// TTL を過ぎた pending を一括削除し、削除件数を返す。
 /// `take_pending` と `register_pending` の双方から呼び、取出しが無い経路でも掃除されるようにする。
-fn purge_expired_pending(pending: &mut HashMap<String, PendingAuth>) {
+fn purge_expired_pending(pending: &mut HashMap<String, PendingAuth>) -> usize {
     let now = Instant::now();
+    let before = pending.len();
     pending.retain(|_, auth| now.saturating_duration_since(auth.created_at) < PENDING_TTL);
+    before - pending.len()
 }
 
 pub struct OidcState {
@@ -259,6 +261,17 @@ impl OidcState {
     #[cfg(test)]
     pub(crate) fn config(&self) -> &OidcConfig {
         &self.config
+    }
+
+    /// 期限切れ pending を回収し、削除件数を返す。
+    /// `register_pending` / `take_pending` は認証リクエストが来たときだけ掃除するため、
+    /// 起動時 purge や周期 tick からも呼んでアイドル中の古いエントリを回収する。
+    /// ロック取得に失敗した場合は best-effort として 0 を返す。
+    pub(crate) fn sweep_expired_pending(&self) -> usize {
+        self.pending
+            .lock()
+            .map(|mut pending| purge_expired_pending(&mut pending))
+            .unwrap_or(0)
     }
 
     /// 期限切れを掃除したうえで pending を登録する。

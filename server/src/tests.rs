@@ -5626,6 +5626,139 @@ async fn test_oidc_pending_limit_purges_expired_entries() {
     assert_eq!(oidc.pending_nonce("fresh").as_deref(), Some("fresh"));
 }
 
+/// 起動時/周期 sweep: 期限切れ pending を件数付きで回収し、map を空にする。
+#[tokio::test]
+async fn test_oidc_sweep_expired_pending_empties_store() {
+    let (_app, oidc, _mock, _db) = setup_app_with_oidc().await;
+    let states: Vec<String> = (0..3).map(|i| format!("stale-{i}")).collect();
+    // register_pending 自体が期限切れを掃除するため、全件登録してから期限切れにする。
+    for state in &states {
+        oidc.register_pending(state.clone(), crate::oidc::OidcState::test_pending(state))
+            .expect("registration must succeed");
+    }
+    for state in &states {
+        oidc.expire_pending(state);
+    }
+    assert_eq!(oidc.pending_count(), states.len());
+
+    assert_eq!(oidc.sweep_expired_pending(), states.len());
+    assert_eq!(oidc.pending_count(), 0);
+    for state in &states {
+        assert!(oidc.pending_nonce(state).is_none());
+    }
+    assert_eq!(oidc.sweep_expired_pending(), 0, "sweep must be idempotent");
+
+    // 回収後は新規登録が可能で、フロー用の pending として残る。
+    oidc.register_pending(
+        "after-sweep".to_string(),
+        crate::oidc::OidcState::test_pending("after-sweep"),
+    )
+    .expect("registration after sweep must succeed");
+    assert_eq!(oidc.pending_count(), 1);
+    assert_eq!(
+        oidc.pending_nonce("after-sweep").as_deref(),
+        Some("after-sweep")
+    );
+}
+
+/// sweep は期限切れだけを回収し、生きている pending を使う OIDC フローは壊さない。
+#[tokio::test]
+async fn test_oidc_sweep_keeps_start_callback_flow() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+
+    // register_pending は登録時に期限切れを掃除するため、start 後に期限切れを仕込む。
+    oidc.register_pending(
+        "stale".to_string(),
+        crate::oidc::OidcState::test_pending("stale"),
+    )
+    .expect("registration must succeed");
+    oidc.expire_pending("stale");
+    assert_eq!(oidc.pending_count(), 2);
+
+    assert_eq!(oidc.sweep_expired_pending(), 1);
+    assert_eq!(oidc.pending_count(), 1);
+    let nonce = oidc
+        .pending_nonce(&auth_state)
+        .expect("sweep must keep fresh pending");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(oidc.pending_nonce(&auth_state).is_none());
+    assert_eq!(oidc.pending_count(), 0);
+}
+
+/// 起動時 purge 群に OIDC pending sweep が組み込まれていることを検証する。
+/// ここを外すと期限切れ pending が register/take まで残るため timeout で失敗する。
+#[tokio::test]
+async fn test_moderation_finalizer_sweeps_expired_oidc_pending_on_startup() {
+    let (_app, oidc, _mock, db) = setup_app_with_oidc().await;
+    oidc.register_pending(
+        "stale-startup".to_string(),
+        crate::oidc::OidcState::test_pending("stale-startup"),
+    )
+    .expect("registration must succeed");
+    oidc.register_pending(
+        "fresh-startup".to_string(),
+        crate::oidc::OidcState::test_pending("fresh-startup"),
+    )
+    .expect("registration must succeed");
+    // 両方登録してから期限切れにする（登録時に purge が走るため）。
+    oidc.expire_pending("stale-startup");
+    assert_eq!(oidc.pending_count(), 2);
+
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let finalizer = tokio::spawn(crate::run_moderation_finalizer(
+        db,
+        Some(oidc.clone()),
+        Duration::from_secs(3600),
+        shutdown_rx,
+    ));
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while oidc.pending_nonce("stale-startup").is_some() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("startup purge must sweep expired OIDC pending");
+    assert_eq!(
+        oidc.pending_count(),
+        1,
+        "fresh pending must survive startup purge"
+    );
+    assert_eq!(
+        oidc.pending_nonce("fresh-startup").as_deref(),
+        Some("fresh-startup")
+    );
+
+    shutdown_tx.send(()).expect("shutdown signal");
+    finalizer.await.expect("finalizer task must stop cleanly");
+}
+
 /// R1-23: 上限近くまで埋まっていても OIDC start/callback フローは成立する。
 #[tokio::test]
 async fn test_oidc_pending_limit_keeps_start_callback_flow() {
