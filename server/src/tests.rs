@@ -3468,7 +3468,7 @@ async fn test_vote_consensus_rejects_content() {
         .await
         .unwrap();
 
-        let message = json!({"report_id": 1, "result": "Reject"}).to_string();
+        let message = crate::moderation_vote_message_v2(1, "Reject", &juror_hash);
         let signing_key = SigningKey::<Sha256>::new(private_key.clone());
         let signature = signing_key.sign(message.as_bytes()).to_vec();
 
@@ -3649,7 +3649,7 @@ async fn test_duplicate_vote_rejected() {
     .await
     .unwrap();
 
-    let message = json!({"report_id": 1, "result": "Approve"}).to_string();
+    let message = crate::moderation_vote_message_v2(1, "Approve", &juror_hash);
     let signing_key = SigningKey::<Sha256>::new(private_key.clone());
     let signature = signing_key.sign(message.as_bytes()).to_vec();
     let vote_body = json!({
@@ -3738,20 +3738,24 @@ async fn force_conclude(db: &libsql::Connection, report_id: i64) {
     tx.commit().await.unwrap();
 }
 
-/// 署名付きの投票リクエストを送信し、ステータスコードを返す
-async fn send_signed_vote(
+/// 与えられた署名対象メッセージを RSA 秘密鍵で署名するテストヘルパー。
+fn sign_vote_message(message: &str, private_key: &PrivateKey) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
+    signing_key.sign(message.as_bytes()).to_vec()
+}
+
+/// 任意の署名バイト列で投票リクエストを送信し、ステータスコードを返す。
+/// 署名対象メッセージを差し替える再生テストから使う。
+async fn send_vote_with_signature(
     app: &Router,
     report_id: i64,
     result: &str,
     juror_hash: &str,
-    private_key: &PrivateKey,
+    signature: Vec<u8>,
 ) -> StatusCode {
-    use rsa::pkcs1v15::SigningKey;
-    use rsa::signature::{SignatureEncoding, Signer};
-
-    let message = crate::moderation_vote_message(report_id, result);
-    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
-    let signature = signing_key.sign(message.as_bytes()).to_vec();
     let vote_body = json!({
         "report_id": report_id,
         "juror_hash": juror_hash,
@@ -3778,6 +3782,19 @@ async fn send_signed_vote(
         .await
         .unwrap();
     response.status()
+}
+
+/// v2 メッセージに正しく署名した投票リクエストを送信する。
+async fn send_signed_vote(
+    app: &Router,
+    report_id: i64,
+    result: &str,
+    juror_hash: &str,
+    private_key: &PrivateKey,
+) -> StatusCode {
+    let message = crate::moderation_vote_message_v2(report_id, result, juror_hash);
+    let signature = sign_vote_message(&message, private_key);
+    send_vote_with_signature(app, report_id, result, juror_hash, signature).await
 }
 
 /// MOD-02: 確定後の追加投票は拒否され、確定状態は変わらない
@@ -3920,13 +3937,153 @@ async fn test_vote_for_missing_report_returns_404() {
     );
 }
 
-/// 投票署名メッセージは report_id と result の両方に依存する（転用防止の基盤）。
+/// v2 投票署名メッセージは report_id / result / juror_hash のすべてに依存し、
+/// ドメイン分離子を含む（転用防止の基盤）。
 #[test]
-fn test_moderation_vote_message_binds_report_and_result() {
-    let a = crate::moderation_vote_message(1, "Approve");
-    assert_ne!(a, crate::moderation_vote_message(2, "Approve"));
-    assert_ne!(a, crate::moderation_vote_message(1, "Reject"));
-    assert_eq!(a, crate::moderation_vote_message(1, "Approve"));
+fn test_moderation_vote_message_v2_binds_all_fields() {
+    let a = crate::moderation_vote_message_v2(1, "Approve", "juror_a");
+    assert_ne!(
+        a,
+        crate::moderation_vote_message_v2(2, "Approve", "juror_a")
+    );
+    assert_ne!(a, crate::moderation_vote_message_v2(1, "Reject", "juror_a"));
+    assert_ne!(
+        a,
+        crate::moderation_vote_message_v2(1, "Approve", "juror_b")
+    );
+    assert_eq!(
+        a,
+        crate::moderation_vote_message_v2(1, "Approve", "juror_a")
+    );
+
+    let parsed: serde_json::Value = serde_json::from_str(&a).unwrap();
+    assert_eq!(parsed["domain"], "moderation-vote-v2");
+    assert_eq!(parsed["report_id"], 1);
+    assert_eq!(parsed["result"], "Approve");
+    assert_eq!(parsed["juror_hash"], "juror_a");
+
+    // 旧 v1 形式とは必ず異なる（アップロード署名等とのクロスプロトコル分離）。
+    #[allow(deprecated)]
+    let legacy = crate::moderation_vote_message(1, "Approve");
+    assert_ne!(a, legacy);
+}
+
+/// v2 投票署名テスト用の共通セットアップ（content + report + app）。
+async fn setup_vote_signature_test() -> (Router, libsql::Connection) {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    db.execute("INSERT INTO users (user_hash) VALUES ('owner')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E', 'Illustration', 'owner', 'abc', 'Reported')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO reports (report_id, target_cid, reason) VALUES (1, 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111E', 'test')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let shared_state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let app = build_router(shared_state);
+    (app, db)
+}
+
+/// v2 メッセージに正しく署名した投票は受理され、票が記録される。
+#[tokio::test]
+async fn test_vote_v2_signature_accepted() {
+    let (app, db) = setup_vote_signature_test().await;
+    let (juror_hash, key) = insert_juror(&db).await;
+
+    assert_eq!(
+        send_signed_vote(&app, 1, "Approve", &juror_hash, &key).await,
+        StatusCode::OK,
+        "v2 署名の投票は受理されること"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "v2 署名の投票が記録されること");
+}
+
+/// 旧 v1 形式で署名した投票は 401 で拒否され、票を記録しない。
+#[tokio::test]
+async fn test_vote_rejects_legacy_v1_signature() {
+    let (app, db) = setup_vote_signature_test().await;
+    let (juror_hash, key) = insert_juror(&db).await;
+
+    #[allow(deprecated)]
+    let legacy_message = crate::moderation_vote_message(1, "Approve");
+    let signature = sign_vote_message(&legacy_message, &key);
+    assert_eq!(
+        send_vote_with_signature(&app, 1, "Approve", &juror_hash, signature).await,
+        StatusCode::UNAUTHORIZED,
+        "旧形式の署名は拒否されること"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "旧形式の署名では票が記録されないこと");
+}
+
+/// 別の juror_hash 向けに署名したメッセージは転用できない。
+#[tokio::test]
+async fn test_vote_rejects_signature_bound_to_other_juror() {
+    let (app, db) = setup_vote_signature_test().await;
+    let (juror_a, _key_a) = insert_juror(&db).await;
+    let (juror_b, key_b) = insert_juror(&db).await;
+
+    // B の秘密鍵で署名するが、署名対象メッセージは A の juror_hash に束縛されている。
+    let forged_message = crate::moderation_vote_message_v2(1, "Approve", &juror_a);
+    let signature = sign_vote_message(&forged_message, &key_b);
+    assert_eq!(
+        send_vote_with_signature(&app, 1, "Approve", &juror_b, signature).await,
+        StatusCode::UNAUTHORIZED,
+        "別 juror_hash に束縛された署名は転用できないこと"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM votes WHERE report_id = 1", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "転用署名では票が記録されないこと");
 }
 
 /// 無効署名の投票は 401 で拒否し、票を記録しない
@@ -4233,7 +4390,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
     use rsa::pkcs1v15::SigningKey;
     use rsa::signature::{SignatureEncoding, Signer};
 
-    let message = json!({"report_id": 1, "result": "Approve"}).to_string();
+    let message = crate::moderation_vote_message_v2(1, "Approve", &juror_hash);
     let signing_key = SigningKey::<Sha256>::new(key);
     let signature = signing_key.sign(message.as_bytes()).to_vec();
     let vote_body = json!({
@@ -11298,6 +11455,33 @@ async fn test_list_contents_filters_by_query_tag_and_type() {
     assert_eq!(items[0]["price"], 0);
 }
 
+/// price が NULL の Approved 行があっても一覧は 500 にならず、
+/// 購入不可を表す 0 として返る（エクスポート側の Option<i64> と経路を揃える）。
+#[tokio::test]
+async fn test_list_contents_null_price_is_returned_as_zero() {
+    let (app, db) = setup_app_with_db().await;
+    db.execute("DELETE FROM contents", ()).await.unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price, title, description, tags, created_at)
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111B',
+                 'Illustration', 'test_user', 'sum', 'Approved', NULL,
+                 'Null price', 'no price', '', '2026-01-05 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let (status, items) = get_content_list(&app, &token, "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(items.len(), 1);
+    assert_eq!(
+        items[0]["cid"],
+        "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111B"
+    );
+    assert_eq!(items[0]["price"], 0);
+}
+
 #[tokio::test]
 async fn test_list_contents_limit_boundaries_and_offset() {
     let (app, db) = setup_app_with_db().await;
@@ -13158,6 +13342,97 @@ async fn list_reports_returns_summarized_reason() {
         .unwrap();
     let row = rows.next().await.unwrap().unwrap();
     assert_eq!(row.get::<String>(0).unwrap(), full_reason);
+}
+
+/// GET /content/{cid}/audit の reason は要約化し、ハッシュ検証用の entry_hash は
+/// DB の生 reason から計算された値をそのまま返す（表示のみマスク）。
+#[tokio::test]
+async fn test_get_content_audit_masks_reason_but_preserves_entry_hash() {
+    let (app, db) = setup_app_with_db().await;
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g";
+    let raw_reason = "contact user@example.com https://example.com/a code 1234";
+    let previous_log_hash = "GENESIS_HASH";
+
+    let entry = common::AuditLogEntry {
+        log_id: None,
+        cid: cid.to_string(),
+        old_status: "Approved".to_string(),
+        new_status: "Reported".to_string(),
+        changed_by: "reporter".to_string(),
+        reason: raw_reason.to_string(),
+        previous_log_hash: previous_log_hash.to_string(),
+    };
+    let expected_hash = entry.calculate_hash_v2();
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            cid,
+            "Approved",
+            "Reported",
+            "reporter",
+            raw_reason,
+            previous_log_hash,
+            expected_hash.clone(),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}/audit"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(raw_reason), "全文が漏れた: {text}");
+    assert!(
+        !text.contains("user@example.com"),
+        "メールアドレスが漏れた: {text}"
+    );
+    assert!(!text.contains("example.com"), "URL が漏れた: {text}");
+    assert!(!text.contains("1234"), "4 桁数字が漏れた: {text}");
+
+    let logs: Vec<crate::AuditLogResponse> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(
+        logs[0].reason.as_deref(),
+        Some(common::summarize_reason(raw_reason).as_str()),
+        "レスポンスは summarize_reason の結果であること"
+    );
+    assert!(
+        logs[0]
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("[redacted]"))
+    );
+
+    // レスポンスの entry_hash はマスク影響を受けず、生 reason から再計算した値と一致する。
+    assert_eq!(logs[0].entry_hash, expected_hash);
+    let mut rows = db
+        .query("SELECT reason, entry_hash FROM content_audit_log", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let stored_raw: String = row.get(0).unwrap();
+    let stored_hash: String = row.get(1).unwrap();
+    assert_eq!(stored_raw, raw_reason, "DB には全文が残ること");
+    let verify_entry = common::AuditLogEntry {
+        reason: stored_raw,
+        ..entry
+    };
+    assert_eq!(verify_entry.calculate_hash_v2(), stored_hash);
+    assert_eq!(stored_hash, logs[0].entry_hash);
 }
 
 /// 未認証の GET /mod/reports は従来どおり 401。

@@ -1679,13 +1679,16 @@ pub async fn get_content_audit(
 
     let mut logs = Vec::new();
     while let Some(row) = rows.next().await? {
+        // DB には全文を保持したまま、表示用のレスポンスには要約だけを返す。
+        // ハッシュ検証に使う entry_hash は DB の生値をそのまま返し、変更しない。
+        let reason: Option<String> = row.get(5)?;
         logs.push(AuditLogResponse {
             log_id: row.get(0)?,
             cid: row.get(1)?,
             old_status: row.get(2)?,
             new_status: row.get(3)?,
             changed_by: row.get(4)?,
-            reason: row.get(5)?,
+            reason: reason.map(|text| common::summarize_reason(&text)),
             created_at: row.get(6)?,
             entry_hash: row.get(7)?,
         });
@@ -2185,7 +2188,10 @@ pub fn build_content_query(
     // JOIN するとお気に入りの重複行でページング件数が壊れるため、相関 EXISTS
     // で判定する（重複行を作らず、favorite_only のときだけ favorites を参照）。
     let mut sql = String::from(
-        "SELECT cid, checksum, type, status, price, title, description, tags, \
+        // price は外部データ取込等で NULL になり得る。一覧は i64 で返すため
+        // COALESCE で 0（購入不可）に読み替え、エクスポート側の Option<i64> と
+        // 経路を揃える。JOIN / WHERE / ORDER には影響しない。
+        "SELECT cid, checksum, type, status, COALESCE(price, 0) AS price, title, description, tags, \
          EXISTS (SELECT 1 FROM favorites f WHERE f.cid = contents.cid AND f.user_hash = ?) AS is_favorite \
          FROM contents WHERE status = 'Approved'",
     );
@@ -2802,11 +2808,26 @@ pub async fn record_unpin(
     Ok(Json(true))
 }
 
-/// モデレーション投票の署名対象メッセージを生成する。
-/// 現行形式（互換性のため変更しない）を一箇所に集約し、将来のドメイン分離を
-/// この関数だけで行えるようにする。
+/// モデレーション投票の署名対象メッセージ（旧 v1 形式）。
+/// 互換性のため残すが、`mod_vote` は v2 のみ受理するためこの形式では投票できない。
+#[deprecated(
+    note = "v1 vote messages are no longer accepted by mod_vote; use moderation_vote_message_v2"
+)]
 pub fn moderation_vote_message(report_id: i64, result: &str) -> String {
     json!({"report_id": report_id, "result": result}).to_string()
+}
+
+/// モデレーション投票の署名対象メッセージ（v2）。
+/// ドメイン分離子と投票者ハッシュを含め、同じ公開鍵で署名したアップロード署名
+/// など他プロトコルの署名を投票へ転用（クロスプロトコル再生）できないようにする。
+pub fn moderation_vote_message_v2(report_id: i64, result: &str, juror_hash: &str) -> String {
+    json!({
+        "domain": "moderation-vote-v2",
+        "report_id": report_id,
+        "result": result,
+        "juror_hash": juror_hash
+    })
+    .to_string()
 }
 
 pub async fn mod_vote(
@@ -2825,7 +2846,8 @@ pub async fn mod_vote(
     ensure_user_not_banned(&state.db, &claims.sub).await?;
 
     // 1. Verify Signature (Auditability)
-    let message = moderation_vote_message(vote.report_id, &vote.result);
+    // v2 のみ受理する。旧形式の署名や他プロトコル由来の署名はここで拒否される。
+    let message = moderation_vote_message_v2(vote.report_id, &vote.result, &vote.juror_hash);
 
     // 空署名は長さ検証前にモックとして受理されないよう明示的に拒否する。
     if vote.signature.is_empty() {

@@ -60,6 +60,10 @@ const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 /// エクスポートの保存ファイル名。ユーザー入力を一切使わない固定値（パス注入対策）。
 const EXPORT_FILENAME: &str = "openillustration-export.json";
 
+/// エクスポート結果が `DataExport` として解析できない場合の固定文言。
+/// 解析エラーの詳細は機微情報を含み得るため画面へ出さない。
+const EXPORT_PARSE_ERROR: &str = "エクスポート結果の解析に失敗しました。";
+
 /// 本文と TOC で共有する見出し情報。
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HeadingEntry {
@@ -674,6 +678,18 @@ impl DataExport {
     }
 }
 
+/// エクスポート成功時に `export-status` へ出す文言を組み立てる。
+/// 型として読めないレスポンスを「0 件」成功にせず、固定エラーを返す。
+/// エラー時は `export-error` にのみ表示し、`export-status` は空のままにする。
+fn export_status_message(payload: &serde_json::Value) -> Result<String, String> {
+    let data = serde_json::from_value::<DataExport>(payload.clone())
+        .map_err(|_| EXPORT_PARSE_ERROR.to_string())?;
+    Ok(format!(
+        "エクスポート完了: {} 件のレコードをダウンロードしました。",
+        data.record_count()
+    ))
+}
+
 /// ダウンロード開始に失敗したときに表示する固定文言。
 /// JS 側の例外メッセージは機微情報を含み得るため表示には使わない。
 fn download_start_error_message() -> &'static str {
@@ -1176,13 +1192,10 @@ fn ExportMyData(token: String) -> impl IntoView {
                     .await
                     .map_err(|_| "エクスポートの解析に失敗しました。".to_string())?;
                 // 型定義で後方互換を確認し、画面には件数だけを出す。
-                let count = serde_json::from_value::<DataExport>(payload.clone())
-                    .map(|data| data.record_count())
-                    .unwrap_or(0);
+                // 解析失敗時は「0 件」成功にせず、固定エラーだけを表示する。
+                let message = export_status_message(&payload)?;
                 download_json_file(&payload, EXPORT_FILENAME)?;
-                Ok(format!(
-                    "エクスポート完了: {count} 件のレコードをダウンロードしました。"
-                ))
+                Ok(message)
             }
             .await;
             set_busy.set(false);
@@ -2659,6 +2672,29 @@ mod tests {
 
         // 正しいデータはチェックサムと一致する
         assert!(common::verify_checksum(original_data, &original_checksum));
+    }
+
+    /// R5-04: 解析失敗時に「0 件」成功表示へ落とさず固定文言を出すこと。
+    #[test]
+    fn export_parse_failure_uses_fixed_phrase_without_success_status() {
+        assert_eq!(
+            super::EXPORT_PARSE_ERROR,
+            "エクスポート結果の解析に失敗しました。"
+        );
+        // version が数値でないため DataExport として読めないレスポンス。
+        let invalid: serde_json::Value =
+            serde_json::from_str(r#"{"version":"invalid","contents":[]}"#).unwrap();
+        assert_eq!(
+            super::export_status_message(&invalid).unwrap_err(),
+            "エクスポート結果の解析に失敗しました。"
+        );
+        // 正常系は従来どおり件数入りの成功文言（export-status に出す値）。
+        let valid: serde_json::Value =
+            serde_json::from_str(r#"{"version":1,"sub":"s","contents":[{}]}"#).unwrap();
+        assert_eq!(
+            super::export_status_message(&valid).unwrap(),
+            "エクスポート完了: 1 件のレコードをダウンロードしました。"
+        );
     }
 
     /// R5-04: サーバーの共通インターフェースに合わせた全フィールドが読めること。
