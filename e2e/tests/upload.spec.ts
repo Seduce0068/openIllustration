@@ -19,6 +19,14 @@ test.describe('Content Upload Flow', () => {
   });
 
   test('should upload JXL content successfully', async ({ page }) => {
+    // BROWSE ビューの一覧件数 sr-only ライブリージョン（UPLOAD へ遷移する前に検証）。
+    // 実装: client/src/lib.rs:1177 <p role="status" aria-live="polite" class="sr-only">。
+    const itemCountStatus = page.locator('p.sr-only[role="status"]');
+    await expect(itemCountStatus).toHaveCount(1);
+    await expect(itemCountStatus).toHaveAttribute('role', 'status');
+    await expect(itemCountStatus).toHaveAttribute('aria-live', 'polite');
+    await expect(itemCountStatus).toContainText('content items displayed');
+
     await page.getByRole('button', { name: 'UPLOAD' }).click();
     
     const fileInput = page.locator('input[type="file"]');
@@ -114,6 +122,10 @@ test.describe('Content Upload Flow', () => {
     const status = page.getByTestId('upload-status');
     await expect(status).toContainText('アップロードの準備に失敗しました。', { timeout: 15000 });
 
+    // ライブリージョン属性を明示的に検証（client/src/lib.rs:1900）。
+    await expect(status).toHaveAttribute('role', 'status');
+    await expect(status).toHaveAttribute('aria-live', 'polite');
+
     // "Processing..." のまま固まらず、ボタンが再活性化されること。
     await expect(submitButton).toBeEnabled({ timeout: 10000 });
     await expect(submitButton).not.toHaveText(/Processing/i);
@@ -126,12 +138,36 @@ test.describe('Content Upload Flow', () => {
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute('tabindex', '0');
 
-    // ラベルの keydown ハンドラが input.click() を呼び、filechooser が発火する。
+    // ラベルの keydown ハンドラが input.click() を呼び、filechooser が発火する（Enter ケースは維持）。
     const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
     await label.focus();
     await page.keyboard.press('Enter');
     const fileChooser = await fileChooserPromise;
     expect(fileChooser).toBeTruthy();
+
+    // Space (' ') でも filechooser が発火することを検証（client/src/lib.rs:1681-1683, 1823-1825）。
+    // is_file_picker_activation_key(" ") が ev.prevent_default() を呼ぶため、
+    // Space 既定のページスクロールは抑制される。バブル phase の window リスナーで
+    // defaultPrevented を記録し、レイアウトに依存せず決定論的に確認する。
+    await page.evaluate(() => {
+      const w = window as unknown as { __spaceDefaultPrevented: boolean | null };
+      w.__spaceDefaultPrevented = null;
+      window.addEventListener('keydown', event => {
+        if (event.key === ' ') {
+          w.__spaceDefaultPrevented = event.defaultPrevented;
+        }
+      });
+    });
+    const spaceChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
+    await label.focus();
+    await page.keyboard.press('Space');
+    const spaceChooser = await spaceChooserPromise;
+    expect(spaceChooser).toBeTruthy();
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __spaceDefaultPrevented: boolean }).__spaceDefaultPrevented,
+      ),
+    ).toBe(true);
 
     const priceInput = page.locator('#upload-price');
     await expect(priceInput).toHaveAttribute('min', '1');

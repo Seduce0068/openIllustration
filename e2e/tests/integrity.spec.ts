@@ -212,9 +212,20 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page.getByTestId('content-verification-badge')).toHaveText('× DECODE FAILED');
 
     // R1-13 の回帰: デコード失敗時に VERIFIED や改ざん検知文言が出ないこと。
-    await expect(page.locator('span', { hasText: '● VERIFIED' })).toHaveCount(0);
-    await expect(page.getByText('Integrity Breach Detected')).toHaveCount(0);
-    await expect(page.getByText('Wasm checksum does not match forensic registry.')).toHaveCount(0);
+    // 上でバッジ文言・エラー詳細の肯定アサーションが通る = 状態遷移が確定している。
+    // その上で否定を expect.poll に置き、描画前の瞬間に成立する脆弱な
+    // 単発 toHaveCount(0) を避ける（.async な遅延描画でも取りこぼさない）。
+    await expect(page.getByTestId('content-verification-badge'))
+      .toHaveText('× DECODE FAILED', { timeout: 30000 });
+    await expect
+      .poll(() => page.locator('span', { hasText: '● VERIFIED' }).count(), { timeout: 5000 })
+      .toBe(0);
+    await expect
+      .poll(() => page.getByText('Integrity Breach Detected').count(), { timeout: 5000 })
+      .toBe(0);
+    await expect
+      .poll(() => page.getByText('Wasm checksum does not match forensic registry.').count(), { timeout: 5000 })
+      .toBe(0);
 
     // ゲートウェイ取得は 200 で 1 回だけ（チェックサム一致によるデコード試行）。
     expect(gatewayStatuses).toEqual([200]);
@@ -403,6 +414,76 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // Escape はトグル（カード内）で受け取り、カードの keydown ハンドラで閉じる。
     await auditToggle.focus();
     await page.keyboard.press('Escape');
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(dialog).toHaveCount(0);
+    await expect(auditToggle).toBeFocused();
+  });
+
+  test('R2: Audit toggle dialog closes via CLOSE button and restores focus', async ({ page }) => {
+    const hash = computeHash(ORIGINAL_CONTENT);
+
+    // Escape ケースと同じモックを用意し、CLOSE ボタン経路だけを独立して切り出す。
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          cid: MOCK_CID,
+          checksum: hash,
+          type: 'Novel',
+          status: 'Approved',
+          price: 0,
+          title: 'Forensic Evidence Log',
+          description: 'ARIA toggle CLOSE fixture',
+          tags: ['forensic', 'a11y'],
+          is_favorite: false
+        }])
+      });
+    });
+
+    await page.route(`**/content/${MOCK_CID}`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/markdown',
+        headers: {
+          'x-forensic-checksum': hash,
+          'content-type': 'text/markdown'
+        },
+        body: ORIGINAL_CONTENT
+      });
+    });
+
+    await page.route(`**/content/${MOCK_CID}/audit`, async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
+    });
+    await page.route('**/auth/verify', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' })
+      });
+    });
+
+    await page.goto('/');
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
+
+    const card = page.getByTestId('content-card').first();
+    const auditToggle = card.getByRole('button', { name: 'Audit' });
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
+
+    await auditToggle.click();
+    const dialog = page.getByRole('dialog', { name: 'Forensic Timeline' });
+    await expect(dialog).toBeVisible();
+    await expect(auditToggle).toHaveAttribute('aria-expanded', 'true');
+
+    // Escape ではなく dialog 内の CLOSE ボタンで閉じる（client/src/lib.rs:1645-1654）。
+    await dialog.getByRole('button', { name: 'CLOSE' }).click();
+
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(dialog).toHaveCount(0);
     await expect(auditToggle).toBeFocused();

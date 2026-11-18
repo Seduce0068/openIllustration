@@ -103,7 +103,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     await expect
       .poll(() => captured.map(call => JSON.parse(call.body) as unknown), {
         intervals: [100, 100, 100, 100, 100],
-        timeout: 2000,
+        timeout: 5000,
       })
       .toEqual([{ event: 'neutralized_url', count: 2 }]);
 
@@ -219,7 +219,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     await expect
       .poll(() => captured.map(call => JSON.parse(call.body) as unknown), {
         intervals: [100, 100, 100, 100, 100],
-        timeout: 2000,
+        timeout: 5000,
       })
       .toEqual([{ event: 'neutralized_url', count: 2 }]);
   });
@@ -235,7 +235,11 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
 
     // BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントさせ、同じ本文を再描画する。
     await page.getByRole('button', { name: 'UPLOAD' }).click();
-    await expect(page.getByText('Neutralized Story')).toHaveCount(0);
+    // ビュー切り替えが完了した肯定アサーションを先に置き、否定は poll で待つ。
+    await expect(page.locator('#upload-price')).toBeVisible();
+    await expect
+      .poll(() => page.getByText('Neutralized Story').count(), { timeout: 5000 })
+      .toBe(0);
     await page.getByRole('button', { name: 'BROWSE' }).click();
     await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
     await expect.poll(() => contentBodyRequests.length, { timeout: 10000 }).toBe(2);

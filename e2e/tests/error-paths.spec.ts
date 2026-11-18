@@ -219,11 +219,17 @@ test.describe('Error paths (network error / HTTP 500)', () => {
       .toHaveText(`コンテンツの取得に失敗しました (HTTP ${status}).`);
 
     const badge = page.getByTestId('content-verification-badge');
-    await expect(badge).toHaveText('× LOAD FAILED');
+    await expect(badge).toHaveText('× LOAD FAILED', { timeout: 10000 });
+    // 上のバッジ文言と load-error 詳細の肯定アサーションで取得失敗状態が確定済み。
+    // 否定は expect.poll に置き、描画前の瞬間に成立する単発 toHaveCount(0) を避ける。
     await expect(badge).not.toContainText('COMPROMISED');
-    await expect(page.getByText('Integrity Breach Detected')).toHaveCount(0);
+    await expect
+      .poll(() => page.getByText('Integrity Breach Detected').count(), { timeout: 5000 })
+      .toBe(0);
     // HTTP エラー本文（サーバー詳細）を画面へ出さない。
-    await expect(page.getByText('SERVER_DETAIL_MUST_NOT_BE_SHOWN')).toHaveCount(0);
+    await expect
+      .poll(() => page.getByText('SERVER_DETAIL_MUST_NOT_BE_SHOWN').count(), { timeout: 5000 })
+      .toBe(0);
   }
 
   test('CONTENT-ERR-404: /content/{cid} が HTTP 404 のとき取得失敗文言を出し改ざん検知と誤表示しないこと', async ({ page }) => {

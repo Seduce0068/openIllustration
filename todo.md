@@ -122,7 +122,7 @@ P2（品質・保守・プロダクト拡張）:
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
   E2E 定義数は37件（現行）。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 48件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 49件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -143,7 +143,7 @@ P2（品質・保守・プロダクト拡張）:
    `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
    「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [x] 型境界とビルドゲート（2026-11-18）: 注文のNULL価格を400へ統一、CSS側CDN参照と
-  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 48件。
+  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 49件。
   ※ 本番投票は実JPKI署名が未実装のため現状401（外部要因DEC-01）。
 - [x] トランザクション安全性（2026-11-18）: exportのBEGINをwrite_lock配下へ、
   期限切れ更新と固定アドレス注文INSERTをtx内へ統一（高リスクの500を解消）。
@@ -159,7 +159,7 @@ P2（品質・保守・プロダクト拡張）:
   restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
 - [x] 定数単一情報源化とエラー表示（2026-11-18）: clock skew 定数を pub use で共有、
   favorite 再試行クリアの E2E、Ledger の /transactions 失敗表示（role=alert）。
-  E2E 48件。
+  E2E 49件。
 - [x] クライアント境界の硬化（2026-11-18）: 中立化URL件数を描画ソース単位で1回に抑制、
   protocol-relative/UNC URL を拒否、ファイル選択解除時に古い File をクリア。
 - [x] E2E契約の監査対応（2026-11-18）: 件数矛盾(37→45)・MOD-07/10/11・Ledger/METシナリオ
@@ -189,6 +189,9 @@ P2（品質・保守・プロダクト拡張）:
   aria-expandedは"true"/"false"文字列を返すよう実装を修正。
 - [x] E2Eシナリオ仕様の是正（2026-11-18）: 11件の未反映を反映。MET ID衝突を
   NEUT-URL-02/03へ分離、a11y/CONTENT-ERR/favorites/export/GOV-01のオラクルを明記。
+- [x] dialog/フォーカスとE2E堅牢性（2026-11-18）: aria-modal+初期フォーカス+Tab trap、
+  label role=button、CLOSE/SpaceのE2E、否定アサーションの状態確定、MET poll延長。
+  E2E 49件。
 - [ ] R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
@@ -238,7 +241,7 @@ P2（品質・保守・プロダクト拡張）:
 ## メモ
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
-  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は48件（12 spec）。
+  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は49件（12 spec）。
 - 詳細な残タスク棚卸しは `docs/TASK_INVENTORY.md`、レビュー履歴は `docs/REVIEW_REPORT.md`、
   未知タスク調査は `docs/UNKNOWN_TASKS_INVESTIGATION.md` を参照。
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。

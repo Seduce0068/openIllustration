@@ -188,7 +188,11 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
       favorite_only: '1',
     });
     await expect(page.getByText('Plain Story')).toBeVisible();
-    await expect(page.getByText('Fav Story')).toHaveCount(0);
+    // 絞り込みが反映され、カードが1件だけになったことを肯定アサーションで確定させてから否定を置く。
+    await expect(page.locator('div[data-testid="content-card"]')).toHaveCount(1);
+    await expect
+      .poll(() => page.getByText('Fav Story').count(), { timeout: 5000 })
+      .toBe(0);
 
     // 既存の q と併用できること。
     await page.getByLabel('Search').fill('Plain');
@@ -435,8 +439,9 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await expect(toggle).toHaveAttribute('aria-pressed', 'false');
 
     // 再トグル: レスポンスが返る前でも toggle_favorite 先頭のクリアで旧エラーが消える。
+    // 直前に旧エラーの存在を肯定アサーションで確定させているため、poll で消失を待つ。
     await toggle.click();
-    await expect(error).toHaveCount(0);
+    await expect.poll(() => error.count(), { timeout: 5000 }).toBe(0);
     await expect.poll(() => favoriteCalls).toEqual([
       { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
       { method: 'POST', path: `/content/${GUARD_CID}/favorite` },
