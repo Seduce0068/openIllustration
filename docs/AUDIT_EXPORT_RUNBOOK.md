@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 ---
 
 ## 目的
@@ -112,7 +112,8 @@ cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされてい
 正常系（鍵 0600・親 0700・新規出力・`DATABASE_TOKEN` 環境変数）は
 「スナップショット作成」の手順に従って実行する。上記はコード上の契約から導いた確認手順であり、
 本ドキュメント更新時点でこの手順の実行は行っていない。
-専用の自動テストは未追加であり、継続的な検証は Runbook の本手順と
+`server/src/bin/sign_audit_export.rs` には鍵権限・トークン・上書き拒否の9テストを追加済みであり、
+継続的な検証は Runbook の本手順と
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の AUDIT-02 ゲートで扱う。
 
 ## 形式バージョンと互換範囲（v1 エントリ互換の限界）
@@ -173,7 +174,42 @@ cargo run -p server --bin verify_audit_export -- \
 ```
 
 成功時は `audit_export_verification: OK` を出力し終了コード 0 を返す。
-改ざん・誤鍵・形式不正は終了コード 1 となる。
+改ざん・誤鍵・形式不正は終了コード 1 となる。受理1行の形式は
+`audit_export_verification: OK version=3 entries=N governance=N root=<hex>` である。
+
+### 保存した Merkle root との照合（`--expect-root`）
+
+署名検証に加え、過去に記録した Merkle root と突き合わせる場合は `--expect-root HEX` を付ける。
+省略時は照合しない。比較は大小文字を区別せず（実装は `eq_ignore_ascii_case`）、
+不一致なら `audit root mismatch: expected=<指定値>, computed=<スナップショットの root>`
+を stderr へ出力し終了コード1となる。値を忘れた場合は `--expect-root requires a value`
+で拒否される（いずれも実 CLI で確認）。
+
+```bash
+# Kubuntu / リポジトリルート
+echo "== 1. 検証成功時に root を記録 =="
+ROOT=$(cargo run -q -p server --bin verify_audit_export -- \
+  --snapshot /path/to/audit-snapshot-YYYYMMDD.json \
+  --public-key /path/to/audit-public.der | sed -n 's/.* root=\([0-9a-f]*\)$/\1/p')
+echo "recorded root: $ROOT"
+
+echo "== 2. 記録した root と一致する場合は受理されること =="
+cargo run -p server --bin verify_audit_export -- \
+  --snapshot /path/to/audit-snapshot-NEW.json \
+  --public-key /path/to/audit-public.der \
+  --expect-root "$ROOT"; echo "exit_code=$?"
+
+echo "== 3. 不一致の例（拒否されること） =="
+cargo run -p server --bin verify_audit_export -- \
+  --snapshot /path/to/audit-snapshot-NEW.json \
+  --public-key /path/to/audit-public.der \
+  --expect-root deadbeef; echo "exit_code=$?"
+```
+
+期待結果: 2 は root が一致すれば `audit_export_verification: OK` と終了コード0、
+3 は `Error: audit root mismatch: expected=deadbeef, computed=<root>` と終了コード1。
+`--expect-root` は署名・連鎖・Merkle root の再計算検証の代替ではなく、記録済み root との
+突き合わせ（切詰め・差し替え検知）を追加するオプションである。
 
 ## 検証済み事項（2026-11-17）
 
@@ -189,6 +225,11 @@ cargo run -p server --bin verify_audit_export -- \
   `Error: Invalid signature: unsupported audit snapshot version: N`（終了コード 1）
   となり、旧形式が fail-closed で拒否されることを CLI で確認した。version 3 は
   バージョン検査を通過し署名検証へ進むことも確認した。
+- `verify_audit_export` に `--expect-root` を追加し、`VerificationOutcome` /
+  `verify_export` を I/O を持たない純粋関数へ分離した。`server/src/bin/verify_audit_export.rs`
+  に17テスト（引数パース6 / 受理2 / 拒否5 / マスク出力3 / 一時ファイル1）を追加し、
+  有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・マスク出力を検証する。
+  上位ゲートは [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-02 を参照。
 
 ## 未解決事項
 
@@ -196,4 +237,5 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名鍵の HSM 管理、ローテーション、旧公開鍵の配布方針。
 - 公開範囲と個人情報（理由_TEXT 等）のマスキング方針。
 - スナップショットの自動生成頻度と公開手順。
-- 鍵権限・`DATABASE_TOKEN` 環境変数・出力上書き拒否の専用自動テスト（現状は手動確認のみ、AUDIT-02）。
+- AUDIT-02 の自動テストは `sign_audit_export.rs` の9件で充足済み。残るは外部アンカー運用と
+  HSM 鍵管理の実試験（上記項目と重複）。

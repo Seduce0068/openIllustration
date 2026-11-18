@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -33,6 +33,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   upload の4件目は R1-14（`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）の回帰である。
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記35件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
+  今回の3CLIへのテスト追加（doctor 20件 / verify_audit_export 17件 / verify_backup 17件）も
+  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は35件のまま変わらない。
 
 ## 2. 実装済みテストの概要
 
@@ -57,7 +59,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化 | 実装は完了。専用の自動テストは未追加（Runbookの手動確認に委譲）。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 20件 / `verify_audit_export` 17件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 
 ## 3. 必須要件のリリースゲート
@@ -115,11 +117,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
 | AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
-| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。自動テストは未追加。Runbookの手動確認手順で運用時に確認する |
+| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に9テストを追加済み。Runbookの手動確認手順も併用する |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
-| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。下記「設定診断（`doctor`）の検証」を参照 |
+| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と20テストを追加し、11カテゴリ固定を検証。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
@@ -132,6 +134,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-04 | `prop_summarize_reason_truncates_safe_text_at_char_boundary` | PII を含まない文字（あ / 知 / A / b / 空白 / 改行 / 🍣 / 。、0..=160個）で、120文字以下は等価、超過は先頭119文字＋`…` に切り詰め（Unicode 境界を維持） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
+| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。11カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に20テストを追加。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
@@ -177,16 +182,101 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 ダミーの `JWT_SECRET` を設定した5パターンの実出力は次のとおり（秘密値は出力されない）。
 
-| パターン | 環境変数（差分） | 実行 | 実出力（要約） | 終了コード |
+| パターン | 環境変数（差分） | 実出力（要約） | 既定 | `--strict` |
 | --- | --- | --- | --- | --- |
-| P1 | `ALLOW_MOCK_AUTH=1` のみ | 既定 | `doctor: 10 check(s), 0 problem(s)` | 0 |
-| P2 | P1 + `PINATA_JWT=<本番相当値>` | 既定 | `10 check(s), 1 problem(s)` + mock 警告 | 0 |
-| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | 既定 | `10 check(s), 1 problem(s)` + mock 警告 | 0 |
-| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM` | `--strict` | `10 check(s), 2 problem(s)` + jwt / mock 警告 | 1 |
-| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `--strict` | `10 check(s), 0 problem(s)` | 0 |
+| P1 | `ALLOW_MOCK_AUTH=1` のみ | `doctor: 11 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
+| P2 | P1 + `PINATA_JWT=<本番相当値>` | `11 check(s), 2 problem(s)` + `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | `11 check(s), 2 problem(s)` + 同上の2警告 | 0 | 1 |
+| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM`（不正ダミー） | `11 check(s), 3 problem(s)` + `jwt` / `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `11 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
 
-P2 / P3 を `--strict` で実行した場合はいずれも `1 problem(s)` で終了コード1となる。
+いずれもダミーの `JWT_SECRET`（32バイト以上）を設定した実測値である（2026-11-18、ビルド済み
+`target/debug/doctor` で確認）。`mock_auth_enabled` カテゴリの追加により検査数は11となり、
+`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。よって P5 は `--strict` で終了コード1であり
+（旧挙動の0ではない）、`--strict` の判定は `should_fail(strict, problems)` に委譲される。
 P4 の jwt 警告はダミー PEM が無効なことによるもので、mock 警告とは独立している。
+
+### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
+
+今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は35件のまま
+変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
+判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
+
+#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、20テスト）
+
+- `parse_args_from<I>(items) -> ParseOutcome`: 引数は `Vec<String>` で受け取り、先頭要素を
+  プログラム名として読み飛ばす。`[]` は `Run { strict: false }`、`["--strict"]` は
+  `Run { strict: true }`、`-h` / `--help` は `Help`、単一の不明引数は
+  `UnknownArgument(String)`、複数引数は `TooManyArguments` を返す（完全一致のみ有効）。
+- `check_all_with<F>(lookup) -> Vec<(&'static str, Vec<String>)>`: 環境変数を `lookup`
+  経由でのみ読み、11カテゴリを固定で返す（`production` /
+  `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` / `jwt_secret` /
+  `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` /
+  `age_policy` / `rate_limit`）。秘密値は問題文へ含めない。`check_all()` は実環境の
+  `env` を渡すだけのラッパーである。
+- `should_fail(strict, problems) -> bool`: `strict && problems > 0` のみ。既定は警告表示で
+  exit 0、`--strict` のとき問題が1件以上なら exit 1。
+
+| 群 | 件数 | テスト名 |
+| --- | --- | --- |
+| 引数パース | 6 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` |
+| 設定判定 | 11 | `check_always_reports_eleven_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` |
+| strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
+
+真値は `1` と `true`（大文字小文字不問）のみで、`0` / `false` / `no` / 空文字は偽である。
+`ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に1件計上され、`--strict` で exit 1 になる。
+
+#### CLI-02: `verify_audit_export`（`server/src/bin/verify_audit_export.rs`、17テスト）
+
+- 使用形: `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]`。
+  `--expect-root` は任意で、省略時は照合しない。値が無い場合は `--expect-root requires a value`
+  で拒否される（実 CLI で確認）。
+- `parse_args_from<I>(items) -> anyhow::Result<Args>` は純粋に引数を解釈し、`--help` を除き
+  `--snapshot` / `--public-key` の欠落もここで検出する。
+- `VerificationOutcome` は `Accepted { report }` / `Rejected { message }` の2値で、
+  `exit_code()` は受理0・拒否1を返す。
+- `verify_export(snapshot, public_key, expect_root) -> VerificationOutcome` は I/O も
+  `std::process::exit` も行わない。`common::verify_audit_snapshot` が version 3 のみ受理し、
+  署名・連鎖・Merkle root を検証する。`--expect-root` は `eq_ignore_ascii_case` で照合し、
+  不一致なら `audit root mismatch: expected=<値>, computed=<root>` を返す。
+- 受理時の1行は
+  `audit_export_verification: OK version=3 entries=N governance=N root=<hex>` である。
+
+| 群 | 件数 | テスト名 |
+| --- | --- | --- |
+| 引数パース | 6 | `parse_args_accepts_all_flags` / `parse_args_without_expect_root_is_valid` / `parse_args_accepts_help_without_required_args` / `parse_args_rejects_unknown_argument` / `parse_args_rejects_missing_values` / `parse_args_rejects_missing_required_arguments` |
+| 受理 | 2 | `valid_v3_snapshot_from_temp_files_is_accepted` / `matching_expect_root_is_accepted_case_insensitively` |
+| 拒否 | 5 | `mismatched_expect_root_is_rejected` / `tampered_entry_is_rejected` / `tampered_merkle_root_is_rejected` / `tampered_signature_is_rejected` / `unsupported_versions_1_and_2_are_rejected` |
+| マスク出力 | 3 | `masked_snapshot_output_has_no_secret_or_reason_body` / `plaintext_reason_snapshot_output_still_hides_reasons` / `rejected_output_has_no_secret_or_reason_body` |
+| 一時ファイル | 1 | `temp_files_are_removed_on_drop` |
+
+改ざん entry / Merkle root / 署名はいずれも `Invalid signature` で拒否され、version 1 / 2 は
+`unsupported audit snapshot version: N` で拒否される。マーカー
+`TOP-SECRET-INVESTIGATION-NOTE-DO-NOT-LEAK` を理由本文へ含めても受理・拒否のどちらの出力にも
+漏れないことを検証する。
+
+#### CLI-03: `verify_backup`（`server/src/bin/verify_backup.rs`、17テスト）
+
+- 使用形は `verify_backup --input PATH`。`parse_args_from` は環境変数・プロセス引数を読まない。
+- `--database-token` は argv で受け付けず、
+  `--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
+  で拒否する。トークン値はエラーへエコーしない（`ps` 等での露出を防ぐ）。
+  これは `sign_audit_export` と同じ契約であり、値は `DATABASE_TOKEN` 環境変数のみから読む。
+- `ensure_no_sidecars(path)` は `<path>-wal` / `<path>-shm` / `<path>-journal` を DB を開く
+  前に検査し、存在すれば `backup has a <path> sidecar; stop the server before verifying`
+  で拒否する（`restore_db` と同等の fail-closed）。
+- `verify_backup_at(path)` は存在確認 → サイドカー検査 → SQLite オープン →
+  `PRAGMA integrity_check` が `ok` → テーブル数 > 0 → `_migrations` の件数 > 0 を検証する。
+- `decide_output(result)` は成功時に
+  `backup_verification: OK tables=N migrations=N` と終了コード0、失敗時は `(None, 1)` を
+  返す。エラー本文は stdout へ出さず stderr の `Error: ...` に委譲する。
+
+| 群 | 件数 | テスト名 |
+| --- | --- | --- |
+| 引数パース | 6 | `parse_args_accepts_backup_path` / `parse_args_accepts_help_without_input` / `parse_args_rejects_missing_input_value` / `parse_args_rejects_missing_required_input` / `parse_args_rejects_unknown_argument` / `database_token_argument_is_rejected_without_leaking_value` |
+| 出力判定 | 3 | `success_output_keeps_existing_format` / `failure_has_no_stdout_and_exit_code_one` / `failure_never_writes_error_text_to_stdout` |
+| サイドカー | 2 | `sidecar_suffixes_are_appended_to_full_path` / `sidecars_are_rejected_before_opening_the_backup` |
+| 構造検証 | 6 | `valid_backup_is_accepted` / `empty_database_is_rejected` / `missing_migration_ledger_is_rejected` / `empty_migration_ledger_is_rejected` / `nonexistent_file_is_rejected` / `non_sqlite_file_is_rejected` |
 
 ### レート制限キーの検証（NET-03）
 
@@ -664,9 +754,10 @@ HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload f
 
 ### 監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）
 
-`server/src/bin/sign_audit_export.rs` の硬化項目に対するテスト設計。実装は完了しているが、
-`server/src/tests.rs` に専用の自動テストはまだ追加されていない（現状は Runbookの手動確認に
-委譲）。ゲートを満たすには下表のケースを自動化するか、Runbookの手順で運用時に確認する。
+`server/src/bin/sign_audit_export.rs` の硬化項目に対するテスト設計。実装は完了しており、
+同ファイル内に鍵権限・トークン・上書き拒否の9テストを追加済み。下表はその契約の一覧であり、
+Runbookの手動確認手順を継続して併用する。同じトークン契約は `verify_backup` にも適用される
+（CLI-03 を参照）。
 
 | 検証項目 | 条件 | 期待結果 |
 | --- | --- | --- |

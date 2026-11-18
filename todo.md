@@ -8,7 +8,7 @@ tags:
   - tasks
 generated:
   by: dsh (lead)
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 status: current
 ---
 
@@ -49,7 +49,13 @@ P1（本番運用の健全性）:
   （盲署名対策、2026-11-18 対応済み・未コミット、PAY-05）
 - [x] 監査 CLI（`sign_audit_export`）を硬化: 鍵権限 0600/0400・親 0700、
   `DATABASE_TOKEN` 環境変数限定（`--database-token` 廃止）、出力 `create_new` 上書き拒否
-  （2026-11-18 対応済み・未コミット、AUDIT-02。自動テストは未追加でRunbook手動確認）
+  （2026-11-18 対応済み・未コミット、AUDIT-02。bin 内に9テスト追加済み）
+- [x] 3CLIへ自動テスト追加と契約の明文化（2026-11-18 対応済み・未コミット）:
+  `doctor` の `parse_args_from` / `check_all_with` / `should_fail` を純粋化し20テスト、
+  `verify_audit_export` に `--expect-root` と `VerificationOutcome` / `verify_export` の
+  純粋化で17テスト、`verify_backup` は `--database-token` を argv で拒否（
+  `DATABASE_TOKEN` 環境変数のみ）＋sidecar fail-closed で17テスト。
+  全て `server/src/bin/` のサーバー側 bin テストであり E2E は35件のまま（CLI-01〜03）
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
@@ -116,6 +122,12 @@ P2（品質・保守・プロダクト拡張）:
 - [x] 未コミット変更のドキュメント反映（2026-11-18）: メトリクス最外側化・決済 bind 署名 v2・監査CLI硬化を
   DETAILED_DESIGN / OPERATIONAL_POLICY / TEST_SPECIFICATION / TASK_INVENTORY / AUDIT_EXPORT_RUNBOOK へ記載。
   E2E 定義は35件のまま（今回の追加はサーバー側テスト5件）。git commit/push は親エージェントが実施。
+- [x] 3CLIの自動テスト追加のドキュメント反映（2026-11-18）: doctor / verify_audit_export /
+  verify_backup の純粋関数化・`--expect-root`・`--database-token` 拒否・sidecar fail-closed と
+  各20/17/17テストを TEST_SPECIFICATION（CLI-01〜03 ゲート）・DETAILED_DESIGN・
+  AUDIT_EXPORT_RUNBOOK・BACKUP_RESTORE_RUNBOOK・TASK_INVENTORY へ反映。
+  E2E 定義は35件のまま（全てサーバー側 bin テスト）。frontmatter 日時は `date` 実測値へ更新。
+  git commit/push は親エージェントが実施。
 
 ## メモ
 

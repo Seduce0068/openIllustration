@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 status: current
 ---
 
@@ -33,8 +33,23 @@ status: current
   - [対応済み（未コミット）] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
     （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
     `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
-    上書き拒否を実装。専用の自動テストは未追加でRunbookの手動確認に委譲（AUDIT-02、
+    上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
+  - [対応済み（未コミット）] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
+    `check_all_with` / `should_fail` を分離し、11カテゴリ固定・秘密値非出力・`--strict` 判定を
+    `server/src/bin/doctor.rs` の20テストで検証（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で11 check(s) を確認。
+  - [対応済み（未コミット）] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
+    `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
+    に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
+    マスク出力）を追加（CLI-02、
+    [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
+  - [対応済み（未コミット）] `verify_backup` の契約明文化: `--database-token` は argv で拒否
+    （値もエコーしない、`DATABASE_TOKEN` 環境変数のみ。 `sign_audit_export` と同じ契約）、
+    `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
+    `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
+    [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
+    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は35件のまま変更しない。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -245,8 +260,15 @@ status: current
   権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
   （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
   `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
-  既存ファイルの上書きを拒否（TOCTOU 対策）。専用の自動テストは未追加で、手動確認手順を
+  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に9テストを追加済みで、手動確認手順を
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
+- [対応済み（未コミット）] **`verify_audit_export` の `--expect-root` と純粋関数化**:
+  `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
+  Merkle root と大小文字非区別で照合し、不一致は `audit root mismatch` で拒否。
+  `VerificationOutcome` / `verify_export` は I/O と `process::exit` を持たない。
+  `server/src/bin/verify_audit_export.rs` に17テスト（有効 v3 / 改ざん entry・root・署名 /
+  version 1・2 拒否 / expect-root 不一致 / マスク出力）を追加（CLI-02、
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 監査エクスポートの公開範囲: `reason`/`details` を既定でマスクし、`--include-reasons` オプトインで本文を含める。マスク後の文字列が署名対象（
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
 - [高・要判断] **第三者検証可能な監査の残項目**: DB外アンカー/追記専用媒体、公開範囲の最終判断、訂正/削除との調整、鍵の HSM 管理とローテーション（
@@ -353,6 +375,12 @@ status: current
 - [対応済み] バックアップの自動ローテーション: `scripts/backup-rotate.sh` が取得・検証・保持期間（既定30日）超過分の削除を実施。直近 `MIN_KEEP`（既定3）件は保護。静的検証と実 DB
   で動作確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] `verify_backup` に `PRAGMA integrity_check` を追加（旧実装はテーブル/マイグレーション数のみで破損を見逃す）。実 DB で破損ページを持つバックアップが拒否されることを確認。
+- [対応済み（未コミット）] `verify_backup` のargv契約とサイドカー fail-closed を明文化:
+  `--database-token` は受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ、
+  `sign_audit_export` と同じ契約）。`-wal` / `-shm` / `-journal` は DB オープン前に拒否。
+  `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化し、
+  `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] `backup_db` の取得後検証に `_migrations` 台帳チェックを追加（旧実装はコメントで保証を謳いながら未検証）。`backup_ok ... migrations=9` を実出力で確認。
 - [対応済み] スケジューラ設定例: `deploy/openillustration-backup.{service,timer,cron}` を追加。`backup-rotate.sh` は `BIN_DIR`
   のビルド済みバイナリを優先し、実リリースバイナリで取得・検証・ローテーションを確認（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
@@ -411,6 +439,10 @@ status: current
 - [中] 外部依存のアラート通知先への接続と実運用でのデプロイ・復旧訓練。
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+- [対応済み（未コミット）] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に20テストを追加。検査は11カテゴリ固定、
+  秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1
+  （CLI-01 / CFG-01、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ### 3.8 依存・セキュリティ衛生
 

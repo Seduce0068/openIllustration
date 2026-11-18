@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-18T14:13:12+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -501,3 +501,69 @@ INSERT を同じトランザクションでコミットする。この原子的�
   - バックアップからの消去方針（消去対象・保持ライフサイクル・リストア時の整合性）。
 - 決定前に削除 API を提供すると、監査連鎖の連続性・バックアップからの復元経路と矛盾するため、
   現時点では提供しない。
+
+## 10. 運用CLI（doctor / verify_audit_export / verify_backup）の設計
+
+3つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
+閉じ込め、判定を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
+テストは全てサーバー側 bin テストであり、E2E 定義数（35件）は変更しない。
+ゲート ID とテスト名は
+[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 を参照。
+
+| CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
+| --- | --- | --- | --- |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 20 | CLI-01 / CFG-01 |
+| `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 17 | CLI-02 / AUDIT-01 |
+| `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 17 | CLI-03 |
+
+### doctor（`server/src/bin/doctor.rs`）
+
+- `parse_args_from<I>(items) -> ParseOutcome` は先頭要素をプログラム名として読み飛ばし、
+  `Run { strict }` / `Help` / `UnknownArgument(String)` / `TooManyArguments` を返す。
+  `--strict` は完全一致のみ有効で、`-h` / `--help` はヘルプ表示（exit 0）へ変換する。
+- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、11カテゴリの検査結果を
+  返す。`production` / `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` /
+  `jwt_secret` / `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` /
+  `oidc_http_timeout` / `age_policy` / `rate_limit`。秘密情報の値は結果へ含めない。
+  実環境用の `check_all()` は `env` を渡すラッパーに留める。
+- `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
+  `--strict` で問題があれば exit 1 とする。
+- `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
+  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（11 check(s) 実測）。
+
+### verify_audit_export（`server/src/bin/verify_audit_export.rs`）
+
+- 使用形: `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]`。
+  `--expect-root` は任意で、過去に記録した Merkle root との照合に使う。値が無ければ
+  `--expect-root requires a value` で拒否する。
+- `parse_args_from` は必須引数の欠落も検出する。判定は `verify_export(snapshot, public_key,
+  expect_root) -> VerificationOutcome` が担い、I/O と `process::exit` を行わない。
+  `VerificationOutcome` は `Accepted { report }` / `Rejected { message }` で、
+  `exit_code()` が受理0・拒否1を返す。
+- `common::verify_audit_snapshot` が version 3 のみ受理し、署名・連鎖・Merkle root を検証する。
+  v1 / v2 は `unsupported audit snapshot version: N` で fail-closed 拒否、
+  改ざん entry / root / 署名は `Invalid signature` で拒否する。
+- `--expect-root` の照合は `eq_ignore_ascii_case`（大小文字非区別）で、不一致なら
+  `audit root mismatch: expected=<値>, computed=<root>` を返す。受理1行の形式は
+  `audit_export_verification: OK version=3 entries=N governance=N root=<hex>` である。
+  理由本文（マスク済み・平文の双方）と秘密値は出力しない。
+- 運用上の使い方は
+  [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) の「第三者検証」を参照。
+
+### verify_backup（`server/src/bin/verify_backup.rs`）
+
+- 使用形は `verify_backup --input PATH`。`parse_args_from` は argv のみを解釈し、
+  環境変数・プロセス引数を読まない。
+- トークン契約は `sign_audit_export` と同じ。`--database-token` が argv に現れた時点で
+  `--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
+  を返し、渡された値はエラーへエコーしない。リモート DB トークンは `DATABASE_TOKEN`
+  環境変数からのみ読む（argv は `ps` 等で公開されるため）。
+- `ensure_no_sidecars(path)` は `<path>-wal` / `<path>-shm` / `<path>-journal` を DB オープン
+  前に検査し、残っていれば `backup has a <path> sidecar; stop the server before verifying`
+  で拒否する（restore_db と同じ fail-closed）。
+- `verify_backup_at(path)` は存在確認 → サイドカー検査 → SQLite オープン →
+  `PRAGMA integrity_check` が `ok` → テーブル数 > 0 → `_migrations` 件数 > 0 を順に検証する。
+- `decide_output(result)` は成功時に `backup_verification: OK tables=N migrations=N` と
+  終了コード0、失敗時は `(None, 1)` を返す。エラー本文は stdout へ出さず stderr の
+  `Error: ...` に委譲する。手順は
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。

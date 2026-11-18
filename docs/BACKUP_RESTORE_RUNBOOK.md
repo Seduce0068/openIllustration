@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-18T14:55:44+09:00"
 ---
 
 ## 目的
@@ -18,6 +18,9 @@ generated:
 
 - サーバーバイナリと同じリポジトリでビルドされた `backup_db` / `verify_backup` / `verify_audit_log` を使う。
 - `DATABASE_URL` はローカル DB のパス（`file:` プレフィックス）を指す。
+- リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ渡す。`verify_backup` は
+  `--database-token` を argv で受け付けず、`sign_audit_export` と同じ契約で拒否する
+  （下記「バックアップ検証」を参照）。
 - バックアップ先ディレクトリは事前に存在し、出力ファイルは**存在しない**こと。
   既存ファイルは上書きしない（安全側）。
 - バックアップ取得時はサーバーが停止していること。生存 `instance.lock` を検出した
@@ -126,6 +129,50 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 `verify_audit_log` は監査ハッシュ連鎖・`log_id` 連続性・Merkle root を検証する。
 両方成功しなければバックアップを本番バックアップとして認めない。
 
+### `verify_backup` の契約（トークン・サイドカー・出力）
+
+使用形は `verify_backup --input PATH` である。判定は `parse_args_from` / `decide_output` /
+`ensure_no_sidecars` / `verify_backup_at` に分離され、`server/src/bin/verify_backup.rs` に
+17テスト（引数パース6 / 出力判定3 / サイドカー2 / 構造検証6）を追加済み。
+
+- **トークン受け渡し**: `sign_audit_export` と同じ契約。`--database-token` は argv で
+  受け付けず、`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
+  で拒否する。渡されたトークン値はエラー文へエコーしない（`ps` 等で公開されるため）。
+  リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ読む。
+- **サイドカー fail-closed**: `<path>-wal` / `<path>-shm` / `<path>-journal` のいずれかが
+  残っていれば、DB を開く前に
+  `backup has a <path> sidecar; stop the server before verifying` で拒否する。
+  `restore_db` と同等の判定であり、WAL 未適用データを失わないための措置である。
+- **構造検証**: 存在確認 → サイドカー検査 → SQLite オープン → `PRAGMA integrity_check` が
+  `ok` → テーブル数 > 0 → `_migrations` 件数 > 0 の順に検査する。
+- **出力**: 成功時は stdout へ `backup_verification: OK tables=N migrations=N` を1行出し
+  終了コード0。失敗時は stdout へ何も出さず、stderr の `Error: ...` と終了コード1とする
+  （エラー本文に機微情報が混じる可能性があるため）。
+
+```bash
+# Kubuntu / リポジトリルート
+echo "== 1. --database-token は値を出さずに拒否されること =="
+cargo run -q -p server --bin verify_backup -- \
+  --input /path/to/backups/openillustration.db \
+  --database-token TOP_SECRET_DATABASE_TOKEN_VALUE; echo "exit_code=$?"
+
+echo "== 2. トークンはargvではなく環境変数から読まれること（リモートDBの場合） =="
+# DATABASE_TOKEN は事前に環境変数へ設定しておく（値をargvやスクリプトへ書かない）
+cargo run -q -p server --bin verify_backup -- \
+  --input /path/to/backups/openillustration.db; echo "exit_code=$?"
+
+echo "== 3. WALサイドカーが残っていれば拒否されること =="
+touch /path/to/backups/openillustration.db-wal
+cargo run -q -p server --bin verify_backup -- \
+  --input /path/to/backups/openillustration.db; echo "exit_code=$?"
+rm /path/to/backups/openillustration.db-wal
+```
+
+期待結果: 1 と 3 は終了コード1、2 は `backup_verification: OK` と終了コード0。
+1 の出力に `TOP_SECRET_DATABASE_TOKEN_VALUE` は現れないこと。
+自動テストの内訳とゲート ID は
+[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-03 を参照。
+
 ## リストア（復旧訓練）
 
 1. 対象サーバーを停止する（SIGTERM）。readiness `/ready` が 503 になることを確認する。
@@ -187,6 +234,18 @@ cargo run -p server --bin restore_db -- \
 - `verify_backup` が正常ファイルで成功し、存在しないファイルと破損ファイルで失敗（integrity_check）。
 - 復元 DB に対して `verify_audit_log` が成功。
 - `restore_db` が既存 DB の上書きを `--force` 無しで拒否、WAL サイドカー存在時に拒否、`--force` で安全コピー作成＋原子的置換＋データ保持を確認。
+
+## 検証済み事項（2026-11-18）
+
+- `verify_backup` の判定を純粋関数 / 境界関数へ分離し、
+  `server/src/bin/verify_backup.rs` に17テストを追加した。実 libsql の一時 DB で
+  正常系・空 DB・台帳欠落・台帳空・不存在ファイル・非 SQLite ファイルを検証する。
+- argv の `--database-token` は値をエコーせずに拒否されることを実 CLI で確認した
+  （`Error: --database-token is not accepted; set DATABASE_TOKEN in the environment instead`、
+  終了コード1）。トークンは `DATABASE_TOKEN` 環境変数からのみ渡す。
+- サイドカーは `-wal` / `-shm` / `-journal` の3 suffix について、DB を開く前に fail-closed
+  で拒否されることを検証した。上位ゲートは
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-03 を参照。
 
 ## 未解決事項
 
