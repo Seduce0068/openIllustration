@@ -1995,6 +1995,9 @@ pub async fn auth_verify(
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // 下流の delete_superseded_revocation が同じ write_lock を取得するため、
+    // ここで明示的に解放しないと自己デッドロックする。
+    drop(_write_guard);
 
     let now = chrono::Utc::now();
     let now_ts = now.timestamp() as usize;
@@ -2003,19 +2006,24 @@ pub async fn auth_verify(
         .expect("valid timestamp")
         .timestamp() as usize;
 
-    let iat = {
+    let (iat, old_threshold) = {
         let mut revoked_subs = state
             .revoked_subs_before
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        let issued_at = match revoked_subs.get(&user_hash).copied() {
+        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
+        let old = revoked_subs.remove(&user_hash);
+        let issued_at = match old {
             Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
             None => now_ts,
         };
-        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
-        revoked_subs.remove(&user_hash);
-        issued_at
+        (issued_at, old)
     };
+    // OIDC callback と同じ順序で、メモリ削除の後に DB の旧閾値も削除する。
+    // これを省くと再起動後に refresh が古い閾値で塞がる。
+    if let Some(old_threshold) = old_threshold {
+        oidc::delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await?;
+    }
 
     let claims = Claims {
         sub: user_hash.clone(),
@@ -3244,6 +3252,20 @@ fn mock_cid_for_data(data: &[u8]) -> String {
     base58btc_encode(&multihash)
 }
 
+/// Pinata レスポンスの `IpfsHash` を取り出し、CID 形式を厳密検証する。
+/// 外部レスポンスは信頼できないため、`pin_to_ipfs` は必ずこの関数を通す。
+fn cid_from_pinata_response(json: &serde_json::Value) -> Result<String, AppError> {
+    let cid = json["IpfsHash"]
+        .as_str()
+        .ok_or_else(|| AppError::Internal("CID not found in Pinata response".to_string()))?;
+    if !is_safe_cid(cid) {
+        return Err(AppError::Internal(
+            "invalid CID in Pinata response".to_string(),
+        ));
+    }
+    Ok(cid.to_string())
+}
+
 pub async fn pin_to_ipfs(
     state: &AppState,
     data: Vec<u8>,
@@ -3282,11 +3304,8 @@ pub async fn pin_to_ipfs(
         .await
         .map_err(|e| AppError::Internal(format!("Invalid Pinata response: {}", e)))?;
 
-    let cid = json["IpfsHash"]
-        .as_str()
-        .ok_or_else(|| AppError::Internal("CID not found in Pinata response".to_string()))?;
-
-    Ok(cid.to_string())
+    // 外部レスポンスの IpfsHash は保存前に厳密検証する（不正なら Internal）。
+    cid_from_pinata_response(&json)
 }
 
 pub async fn upload_content(
