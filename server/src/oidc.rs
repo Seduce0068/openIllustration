@@ -24,6 +24,12 @@ use std::{
 use uuid::Uuid;
 
 const PENDING_TTL: StdDuration = StdDuration::from_secs(10 * 60);
+/// ログイン CSRF 対策の double-submit に使う Cookie 名と有効期限。
+/// `secure=false`（mock）はこの名前を維持する。
+const OIDC_STATE_COOKIE: &str = "oidc_state";
+/// `__Host-` プレフィックスは Secure / Path=/ / Domain なしが必須。
+const HOST_OIDC_STATE_COOKIE: &str = "__Host-oidc_state";
+const OIDC_STATE_COOKIE_MAX_AGE: i64 = 10 * 60;
 /// 未完了の OIDC 認証（`pending`）の保持上限。
 /// 認証開始は未認証で呼べるため、上限を設けないと TTL 到期までエントリが
 /// 際限なく溜まりメモリを圧迫する（R1-23）。
@@ -122,6 +128,72 @@ fn refresh_cookie(token: &str, secure: bool) -> Result<HeaderValue, AppError> {
     );
     HeaderValue::from_str(&value)
         .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))
+}
+
+/// state Cookie の名前を `cookie_secure` から選ぶ。
+///
+/// `__Host-` プレフィックスは Secure 属性・Path=/・Domain なしを要求する。
+/// 本番相当（`secure=true`）でのみ採用し、`secure=false`（mock）では
+/// `__Host-` を付けない。Secure のない Cookie に `__Host-` を付けると
+/// ブラウザが保存を拒否して OIDC フローが壊れるため、常時は使わない。
+fn state_cookie_name(secure: bool) -> &'static str {
+    if secure {
+        HOST_OIDC_STATE_COOKIE
+    } else {
+        OIDC_STATE_COOKIE
+    }
+}
+
+/// OIDC state の double-submit Cookie を構築する。
+///
+/// `state` が空文字のときは検証後の削除用（`Max-Age=0`）Cookie になる。
+/// Secure 属性は `oidc.config.cookie_secure` に従う。start 時と callback 時で
+/// 同じヘルパを通るため、命名と Path は必ず一致する。
+fn state_cookie(state: &str, secure: bool) -> Result<HeaderValue, AppError> {
+    let (value, max_age) = if state.is_empty() {
+        ("", 0)
+    } else {
+        (state, OIDC_STATE_COOKIE_MAX_AGE)
+    };
+    // `__Host-` Cookie は Path=/ かつ Domain なしが必須。旧名は Path=/auth を維持する。
+    let path = if secure { "/" } else { "/auth" };
+    let cookie = format!(
+        "{}={value}; HttpOnly; Path={path}; SameSite=Lax; Max-Age={max_age}{}",
+        state_cookie_name(secure),
+        if secure { "; Secure" } else { "" }
+    );
+    HeaderValue::from_str(&cookie)
+        .map_err(|_| AppError::Internal("invalid OIDC state cookie".to_string()))
+}
+
+/// `Cookie` ヘッダから state Cookie の値を取り出す。
+///
+/// 同一名 Cookie が2つ以上ある場合は攻撃の兆候として `None` を返す。
+/// `find_map` の先勝ちだと攻撃者値が先に来たときにすり替えられるため、
+/// 重複は例外的に検証失敗へつなげる。値は比較のためだけに使い、
+/// エラーメッセージには含めない。
+fn state_from_cookie(headers: &HeaderMap, secure: bool) -> Option<&str> {
+    let name = state_cookie_name(secure);
+    let mut found: Option<&str> = None;
+    for header_value in headers.get_all(header::COOKIE) {
+        // デコード不能なヘッダは検証失敗扱い（fail-closed）。
+        let Ok(cookies) = header_value.to_str() else {
+            return None;
+        };
+        for part in cookies.split(';') {
+            let Some((cookie_name, value)) = part.trim().split_once('=') else {
+                continue;
+            };
+            if cookie_name != name {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(value);
+        }
+    }
+    found
 }
 
 /// 再認証で不要になった古い失効閾値だけを DB から削除する。
@@ -824,7 +896,7 @@ async fn verify_logout_token(
     Ok(claims)
 }
 
-pub async fn start(State(state): State<Arc<AppState>>) -> Result<Json<StartResponse>, AppError> {
+pub async fn start(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let oidc = state
         .oidc
         .as_ref()
@@ -866,14 +938,21 @@ pub async fn start(State(state): State<Arc<AppState>>) -> Result<Json<StartRespo
         .append_pair("code_challenge", &challenge)
         .append_pair("code_challenge_method", "S256");
 
-    Ok(Json(StartResponse {
+    // ログイン CSRF 対策: 生成した state を Cookie にも入れ、callback で
+    // query と突き合わせる（double-submit）。JSON 本体は従来どおり返す。
+    let cookie = state_cookie(&auth_state, oidc.config.cookie_secure)?;
+    let mut response = Json(StartResponse {
         authorization_url: url.to_string(),
         state: auth_state,
-    }))
+    })
+    .into_response();
+    response.headers_mut().insert(header::SET_COOKIE, cookie);
+    Ok(response)
 }
 
 pub async fn callback(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     Query(query): Query<CallbackQuery>,
 ) -> Result<Response, AppError> {
     let oidc = state
@@ -885,6 +964,15 @@ pub async fn callback(
     // 信頼属性必須モード／明示設定必須モードでは、OIDC 経路に検証済み年齢属性が
     // 無いため fail-closed で拒否する（数値判定は auth_verify に委ねる）。
     crate::ensure_age_policy_configured(&state.age_policy)?;
+
+    // ログイン CSRF（state すり替え）対策: Cookie の state と query の state を
+    // 比較し、一致しなければ値をエコーせずに拒否する。take_pending より前で
+    // 検証し、pending を消費させない。
+    let cookie_state = state_from_cookie(&headers, oidc.config.cookie_secure)
+        .ok_or_else(|| AppError::Unauthorized("OIDC state mismatch".to_string()))?;
+    if cookie_state != query.state.as_str() {
+        return Err(AppError::Unauthorized("OIDC state mismatch".to_string()));
+    }
 
     let pending = oidc.take_pending(&query.state)?;
     let token = exchange_code(
@@ -987,6 +1075,11 @@ pub async fn callback(
     response.headers_mut().append(
         header::SET_COOKIE,
         refresh_cookie(&refresh_token, oidc.config.cookie_secure)?,
+    );
+    // 検証に成功した state Cookie は使い捨てなので削除する。
+    response.headers_mut().append(
+        header::SET_COOKIE,
+        state_cookie("", oidc.config.cookie_secure)?,
     );
     Ok(response)
 }

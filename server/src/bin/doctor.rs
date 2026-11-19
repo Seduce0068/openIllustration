@@ -308,7 +308,7 @@ where
             let falsy = value == "0" || value.eq_ignore_ascii_case("false");
             if !allow_mock_auth && falsy {
                 vec![
-                    "OIDC_COOKIE_SECURE is disabled; refresh cookies will lack the Secure attribute"
+                    "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute"
                         .to_string(),
                 ]
             } else {
@@ -1144,8 +1144,7 @@ mod tests {
 
     #[test]
     fn oidc_cookie_secure_falsy_warns_without_disclosing_value() {
-        const EXPECTED: &str =
-            "OIDC_COOKIE_SECURE is disabled; refresh cookies will lack the Secure attribute";
+        const EXPECTED: &str = "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute";
         for value in ["0", "false", "FALSE", "FaLsE"] {
             let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
             let errors = errors_for(&results, "oidc_cookie_secure");

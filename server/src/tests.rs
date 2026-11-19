@@ -707,6 +707,19 @@ async fn setup_app_with_oidc_and_age_policy(
     MockOidcServer,
     Arc<libsql::Connection>,
 ) {
+    setup_app_with_oidc_age_policy_and_cookie_secure(age_policy, false).await
+}
+
+/// `OIDC_COOKIE_SECURE` 相当の設定を差し替えて OIDC アプリを組み立てる。
+async fn setup_app_with_oidc_age_policy_and_cookie_secure(
+    age_policy: common::age::AgePolicy,
+    cookie_secure: bool,
+) -> (
+    Router,
+    Arc<crate::oidc::OidcState>,
+    MockOidcServer,
+    Arc<libsql::Connection>,
+) {
     let mock = MockOidcServer::start().await;
     let config = crate::oidc::OidcConfig {
         issuer: mock.base_url.clone(),
@@ -717,7 +730,7 @@ async fn setup_app_with_oidc_and_age_policy(
         token_endpoint: format!("{}/token", mock.base_url),
         jwks_uri: format!("{}/jwks", mock.base_url),
         scopes: "openid".to_string(),
-        cookie_secure: false,
+        cookie_secure,
         clock_skew_secs: 60,
         required_acr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         required_amr: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -1366,6 +1379,7 @@ async fn oidc_login(
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -1405,6 +1419,7 @@ async fn oidc_login_with_refresh(
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -6826,6 +6841,7 @@ async fn test_oidc_max_auth_age() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -6858,6 +6874,7 @@ async fn test_oidc_max_auth_age() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -6890,6 +6907,7 @@ async fn test_oidc_max_auth_age() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -6940,6 +6958,7 @@ async fn test_oidc_required_acr_amr() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -6982,6 +7001,7 @@ async fn test_oidc_start_and_callback() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7005,6 +7025,338 @@ async fn test_oidc_start_and_callback() {
     assert_eq!(body["authorized"], true);
     assert_eq!(body["user_hash"], "test-ppid");
     assert!(body["token"].as_str().unwrap().len() > 20);
+}
+
+/// ログイン CSRF 対策: start が JSON の state と同じ値を oidc_state Cookie に
+/// HttpOnly / Path=/auth / SameSite=Lax / Max-Age=600 で格納すること。
+#[tokio::test]
+async fn test_oidc_start_sets_state_cookie() {
+    let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let state_cookie = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("oidc_state="))
+        .expect("start must set an oidc_state cookie");
+
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let state = started["state"].as_str().expect("start JSON keeps state");
+    assert!(
+        state_cookie.starts_with(&format!("oidc_state={state};")),
+        "cookie value must equal the JSON state: {state_cookie}"
+    );
+    assert!(state_cookie.contains("HttpOnly"), "{state_cookie}");
+    assert!(state_cookie.contains("Path=/auth"), "{state_cookie}");
+    assert!(state_cookie.contains("SameSite=Lax"), "{state_cookie}");
+    assert!(state_cookie.contains("Max-Age=600"), "{state_cookie}");
+    // mock（cookie_secure=false）では `__Host-` を付けず既存名を維持する。
+    // `__Host-` は Secure が必須なので、付けると Cookie が保存されない。
+    assert!(
+        !cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("__Host-oidc_state="))
+    );
+    // テスト構成は cookie_secure=false なので Secure は付かない。
+    assert!(!state_cookie.contains("; Secure"), "{state_cookie}");
+}
+
+/// 本番相当（cookie_secure=true）では `__Host-oidc_state` / Path=/ / Secure を使い、
+/// start→callback が成立すること。削除 Cookie も同名・同 Path になること。
+#[tokio::test]
+async fn test_oidc_state_cookie_secure_follows_config() {
+    let policy = common::age::AgePolicy::default();
+    let (app, oidc, mock, _db) =
+        setup_app_with_oidc_age_policy_and_cookie_secure(policy, true).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let state_cookie = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("__Host-oidc_state="))
+        .expect("secure start must set an __Host-oidc_state cookie")
+        .to_string();
+    assert!(
+        !cookies
+            .iter()
+            .any(|cookie| cookie.starts_with("oidc_state=")),
+        "secure 時は旧名の Cookie を出さない: {cookies:?}"
+    );
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().expect("start JSON keeps state");
+    assert!(
+        state_cookie.starts_with(&format!("__Host-oidc_state={auth_state};")),
+        "cookie value must equal the JSON state: {state_cookie}"
+    );
+    assert!(state_cookie.contains("; Secure"), "{state_cookie}");
+    assert!(state_cookie.contains("HttpOnly"), "{state_cookie}");
+    assert!(state_cookie.contains("Path=/;"), "{state_cookie}");
+    assert!(!state_cookie.contains("Path=/auth"), "{state_cookie}");
+    assert!(
+        !state_cookie.to_ascii_lowercase().contains("domain="),
+        "{state_cookie}"
+    );
+
+    let nonce = oidc.pending_nonce(auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    // `__Host-oidc_state` を送り返すと callback が成立する（start と同名）。
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .header(header::COOKIE, format!("__Host-oidc_state={auth_state}"))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let deletion = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("__Host-oidc_state="))
+        .expect("callback must clear the state cookie")
+        .to_string();
+    assert!(deletion.starts_with("__Host-oidc_state=;"), "{deletion}");
+    assert!(deletion.contains("Max-Age=0"), "{deletion}");
+    assert!(deletion.contains("; Secure"), "{deletion}");
+    assert!(deletion.contains("Path=/;"), "{deletion}");
+    assert!(!deletion.contains("Path=/auth"), "{deletion}");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["authorized"], true);
+}
+
+/// state のすり替えを防ぐ double-submit 検証。
+/// Cookie 欠落 / 不一致は 401（値をエコーしない）、一致時は従来どおり成功し、
+/// 検証後に state Cookie を Max-Age=0 で削除する。
+#[tokio::test]
+async fn test_oidc_callback_binds_state_to_cookie() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let uri = format!("/auth/oidc/callback?code=test-code&state={auth_state}");
+
+    // Cookie 欠落は 401。固定文言のみで state 値はエコーしない。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str()).body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("OIDC state mismatch"), "{text}");
+    assert!(
+        !text.contains(auth_state.as_str()),
+        "state 値をエコーしない: {text}"
+    );
+
+    // 不一致 Cookie も 401。エラー文言は同じで、値はエコーしない。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(header::COOKIE, "oidc_state=attacker-controlled-state")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("OIDC state mismatch"), "{text}");
+    assert!(
+        !text.contains("attacker-controlled-state"),
+        "Cookie 値をエコーしない: {text}"
+    );
+
+    // 検証前に拒否しているので pending はまだ消費されていない。
+    assert!(oidc.pending_nonce(&auth_state).is_some());
+
+    // 一致 Cookie は従来どおり成功し、state Cookie が削除される。
+    let response = app
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(header::COOKIE, format!("oidc_state={auth_state}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookies: Vec<String> = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    let deletion = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("oidc_state="))
+        .expect("callback must clear the state cookie");
+    assert!(deletion.starts_with("oidc_state=;"), "{deletion}");
+    assert!(deletion.contains("Max-Age=0"), "{deletion}");
+    assert!(deletion.contains("HttpOnly"), "{deletion}");
+    assert!(deletion.contains("Path=/auth"), "{deletion}");
+    assert!(deletion.contains("SameSite=Lax"), "{deletion}");
+
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(body["authorized"], true);
+    assert!(oidc.pending_nonce(&auth_state).is_none());
+}
+
+/// state Cookie が同一名で重複した場合は攻撃の兆候として 401 にする。
+/// 攻撃者値が先に来て query.state と一致しても受け付けない（旧 find_map の先勝ち回帰）。
+#[tokio::test]
+async fn test_oidc_callback_rejects_duplicate_state_cookies() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    const ATTACKER: &str = "attacker-controlled-state";
+    let uri = format!("/auth/oidc/callback?code=test-code&state={ATTACKER}");
+
+    // 単一ヘッダ内で同一名が重複（攻撃者値が先）。旧 find_map なら先勝ちで
+    // query.state と一致して検証を通ってしまうため、401 になることを検証する。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(
+                    header::COOKIE,
+                    format!("oidc_state={ATTACKER}; oidc_state={auth_state}"),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("OIDC state mismatch"), "{text}");
+    assert!(!text.contains(ATTACKER), "state 値をエコーしない: {text}");
+    assert!(
+        !text.contains(auth_state.as_str()),
+        "state 値をエコーしない: {text}"
+    );
+
+    // 別々の Cookie ヘッダに分かれていても重複なら拒否する。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(header::COOKIE, format!("oidc_state={ATTACKER}"))
+                .header(header::COOKIE, format!("oidc_state={auth_state}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // 検証前に拒否しているので pending は消費されず、正規フローは成立する。
+    assert!(oidc.pending_nonce(&auth_state).is_some());
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={auth_state}"
+            ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(oidc.pending_nonce(&auth_state).is_none());
 }
 
 /// BAN 済み subject では OIDC callback がセッションを発行しない。
@@ -7049,6 +7401,7 @@ async fn test_oidc_callback_rejects_banned_user() {
                 Request::get(format!(
                     "/auth/oidc/callback?code=test-code&state={auth_state}"
                 ))
+                .header(header::COOKIE, format!("oidc_state={auth_state}"))
                 .body(Body::empty())
                 .unwrap(),
                 test_ipv6_peer(),
@@ -7271,6 +7624,7 @@ async fn test_oidc_sweep_keeps_start_callback_flow() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7413,6 +7767,7 @@ async fn test_oidc_pending_limit_keeps_start_callback_flow() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7449,10 +7804,14 @@ async fn test_oidc_callback_rejects_reused_state() {
     *mock.nonce.lock().unwrap() = Some(nonce);
 
     let uri = format!("/auth/oidc/callback?code=test-code&state={auth_state}");
+    let state_cookie = format!("oidc_state={auth_state}");
     let first = app
         .clone()
         .oneshot(with_peer(
-            Request::get(uri.as_str()).body(Body::empty()).unwrap(),
+            Request::get(uri.as_str())
+                .header(header::COOKIE, state_cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
             test_ipv6_peer(),
         ))
         .await
@@ -7461,7 +7820,10 @@ async fn test_oidc_callback_rejects_reused_state() {
 
     let second = app
         .oneshot(with_peer(
-            Request::get(uri.as_str()).body(Body::empty()).unwrap(),
+            Request::get(uri.as_str())
+                .header(header::COOKIE, state_cookie.as_str())
+                .body(Body::empty())
+                .unwrap(),
             test_ipv6_peer(),
         ))
         .await
@@ -7494,6 +7856,7 @@ async fn test_oidc_rejects_nonce_mismatch() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7531,6 +7894,7 @@ async fn test_oidc_rejects_at_hash_mismatch() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7575,6 +7939,7 @@ async fn test_oidc_rejects_future_nbf() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7641,6 +8006,7 @@ async fn test_oidc_rejects_id_token_signed_by_unknown_key() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7683,6 +8049,7 @@ async fn test_oidc_rejects_id_token_without_kid() {
             Request::get(format!(
                 "/auth/oidc/callback?code=test-code&state={auth_state}"
             ))
+            .header(header::COOKIE, format!("oidc_state={auth_state}"))
             .body(Body::empty())
             .unwrap(),
             test_ipv6_peer(),
@@ -7907,6 +8274,7 @@ async fn test_oidc_callback_rejects_unknown_state() {
     let response = app
         .oneshot(with_peer(
             Request::get("/auth/oidc/callback?code=test-code&state=unknown-state")
+                .header(header::COOKIE, "oidc_state=unknown-state")
                 .body(Body::empty())
                 .unwrap(),
             test_ipv6_peer(),
