@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-20T05:23:08+09:00"
+  at: "2026-11-20T05:51:29+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -260,7 +260,7 @@ generated:
 | `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
 | `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
-| `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で Cookie の `Secure` を外す。開発時のみ。 |
+| `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で session / refresh / OIDC state Cookie の `Secure` を外す。開発時のみ。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
 | `PINATA_JWT` | 任意 | `mock_jwt`（模擬） | IPFSピン用トークン。未設定時は模擬動作となり、本番では使用しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |

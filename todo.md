@@ -279,7 +279,11 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: is_order_expired をパース比較＋fail-closed、purge を datetime() 正規化。
 - [x] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
   2026-11-20 対応: auth_verify の Claims に sid 付与、logout を冪等化（lib.rs:2221, 2285）。
-- [ ] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
+- [x] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
+  2026-11-20 対応: double-submit Cookie を本番（`cookie_secure=true`）では
+  `__Host-oidc_state` / Path=/ / Secure、mock では従来の `oidc_state` / Path=/auth で
+  発行・検証（start と callback で同名・同 Path）。同一名 Cookie の重複は攻撃の兆候として
+  401 で拒否。PKCE / nonce / 年齢ゲート順序 / state 検証位置は不変。
 - [x] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
   2026-11-20 対応: `from_env_with` が全5エンドポイントを検証し https のみ受理、`ALLOW_MOCK_AUTH`
   有効時のみ localhost 系の http を許容（fail-closed・設定値はエコーしない、実装は oidc.rs:280-314）。
@@ -445,6 +449,13 @@ P2（品質・保守・プロダクト拡張）:
   `client/src/lib.rs` を grep した確定値に基づく。
   E2E 定義数40件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。
 
+- 2026-11-20 (R5 / セキュリティレビュー採用指摘の反映): OIDC state Cookie の `__Host-`
+  プレフィックスを本番（`OIDC_COOKIE_SECURE` 有効）のみへ条件付き採用（mock は Secure
+  が無いとブラウザが保存を拒否しフローが壊れるため旧名を維持）、同一名 Cookie の重複
+  拒否、`doctor` 警告文を session / refresh / OIDC state を含む表現へ更新。`__Host-`
+  を常時使わない理由はコードコメントに明記。E2E 定義数は不変（変更はサーバー側のみ）。
+  `docs/OPERATIONAL_POLICY.md:263` の `OIDC_COOKIE_SECURE` 説明は担当外のため未更新
+  （親が判断）。
 - 2026-11-20 (R5 / R4 採用指摘の反映): 採用分の OIDC 空値検証・doctor max_auth_age 整合・
   shutdown 2件・シェル2件・filechooser オラクルは全て既に `[x]` であり、該当する未着手は
   存在しなかった。本次で doctor 内訳の「＋設定検証3件」6箇所（TASK_INVENTORY 3箇所 /
