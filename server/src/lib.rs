@@ -1565,10 +1565,20 @@ async fn purge_expired_refresh_tokens_with_wait(
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
+    // `expires_at` は chrono の to_rfc3339()（小数秒 0/3/6/9 桁・タイムゾーン表記は
+    // Z / +HH:MM）で保存されるため、文字列の辞書順比較では表記の差で前後が逆転する。
+    // ここでは SQLite の datetime() で両辺を UTC の SQL datetime に正規化して比較する。
+    // Rust 側で全行を読んでパースする方式もあり得るが、書き込みロック保持中に
+    // 全走査するのはコストが大きく、既存の ban 判定などと同じ SQL 側正規化を採用した
+    // （lib.rs の ensure_user_not_banned と同じ方針）。秒未満の切り捨ては単調なので
+    // 実際に期限切れのトークンが取り残されることはなく、高々 1 秒早く回収されるだけ。
     let now = chrono::Utc::now().to_rfc3339();
     let (_write_guard, tx) = begin_write_tx_sql_with_guard(db, guard).await?;
-    tx.execute("DELETE FROM refresh_tokens WHERE expires_at <= ?", [now])
-        .await?;
+    tx.execute(
+        "DELETE FROM refresh_tokens WHERE datetime(expires_at) <= datetime(?)",
+        [now],
+    )
+    .await?;
     let deleted = tx.changes();
     tx.commit().await?;
     Ok(Some(deleted))

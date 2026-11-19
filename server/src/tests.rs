@@ -8327,6 +8327,55 @@ fn test_order_expiry_boundary_is_inclusive() {
     ));
 }
 
+/// JPYC: 小数秒の桁数（0/3/6/9）やタイムゾーン表記が違っても RFC3339 の
+/// 時刻として比較し、辞書順比較のような前後逆転を起こさない。
+#[test]
+fn test_order_expiry_parses_rfc3339_fractional_digits() {
+    // 同一時刻を小数秒ありで表したもの。辞書順では ".000+00:00" が "+00:00" より
+    // 後に来る（'.' > '+'）ため文字列比較なら有効と誤判定されるが、
+    // 境界 <= により期限切れが正しい。3/6/9 桁でも同様。
+    for expires_at in [
+        "2026-01-01T00:00:00.000+00:00",
+        "2026-01-01T00:00:00.000000+00:00",
+        "2026-01-01T00:00:00.000000000+00:00",
+    ] {
+        assert!(
+            crate::payments::is_order_expired(expires_at, "2026-01-01T00:00:00+00:00"),
+            "{expires_at} は now と同一時刻なので期限切れ"
+        );
+    }
+
+    // 3 桁の `.000Z` は 9 桁の `.000000001+00:00` より 1ns 前なので期限切れ。
+    // 辞書順では 'Z'(0x5A) > '0'(0x30) のため前後が逆転する。
+    assert!(crate::payments::is_order_expired(
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-01T00:00:00.000000001+00:00",
+    ));
+
+    // 9 桁の未来時刻（境界より 1ns 後）は有効。
+    assert!(!crate::payments::is_order_expired(
+        "2026-01-01T00:00:00.000000001+00:00",
+        "2026-01-01T00:00:00+00:00",
+    ));
+
+    // タイムゾーン表記違い：+09:00 の 09:00 は UTC の 00:00 と同一時刻。
+    assert!(crate::payments::is_order_expired(
+        "2026-01-01T09:00:00+09:00",
+        "2026-01-01T00:00:00+00:00",
+    ));
+
+    // パースできない値は fail-closed（期限切れ扱い）。now 側も同様。
+    for (expires_at, now) in [
+        ("not-a-rfc3339-date", "2026-01-01T00:00:00+00:00"),
+        ("2026-01-01T00:00:00+00:00", "not-a-rfc3339-date"),
+    ] {
+        assert!(
+            crate::payments::is_order_expired(expires_at, now),
+            "パース失敗は fail-closed: {expires_at} / {now}"
+        );
+    }
+}
+
 /// JPYC: derivation_index の u32 境界を超える値は受取アドレス再利用を防ぐため拒否。
 #[test]
 fn test_derivation_index_bounds() {
@@ -10877,6 +10926,66 @@ async fn test_purge_expired_refresh_tokens() {
         remaining.push(row.get::<String>(0).unwrap());
     }
     assert_eq!(remaining, vec!["valid"]);
+}
+
+/// refresh purge は SQLite の datetime() で正規化して比較するため、
+/// タイムゾーン表記の差で辞書順が逆転しても正しく回収／保持される。
+#[tokio::test]
+async fn test_purge_expired_refresh_tokens_normalizes_timezone() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let now = chrono::Utc::now();
+    let east = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+    let west = chrono::FixedOffset::west_opt(9 * 3600).unwrap();
+
+    // 実時刻は 2 時間前（期限切れ）だが +09:00 表記の壁時計は now より後に来るため、
+    // 文字列比較なら回収されない。
+    let expired = (now - chrono::Duration::hours(2))
+        .with_timezone(&east)
+        .to_rfc3339();
+    // 実時刻は 2 時間後（有効）だが -09:00 表記の壁時計は now より前に来るため、
+    // 文字列比較なら誤って回収される。
+    let valid = (now + chrono::Duration::hours(2))
+        .with_timezone(&west)
+        .to_rfc3339();
+
+    for (token_hash, expires_at) in [
+        ("expired-tz", expired.as_str()),
+        ("valid-tz", valid.as_str()),
+    ] {
+        db.execute(
+            "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES (?, 'u', 'f', ?)",
+            (token_hash, expires_at),
+        )
+        .await
+        .unwrap();
+    }
+
+    let purged = crate::purge_expired_refresh_tokens(&db).await.unwrap();
+    assert_eq!(
+        purged,
+        Some(1),
+        "only the actually expired token must be purged"
+    );
+
+    let mut rows = db
+        .query("SELECT token_hash FROM refresh_tokens", ())
+        .await
+        .unwrap();
+    let mut remaining = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        remaining.push(row.get::<String>(0).unwrap());
+    }
+    assert_eq!(remaining, vec!["valid-tz"]);
 }
 
 #[tokio::test]

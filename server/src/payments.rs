@@ -6,7 +6,7 @@ use axum::{
     Json,
     extract::{Path, State},
 };
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
@@ -519,10 +519,21 @@ pub async fn get_order(
     Ok(Json(load_order(&state, &order_id, &claims.sub).await?))
 }
 
-/// 期限切れ判定。RFC3339 文字列の比較であり、`expires_at == now` の境界も期限切れとする。
+/// 期限切れ判定。RFC3339 文字列を時刻としてパースして比較する。
+/// 小数秒の桁数（chrono の `AutoSi` は 0/3/6/9 桁）や `Z` / `+HH:MM` の表記差で
+/// 辞書順が逆転しても誤判定しないよう、`oidc::refresh_token_expired` と同じ方式を取る。
+/// パース失敗は fail-closed（期限切れ扱い）。`expires_at == now` の境界も期限切れとする
+/// 既存契約を維持するため比較は `<=` のまま。
 /// テストから境界値を直接渡せるよう、時刻取得と比較を分離している。
 pub(crate) fn is_order_expired(expires_at: &str, now: &str) -> bool {
-    expires_at <= now
+    match (
+        DateTime::parse_from_rfc3339(expires_at),
+        DateTime::parse_from_rfc3339(now),
+    ) {
+        (Ok(expires_at), Ok(now)) => expires_at.with_timezone(&Utc) <= now.with_timezone(&Utc),
+        // 不正な値を「まだ有効」と扱うと期限切れ注文の決済を通してしまうため fail-closed。
+        _ => true,
+    }
 }
 
 /// 期限切れなら EXPIRED へ更新する（更新系エンドポイント共通）。
