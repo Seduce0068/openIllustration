@@ -4,6 +4,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 /// デコンプレッション bomb 対策。サーバーの取得上限 10 MiB に対して
 /// 8000x8000 = 64M ピクセル（RGBA で 256 MB）を上限とする。
+/// 入力バイト数の 10 MiB 上限はサーバー側の取得・検証で担保されるため、
+/// クライアント側では重複チェックせず、デコード前後の寸法のみを検証する。
 const MAX_DIMENSION: u32 = 8000;
 const MAX_PIXELS: u64 = 64_000_000;
 
@@ -52,6 +54,37 @@ mod tests {
         assert!(!dimensions_allowed(8000, 8001));
         // saturating_mul でオーバーフローしても安全に拒否される。
         assert!(!dimensions_allowed(u64::MAX, u64::MAX));
+    }
+
+    /// proptest は dev-dependencies に無いため、決定論的な疑似乱数ループで
+    /// プロパティを検証する（新規依存クレートは追加しない）。
+    #[test]
+    fn jxl_dimension_fuzz_property() {
+        // xorshift64* による再現可能なシード。flaky にならない固定値。
+        let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut next = || {
+            state ^= state >> 12;
+            state ^= state << 25;
+            state ^= state >> 27;
+            state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        };
+
+        let max_dim = u64::from(MAX_DIMENSION);
+        // 0 と上限超過を必ず混ぜるため、8000 を超える範囲で生成する。
+        let sample_range = max_dim + 1000;
+        for _ in 0..10_000 {
+            let w = next() % sample_range;
+            let h = next() % sample_range;
+
+            // ガードの判定が上限定義と整合することを再確認する。
+            let expected =
+                w > 0 && h > 0 && w <= max_dim && h <= max_dim && w.saturating_mul(h) <= MAX_PIXELS;
+            assert_eq!(
+                dimensions_allowed(w, h),
+                expected,
+                "guard mismatch for {w}x{h}"
+            );
+        }
     }
 
     #[test]

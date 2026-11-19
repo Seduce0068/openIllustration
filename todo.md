@@ -264,7 +264,11 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
   2026-11-20 対応: auth_verify の Claims に sid 付与、logout を冪等化（lib.rs:2221, 2285）。
 - [ ] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
-- [ ] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
+- [x] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
+  2026-11-20 対応: `from_env_with` が全5エンドポイントを検証し https のみ受理、`ALLOW_MOCK_AUTH`
+  有効時のみ localhost 系の http を許容（fail-closed・設定値はエコーしない、実装は oidc.rs:280-314）。
+  R5 で R4 採用指摘を反映し、エラー文言を実判定へ整合（`test_oidc_from_env_with_endpoint_url_scheme_validation`
+  の期待値も同一文言へ更新）。判定条件・mock 許容ロジックは不変。
 - [x] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
   2026-11-20 対応: コミット後に DB 閾値→refresh 消費の順で失効、閾値は単調増加（lib.rs:3207-3235）。
 - [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
@@ -279,7 +283,11 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: 実パーサ結果で判定、警告文を実態に合わせ修正、check数21不変。
 - [x] **wasm リリースから console_log/panic_hook をゲート** — 根拠 `client/Cargo.toml:13-14` / R3-DE01 / 中。
   2026-11-20 対応: optional + dev-console feature、既定off、main()をcfgでゲート。
-- [ ] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。
+- [x] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。
+  2026-11-20 対応: `dimensions_allowed` が `MAX_DIMENSION` / `MAX_PIXELS` を `saturating_mul` で検査し、
+  決定論的 xorshift64* による 10,000 通りの fuzz プロパティテストを追加。R5 で R4 採用指摘を反映し、
+  「独立オラクル」表現を「上限定義との整合を再確認する」へ是正、`expected` に既に含まれる
+  冗長な面積 assert を削除（fuzz 本体・10,000 サンプリングは維持）。
 - [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
 - [x] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
   2026-11-20 対応: CI は `npm ci --ignore-scripts --no-audit --no-fund` の後に
@@ -311,7 +319,8 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: `upload_error_message` の4分岐（401=再ログイン / 413=サイズ超過 /
   その他=`Failed to upload content (HTTP {status}).` / None=`Network error uploading content.`）を
   TEST_SPECIFICATION / DETAILED_DESIGN / E2E (`upload.spec.ts`) の確定文言へ整合。
-- [ ] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
+- [x] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
+  2026-11-20: parse_price_input + valueAsNumber で対応済み（Round 7）。
 - [x] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
   2026-11-20 対応: is_alphanumeric + to_lowercase再フィルタ（U+0130対策）。
 - [x] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。

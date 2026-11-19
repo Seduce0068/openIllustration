@@ -250,9 +250,22 @@ test.describe('Real server integration', () => {
       expect(Array.isArray(payload[key]), `${key} must be an array`).toBe(true);
     }
 
-    // セッション ID / リフレッシュトークン識別子は JSON 文字列へ一切現れない。
+    // セッション ID / リフレッシュトークン識別子はフィールド名として現れない。
+    // CID 等のデータ値に "sid" という部分文字列が偶然含まれることは誤検知なので、
+    // 生文字列の substring 検索ではなく、再帰的にキー名を検査する。
+    const collectKeys = (value: unknown): string[] => {
+      if (Array.isArray(value)) return value.flatMap(collectKeys);
+      if (value !== null && typeof value === 'object') {
+        return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => [
+          key,
+          ...collectKeys(child),
+        ]);
+      }
+      return [];
+    };
+    const keys = collectKeys(payload);
     for (const secret of ['token_hash', 'sid', 'family_id']) {
-      expect(text, `"${secret}" must not leak`).not.toContain(secret);
+      expect(keys, `"${secret}" must not leak as a field name`).not.toContain(secret);
     }
   });
 });
