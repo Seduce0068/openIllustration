@@ -401,7 +401,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     // 初期状態: 閉じており、aria-controls でタイムラインパネルを参照している。
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(auditToggle).toHaveAttribute('aria-controls', 'forensic-timeline');
+    await expect(auditToggle).toHaveAttribute('aria-controls', /^forensic-timeline-.+$/);
 
     await auditToggle.click();
 
@@ -409,7 +409,11 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'true');
     const dialog = page.getByRole('dialog', { name: 'Forensic Timeline' });
     await expect(dialog).toBeVisible();
-    await expect(dialog).toHaveAttribute('id', 'forensic-timeline');
+    await expect(dialog).toHaveAttribute('id', /^forensic-timeline-.+$/);
+
+    // aria-controls の参照先と dialog の id が厳密に一致することを確認する。
+    const controls = await auditToggle.getAttribute('aria-controls');
+    await expect(dialog).toHaveAttribute('id', controls as string);
 
     // Escape はトグル（カード内）で受け取り、カードの keydown ハンドラで閉じる。
     await auditToggle.focus();

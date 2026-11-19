@@ -121,7 +121,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
   });
 
   /**
-   * MET-02 / MET-03 共通のセットアップ。
+   * NEUT-URL-02 / NEUT-URL-03 共通のセットアップ。
    * 与えた本文を checksum 付きの Novel として配信し、/metrics/client-events の
    * POST（と CORS プリフライトの OPTIONS）を捕まえる。既存の MET-01 は変更しない。
    */
@@ -203,7 +203,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     return { captured, contentBodyRequests };
   }
 
-  test('MET-02: protocol-relative URL は # に中立化され件数が送信される', async ({ page }) => {
+  test('NEUT-URL-02: protocol-relative URL は # に中立化され件数が送信される', async ({ page }) => {
     // network-path reference(//host) と Windows UNC(\\host) はスキームが無いため
     // 従来は安全とみなされていたが、ブラウザが現在のスキームを補完して
     // 外部ホストへ誘導し得るため拒否される（client/src/lib.rs:520-539）。
@@ -224,7 +224,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
       .toEqual([{ event: 'neutralized_url', count: 2 }]);
   });
 
-  test('MET-03: 同一本文の再描画では client event を再送しない', async ({ page }) => {
+  test('NEUT-URL-03: 同一本文の再描画では client event を再送しない', async ({ page }) => {
     const body = '[click](javascript:alert(1)) ![img](data:text/html,alert)';
     const { captured, contentBodyRequests } = await setupNeutralizedMetricsPage(page, body);
 

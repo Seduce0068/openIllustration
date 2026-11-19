@@ -255,14 +255,30 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html
 }
 
-/// 見出しテキストから slug を作る。許可するのは ASCII 英数字・`-`・`_` のみで、
-/// それ以外は除去する（属性注入を防ぐ）。大文字は小文字に畳み、
+/// 見出しテキストから slug を作る。許可するのは Unicode の英数字・`-`・`_` のみで、
+/// それ以外（HTML 属性を壊す `"`, `'`, `<`, `>`, `&`, 空白, 制御文字, `/` 等）は
+/// すべて除去する（属性注入を防ぐ）。大文字は `to_lowercase()` で畳み、
 /// すべて除去された場合は `section` を返す。
+///
+/// 属性値のエスケープは `escape_html_text`（TOC の href/表示名）と
+/// pulldown-cmark（本文の id）に委譲し、ここでは URL エンコードしない。
 fn sanitize_heading_slug(text: &str) -> String {
     let mut slug = String::new();
     for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
-            slug.push(ch.to_ascii_lowercase());
+        // `-` / `_` と Unicode の英数字だけを許可する。引用符・山括弧・`&`・
+        // 空白・制御文字・`/` 等は英数字ではないため許可リストから漏れ、
+        // 属性注入の可能性を残さない。
+        if ch == '-' || ch == '_' {
+            slug.push(ch);
+        } else if ch.is_alphanumeric() {
+            // ASCII に限らない大文字畳み込み。İ のように複数文字へ展開される
+            // 場合があるため、展開結果も英数字だけを通す。これにより U+0307
+            // （結合文字）などが属性値へ混入するのを防ぐ。
+            for lc in ch.to_lowercase() {
+                if lc.is_alphanumeric() {
+                    slug.push(lc);
+                }
+            }
         }
     }
     if slug.is_empty() {
@@ -270,6 +286,25 @@ fn sanitize_heading_slug(text: &str) -> String {
     } else {
         slug
     }
+}
+
+/// cid から DOM id / TOC アンカーの名前空間に使う属性安全なトークンを作る。
+///
+/// cid はサーバー由来の信頼できない値なので、そのまま属性へ埋め込まない。
+/// `sanitize_heading_slug` で英数字（Unicode 含む）・`-`・`_` だけに正規化し、
+/// さらに元の cid のハッシュを付与する。これにより引用符や `<` 等が属性を
+/// 壊すことはなく、特殊文字だけの cid が同じトークンへ潰れることも防ぐ。
+fn cid_scope_token(cid: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    cid.hash(&mut hasher);
+    let normalized = sanitize_heading_slug(cid);
+    format!("c{normalized}-{:x}", hasher.finish())
+}
+
+/// 監査パネルの DOM id。トグルの `aria-controls` と同じ値を使う。
+fn forensic_panel_id(cid_token: &str) -> String {
+    format!("forensic-timeline-{cid_token}")
 }
 
 /// 既に使われている slug と衝突しない一意の値を割り当てる。
@@ -307,7 +342,11 @@ fn assign_unique_slug(base: &str, used: &mut HashMap<String, usize>) -> String {
 /// Markdown を一度だけ解析し、見出しのレベル・表示名・一意 slug を集める。
 /// `render_markdown` と `render_toc` の両方がこの純粋関数を使うため、
 /// TOC のアンカーと本文の見出し id は必ず一致する。
-fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
+///
+/// `prefix` は cid 由来の名前空間トークン（空なら従来どおり）。採番そのものは
+/// `assign_unique_slug` が担い、prefix は採番後の slug に連結するだけなので
+/// 重複連番のならし O(1) ロジックは変わらない。
+fn collect_headings_with_prefix(markdown: &str, prefix: &str) -> Vec<HeadingEntry> {
     let mut headings = Vec::new();
     let mut used = HashMap::new();
     let mut current: Option<(HeadingLevel, String)> = None;
@@ -320,6 +359,12 @@ fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
             Event::End(TagEnd::Heading(_)) => {
                 if let Some((level, text)) = current.take() {
                     let slug = assign_unique_slug(&text, &mut used);
+                    // prefix 付与だけを追加。採番済み slug はそのまま使う。
+                    let slug = if prefix.is_empty() {
+                        slug
+                    } else {
+                        format!("{prefix}-{slug}")
+                    };
                     headings.push(HeadingEntry { level, text, slug });
                 }
             }
@@ -338,6 +383,12 @@ fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
         }
     }
     headings
+}
+
+/// 既存の接頭辞なし版。単体テストと後方互換のために残す。
+#[cfg(test)]
+fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
+    collect_headings_with_prefix(markdown, "")
 }
 
 /// `POST /metrics/client-events` に送る JSON 本文を組み立てる（純粋関数）。
@@ -428,10 +479,10 @@ fn report_neutralized_urls(count: usize, markdown: &str) {
 ///
 /// 件数は同期的な描画の中で `Cell` に集約する。送信は `render_markdown` 側で
 /// 描画完了後に 1 回だけ行うため、リンク/img ごとに POST することはない。
-fn render_markdown_with_neutralized_count(markdown: &str) -> (String, usize) {
+fn render_markdown_with_neutralized_count_scoped(markdown: &str, prefix: &str) -> (String, usize) {
     // 先に見出しを収集し、Start(Heading) の順に id を割り当てる。
     // id は pulldown-cmark の HTML レンダラがエスケープするため安全。
-    let headings = collect_headings(markdown);
+    let headings = collect_headings_with_prefix(markdown, prefix);
     let mut next_heading = 0usize;
     let neutralized = std::cell::Cell::new(0usize);
     let events = Parser::new(markdown).map(|event| match event {
@@ -492,19 +543,32 @@ fn render_markdown_with_neutralized_count(markdown: &str) -> (String, usize) {
     (html, neutralized.get())
 }
 
-fn render_markdown(markdown: &str) -> String {
-    let (html, neutralized_count) = render_markdown_with_neutralized_count(markdown);
+/// 既存の接頭辞なし版。単体テストと後方互換のために残す。
+#[cfg(test)]
+fn render_markdown_with_neutralized_count(markdown: &str) -> (String, usize) {
+    render_markdown_with_neutralized_count_scoped(markdown, "")
+}
+
+fn render_markdown_scoped(markdown: &str, prefix: &str) -> String {
+    let (html, neutralized_count) = render_markdown_with_neutralized_count_scoped(markdown, prefix);
     // 集約した件数を描画完了後に送る。同じ本文の再描画は送信側で除外される
     // （描画はブロックせず、HTML を返す契約は据え置き）。
     report_neutralized_urls(neutralized_count, markdown);
     html
 }
 
+/// 既存の接頭辞なし版。単体テストと後方互換のために残す。
+#[cfg(test)]
+fn render_markdown(markdown: &str) -> String {
+    render_markdown_scoped(markdown, "")
+}
+
 /// 見出し一覧から TOC（アンカーリンクのリスト）を生成する。
-/// リンク先は `collect_headings` が生成した `#slug` のみを使う。
-fn render_toc(markdown: &str) -> String {
+/// リンク先は `collect_headings_with_prefix` が生成した `#slug` のみを使う。
+/// `prefix` を渡すと本文の見出し id と同じ名前空間の href が生成される。
+fn render_toc_with_prefix(markdown: &str, prefix: &str) -> String {
     let mut toc = String::new();
-    for heading in collect_headings(markdown) {
+    for heading in collect_headings_with_prefix(markdown, prefix) {
         let indent = (heading.level as u32).saturating_sub(1) * 2;
         let _ = writeln!(
             toc,
@@ -515,6 +579,12 @@ fn render_toc(markdown: &str) -> String {
         );
     }
     toc
+}
+
+/// 既存の接頭辞なし版。単体テストと後方互換のために残す。
+#[cfg(test)]
+fn render_toc(markdown: &str) -> String {
+    render_toc_with_prefix(markdown, "")
 }
 
 /// Markdown links and images may only use web-safe schemes or relative destinations.
@@ -1350,6 +1420,10 @@ where
     F: Fn() + 'static + Clone,
 {
     let cid_label = cid.clone();
+    // 一覧の複数カードが同じ markdown を描画しても DOM id / TOC アンカーが衝突しないよう、
+    // cid 由来の属性安全なトークンを名前空間として使う。
+    let cid_token = cid_scope_token(&cid);
+    let heading_prefix = cid_token.clone();
     // メタデータは信頼できない入力なので、escape_html_text を通した文字列だけを
     // inner_html へ渡す（Markdown 本文/TOC の既存レンダリングには触れない）。
     let meta_html = render_content_meta_html(&title, &description, &tags);
@@ -1441,6 +1515,7 @@ where
     let ct_ef = content_type.clone();
     Effect::new(move |_| {
         let cid = cid.clone();
+        let heading_prefix = heading_prefix.clone();
         let expected_checksum = expected_checksum.clone();
         let ct = ct_ef.clone();
         let token = token_stored.get_value();
@@ -1483,9 +1558,10 @@ where
                                 }
                             } else {
                                 let text = String::from_utf8_lossy(&bytes).to_string();
-                                // 本文と TOC は同じテキストから生成し、アンカーの一致を保証する。
-                                set_novel_toc.set(render_toc(&text));
-                                set_novel_html.set(render_markdown(&text));
+                                // 本文と TOC は同じテキスト・同じ cid 由来 prefix から生成し、
+                                // カード間でアンカーが衝突しないようにする。
+                                set_novel_toc.set(render_toc_with_prefix(&text, &heading_prefix));
+                                set_novel_html.set(render_markdown_scoped(&text, &heading_prefix));
                             }
                         } else if is_ok && ct == "Illustration" {
                             // チェックサムが一致しても空バイトでは JXL をデコードできない。
@@ -1536,6 +1612,11 @@ where
     let ct_nov = content_type.clone();
     let ct_bad = content_type.clone();
     let ct_toc = content_type.clone();
+    // 動的属性のクロージャが値を move しないよう StoredValue で保持する。
+    // トグルの aria-controls とパネルの id は同じ一意値を指す。
+    let audit_panel_id: StoredValue<String> = StoredValue::new(forensic_panel_id(&cid_token));
+    let audit_controls_id: StoredValue<String> =
+        StoredValue::new(audit_panel_id.get_value().clone());
 
     view! {
         <div data-testid="content-card"
@@ -1576,7 +1657,7 @@ where
                     <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
                         node_ref=audit_toggle_ref
                         aria-expanded=move || if show_audit.get() { "true" } else { "false" }
-                        aria-controls="forensic-timeline"
+                        aria-controls=move || audit_controls_id.get_value().to_string()
                         class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
                     </button>
@@ -1646,7 +1727,7 @@ where
                 // モーダルではない。背景（nav・他カード・Audit/favorite トグル）は引き続き
                 // 操作可能なままなので、背景を aria-hidden / inert にしない。
                 <Show when=move || show_audit.get() fallback=|| ()>
-                    <div id="forensic-timeline"
+                    <div id=move || audit_panel_id.get_value().to_string()
                         role="dialog"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
@@ -2542,6 +2623,103 @@ mod tests {
     }
 
     #[test]
+    fn cid_prefix_namespaces_heading_ids_and_toc_anchors() {
+        let markdown = "# Alpha\n\n## Beta\n\n# Alpha\n";
+        let cid_a = super::cid_scope_token("cid-alpha");
+        let cid_b = super::cid_scope_token("cid-beta");
+        assert_ne!(cid_a, cid_b);
+
+        let expected_a = vec![
+            format!("{cid_a}-alpha"),
+            format!("{cid_a}-beta"),
+            format!("{cid_a}-alpha-1"),
+        ];
+        let expected_b = vec![
+            format!("{cid_b}-alpha"),
+            format!("{cid_b}-beta"),
+            format!("{cid_b}-alpha-1"),
+        ];
+
+        let ids_a = heading_ids(&super::render_markdown_scoped(markdown, &cid_a));
+        let ids_b = heading_ids(&super::render_markdown_scoped(markdown, &cid_b));
+        assert_eq!(ids_a, expected_a);
+        assert_eq!(ids_b, expected_b);
+        // 異なる cid なら同じ markdown でも id が衝突しない。
+        assert!(ids_a.iter().all(|id| !ids_b.contains(id)));
+
+        // 同じ cid なら再描画しても同じ id になる（アンカーの安定性）。
+        assert_eq!(
+            heading_ids(&super::render_markdown_scoped(markdown, &cid_a)),
+            ids_a
+        );
+
+        // TOC の href も本文 id と同じ名前空間を使う。
+        let toc_a = anchor_fragments(&super::render_toc_with_prefix(markdown, &cid_a));
+        let toc_b = anchor_fragments(&super::render_toc_with_prefix(markdown, &cid_b));
+        assert_eq!(toc_a, ids_a);
+        assert_eq!(toc_b, ids_b);
+        assert!(toc_a.iter().all(|f| !toc_b.contains(f)));
+        assert_eq!(
+            anchor_fragments(&super::render_toc_with_prefix(markdown, &cid_a)),
+            toc_a
+        );
+    }
+
+    #[test]
+    fn cid_scope_token_is_attribute_safe_and_stable() {
+        let tricky = "a\"b<c>&d'e/f g";
+        let token = super::cid_scope_token(tricky);
+        let is_safe = |value: &str| {
+            value
+                .chars()
+                .all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_')
+        };
+        assert!(is_safe(&token), "属性に安全でない文字: {token}");
+        assert_eq!(token, super::cid_scope_token(tricky));
+
+        // 特殊文字だけの cid でもトークンは空にならず、他と衝突しない。
+        let symbols = super::cid_scope_token("!!!");
+        assert!(!symbols.is_empty());
+        assert_ne!(symbols, super::cid_scope_token("???"));
+        assert_ne!(symbols, token);
+
+        // Unicode CID も属性安全なトークンになる（slug の Unicode 化と整合）。
+        let unicode = super::cid_scope_token("日本語CID");
+        assert!(
+            is_safe(&unicode),
+            "Unicode CID のトークンが安全でない: {unicode}"
+        );
+        assert_eq!(unicode, super::cid_scope_token("日本語CID"));
+
+        // İ (U+0130) は小文字化で 'i' + 結合文字 U+0307 に展開される。
+        // 展開結果を再フィルタするので結合文字は除去され、is_safe が保たれる。
+        let dotted_i = super::cid_scope_token("İstanbul");
+        assert!(
+            is_safe(&dotted_i),
+            "İ を含む CID のトークンが安全でない: {dotted_i}"
+        );
+        assert_eq!(dotted_i, super::cid_scope_token("İstanbul"));
+        assert!(!dotted_i.contains('\u{0307}'), "{dotted_i}");
+
+        // prefix を含む href にも生の特殊文字が混入しない。
+        let toc = super::render_toc_with_prefix("# Alpha\n", &token);
+        assert!(anchor_fragments(&toc).iter().all(|f| is_safe(f)), "{toc}");
+    }
+
+    #[test]
+    fn forensic_panel_id_is_unique_per_cid() {
+        let a = super::forensic_panel_id(&super::cid_scope_token("cid-a"));
+        let b = super::forensic_panel_id(&super::cid_scope_token("cid-b"));
+        assert!(a.starts_with("forensic-timeline-"), "{a}");
+        assert!(b.starts_with("forensic-timeline-"), "{b}");
+        assert_ne!(a, b);
+        assert_eq!(
+            a,
+            super::forensic_panel_id(&super::cid_scope_token("cid-a"))
+        );
+    }
+
+    #[test]
     fn duplicate_headings_get_sequential_slugs() {
         let markdown = "# Foo\n\n# Foo\n\n## Foo\n\n# foo\n";
         let slugs: Vec<String> = super::collect_headings(markdown)
@@ -2559,9 +2737,10 @@ mod tests {
 
     #[test]
     fn heading_slugs_are_sanitized_against_injection() {
-        // 危険文字・HTML ・日本語は slug から除去され、属性を壊せない。
+        // 危険文字・HTML は slug から除去され、属性を壊せない。
+        // 日本語は Unicode 文字として残り、`section` には潰れない。
         assert_eq!(super::sanitize_heading_slug("A-B_C 123!"), "a-b_c123");
-        assert_eq!(super::sanitize_heading_slug("日本語!!!"), "section");
+        assert_eq!(super::sanitize_heading_slug("日本語!!!"), "日本語");
 
         let markdown = "# <img src=x onerror=alert(1)>\n\n# \"quoted\" & symbols!!!\n";
         let headings = super::collect_headings(markdown);
@@ -2582,6 +2761,136 @@ mod tests {
         assert!(!toc.contains("<img"), "{toc}");
         assert!(toc.contains("&lt;img"), "{toc}");
         assert!(toc.contains("&amp;"), "{toc}");
+
+        // 本番と同じ非空 prefix 経路でも見出し id / TOC href が属性を壊さない。
+        let prefix = super::cid_scope_token("cid-a");
+        let prefixed = super::collect_headings_with_prefix(markdown, &prefix);
+        assert_eq!(prefixed.len(), 2);
+        assert!(
+            prefixed
+                .iter()
+                .all(|heading| heading.slug.starts_with(&format!("{prefix}-"))),
+            "{prefixed:?}"
+        );
+        let prefixed_body = super::render_markdown_scoped(markdown, &prefix);
+        assert!(
+            prefixed_body.contains(&format!("id=\"{prefix}-")),
+            "{prefixed_body}"
+        );
+        assert!(!prefixed_body.contains("id=\"<"), "{prefixed_body}");
+        assert!(!prefixed_body.contains("id=\"\""), "{prefixed_body}");
+        let prefixed_toc = super::render_toc_with_prefix(markdown, &prefix);
+        assert!(
+            anchor_fragments(&prefixed_toc)
+                .iter()
+                .all(|fragment| fragment.starts_with(&format!("{prefix}-"))),
+            "{prefixed_toc}"
+        );
+    }
+
+    #[test]
+    fn prefixed_render_with_xss_cid_cannot_break_html_attributes() {
+        // 引用符・山括弧・& を含む cid を prefix にしても、本文の id と TOC の
+        // href が属性を壊さない（本番の cid 名前空間経路の回帰テスト）。
+        let cid = "a\"b<c>&d'e/f g";
+        let prefix = super::cid_scope_token(cid);
+        assert!(
+            prefix
+                .chars()
+                .all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_'),
+            "危険な cid 由来の prefix: {prefix}"
+        );
+        let markdown = "# <img src=x onerror=alert(1)>\n\n# \"quoted\" & symbols!!!\n";
+
+        let body = super::render_markdown_scoped(markdown, &prefix);
+        assert!(!body.contains("<img"), "{body}");
+        assert!(!body.contains("<script"), "{body}");
+        assert!(!body.contains("id=\"\""), "{body}");
+
+        let headings = super::collect_headings_with_prefix(markdown, &prefix);
+        assert_eq!(headings.len(), 2);
+        for heading in &headings {
+            assert!(
+                heading.slug.starts_with(&format!("{prefix}-")),
+                "{heading:?}"
+            );
+            assert!(
+                heading
+                    .slug
+                    .chars()
+                    .all(|ch| ch.is_alphanumeric() || ch == '-' || ch == '_'),
+                "属性に安全でない slug: {}",
+                heading.slug
+            );
+            assert!(body.contains(&format!("id=\"{}\"", heading.slug)), "{body}");
+        }
+
+        let toc = super::render_toc_with_prefix(markdown, &prefix);
+        let fragments = anchor_fragments(&toc);
+        assert_eq!(fragments.len(), 2, "{toc}");
+        assert!(
+            fragments
+                .iter()
+                .all(|fragment| fragment.starts_with(&format!("{prefix}-"))),
+            "{toc}"
+        );
+        assert!(!toc.contains("<img"), "{toc}");
+        assert!(toc.contains("&lt;img"), "{toc}");
+    }
+
+    #[test]
+    fn unicode_heading_slugs_are_identifiable_and_attribute_safe() {
+        use std::collections::HashMap;
+
+        // 日本語見出しは `section` に潰れず、判別可能な slug を生成する。
+        assert_eq!(super::sanitize_heading_slug("概要"), "概要");
+        assert_eq!(
+            super::sanitize_heading_slug("第1章 カタカナ"),
+            "第1章カタカナ"
+        );
+        assert_eq!(super::sanitize_heading_slug("日本語!!!"), "日本語");
+
+        // 大文字畳み込みは ASCII に限らない（`to_lowercase()` を使用）。
+        assert_eq!(super::sanitize_heading_slug("ÄÖÜ"), "äöü");
+        assert_eq!(super::sanitize_heading_slug("ABC-DEF_GHI"), "abc-def_ghi");
+
+        // HTML 属性として危険な文字はことごとく除去される。
+        assert_eq!(
+            super::sanitize_heading_slug("a\"b'c<d>e&f g/h\\i\tj"),
+            "abcdefghij"
+        );
+        let dangerous = super::sanitize_heading_slug("\"'<>&/ \u{0000}\u{200b}日本語");
+        assert_eq!(dangerous, "日本語");
+        for ch in ['"', '\'', '<', '>', '&', '/', ' ', '\t', '\n', '\r', '\0'] {
+            assert!(!dangerous.contains(ch), "危険文字が残った: {ch:?}");
+        }
+
+        // すべて除去された場合だけ `section` にフォールバックする。
+        assert_eq!(super::sanitize_heading_slug("\"'<>&/ \\"), "section");
+
+        // 日本語見出しどうしも既存の連番機構で衝突しない。
+        let mut used = HashMap::new();
+        assert_eq!(super::assign_unique_slug("日本語", &mut used), "日本語");
+        assert_eq!(super::assign_unique_slug("日本語", &mut used), "日本語-1");
+    }
+
+    #[test]
+    fn japanese_slug_does_not_collide_with_cid_prefixed_slug() {
+        let markdown = "# 日本語\n\n## 概要\n";
+        let token_a = super::cid_scope_token("bafy-first");
+        let token_b = super::cid_scope_token("bafy-second");
+        assert_ne!(token_a, token_b);
+
+        let toc_a = super::render_toc_with_prefix(markdown, &token_a);
+        let toc_b = super::render_toc_with_prefix(markdown, &token_b);
+        let frags_a = anchor_fragments(&toc_a);
+        let frags_b = anchor_fragments(&toc_b);
+
+        // 日本語 slug は cid 接頭辞付きでも識別可能なまま残る。
+        assert!(frags_a[0].ends_with("-日本語"), "{toc_a}");
+        assert!(frags_b[1].ends_with("-概要"), "{toc_b}");
+        // 異なる cid の名前空間どうしでフラグメントが衝突しない。
+        assert!(frags_a.iter().all(|frag| !frags_b.contains(frag)));
     }
 
     #[test]
@@ -2613,10 +2922,10 @@ mod tests {
         assert_eq!(super::assign_unique_slug("foo-1", &mut used), "foo-1");
         assert_eq!(super::assign_unique_slug("foo", &mut used), "foo-2");
 
-        // 日本語などで base が空になる場合は `section` 系を維持。
+        // 記号のみで base が空になる場合は `section` 系を維持。
         let mut used = HashMap::new();
-        assert_eq!(super::assign_unique_slug("日本語", &mut used), "section");
-        assert_eq!(super::assign_unique_slug("!!!", &mut used), "section-1");
+        assert_eq!(super::assign_unique_slug("!!!", &mut used), "section");
+        assert_eq!(super::assign_unique_slug("???", &mut used), "section-1");
     }
 
     /// 1 万件の同一見出しを時間計測なしで検証する（O(N²) 回帰テスト）。
@@ -2679,13 +2988,21 @@ mod tests {
 
     #[test]
     fn markdown_raw_html_is_escaped() {
-        let rendered =
-            super::render_markdown("<img src=x onerror=alert(1)>\n\n<script>alert(1)</script>");
+        let markdown = "<img src=x onerror=alert(1)>\n\n<script>alert(1)</script>";
+        let rendered = super::render_markdown(markdown);
 
         assert!(!rendered.contains("<img"));
         assert!(!rendered.contains("<script>"));
         assert!(rendered.contains("&lt;img"));
         assert!(rendered.contains("&lt;script&gt;"));
+
+        // 本番と同じ非空 prefix 経路でもエスケープが維持される。
+        let prefix = super::cid_scope_token("cid-a");
+        let prefixed = super::render_markdown_scoped(markdown, &prefix);
+        assert!(!prefixed.contains("<img"), "{prefixed}");
+        assert!(!prefixed.contains("<script>"), "{prefixed}");
+        assert!(prefixed.contains("&lt;img"), "{prefixed}");
+        assert!(prefixed.contains("&lt;script&gt;"), "{prefixed}");
     }
 
     #[test]
@@ -2720,6 +3037,16 @@ mod tests {
         assert!(!rendered.contains("src=\"javascript:"));
         assert!(rendered.contains("href=\"#\""));
         assert!(rendered.contains("src=\"#\""));
+
+        // 本番と同じ非空 prefix 経路でも危険スキームが中立化される。
+        let prefix = super::cid_scope_token("cid-a");
+        let dangerous = "[script](javascript:alert%281%29) [data](data:text/html,alert) ![svg](data:image/svg+xml,%3Csvg%20onload=alert%281%29%3E)";
+        let prefixed = super::render_markdown_scoped(dangerous, &prefix);
+        assert!(!prefixed.contains("href=\"javascript:"), "{prefixed}");
+        assert!(!prefixed.contains("href=\"data:"), "{prefixed}");
+        assert!(!prefixed.contains("src=\"data:"), "{prefixed}");
+        assert!(prefixed.contains("href=\"#\""), "{prefixed}");
+        assert!(prefixed.contains("src=\"#\""), "{prefixed}");
     }
 
     /// プロトコル相対 URL（`//host/path`）と UNC 形式（`\\host\path`）は
