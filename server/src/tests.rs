@@ -15641,6 +15641,105 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
     assert_cookie(Some(""), true);
 }
 
+/// OIDC エンドポイント URL: https 必須、mock 時のみ localhost の http を許容。
+/// エラー文言は固定で設定値を含まない（情報漏洩を防ぐ）。
+#[test]
+fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
+    const ENDPOINT_KEYS: [&str; 5] = [
+        "OIDC_ISSUER",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    const INVALID_URL_ERROR: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
+
+    // 有効な https（4 エンドポイント + redirect_uri）は有効化される。
+    let env = oidc_required_env();
+    assert!(
+        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("all endpoints are https")
+            .is_some(),
+        "valid https endpoints must enable OIDC"
+    );
+
+    // 本番相当（ALLOW_MOCK_AUTH 未設定）では http はどの変数でも拒否。
+    for key in ENDPOINT_KEYS {
+        let mut env = oidc_required_env();
+        env.insert(
+            key.to_string(),
+            "http://issuer.example.jp/endpoint".to_string(),
+        );
+        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .err()
+            .expect("http endpoint must be rejected in production mode");
+        assert_eq!(err, INVALID_URL_ERROR);
+        assert!(
+            !err.contains("issuer.example.jp"),
+            "error must not echo the value"
+        );
+    }
+
+    // mock 有効（1 / true / TRUE）なら localhost 系の http のみ許容。
+    for flag in ["1", "true", "TRUE"] {
+        for host in ["localhost", "127.0.0.1", "[::1]"] {
+            let mut env = oidc_required_env();
+            for key in ENDPOINT_KEYS {
+                env.insert(key.to_string(), format!("http://{host}/endpoint"));
+            }
+            env.insert("ALLOW_MOCK_AUTH".to_string(), flag.to_string());
+            assert!(
+                crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                    .expect("localhost http is allowed in mock mode")
+                    .is_some(),
+                "ALLOW_MOCK_AUTH={flag}, host={host} must be accepted"
+            );
+        }
+    }
+
+    // mock が有効でもリモートの http は拒否（値をエコーしない）。
+    let mut env = oidc_required_env();
+    env.insert("ALLOW_MOCK_AUTH".to_string(), "1".to_string());
+    env.insert(
+        "OIDC_ISSUER".to_string(),
+        "http://remote.example.jp/issuer".to_string(),
+    );
+    let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        .err()
+        .expect("remote http must be rejected even in mock mode");
+    assert_eq!(err, INVALID_URL_ERROR);
+    assert!(
+        !err.contains("remote.example.jp"),
+        "error must not echo the value"
+    );
+
+    // mock 無効とみなす値（0 / false / 空 / その他）では localhost の http も拒否。
+    for flag in ["0", "false", "", "yes"] {
+        let mut env = oidc_required_env();
+        env.insert("ALLOW_MOCK_AUTH".to_string(), flag.to_string());
+        for key in ENDPOINT_KEYS {
+            env.insert(key.to_string(), "http://localhost/endpoint".to_string());
+        }
+        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .err()
+            .expect("ALLOW_MOCK_AUTH={flag} must not allow http");
+        assert_eq!(err, INVALID_URL_ERROR);
+    }
+
+    // パース不能・不正スキームも拒否し、設定値をエコーしない。
+    for raw in ["not a url", "", "ftp://localhost/issuer", "https://"] {
+        let mut env = oidc_required_env();
+        env.insert("OIDC_ISSUER".to_string(), raw.to_string());
+        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .err()
+            .expect("invalid URL must be rejected");
+        assert_eq!(err, INVALID_URL_ERROR);
+        if !raw.is_empty() {
+            assert!(!err.contains(raw), "error must not echo the invalid value");
+        }
+    }
+}
+
 // ---- proptest: 入力境界と仕様不変条件の網羅 ----
 //
 // fuzz_test.rs の年齢プロパティに続き、CID 検証・金額変換・通報理由要約の

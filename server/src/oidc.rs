@@ -277,6 +277,41 @@ impl OidcState {
             ),
             _ => return Ok(None),
         };
+        // SSRF 対策: OIDC エンドポイントは https のみ受け付ける。
+        // 開発用の mock 認証が明示的に有効な場合だけ localhost の http を許容し、
+        // 本番相当では http / 不正文字列を起動拒否する（fail-closed）。
+        // エラー文言は固定で、設定値をエコーしない。
+        let allow_mock_auth = lookup("ALLOW_MOCK_AUTH")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let is_valid_endpoint = |value: &str| match reqwest::Url::parse(value) {
+            Ok(url) => {
+                if url.scheme() == "https" {
+                    true
+                } else if url.scheme() == "http" && allow_mock_auth {
+                    matches!(
+                        url.host_str()
+                            .map(|host| host.to_ascii_lowercase())
+                            .as_deref(),
+                        Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+                    )
+                } else {
+                    false
+                }
+            }
+            Err(_) => false,
+        };
+        for endpoint in [
+            issuer.as_str(),
+            redirect_uri.as_str(),
+            authorization_endpoint.as_str(),
+            token_endpoint.as_str(),
+            jwks_uri.as_str(),
+        ] {
+            if !is_valid_endpoint(endpoint) {
+                return Err("OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)".to_string());
+            }
+        }
         let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
         let cookie_secure = lookup("OIDC_COOKIE_SECURE")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
