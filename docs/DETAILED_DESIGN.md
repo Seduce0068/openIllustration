@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T00:16:27+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -586,7 +586,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
 | --- | --- | --- | --- |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 36（既存29＋境界テスト7） | CLI-01 / CFG-01 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 40（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1） | CLI-01 / CFG-01 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 19 | CLI-02 / AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 17 | CLI-03 |
 
@@ -595,14 +595,18 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `parse_args_from<I>(items) -> ParseOutcome` は先頭要素をプログラム名として読み飛ばし、
   `Run { strict }` / `Help` / `UnknownArgument(String)` / `TooManyArguments` を返す。
   `--strict` は完全一致のみ有効で、`-h` / `--help` はヘルプ表示（exit 0）へ変換する。
-- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、21カテゴリの検査結果を
+- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、22カテゴリの検査結果を
   返す。`production` / `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` /
   `jwt_secret` / `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` /
-  `oidc_http_timeout` / `oidc_clock_skew` / `age_policy` / `rate_limit` / `ipv4_localhost` /
+  `oidc_http_timeout` / `oidc_clock_skew` / `oidc_endpoint_urls` / `age_policy` / `rate_limit` / `ipv4_localhost` /
   `trusted_proxy` / `oidc_max_auth_age` / `oidc_cookie_secure` / `oidc_required_assurance` /
   `expose_internal_errors` / `allowed_origins` / `graceful_drain_timeout` /
   `moderation_finalize_interval`。秘密情報の値は結果へ含めない。実環境用の `check_all()` は `env` を渡す
   ラッパーに留める。
+  `oidc_endpoint_urls` は OIDC 7 変数がすべて揃ったときに `OIDC_ISSUER` / `OIDC_REDIRECT_URI` /
+  `OIDC_AUTHORIZATION_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI` の5エンドポイントURLを
+  検証し、https のみを受理する（`ALLOW_MOCK_AUTH` 有効時は localhost の http のみ許容）。
+  警告は固定文言で、設定値は出力しない。
 - `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は各パーサが不正値・範囲外を
   既定へフォールバックするため、`rate_limit` と同じ方式で「生のパース値」と「正規化後の値」を
   比較し、フォールバック時に当該カテゴリへ警告1件を計上する（設定値自体は出力しない）。
@@ -611,7 +615,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。
 - `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
-  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（21 check(s) 実測）。
+  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（22 check(s) 実測）。
 - `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`、大小文字不問）のときと `TRUSTED_PROXY_CIDRS`
   が設定されているときは、それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する
   （`doctor --strict` の警告対象）。いずれも設定値は出力せず有無のみを警告する。

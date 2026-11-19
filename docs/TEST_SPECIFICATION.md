@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T03:46:10+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T03:46:10+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -22,8 +22,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全54件（auth 2 / build-gate 3 / economy 3 /
-  error-paths 6 / export 3 / favorites 5 / integrity 6 / metrics 3 / moderation 12 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全56件（auth 2 / build-gate 3 / economy 3 /
+  error-paths 6 / export 3 / favorites 5 / integrity 6 / metrics 3 / moderation 14 /
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   favorites の5件はトグル基本フローに加え、二重クリック防止・401の再ログイン案内・
   失敗後の再トグルで旧エラーを消すこと・ネットワークエラー文言の表示を検証する。
@@ -33,8 +33,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   CONTENT-ERR-404 / CONTENT-ERR-500（取得失敗表示と改ざん検知の誤表示回避）を含む。
   metrics の3件は MET-01 と E2E 固有の NEUT-URL-02 / NEUT-URL-03 であり、
   サーバー側 `observe_metrics` の MET-02 とは別 ID である。
-  moderation の12件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
-  2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）の回帰である。
+  moderation の14件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
+  2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）、2件は二重送信ガード（REPORT-GUARD-01 / VOTE-GUARD-01）の回帰である。
   integrity の6件は正規・改ざんに加え、3件目が R1-13（チェックサム一致だが JXL デコード失敗時に
   VERIFIED にしない）、4件目が AUDIT-04 の FORENSIC_TIMELINE 順序、
   5件目が Audit トグルの ARIA 状態と Escape 時のフォーカス復帰（a11y）、
@@ -42,20 +42,21 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   upload の6件は送信成功・10 MiB 拒否・INT-02 に加え、4件目が R1-14
   （`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）、
   5件目がファイル選択 label のキーボード操作と価格入力の上下限（a11y）、
-  6件目が R2 価格境界テスト（0 / 1000001 / 1000000 を実送信し、丸めずに送って
+  6件目が R2 価格境界テスト（0 / 1000001 / 1000000 をモック応答で送信し、丸めずに送って
   上限超過のみ拒否されること）を検証する。
-  メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記54件の内訳は変更しない。
+  メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記56件の内訳は変更しない。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
-  今回の3CLIへのテスト追加（doctor 36件（既存29件＋境界テスト7件） / verify_audit_export 19件 / verify_backup 17件）も
-  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は54件のまま変わらない。
-  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は54件のまま。
+  今回の3CLIへのテスト追加（doctor 40件（既存29件＋境界テスト7件＋OIDC URL検証3件＋
+  oidc_required_assurance1件） / verify_audit_export 19件 / verify_backup 17件）も
+  全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は56件のまま変わらない。
+  直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は56件のまま。
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
    読み取りトランザクションの5件も `server/src/tests.rs` のサーバー側テストであり、
-   E2E 定義数は54件のまま変更なし。
+   E2E 定義数は56件のまま変更なし。
    直近の監査理由マスク1件・投票署名 v2 の4件・一覧の `price` NULL 1件は
    `server/src/tests.rs` のサーバー側テスト、エクスポート解析失敗1件は
    `client/src/lib.rs` のクライアント側単体テストである。いずれも E2E 定義を増やさず、
-   E2E 定義数は54件のまま変更しない。
+   E2E 定義数は56件のまま変更しない。
 
 ## 2. 実装済みテストの概要
 
@@ -80,10 +81,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 36件（既存29件＋境界テスト7件） / `verify_audit_export` 19件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に9テスト、`doctor` 40件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件） / `verify_audit_export` 19件 / `verify_backup` 17件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
-| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は54件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
+| 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は56件のまま。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
 
 ## 3. 必須要件のリリースゲート
 
@@ -103,7 +104,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
 | CONTENT-09 | チェックサム一致だが JXL として不正なバイト列（例: `not a jxl codestream`）を HTTP 200 で返すゲートウェイ | チェックサム検証は成功しても VERIFIED にせず、`× DECODE FAILED` と固定エラー文言を表示する | 実装済み。クライアントの `decode_error` 分岐で `set_verified = Some(false)` に切り替え、デコーダのエラー値は画面へ出さない。E2E は `e2e/tests/integrity.spec.ts` の `should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)` で検証。補助する単体テストは `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` |
-| INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／デコード失敗／監査順序／Audit トグルの a11y） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない。Audit トグルは `aria-expanded=false→true→false`、`aria-controls="forensic-timeline"`、`role="dialog"`（名前 `Forensic Timeline`）を満たし、Escape でトグルへフォーカスが復帰する | 実装済み。`integrity.spec.ts` の6件（R1-13 のデコード失敗、AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y と CLOSE ボタンのフォーカス復帰を追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
+| INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／デコード失敗／監査順序／Audit トグルの a11y） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない。Audit トグルは `aria-expanded=false→true→false`、`aria-controls` が CID 由来の `forensic-timeline-<token>` で dialog の `id` と厳密一致し、`role="dialog"`（名前 `Forensic Timeline`）を満たし、Escape でトグルへフォーカスが復帰する | 実装済み。`integrity.spec.ts` の6件（R1-13 のデコード失敗、AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y と CLOSE ボタンのフォーカス復帰を追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
 | A11Y-01 | Upload フォームのキーボード操作と価格入力の境界（R2） | ファイル選択 `label[for="file-upload"]` が `tabindex="0"` を持ち、フォーカス＋Enter で `filechooser` が発火する。`#upload-price` は `min="1"` / `max="1000000"` を満たす | 実装済み・検証済み: `e2e/tests/upload.spec.ts` の `R2: file-upload label is keyboard operable and price input has bounds`。upload.spec.ts 定義6件 |
 | FAV-01 | お気に入りの追加/削除を繰り返す | 重複追加も未登録削除も200で成功し、行数は0または1のまま。削除後の再追加も可 | 実装済み（`test_favorite_add_and_remove_are_idempotent`） |
 | FAV-02 | 未認証・不正CID・非Approvedコンテンツへの操作 | それぞれ401 / 400 / 404で拒否し、お気に入りを登録しない | 実装済み（`test_favorite_requires_auth_and_valid_approved_cid`） |
@@ -117,11 +118,11 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です`、不正 JSON では `集計の解析に失敗しました。` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件・投票一覧エラー2件・集計解析エラー1件を追加した現在は moderation.spec.ts 全12件 pass、フルスイートの定義数は54件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です`、不正 JSON では `集計の解析に失敗しました。` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件・投票一覧エラー2件・集計解析エラー1件を追加した現在は moderation.spec.ts 全14件 pass、フルスイートの定義数は56件。webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」） |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
-| MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件を含め全12件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
-| MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全12件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
+| MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
+| MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -131,7 +132,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | EXPORT-07 | エクスポートのE2E（R5-04） | 認証トークン付きで `GET /me/export` を呼ぶとJSONダウンロードがトリガされる。401では `role="alert"` に「ログインが必要です」が表示される。ダウンロード開始が例外を投げた場合は `data-testid="export-error"`（`role="alert"`）に固定文言 `ダウンロードの開始に失敗しました。` を出し、`export-status` は出さない（成功文言も出さない）。これは EXPORT-11 の「レスポンス解析失敗」とは別事象 | 実装済み（`e2e/tests/export.spec.ts` 定義3件。chromium で pass を確認済み。webkit はホスト側 libicu/libxml2 不在で起動不可、環境依存）: `R5-04: GET /me/export を認証トークン付きで呼び、JSON ダウンロードがトリガされること` / `R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること` / `R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと`。固定文言は `client/src/lib.rs:753` の確定値 |
 | EXPORT-08 | 削除権（erase）の不在 | 削除要求を受け付けるAPIが存在しない | 未実装（設計で明記）。エクスポートのみ実装。法務・外部アンカー・バックアップ消去方針の決定後に着手 |
 | EXPORT-09 | `/me/export` の読み取りトランザクション | 12表の全クエリが単一の読み取りトランザクション（`BEGIN DEFERRED`）で実行され、`collect_export_snapshot` の `debug_assert!(!db.is_autocommit())` が発火しない。完了時に `tx.commit()`、エラー時は Drop が ROLLBACK | 実装済み。`me_export_queries_run_inside_read_transaction`（`db.transaction()` / `tx.commit()` を外す mutation で失敗）と、並行書き込み待ち（直列化）を検証する `me_export_waits_for_concurrent_write_transaction` を EXPORT-09 の一部として含む。下記「エクスポートの読み取りトランザクション検証」を参照 |
-| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は54件のまま |
+| EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は56件のまま |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス9件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
@@ -150,7 +151,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
-| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と36テスト（既存29件＋境界テスト7件）を追加し、21カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
+| CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）を追加し、22カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | NET-05 | SSRF: IPFSゲートウェイのリダイレクト追従拒否 | 302 + `Location` で内部サービスへ誘導されても追従せず、リダイレクト先へ到達しない。3xx はエラーとして次のゲートウェイへフェイルオーバーする | 実装済み。`build_http_client` が `Policy::none()` を設定。サーバー側テスト2件（`test_get_content_does_not_follow_gateway_redirect` / `test_get_content_redirect_falls_back_to_next_gateway`）。下記「SSRF リダイレクト無効化の検証（NET-05）」を参照 |
@@ -168,7 +169,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-04 | `prop_summarize_reason_truncates_safe_text_at_char_boundary` | PII を含まない文字（あ / 知 / A / b / 空白 / 改行 / 🍣 / 。、0..=160個）で、120文字以下は等価、超過は先頭119文字＋`…` に切り詰め（Unicode 境界を維持） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
-| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。21カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に36テスト（既存29件＋境界テスト7件）を追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
+| CLI-01 | `doctor` の純粋関数化と引数・設定判定（R5-06 / R4-01） | `parse_args_from` / `check_all_with` / `should_fail` を純粋関数として検証。22カテゴリ固定、秘密値非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1 | 実装済み。`server/src/bin/doctor.rs` に40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）を追加（ネットワーク設定警告4件を含む）。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-02 | `verify_audit_export` の `--expect-root` と検証結果の純粋関数化 | version 3 のみ受理し v1/v2 は fail-closed 拒否。改ざん entry / root / 署名を拒否。`--expect-root` は大小文字を区別せず照合し、不一致は `audit root mismatch` で拒否。受理・拒否いずれも理由本文と秘密値を出力しない | 実装済み。`server/src/bin/verify_audit_export.rs` に17テストを追加し、`VerificationOutcome` / `verify_export` を純粋化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | CLI-03 | `verify_backup` の `--database-token` 拒否と sidecar fail-closed | `--database-token` は argv で受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ）。`-wal` / `-shm` / `-journal` サイドカーが残っていれば DB を開く前に拒否。成功行は `backup_verification: OK tables=N migrations=N`、失敗時は stdout にエラー本文を出さない | 実装済み。`server/src/bin/verify_backup.rs` に17テストを追加し、`parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化。下記「3CLIの純粋関数化と自動テスト（CLI-01〜03）」を参照 |
 | AUDIT-03 | `GET /content/{cid}/audit` の理由マスクと `entry_hash` 維持 | `reason` は `summarize_reason` の結果のみで、メール・URL・4桁数字・DB 全文が漏れない。`entry_hash` は生 `reason` から計算した DB の生値と一致し、DB 全文は不変 | 実装済み（`test_get_content_audit_masks_reason_but_preserves_entry_hash`）。下記「監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証」を参照 |
@@ -192,7 +193,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 TZ の強制変更はプロセス環境を汚さないため、純粋関数 `today_for_policy` / `validate_age_at` に
 基準時刻と TZ を明示して検証する。未知の TZ は UTC へフォールバックする分岐も含める。
 年齢数値の判定は `/auth/verify` の `validate_age` に委ね、callback / refresh では設定エラーのみを
-403 へ変換する。これらはサーバー側テストであり、E2E 定義数は54件のまま変わらない。
+403 へ変換する。これらはサーバー側テストであり、E2E 定義数は56件のまま変わらない。
 
 ### エクスポートの読み取りトランザクション検証（EXPORT-09/10）
 
@@ -208,12 +209,12 @@ R5-04 の12表エクスポートを単一時点のスナップショットにす
 | `me_export_waits_for_concurrent_write_transaction` | 外部ライターが `write_lock` と BEGIN を保持している間は完了せず（200ms タイムアウト）、解放後に成功する。`begin_write_tx` を素の `db.transaction()` に戻す mutation で失敗 |
 
 3件目の `me_export_waits_for_concurrent_write_transaction` は EXPORT-09（読み取りトランザクションの直列化）に帰属し、1件目と同じく `begin_write_tx` のロック取得を検証する。
-これらはサーバー側テスト3件のみで、E2E 定義数は54件のまま変わらない。
+これらはサーバー側テスト3件のみで、E2E 定義数は56件のまま変わらない。
 
 ### 期限再判定とトランザクション直列化の回帰（PAY-01/04/05）
 
 共有 `Connection` の BEGIN 直列化と期限判定の回帰テストを `server/src/tests.rs` に追加した。
-すべてサーバー側テストであり、E2E 定義数は54件のまま変わらない。
+すべてサーバー側テストであり、E2E 定義数は56件のまま変わらない。
 
 | テスト関数 | 検証する test oracle |
 | --- | --- |
@@ -269,11 +270,11 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 | パターン | 環境変数（差分） | 実出力（要約） | 既定 | `--strict` |
 | --- | --- | --- | --- | --- |
-| P1 | `ALLOW_MOCK_AUTH=1` のみ | `doctor: 21 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
-| P2 | P1 + `PINATA_JWT=<本番相当値>` | `21 check(s), 2 problem(s)` + `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
-| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | `21 check(s), 2 problem(s)` + 同上の2警告 | 0 | 1 |
-| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM`（不正ダミー） | `21 check(s), 3 problem(s)` + `jwt` / `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
-| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `21 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
+| P1 | `ALLOW_MOCK_AUTH=1` のみ | `doctor: 22 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
+| P2 | P1 + `PINATA_JWT=<本番相当値>` | `22 check(s), 2 problem(s)` + `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P3 | P1 + `OIDC_ISSUER` / `OIDC_CLIENT_ID` | `22 check(s), 2 problem(s)` + 同上の2警告 | 0 | 1 |
+| P4 | P1 + `JWT_RSA_PRIVATE_KEY_PEM`（不正ダミー） | `22 check(s), 3 problem(s)` + `jwt` / `mock_auth_with_production_config` / `mock_auth_enabled` 警告 | 0 | 1 |
+| P5 | P1 + `PINATA_JWT=mock_jwt`（境界値） | `22 check(s), 1 problem(s)` + `mock_auth_enabled` 警告 | 0 | 1 |
 
 いずれもダミーの `JWT_SECRET`（32バイト以上）を設定した実測値である（2026-11-18、ビルド済み
 `target/debug/doctor` で確認）。`mock_auth_enabled` / `ipv4_localhost` / `trusted_proxy` の追加に
@@ -282,22 +283,22 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 `--strict` で終了コード1であり（旧挙動の0ではない）、`--strict` の判定は
 `should_fail(strict, problems)` に委譲される。P4 の jwt 警告はダミー PEM が無効なことに
 よるもので、mock 警告とは独立している。別途 `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
-の実出力で `21 check(s), 2 problem(s)`（`JWT_SECRET` 未設定による `jwt` 警告を含む）を確認した。
+の実出力で `22 check(s), 2 problem(s)`（`JWT_SECRET` 未設定による `jwt` 警告を含む）を確認した。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
-今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は54件のまま
+今回の追加は全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は56件のまま
 変更しない。各 CLI は I/O・環境変数読み取り・`std::process::exit` を薄い `main` 側へ追い出し、
 判定部分を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 
-#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、36テスト（既存29件＋境界テスト7件））
+#### CLI-01: `doctor`（`server/src/bin/doctor.rs`、40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件））
 
 - `parse_args_from<I>(items) -> ParseOutcome`: 引数は `Vec<String>` で受け取り、先頭要素を
   プログラム名として読み飛ばす。`[]` は `Run { strict: false }`、`["--strict"]` は
   `Run { strict: true }`、`-h` / `--help` は `Help`、単一の不明引数は
   `UnknownArgument(String)`、複数引数は `TooManyArguments` を返す（完全一致のみ有効）。
 - `check_all_with<F>(lookup) -> Vec<(&'static str, Vec<String>)>`: 環境変数を `lookup`
-  経由でのみ読み、21カテゴリを固定で返す（`production` /
+  経由でのみ読み、22カテゴリを固定で返す（`production` /
   `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` / `jwt_secret` /
   `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` /
   `graceful_drain_timeout` / `moderation_finalize_interval` /
@@ -313,7 +314,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
 | 引数パース | 6 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` |
-| 設定判定 | 22 | `check_always_reports_twenty_one_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` / `oidc_clock_skew_in_range_and_unset_add_no_warning` / `oidc_clock_skew_out_of_range_warns_without_disclosing_value` / `ipfs_timeout_fallback_is_warned_without_disclosing_value` / `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` / `oidc_http_timeout_fallback_is_warned_without_disclosing_value` / `graceful_drain_timeout_fallback_is_warned_without_disclosing_value` / `moderation_finalize_interval_fallback_is_warned_without_disclosing_value` |
+| 設定判定 | 25 | `check_always_reports_twenty_two_categories` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` / `oidc_clock_skew_in_range_and_unset_add_no_warning` / `oidc_clock_skew_out_of_range_warns_without_disclosing_value` / `ipfs_timeout_fallback_is_warned_without_disclosing_value` / `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` / `oidc_http_timeout_fallback_is_warned_without_disclosing_value` / `graceful_drain_timeout_fallback_is_warned_without_disclosing_value` / `moderation_finalize_interval_fallback_is_warned_without_disclosing_value` / `oidc_endpoint_urls_https_adds_no_warning` / `oidc_endpoint_urls_http_in_production_warns_without_disclosing_value` / `oidc_endpoint_urls_mock_allows_only_localhost_http` |
 | strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
 
 真値は `1` と `true`（大文字小文字不問）のみで、`0` / `false` / `no` / 空文字は偽である。
@@ -323,9 +324,9 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 `ipv4_localhost` と `trusted_proxy` の2カテゴリを追加し、その後の `oidc_clock_skew` 追加と
 フォールバック検出テスト5件（graceful drain / moderation finalize の2件を含む）を含め、
-現行は21カテゴリ・36テスト（既存29件＋境界テスト7件）である
+現行は22カテゴリ・40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）である
 （既存 `check_always_reports_eleven_categories` は `check_always_reports_nineteen_categories`、
-さらに `check_always_reports_twenty_one_categories` へ段階的に改称）。
+さらに `check_always_reports_twenty_two_categories` へ段階的に改称）。
 ネットワーク設定警告の追加4件の oracle は次のとおり。
 
 | テスト | 条件 | 期待結果 |
@@ -337,7 +338,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 `should_fail(strict, problems)` の判定は不変で、`--strict` のときのみ問題があれば exit 1 となる。
 実バイナリで `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor` を実行し、
-`doctor: 21 check(s), 2 problem(s)`（`mock_auth_enabled` + `jwt`）を確認した。
+`doctor: 22 check(s), 2 problem(s)`（`mock_auth_enabled` + `jwt`）を確認した。
 
 ##### doctor のフォールバック検出（追加5件）
 
@@ -357,7 +358,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 各テストは警告文の完全一致で値のエコーを防ぎ、有効値と未設定では警告が出ないことも検証する。
 `graceful_drain_timeout` / `moderation_finalize_interval` は新規カテゴリとして追加し、
-`doctor: 21 check(s)` となる（旧19から+2）。`lib.rs` のパーサ範囲（1..=300 / 30..=3600）
+`doctor: 22 check(s)` となる（旧19から+2）。`lib.rs` のパーサ範囲（1..=300 / 30..=3600）
 と同一の境界を doctor 側でも比較する。
 
 #### CLI-02: `verify_audit_export`（`server/src/bin/verify_audit_export.rs`、19テスト）
@@ -595,7 +596,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 ### 監査理由マスク・投票署名 v2・価格 NULL・エクスポート解析の検証（AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11）
 
 直近の未コミット変更7件のうち6件は `server/src/tests.rs`、1件は `client/src/lib.rs` の
-クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は54件のまま。
+クライアント側単体テストである。いずれも E2E 定義を増やさず、E2E 定義数は56件のまま。
 
 #### AUDIT-03: 監査理由の表示マスクと entry_hash の生値維持
 
@@ -694,7 +695,7 @@ cd e2e && npm test -- build-gate.spec.ts   # ビルドゲート E2E（trunk arch
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- economy.spec.ts   # Support & Ledger E2E（3件: 取得失敗 HTTP 500 / route.abort の2件含む）のみ
-cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック + 投票一覧エラー・集計解析エラー E2E（10件）
+cd e2e && npm test -- moderation.spec.ts   # R5-09 透明性ダッシュボード + 投票フィードバック + 投票一覧エラー・集計解析エラー E2E（14件）
 cd e2e && npm test -- export.spec.ts   # R5-04 データエクスポート E2E のみ
 cd e2e && npm test -- metrics.spec.ts   # 中立化URL E2E（3件: MET-01 / NEUT-URL-02 protocol-relative / NEUT-URL-03 再送抑制）のみ
 cd e2e && npm test -- real-api.spec.ts   # 実サーバー結合 E2E（4件）のみ
@@ -851,7 +852,7 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    前回の通知・エラーが消えること（`vote-error` / `vote-notice` の `toHaveCount(0)`）と、
    `POST /mod/vote` がちょうど3回であることを確認する。
 
-実行例は `cd e2e && npm test -- moderation.spec.ts`。chromium で10件すべて pass を確認済み。
+実行例は `cd e2e && npm test -- moderation.spec.ts`。chromium で14件すべて pass を確認済み。
 
 ### E2E 投票一覧エラーシナリオ（REPORTS-ERR-01〜02）
 
@@ -874,7 +875,7 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 エラーをクリアする。JSON 解析失敗は固定文言 `投票一覧の解析に失敗しました。` を
 表示し、解析エラーの詳細は出さない。この文言はクライアント側単体テスト
 `reports_error_uses_only_fixed_phrases` で担保する。実行例は
-`cd e2e && npm test -- moderation.spec.ts`。chromium で10件すべて pass を確認済み。
+`cd e2e && npm test -- moderation.spec.ts`。chromium で14件すべて pass を確認済み。
 
 ### GOV-01 要約表示の E2E（MOD-08 / MOD-09）
 
@@ -892,8 +893,28 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 3. 元全文に含まれていたメール `reporter@example.com`、電話 `090-1234-5678`、
    URL `https://phish.example.com/login` の3値について、`Reason:` 行と `body` の両方で
    `not.toContainText` を検証する。サーバー本文・生の PII は画面へ出さない。
-4. 本シナリオは定義10件の moderation.spec.ts に含まれ、chromium で pass を確認済み。
+4. 本シナリオは定義14件の moderation.spec.ts に含まれ、chromium で pass を確認済み。
    認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
+
+### 二重送信ガードの E2E（REPORT-GUARD-01 / VOTE-GUARD-01）
+
+`e2e/tests/moderation.spec.ts` の REPORT-GUARD-01 / VOTE-GUARD-01 は、
+`client/src/lib.rs` の `claim_submission` + `BusyGuard` による二重送信防止を UI 側で検証する。
+`/mod/report` と `/mod/vote` の応答を `page.route` で意図的に保留し、固定 sleep を使わずに
+ボタンの状態遷移を待つ。オラクルは次のとおり。
+
+1. 送信ボタンは初期状態で有効（`toBeEnabled`）かつ `aria-busy="false"` である。
+2. 同一タスクで `el.click()` を2回連続で発行する予告なしの高速2クリックでも、
+   `POST /mod/report` / `POST /mod/vote` は1本だけである（`expect.poll` で件数を確認）。
+3. レスポンス保留中はボタンが `disabled`（`toBeDisabled`）かつ `aria-busy="true"` へ遷移し、
+   その状態でもう一度クリックしても POST は増えない。
+4. 応答を解放するとボタンは再び有効かつ `aria-busy="false"` へ戻り、
+   成功固定文言（通報は status 文言、投票は `data-testid="vote-notice"`）が表示される。
+5. 記録したリクエストは1件のみで、`method: 'POST'`、パス `/mod/report` / `/mod/vote`、
+   `Authorization: Bearer mock_jwt_token` であることを完全一致で検証する。
+   2件目の POST や別パス・別ヘッダのリクエストは存在しない。
+6. 本シナリオは `moderation.spec.ts` 全14件に含まれる2件であり、
+   定義件数は14件のまま（既存の投票3回完全一致・お気に入り2/8回アサーションは不変）。
 
 ### E2E エクスポートシナリオ（R5-04）
 
@@ -1017,12 +1038,16 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
    価格入力 `#upload-price` は `min="1"` と `max="1000000"` の属性を持ち、
    1〜1000000 の範囲が入力可能であることを検証する。
 
-6. `R2 (price boundary): 境界値を実送信し、丸めずに送って上限超過のみ拒否される`:
-   `#upload-price` へ 0 / 1000001 / 1000000 を順に入力して実送信し、multipart の
+6. `R2 (price boundary): 境界値をモック応答で送信し、丸めずに送って上限超過のみ拒否される`:
+   UI から min/max 属性で丸めずに送信した値を、`e2e/tests/upload.spec.ts` の
+   `page.route('**/content/upload', ...)` が返すモック（`route.fulfill`）で受け取る。
+   実サーバーへの送信ではないため、このシナリオは実 API の検証を証明しない。
+   `#upload-price` へ 0 / 1000001 / 1000000 を順に入力して送信し、multipart の
    `price` フィールドが `['0', '1000001', '1000000']` であることを確認する。
-   サーバーと同じ境界（<0 と >1000000 のみ拒否）により 0 と 1000000 は成功し、
-   1000001 のみ HTTP 400 の固定文言 `Failed to upload content (HTTP 400).` となる。
-   生エラー本文 `price must not exceed` は画面へ出さない。
+   モックは実サーバーと同じ境界（<0 と >1000000 のみ拒否）を模し、0 と 1000000 は 200、
+   1000001 のみ 400 を返す。クライアントは 400 に対して固定文言
+   `Failed to upload content (HTTP 400).` を表示し、生エラー本文 `price must not exceed` は
+   画面へ出さない。
 
 失敗時は生のエラー値・内部情報を画面へ出さず、固定文言のみを表示する。クライアント
 （`client/src/lib.rs`）は準備・通信・応答読取の各段を `Result` で伝播させ、

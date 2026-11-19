@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-20T00:16:27+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -172,10 +172,13 @@ generated:
   利用者へ告知する。`Login` は `data-testid="login-error"`、エクスポートは `data-testid="export-error"`、
   ContentViewer の監査は `data-testid="audit-error"`、モデレーション集計は
   `data-testid="moderation-stats-error"` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
-  アップロードは `data-testid="upload-status"` に成否を表示し、失敗時は固定文言3種
-  （`アップロードの準備に失敗しました。` / `ネットワークエラーが発生しました。` /
-  `アップロード結果の読み取りに失敗しました。`）を使う。いずれの結果でも `loading` を解除して
-  ボタンを再活性化する。
+  アップロードは `data-testid="upload-status"` に成否を表示し、準備失敗は
+  `アップロードの準備に失敗しました。`、応答読取失敗は `アップロード結果の読み取りに失敗しました。`
+  を使う。通信／HTTP 応答は `upload_error_message` の4分岐で固定文言を選ぶ:
+  401=再ログイン（`再ログインが必要です。`）、413=サイズ超過（`ERROR: File exceeds the 10 MiB limit.`）、
+  HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータス取得不可）=
+  `Network error uploading content.`。サーバー本文・生エラーは表示しない。いずれの結果でも
+  `loading` を解除してボタンを再活性化する。
   JXL デコード失敗は `content-verification-badge` を `× DECODE FAILED` とし、
   `data-testid="jxl-decode-error"` に固定文言を表示する（デコーダのエラー値は出さない）。
   Illustration ではデコード成功時のみ `● VERIFIED` を表示し、サーバー側の完全デコード検証は未実装である。
@@ -248,7 +251,7 @@ generated:
 | `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
 | `PAYMENT_RECEIVING_XPRV` | 任意 | 未設定 | BIP44派生用のxprv。設定時は注文ごとの受取アドレスを派生し、`PAYMENT_RECEIVING_ADDRESS` より優先する。秘密管理基盤から注入し、ログへ出さない。 |
-| `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。 |
+| `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。URL は https が必須（下記 OIDC URL の規約を参照）。 |
 | `OIDC_CLIENT_ID` | 任意 | 未設定 | RP のクライアントID。 |
 | `OIDC_CLIENT_SECRET` | 任意 | 未設定 | RP のクライアントシークレット。秘密管理基盤から注入する。 |
 | `OIDC_REDIRECT_URI` | 任意 | 未設定 | 認可コードのリダイレクトURI。BFF のコールバックを指定する。 |
@@ -269,6 +272,11 @@ generated:
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | バックアップ運用スクリプトが読む環境ファイル。所有者を固定し権限600で管理する。秘密情報を含むため配布物へ含めない。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。`firefox` / `webkit` はオプトインで、バイナリ導入と共有ライブラリに依存するためホスト環境次第。 |
 
+- OIDC の URL 設定（`OIDC_ISSUER` / `OIDC_REDIRECT_URI` / `OIDC_AUTHORIZATION_ENDPOINT` /
+  `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI`）は https が必須。`ALLOW_MOCK_AUTH` が有効な場合のみ
+  `localhost` / `127.0.0.1` / `[::1]` / `::1` の http を許容し、それ以外の http や不正 URL は
+  起動拒否（fail-closed）。`doctor` の `oidc_endpoint_urls` カテゴリでも同じ判定で警告し、
+  設定値は出力しない。
 - 真偽値はいずれも `1` または `true`（大文字小文字を問わない）で有効になる。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।

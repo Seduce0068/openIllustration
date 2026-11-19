@@ -16,6 +16,22 @@ status: current
 
 - [x] プロジェクト全体の6パス・クロスレビュー（統合完了:
   [UNKNOWN_TASKS_INVESTIGATION.md](docs/UNKNOWN_TASKS_INVESTIGATION.md) §6.3）
+- [x] **OIDC エンドポイントの https 要件を doctor 診断へ反映** — 根拠
+  `server/src/bin/doctor.rs:91-100` / `server/src/oidc.rs:249-314` / 発掘 R9 / 中。
+  `oidc.rs` と同様に `doctor` も `oidc_endpoint_urls` で5エンドポイントURLの https を検証
+  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は40テスト。
+- [x] **エクスポート応答の value（機微値）漏洩を精査・是正** — 根拠
+  `server/src/lib.rs:4486-4511` / `client/src/lib.rs:811-818` / 発掘 R9 / 中。
+  エクスポートのレスポンス値・表示値に機微情報が混ざらないことを確認し是正済み。
+  `e2e/tests/real-api.spec.ts` の既知シークレット値比較をキー名へも拡張。
+- [x] **価格境界 E2E の「実送信」表現をモック応答と明記へ是正** — 根拠
+  `docs/TEST_SPECIFICATION.md:1020` / `e2e/tests/upload.spec.ts:177-204` / 発掘 R9 / 中。
+  `/content/upload` は `page.route` + `route.fulfill` のモックであることを仕様側へ明記済み。
+  E2E の test 名・定義件数は不変。
+- [x] **report/vote 二重送信ガードの E2E を追加** — 根拠
+  `client/src/lib.rs:2205-2237` / `e2e/tests/moderation.spec.ts:629-735` / 発掘 R9 / 中。
+  実装は `claim_submission` + `BusyGuard` で対応済み。二重クリックで POST が1本だけであることを
+  検証する REPORT-GUARD-01 / VOTE-GUARD-01 を追加済み（moderation.spec.ts 全14件）。
 
 ## 未着手
 
@@ -122,7 +138,7 @@ P2（品質・保守・プロダクト拡張）:
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
   E2E 定義数は37件（現行）。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 54件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 56件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -143,7 +159,7 @@ P2（品質・保守・プロダクト拡張）:
    `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
    「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [x] 型境界とビルドゲート（2026-11-18）: 注文のNULL価格を400へ統一、CSS側CDN参照と
-  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 54件。
+  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 56件。
   ※ 本番投票は実JPKI署名が未実装のため現状401（外部要因DEC-01）。
 - [x] トランザクション安全性（2026-11-18）: exportのBEGINをwrite_lock配下へ、
   期限切れ更新と固定アドレス注文INSERTをtx内へ統一（高リスクの500を解消）。
@@ -159,7 +175,7 @@ P2（品質・保守・プロダクト拡張）:
   restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
 - [x] 定数単一情報源化とエラー表示（2026-11-18）: clock skew 定数を pub use で共有、
   favorite 再試行クリアの E2E、Ledger の /transactions 失敗表示（role=alert）。
-  E2E 54件。
+  E2E 56件。
 - [x] クライアント境界の硬化（2026-11-18）: 中立化URL件数を描画ソース単位で1回に抑制、
   protocol-relative/UNC URL を拒否、ファイル選択解除時に古い File をクリア。
 - [x] E2E契約の監査対応（2026-11-18）: 件数矛盾(37→45)・MOD-07/10/11・Ledger/METシナリオ
@@ -191,7 +207,7 @@ P2（品質・保守・プロダクト拡張）:
   NEUT-URL-02/03へ分離、a11y/CONTENT-ERR/favorites/export/GOV-01のオラクルを明記。
 - [x] dialog/フォーカスとE2E堅牢性（2026-11-18）: aria-modal+初期フォーカス+Tab trap、
   label role=button、CLOSE/SpaceのE2E、否定アサーションの状態確定、MET poll延長。
-  E2E 54件。
+  E2E 56件。
 - [x] Audit dialog のARIA整合（2026-11-18）: 実挙動（背景操作可のnon-modal）に合わせ
   aria-modal を削除し、初期フォーカスとTab/Shift+TabトラップをE2Eで検証。
 - [x] fail-closed・設定診断の実効化（2026-11-18/19）: backup find失敗伝播、CDNゲートの
@@ -321,6 +337,12 @@ P2（品質・保守・プロダクト拡張）:
   TEST_SPECIFICATION / DETAILED_DESIGN / E2E (`upload.spec.ts`) の確定文言へ整合。
 - [x] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
   2026-11-20: parse_price_input + valueAsNumber で対応済み（Round 7）。
+  前回の親判断（R9 で再確認）: `price_range_error` はテスト内ヘルパー
+  （`client/src/lib.rs:2676-2705`）のみに留め、本番の `sign_and_upload` には接続しない。
+  発掘エージェントは「E2E を変更したなら本番へ接続すべき」と指摘するが、価格境界 E2E は
+  0 / 1000001 を丸めずに送ってサーバー（モックが同じ境界を模す）の拒否を確認する契約であり、
+  接続するとクライアント側で弾かれてサーバー拒否を確認する契約が壊れる。
+  E2E 契約維持のための意図的な未接続であり、E2E 側の契約変更がない限り接続しない。
 - [x] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
   2026-11-20 対応: is_alphanumeric + to_lowercase再フィルタ（U+0130対策）。
 - [x] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
@@ -328,8 +350,10 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **オーファン ゲート ID（EXPORT-12, PAY-06〜08）を整理** — 根拠 `docs/TEST_SPECIFICATION.md:194,209` / disc TQ / 中。
   2026-11-20 対応: TEST_SPECIFICATION の実 ID（EXPORT-09/10、PAY-01/04）へ統一し、
   TASK_INVENTORY の旧 ID 記述も置換済み。
-- [x] **価格境界 E2E の実送信検証** — disc TQ / 中（R5-TS01 と同一、統合済み）。
-  2026-11-20: upload.spec.ts の0/1000001/1000000実送信で対応済み。
+- [x] **価格境界 E2E の送信検証（モック応答）** — disc TQ / 中（R5-TS01 と同一、統合済み）。
+  2026-11-20: upload.spec.ts の0/1000001/1000000送信で対応済み。`/content/upload` は
+  `page.route` + `route.fulfill` によるモック応答であり、実サーバーへの送信ではない
+  （R9 で「実送信」表現を是正）。境界判定は実サーバーと同じ <0 / >1000000 をモックで模す。
 
 ### 2026-11-19 全体レビューで追加（低）
 
@@ -411,7 +435,7 @@ P2（品質・保守・プロダクト拡張）:
   実入力経路は DEC-01 外部待ちのため既存未着手を維持。
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
-  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は54件（12 spec）。
+  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は56件（12 spec）。
 - 詳細な残タスク棚卸しは `docs/TASK_INVENTORY.md`、レビュー履歴は `docs/REVIEW_REPORT.md`、
   未知タスク調査は `docs/UNKNOWN_TASKS_INVESTIGATION.md` を参照。
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。

@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-20T00:16:27+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T00:16:27+09:00"
+  at: "2026-11-20T04:51:44+09:00"
 status: current
 ---
 
@@ -36,9 +36,9 @@ status: current
     上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
-    `check_all_with` / `should_fail` を分離し、21カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の36テスト（既存29件＋境界テスト7件）で検証（CLI-01 / CFG-01、
-    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で21 check(s) を確認。
+    `check_all_with` / `should_fail` を分離し、22カテゴリ固定・秘密値非出力・`--strict` 判定を
+    `server/src/bin/doctor.rs` の40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）で検証（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で22 check(s) を確認。
   - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
@@ -49,7 +49,7 @@ status: current
     `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
     `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
-    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は54件のまま変更しない。
+    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は56件のまま変更しない。
   - [対応済み] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
     `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、IPFS ゲートウェイ /
     OIDC の 3xx を追従しない。`get_content` は 2xx 以外（3xx を含む）を次のゲートウェイへ
@@ -63,15 +63,15 @@ status: current
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
-    検査は現行21カテゴリ、bin テストは36件（既存29件＋フォールバック境界テスト7件）。
+    検査は現行22カテゴリ、bin テストは40件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）。
     `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
-    の実出力で21 check(s) を確認（CLI-01 / CFG-01、
+    の実出力で22 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
   - [対応済み] `doctor` のタイムアウト/試行回数検査の死コード化を解消:
     `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は不正値を既定へ
     フォールバックするため、正規化後の値が0になる判定は発火しなかった。`rate_limit` と
     同じ方式で生のパース値と正規化後の値を比較し、フォールバック時に当該カテゴリへ
-    警告1件（設定値は非出力）を計上。当時は境界テスト3件・検査数19、その後5件・21カテゴリへ拡張
+    警告1件（設定値は非出力）を計上。当時は境界テスト3件・検査数19、その後5件・22カテゴリへ拡張
     （CLI-01 / CFG-01、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
@@ -89,7 +89,7 @@ status: current
     明示 `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点
     スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の5件はいずれもサーバー側テストであり、E2E 定義数は54件のまま変更しない。
+    今回の5件はいずれもサーバー側テストであり、E2E 定義数は56件のまま変更しない。
   - [対応済み] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
     `common::summarize_reason` を適用し、`entry_hash` は DB の生値を維持（DB 全文も不変）。
     サーバー側テスト1件（AUDIT-03、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
@@ -106,7 +106,7 @@ status: current
   - [対応済み] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
     固定文言 `エクスポート結果の解析に失敗しました。` を返し、「0 件」成功表示へ落とさない。
     クライアント側単体テスト1件（EXPORT-11、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は54件のまま変更しない。
+    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は56件のまま変更しない。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -397,7 +397,7 @@ status: current
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) へ追記。`me_export` は `begin_write_tx`
   経由で `write_lock` を取得し、共有 `Connection` の BEGIN を書き込みと直列化する。
   旧設計の無ロック記述は [DETAILED_DESIGN.md](DETAILED_DESIGN.md) と
-  TEST_SPECIFICATION から削除済み。E2E 定義数は54件のまま。
+  TEST_SPECIFICATION から削除済み。E2E 定義数は56件のまま。
 - [対応済み] R4-03: `OIDC_HTTP_TIMEOUT_SECS`（1〜60 秒、既定 10 秒）を追加し、
   OIDC の HTTP クライアントへ適用。境界値テストを追加し、mutation（範囲検査削除）で
   テスト失敗を確認。
@@ -536,8 +536,8 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に36テスト（既存29件＋境界テスト7件）を追加。
-  検査は21カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）を追加。
+  検査は22カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] エクスポート解析失敗の固定文言: `export_status_message` が
