@@ -222,12 +222,13 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html.push_str(
         "<table data-testid=\"moderation-stats-monthly\" class=\"w-full mt-6 text-left text-[10px] font-mono\">",
     );
+    html.push_str("<caption>月次集計</caption>");
     html.push_str(
         "<thead class=\"border-b border-white/10 text-gray-500 uppercase\"><tr>\
-         <th class=\"py-2 pr-4\">Month</th><th class=\"py-2 pr-4\">Reports</th>\
-         <th class=\"py-2 pr-4\">Concluded</th><th class=\"py-2 pr-4\">Approved</th>\
-         <th class=\"py-2 pr-4\">Rejected</th><th class=\"py-2 pr-4\">Bans</th>\
-         <th class=\"py-2 pr-4\">Unbans</th><th class=\"py-2 pr-4\">Unpins</th></tr></thead>",
+         <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Concluded</th><th scope=\"col\" class=\"py-2 pr-4\">Approved</th>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Rejected</th><th scope=\"col\" class=\"py-2 pr-4\">Bans</th>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Unbans</th><th scope=\"col\" class=\"py-2 pr-4\">Unpins</th></tr></thead>",
     );
     html.push_str("<tbody class=\"divide-y divide-white/5\">");
     for row in &stats.monthly {
@@ -895,6 +896,27 @@ pub fn App() -> impl IntoView {
     let (user_hash, set_user_hash) = signal(None::<String>);
     let (token, set_token) = signal(None::<String>);
 
+    // SPA のビュー切替に合わせてタブタイトルを更新する。文言はナビゲーションと同じ。
+    // ログイン等ナビに無いビューは共通タイトルのみにする。window が取れない
+    // non-wasm 環境では何もしない。
+    Effect::new(move |_| {
+        let label = match view.get().as_str() {
+            "dashboard" => "BROWSE",
+            "upload" => "UPLOAD",
+            "moderation" => "MODERATION",
+            "ledger" => "LEDGER",
+            _ => "",
+        };
+        let title = if label.is_empty() {
+            "OpenIllustration".to_string()
+        } else {
+            format!("{label} — OpenIllustration")
+        };
+        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
+            document.set_title(&title);
+        }
+    });
+
     let handle_login_success = move |hash: String, jwt: String| {
         set_user_hash.set(Some(hash));
         set_token.set(Some(jwt));
@@ -908,18 +930,22 @@ pub fn App() -> impl IntoView {
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
                         <button on:click=move |_| set_view.set("dashboard".to_string())
+                            aria-current=move || if view.get() == "dashboard" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-500" })>
                             "BROWSE"
                         </button>
                         <button on:click=move |_| set_view.set("upload".to_string())
+                            aria-current=move || if view.get() == "upload" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-500" })>
                             "UPLOAD"
                         </button>
                         <button on:click=move |_| set_view.set("moderation".to_string())
+                            aria-current=move || if view.get() == "moderation" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-500" })>
                             "MODERATION"
                         </button>
                         <button on:click=move |_| set_view.set("ledger".to_string())
+                            aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
                             "LEDGER"
                         </button>
@@ -1678,7 +1704,10 @@ where
             </Show>
 
             <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
-                <canvas node_ref=canvas_ref class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
+                <canvas node_ref=canvas_ref
+                    role="img"
+                    aria-label=move || title.clone()
+                    class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
 
                 <Show when=move || verified.get() == Some(true) && ct_nov == "Novel" fallback=|| ()>
                     <div class="p-4 text-xs prose prose-invert max-w-none w-full overflow-y-auto h-full" inner_html=move || novel_html.get() />
@@ -2129,13 +2158,14 @@ fn Ledger(token: String) -> impl IntoView {
             </Show>
             <div class="border border-white/10 overflow-hidden">
                 <table class="w-full text-left text-[10px] font-mono">
+                    <caption>"取引履歴"</caption>
                     <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
                         <tr>
-                            <th class="p-4">"Date"</th>
-                            <th class="p-4">"Sender (P2P)"</th>
-                            <th class="p-4">"Receiver"</th>
-                            <th class="p-4 text-right">"Amount"</th>
-                            <th class="p-4">"Record_Hash"</th>
+                            <th scope="col" class="p-4">"Date"</th>
+                            <th scope="col" class="p-4">"Sender (P2P)"</th>
+                            <th scope="col" class="p-4">"Receiver"</th>
+                            <th scope="col" class="p-4 text-right">"Amount"</th>
+                            <th scope="col" class="p-4">"Record_Hash"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-white/5">
