@@ -247,16 +247,34 @@ report_e2e_failure() {
 
 # 実サーバー結合（real-api）は共有 DB/ポートを使うため、他 spec と同じ
 # プロセスで並走するとログインの /auth/verify がタイムアウトする。
-# 先に real-api 単独で実行し、成功した場合のみ残り11 spec を実行する。
+# 先に real-api 単独で実行し、成功した場合のみ残りの spec を動的に列挙して実行する。
 if ! (cd e2e && npm test -- tests/real-api.spec.ts "${project_args[@]}" --workers=1); then
 	report_e2e_failure "real-api"
 fi
-remaining_specs=(
-	tests/auth.spec.ts tests/build-gate.spec.ts tests/economy.spec.ts
-	tests/error-paths.spec.ts tests/export.spec.ts tests/favorites.spec.ts
-	tests/integrity.spec.ts tests/metrics.spec.ts tests/moderation.spec.ts
-	tests/search.spec.ts tests/upload.spec.ts
-)
+# 残り spec は固定配列にせず e2e/tests から動的に列挙する。
+# doc-numbers（scripts/test-doc-numbers.sh）も e2e/tests/*.spec.ts を動的に
+# 走査して内訳を照合しており、新規 spec を追加したときに doc-numbers と
+# 同じ集合が CI でも実行されるようにするためである。
+# パスに改行や特殊文字が含まれても安全なよう NUL 区切り（-print0 / sort -z /
+# read -d ''）を使い、一時ファイルへ出力してから while IFS= read -r で配列へ
+# 読み込む。プロセス置換は find の終了コードを隠すため使わない。
+# find/sort の失敗は set -o pipefail 下のパイプラインを if ! で判定して
+# fail-closed に検出し、0 件ならエラー終了する。順序は LC_ALL=C sort で安定化。
+remaining_specs_list="${workdir}/remaining-specs.list"
+if ! find e2e/tests -maxdepth 1 -name '*.spec.ts' ! -name 'real-api.spec.ts' -print0 |
+	LC_ALL=C sort -z >"$remaining_specs_list"; then
+	echo "failed to enumerate remaining E2E specs under e2e/tests." >&2
+	exit 1
+fi
+remaining_specs=()
+while IFS= read -r -d '' spec_path; do
+	# npm test へ渡すパスは従来どおり tests/<basename> の形式を維持する。
+	remaining_specs+=("tests/${spec_path##*/}")
+done <"$remaining_specs_list"
+if ((${#remaining_specs[@]} == 0)); then
+	echo "no remaining E2E specs found under e2e/tests (excluding real-api.spec.ts)." >&2
+	exit 1
+fi
 if ! (cd e2e && npm test -- "${remaining_specs[@]}" "${project_args[@]}"); then
 	report_e2e_failure "unit-specs"
 fi
