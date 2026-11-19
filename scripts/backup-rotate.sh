@@ -54,10 +54,14 @@ if ! [[ "$retention_days" =~ ^(0|[1-9][0-9]*)$ && "$min_keep" =~ ^(0|[1-9][0-9]*
 	echo "RETENTION_DAYS and MIN_KEEP must be non-negative integers without leading zeros" >&2
 	exit 1
 fi
-# 実用的な上限（100年）を超える値は cutoff の 64bit 算術をオーバーフローさせる。
+# 上限は cutoff = now - retention_days*86400 が非負になる範囲に制限する。
+# 旧上限 36500 日では cutoff が負になり mtime < cutoff が常に false となって
+# 古い世代が一切削除されない（fail-open）ため、now/86400 より小さい 20000 日
+# （約55年）へ引き下げる。2026 年時点の now/86400 は約 20700 日であり、
+# 時刻が進むほど cutoff は大きくなるため将来にわたって安全である。
 # 桁数と辞書順で比較し、巨大な整数でも算術オーバーフローなしに拒否する
 # （先頭ゼロは上の正規表現で既に拒否済みなので、同桁の辞書順は数値順と一致する）。
-max_retention_days=36500
+max_retention_days=20000
 if ((${#retention_days} > ${#max_retention_days})); then
 	echo "RETENTION_DAYS must not exceed ${max_retention_days}" >&2
 	exit 1
@@ -66,6 +70,13 @@ if ((${#retention_days} == ${#max_retention_days})) &&
 	[[ "$retention_days" != "$max_retention_days" ]] &&
 	printf '%s\n%s\n' "$max_retention_days" "$retention_days" | sort -C; then
 	echo "RETENTION_DAYS must not exceed ${max_retention_days}" >&2
+	exit 1
+fi
+# 防御チェック: 上限変更や時刻の異常で cutoff が負になる場合も黙って全保持
+# （fail-open）せず拒否する。ローテーションでもこの時刻を使う。
+now_epoch="$(date -u +%s)"
+if ((now_epoch - retention_days * 86400 <= 0)); then
+	echo "RETENTION_DAYS is too large for the current clock: cutoff would be non-positive" >&2
 	exit 1
 fi
 # MIN_KEEP も 64bit 算術のオーバーフローに対して脆弱だった。
@@ -207,7 +218,7 @@ fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
 # 保持期間を超えていても残す（誤設定で全削除されるのを防ぐ）。
-cutoff=$(($(date -u +%s) - retention_days * 86400))
+cutoff=$((now_epoch - retention_days * 86400))
 # process substitution の終了ステータスは親シェルに伝わらないため、
 # find の出力を一時ファイルへ書き出してから明示的に成否を確認する。
 rotation_list="$(mktemp "${backup_dir}/.${prefix}-rotate.XXXXXX")"

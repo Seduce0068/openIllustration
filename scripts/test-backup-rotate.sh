@@ -83,8 +83,8 @@ expect_failure "no recipient" env -u BACKUP_GPG_RECIPIENT -u ALLOW_UNENCRYPTED_B
 expect_failure "offsite plaintext refused" env -u BACKUP_GPG_RECIPIENT OFFSITE_COPY_CMD=/bin/true OFFSITE_DEST=/tmp "$script"
 expect_failure "invalid retention" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=abc "$script"
 expect_failure "octal retention (08)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=08 "$script"
-# RETENTION_DAYS の上限境界（36500 = 100年）。同桁は辞書順、桁超過は長さで拒否される。
-expect_failure "retention above max (36501)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=36501 "$script"
+# RETENTION_DAYS の上限境界（20000 = 約55年）。同桁は辞書順、桁超過は長さで拒否される。
+expect_failure "retention above max (20001)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=20001 "$script"
 expect_failure "retention far above max (100000)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=100000 "$script"
 expect_failure "octal min_keep (08)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=08 "$script"
 expect_failure "zero min_keep" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=0 "$script"
@@ -117,9 +117,25 @@ sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 # デフォルト値と同じ 30/3 を明示指定しても受け付けられること（先頭ゼロ除去の回帰防止）。
 expect_success "explicit retention/min_keep (30/3)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=30 MIN_KEEP=3 "$script"
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
-# 上限値そのもの（36500）は受理されること（上限比較の off-by-one 回帰防止）。
-expect_success "max retention (36500)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=36500 "$script"
+# 上限値そのもの（20000）は受理されること（上限比較の off-by-one 回帰防止）。
+expect_success "max retention (20000)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=20000 "$script"
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+# 上限値でも cutoff = now - 20000*86400 が正のままであることを実証する。
+# mtime を 1970 年代（@1）に設定した古い世代を置き、実際に prune されること
+# （cutoff 負値で mtime < cutoff が常に false になる fail-open の回帰防止）。
+prune_dir="${work}/prune-max-retention"
+mkdir -p "$prune_dir"
+chmod 700 "$prune_dir"
+old_artifact="${prune_dir}/openillustration-19900101T000000Z.db.gpg"
+printf 'old backup' >"$old_artifact"
+touch -d '@1' "$old_artifact"
+expect_success "prune old generation at max retention (20000)" env BACKUP_DIR="$prune_dir" BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=20000 MIN_KEEP=1 "$script"
+if [[ -e "$old_artifact" ]]; then
+	echo "FAIL old generation not pruned at max retention (cutoff may be non-positive)"
+	failures=$((failures + 1))
+else
+	echo "PASS old generation pruned at max retention"
+fi
 # MIN_KEEP の上限値そのもの（1000）も受理されること（同値除外の回帰防止）。
 expect_success "max min_keep (1000)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=1000 "$script"
 

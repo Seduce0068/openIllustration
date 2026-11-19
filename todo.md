@@ -468,8 +468,25 @@ P2（品質・保守・プロダクト拡張）:
   存在しなかった。本次で doctor 内訳の「＋設定検証3件」6箇所（TASK_INVENTORY 3箇所 /
   TEST_SPECIFICATION 2箇所 / 本ファイル`:22` の 40→43 テスト）、CLI-01 設定判定テスト名
   34件目（`oidc_max_auth_age_mock_with_complete_oidc_warns_without_disclosing_value`）、
-  backup-rotate の RETENTION_DAYS 境界（36500 受理 / 36501・100000 拒否）を反映。
+  backup-rotate の RETENTION_DAYS 境界（当時 36500 受理 / 36501・100000 拒否。
+   R14 で上限を 20000 へ変更済み、末尾メモ参照）を反映。
   未対応のまま残すもの（本次で確認した未着手）: `doctor --strict` のデプロイ前ゲート
   組み込み（`:239`）、backup-rotate の verify_audit_log と暗号化後復号検証の追加
   （`:241`、チェックボックス表記が `- []` で不正）、`doctor --strict --help` 併用の
   他CLI整合（`:368`）。
+
+- 2026-11-20 (R14 / ops-docs 発掘3件の反映): `scripts/backup-rotate.sh` の
+   `RETENTION_DAYS` 上限を 36500 → 20000 日へ変更。旧上限では
+   `cutoff = now - 36500*86400` が負になり `mtime < cutoff` が常に false で
+   古い世代が削除されない（fail-open）ため、`now/86400` より小さい値へ制限し、
+   cutoff が非正になる場合も明示拒否する防御チェックを追加。境界は
+   「20000 受理 / 20001・100000 拒否」へ更新し、上限値で mtime を 1970 年代に
+   設定した古い世代が実際に prune されるテストを追加。定数・テスト・
+   `docs/BACKUP_RESTORE_RUNBOOK.md` の記載をすべて整合させた（上記の
+   36500 は R5 当時の履歴）。`scripts/test-backup-rotate.sh` の実測は
+   `expect_*` 23件（fail-closed）+7件（正常系）=30件で、
+   `docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の「5件・5件」を是正。
+   `docs/OPERATIONAL_POLICY.md:265` の `PINATA_JWT` を本番必須・実トークン必須
+   （未設定/空/空白/mock_jwt 前後空白含むは起動拒否、`doctor` の `production`
+   カテゴリで診断）へ更新し `docs/DETAILED_DESIGN.md:123` と整合。
+   今回の発掘分は3件すべて対応済みで、新たな未着手はなし。
