@@ -31,6 +31,13 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const reportsHttpErrorText = (status: number) => `投票一覧の取得に失敗しました (HTTP ${status}).`;
   const reportsNetworkErrorText = 'Network error loading reports.';
 
+  // client/src/lib.rs:2200 の submit_report 失敗時の固定文言。
+  // 成功文言は client/src/lib.rs:2197。失敗・成功どちらも status シグナルへ入り、
+  // <p role="status" class="text-xs text-gray-400">（client/src/lib.rs:2275）で描画される。
+  // レビュー指摘の「role="alert"」は実装と矛盾するため、テストは実装の role="status" を検証する。
+  const reportFailedText = 'Report failed.';
+  const reportSuccessText = 'Report accepted. Content marked Reported.';
+
   // client/src/lib.rs の stats_error_message(StatsFailure::Parse) を grep して確定した
   // 固定文言。serde の生エラー（フィールド名・解析位置・型情報・レスポンス本文）は
   // 画面へ出さない契約を検証する。
@@ -548,5 +555,71 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(reportsError).toHaveAttribute('role', 'alert');
     await expect(reportsError).toHaveText(reportsNetworkErrorText);
     await expect(page.getByText('NO_PENDING_VOTES')).toHaveCount(0);
+  });
+
+  test('REPORT-ERR-01: /mod/report が 500 を返すと固定文言のみを表示しサーバー本文・成功文言を出さない', async ({ page }) => {
+    const reportRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/report', async route => {
+      reportRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        // サーバー本文のセンチネル。固定文言以外が画面へ漏れないことを検証する。
+        body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await openModeration(page);
+
+    // status は初期状態では空なので要素自体が存在しない（client/src/lib.rs:2274 の Show）。
+    // vote-notice は data-testid を持つため :not([data-testid]) で通報用 status を一意に特定する。
+    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
+    await expect(reportStatus).toHaveCount(0);
+
+    await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
+    await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
+    await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
+
+    await expect(reportStatus).toHaveCount(1);
+    // 実装は role="alert" ではなく role="status"（client/src/lib.rs:2275）。
+    await expect(reportStatus).toHaveAttribute('role', 'status');
+    await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
+    // 成功文言とサーバー本文は出ない。
+    await expect(reportStatus).not.toContainText(reportSuccessText);
+    await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    expect(reportRequests).toEqual([
+      { method: 'POST', path: '/mod/report', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('REPORT-ERR-02: /mod/report が network error でも固定文言のみを表示する', async ({ page }) => {
+    await page.route('**/mod/report', async route => {
+      await route.abort();
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await openModeration(page);
+
+    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
+    await expect(reportStatus).toHaveCount(0);
+
+    await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
+    await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
+    await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
+
+    // abort でも HTTP 500 と同じ固定文言（client/src/lib.rs:2199-2201 の else 節）。
+    await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
+    await expect(reportStatus).not.toContainText(reportSuccessText);
+    // 生のネットワークエラー文字列は画面へ出さない。
+    for (const raw of ['Failed to fetch', 'net::ERR_FAILED', 'AbortError']) {
+      await expect(reportStatus).not.toContainText(raw);
+    }
   });
 });
