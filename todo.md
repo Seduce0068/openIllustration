@@ -122,7 +122,7 @@ P2（品質・保守・プロダクト拡張）:
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
   E2E 定義数は37件（現行）。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 52件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 54件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -143,7 +143,7 @@ P2（品質・保守・プロダクト拡張）:
    `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
    「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [x] 型境界とビルドゲート（2026-11-18）: 注文のNULL価格を400へ統一、CSS側CDN参照と
-  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 52件。
+  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 54件。
   ※ 本番投票は実JPKI署名が未実装のため現状401（外部要因DEC-01）。
 - [x] トランザクション安全性（2026-11-18）: exportのBEGINをwrite_lock配下へ、
   期限切れ更新と固定アドレス注文INSERTをtx内へ統一（高リスクの500を解消）。
@@ -159,7 +159,7 @@ P2（品質・保守・プロダクト拡張）:
   restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
 - [x] 定数単一情報源化とエラー表示（2026-11-18）: clock skew 定数を pub use で共有、
   favorite 再試行クリアの E2E、Ledger の /transactions 失敗表示（role=alert）。
-  E2E 52件。
+  E2E 54件。
 - [x] クライアント境界の硬化（2026-11-18）: 中立化URL件数を描画ソース単位で1回に抑制、
   protocol-relative/UNC URL を拒否、ファイル選択解除時に古い File をクリア。
 - [x] E2E契約の監査対応（2026-11-18）: 件数矛盾(37→45)・MOD-07/10/11・Ledger/METシナリオ
@@ -191,7 +191,7 @@ P2（品質・保守・プロダクト拡張）:
   NEUT-URL-02/03へ分離、a11y/CONTENT-ERR/favorites/export/GOV-01のオラクルを明記。
 - [x] dialog/フォーカスとE2E堅牢性（2026-11-18）: aria-modal+初期フォーカス+Tab trap、
   label role=button、CLOSE/SpaceのE2E、否定アサーションの状態確定、MET poll延長。
-  E2E 52件。
+  E2E 54件。
 - [x] Audit dialog のARIA整合（2026-11-18）: 実挙動（背景操作可のnon-modal）に合わせ
   aria-modal を削除し、初期フォーカスとTab/Shift+TabトラップをE2Eで検証。
 - [x] fail-closed・設定診断の実効化（2026-11-18/19）: backup find失敗伝播、CDNゲートの
@@ -228,14 +228,16 @@ P2（品質・保守・プロダクト拡張）:
   EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。2026-11-19 対応済み。
 - [x] **定足数を QUORUM_VOTES 定数へ集約** — 根拠 `server/src/lib.rs:2816,2834,3773` / R1-AR01 / 重大度 high。
   SQL と Rust で `3` が個別ハードコードされ、変更時に確定ロジックと集計が食い違う。2026-11-19 対応済み。
-- [ ] **リクエスト相関 ID とアクセスログを追加** — 根拠 `server/src/lib.rs:234-251` / R4-OB01 / 重大度 high。
+- [x] **リクエスト相関 ID とアクセスログを追加** — 根拠 `server/src/lib.rs:234-251` / R4-OB01 / 重大度 high。
   x-request-id 生成・伝播と method/path/status/duration ログが無く、Internal エラーの事後調査不可。
+  2026-11-19 対応: tower-http trace feature、MatchedPathベースのJSONログ、3テスト。
 - [ ] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:714-750` / R2-BV01 / 重大度 high。
   remove_file + create_new が非原子で、同時起動で排他が破れる。
 - [x] **通報送信 (/mod/report) の失敗系 E2E を追加** — 根拠 `e2e/tests/moderation.spec.ts:102` / disc TQ / 重大度 high。
   HTTP 500/network abort の固定文言・サーバー本文非表示が未検証。2026-11-19 対応済み。
-- [ ] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
+- [x] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
   現状はシェル文字列パターンのみで fail-open 回帰を実挙動で担保できていない。
+  2026-11-19 対応: 検証をverify_trunk_archive.shへ抽出し実改ざんでexit1/未展開を検証（E2E54件）。
 - [ ] **GOV-01 要約 E2E を生 PII 入力→[redacted] 表示へ** — 根拠 `e2e/tests/moderation.spec.ts:9-14` / R5-TS01 / 重大度 high。
   モックが既に要約済み値を返しオラクルが自明。
 - [x] **Upoad 価格境界 E2E を属性存在→実送信へ** — 根拠 `e2e/tests/upload.spec.ts:172-174` / R5-TS01 / 重大度 high。
@@ -343,6 +345,12 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-19 却下（Runtime Proof 済み）: 単一ライター・ロックの stale 回収 TOCTOU は
+  `server/src/lib.rs:725-733` で再読込一致チェック＋create_new の AlreadyExists 拒否が既にあり、
+  同時起動でも排他が破れないため却下。GOV-01 要約 E2E の生PII→[redacted] は
+  `server/src/lib.rs:1886` のサーバー側 summarize_reason が担い、クライアントは生表示しないため
+  E2E でのオラクル変更は実装と矛盾し却下（Rust 単体/property テストが担保）。
+
 - 2026-11-19 全体レビュー（swarm-project-review + swarm-todo-discovery、15担当・深度1・無制限プロファイル）:
   約100件の指摘を重複排除・Runtime Proof で裁定し、上記へ反映。主な却下: lib.rs god module 分割・
   AppState FromRef 分割・ドメインエラー型導入（大規模リファクタで既存ゲートとのトレードオフ判断が必要）、
@@ -352,7 +360,7 @@ P2（品質・保守・プロダクト拡張）:
   実入力経路は DEC-01 外部待ちのため既存未着手を維持。
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
-  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は52件（12 spec）。
+  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は54件（12 spec）。
 - 詳細な残タスク棚卸しは `docs/TASK_INVENTORY.md`、レビュー履歴は `docs/REVIEW_REPORT.md`、
   未知タスク調査は `docs/UNKNOWN_TASKS_INVESTIGATION.md` を参照。
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。
