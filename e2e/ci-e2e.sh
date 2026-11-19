@@ -57,21 +57,40 @@ trunk --version
 node --version
 npm --version
 
-# 最低バージョンを検証する（package.json の engines と整合）。
-min_node_major="${MIN_NODE_MAJOR:-18}"
+# major バージョン（抽出値・閾値とも）を検査する共通ヘルパ。
+# allow_empty=1 のときだけ空文字を「未設定」として許容する（MAX_* の既定）。
+# 空以外の非数値は bash 算術で 0 として扱われ、下限/上限チェックが黙って
+# スキップされるため、抽出値・閾値の別なく即座に失敗させる。
+assert_major_numeric() {
+	local label="$1"
+	local value="$2"
+	local allow_empty="${3:-0}"
+	if [[ -z "$value" ]]; then
+		if ((allow_empty)); then
+			return 0
+		fi
+		echo "${label} is empty: expected a numeric major version." >&2
+		exit 1
+	fi
+	if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+		echo "${label} is not numeric: '${value}'." >&2
+		exit 1
+	fi
+}
+
+# 最低バージョンを検証する（ルート package.json の engines.node と整合）。
+min_node_major="${MIN_NODE_MAJOR:-22}"
+assert_major_numeric "MIN_NODE_MAJOR" "$min_node_major" 1
 node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
-# 非数値なら下限チェックと上限警告が黙ってスキップされるため、明示的に失敗させる。
-if [[ ! "$node_major" =~ ^[0-9]+$ ]]; then
-	echo "Node major version is not numeric: '${node_major}'." >&2
-	exit 1
-fi
-if [[ "$node_major" =~ ^[0-9]+$ ]] && ((node_major < min_node_major)); then
+assert_major_numeric "Node major version" "$node_major"
+if ((node_major < min_node_major)); then
 	echo "Node ${node_major} is older than the required major ${min_node_major}." >&2
 	exit 1
 fi
 # 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_node_major="${MAX_NODE_MAJOR:-}"
-if [[ -n "$max_node_major" && "$node_major" =~ ^[0-9]+$ ]] && ((node_major > max_node_major)); then
+assert_major_numeric "MAX_NODE_MAJOR" "$max_node_major" 1
+if [[ -n "$max_node_major" ]] && ((node_major > max_node_major)); then
 	echo "warning: Node ${node_major} is newer than the validated major ${max_node_major}." >&2
 fi
 
@@ -90,19 +109,17 @@ fi
 chrome_version="$($chrome_bin --version)"
 echo "$chrome_version"
 min_chrome_major="${MIN_CHROME_MAJOR:-120}"
+assert_major_numeric "MIN_CHROME_MAJOR" "$min_chrome_major" 1
 chrome_major="$(echo "$chrome_version" | grep -oE '[0-9]+' | head -1)"
-# 非数値なら下限チェックと上限警告が黙ってスキップされるため、明示的に失敗させる。
-if [[ ! "$chrome_major" =~ ^[0-9]+$ ]]; then
-	echo "Chrome major version is not numeric: '${chrome_major}'." >&2
-	exit 1
-fi
+assert_major_numeric "Chrome major version" "$chrome_major"
 if ((chrome_major < min_chrome_major)); then
 	echo "Chrome ${chrome_major} is older than the required major ${min_chrome_major}." >&2
 	exit 1
 fi
-# 上側警告は非数値なら上の抽出エラーで既に失敗しているため追加対応不要（既存条件は維持）。
+# 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_chrome_major="${MAX_CHROME_MAJOR:-}"
-if [[ -n "$max_chrome_major" && "$chrome_major" =~ ^[0-9]+$ ]] && ((chrome_major > max_chrome_major)); then
+assert_major_numeric "MAX_CHROME_MAJOR" "$max_chrome_major" 1
+if [[ -n "$max_chrome_major" ]] && ((chrome_major > max_chrome_major)); then
 	echo "warning: Chrome ${chrome_major} is newer than the validated major ${max_chrome_major}." >&2
 fi
 

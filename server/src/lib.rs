@@ -1271,7 +1271,19 @@ pub async fn run() -> anyhow::Result<()> {
     }
     // ロックファイルを削除して次の起動を許可する。
     if let Some(path) = instance_lock {
-        let _ = std::fs::remove_file(&path);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            // 既に削除済み（別プロセスが回収した等）は正常系として扱う。
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to remove instance lock file {}: kind={:?}, error={}",
+                    path,
+                    error.kind(),
+                    error
+                );
+            }
+        }
     }
     Ok(())
 }
