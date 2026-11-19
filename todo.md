@@ -258,10 +258,12 @@ P2（品質・保守・プロダクト拡張）:
 - [ ] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:106,192,445` / R1-AP01 / 中。
 - [x] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
   2026-11-20 対応: is_order_expired をパース比較＋fail-closed、purge を datetime() 正規化。
-- [ ] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
+- [x] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
+  2026-11-20 対応: auth_verify の Claims に sid 付与、logout を冪等化（lib.rs:2221, 2285）。
 - [ ] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
 - [ ] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
-- [ ] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
+- [x] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
+  2026-11-20 対応: コミット後に DB 閾値→refresh 消費の順で失効、閾値は単調増加（lib.rs:3207-3235）。
 - [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
   `server/migrations/002_payment_orders.sql:16` / R2-DI01 / 中。
   2026-11-20 吟味の結果却下: order_id は毎回新規 UUID で同じ ppid/cid の複数注文（再購入）
@@ -278,7 +280,8 @@ P2（品質・保守・プロダクト拡張）:
 - [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
 - [ ] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
 - [ ] **E2E の既定ブラウザを 3 プロジェクトへ** — 根拠 `e2e/ci-e2e.sh:121` / R4-CI01 / 中。
-- [ ] **E2E の npm ci を --ignore-scripts 統一** — 根拠 `e2e/ci-e2e.sh:211` / R4-CI01 / 中。
+- [x] **E2E の npm ci を --ignore-scripts 統一** — 根拠 `e2e/ci-e2e.sh:211` / R4-CI01 / 中。
+  2026-11-20 対応: client と同一引数（--ignore-scripts --no-audit --no-fund）。
 - [ ] **監視パス (/health,/ready,/metrics) を observe_metrics から除外** — 根拠 `server/src/lib.rs:182-184` / R4-OB01 / 中。
 - [ ] **finalizer/purge のカウンタを /metrics へ公開** — 根拠 `server/src/lib.rs:143-150` / R4-OB01 / 中。
 - [ ] **起動時 IPFS 警告の生 URL を redact_url 経由へ** — 根拠 `server/src/lib.rs:1261-1264` / R4-OB01 / 中。
