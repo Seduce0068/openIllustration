@@ -934,6 +934,8 @@ pub fn production_config_errors(
     match pinata_jwt {
         None => errors.push("PINATA_JWT is not configured"),
         Some("") => errors.push("PINATA_JWT is empty"),
+        // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
+        Some(v) if v.trim().is_empty() => errors.push("PINATA_JWT is empty"),
         Some("mock_jwt") => errors.push("PINATA_JWT is the development mock value"),
         Some(_) => {}
     }

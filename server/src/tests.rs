@@ -2183,6 +2183,17 @@ fn test_production_config_fail_closed() {
         !crate::production_config_errors(false, true, Some("mock_jwt")).is_empty(),
         "the development mock JWT must not be accepted in production"
     );
+
+    // 空白・タブ・改行のみの値も空とみなし fail-closed。固定文言のみで値はエコーしない。
+    for blank in [" ", "\t", "\n", "\r\n", " \t\n "] {
+        assert_eq!(
+            crate::production_config_errors(false, true, Some(blank)),
+            vec!["PINATA_JWT is empty"],
+            "blank={blank:?} must be rejected without echoing the value"
+        );
+    }
+    // 実値は従来どおり警告なし（前後の空白があっても非空なら許可）。
+    assert!(crate::production_config_errors(false, true, Some("  real-jwt  ")).is_empty());
 }
 
 /// T-01: IPFS ゲートウェイ設定の既定値と無効要素の除外。
@@ -7272,6 +7283,69 @@ async fn test_oidc_callback_binds_state_to_cookie() {
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
     assert_eq!(body["authorized"], true);
     assert!(oidc.pending_nonce(&auth_state).is_none());
+}
+
+/// デコード不能なバイト列を含む state Cookie は fail-closed で 401。
+/// 不正バイトはエコーせず固定文言 "OIDC state mismatch" のみを返す。
+#[tokio::test]
+async fn test_oidc_callback_rejects_undecodable_state_cookie() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    let auth_state = started["state"].as_str().unwrap().to_string();
+    let nonce = oidc.pending_nonce(&auth_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(nonce);
+
+    let uri = format!("/auth/oidc/callback?code=test-code&state={auth_state}");
+
+    // \xff は HeaderValue としては有効な obs-text だが UTF-8 としてはデコード不能。
+    // state_from_cookie の to_str 失敗経路で検証失敗扱いになることを確認する。
+    let bad_cookie = HeaderValue::from_bytes(b"oidc_state=\xff").expect("raw cookie header");
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(header::COOKIE, bad_cookie)
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(text.contains("OIDC state mismatch"), "{text}");
+    assert!(
+        !text.contains(auth_state.as_str()),
+        "state 値をエコーしない: {text}"
+    );
+
+    // 検証前に拒否しているので pending は消費されず、正規フローは成立する。
+    assert!(oidc.pending_nonce(&auth_state).is_some());
+    let response = app
+        .oneshot(with_peer(
+            Request::get(uri.as_str())
+                .header(header::COOKIE, format!("oidc_state={auth_state}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 /// state Cookie が同一名で重複した場合は攻撃の兆候として 401 にする。
