@@ -622,4 +622,117 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       await expect(reportStatus).not.toContainText(raw);
     }
   });
+
+  // 以下はお気に入りの double-click E2E（favorites.spec.ts:345）と同じ方式で、
+  // submit_report / do_vote の二重送信ガードを検証する独立 test。
+  // 既存の投票3回完全一致・お気に入り2/8回アサーションは変更しない。
+  test('REPORT-GUARD-01: レスポンス保留中の二重クリックでも /mod/report への POST は1本だけ', async ({ page }) => {
+    let releaseResponse = (): void => {};
+    const responseGate = new Promise<void>(resolve => {
+      releaseResponse = resolve;
+    });
+    const reportRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/report', async route => {
+      reportRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      // レスポンスを保留し、送信中ガードが効いている間は busy 状態を維持する。
+      await responseGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(true),
+      });
+    });
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    await openModeration(page);
+
+    await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
+    await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
+
+    const submit = page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' });
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveAttribute('aria-busy', 'false');
+
+    // 予告なしの高速2クリック（同一タスクで2回 dispatch）。
+    await submit.evaluate((el: HTMLElement) => {
+      el.click();
+      el.click();
+    });
+    await expect.poll(() => reportRequests.length).toBe(1);
+
+    // レスポンス保留中は disabled / aria-busy=true になるまで明示的に待ってから
+    // もう一度送る（固定 sleep は使わない）。ガードが効き POST は増えない。
+    await expect(submit).toBeDisabled();
+    await expect(submit).toHaveAttribute('aria-busy', 'true');
+    await submit.evaluate((el: HTMLElement) => el.click());
+    await expect(submit).toBeDisabled();
+    await expect.poll(() => reportRequests.length).toBe(1);
+
+    // 完了後も再送されず、ガードが解除されて次の操作を受け付ける。
+    releaseResponse();
+    await expect(submit).toBeEnabled();
+    await expect(submit).toHaveAttribute('aria-busy', 'false');
+    await expect(page.locator('p[role="status"]:not([data-testid])')).toHaveText(reportSuccessText, { timeout: 10000 });
+    await expect.poll(() => reportRequests.length).toBe(1);
+    expect(reportRequests).toEqual([
+      { method: 'POST', path: '/mod/report', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
+
+  test('VOTE-GUARD-01: レスポンス保留中の二重クリックでも /mod/vote への POST は1本だけ', async ({ page }) => {
+    let releaseResponse = (): void => {};
+    const responseGate = new Promise<void>(resolve => {
+      releaseResponse = resolve;
+    });
+    const voteRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    await page.route('**/mod/vote', async route => {
+      voteRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      // レスポンスを保留し、送信中ガードが効いている間は busy 状態を維持する。
+      await responseGate;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(true),
+      });
+    });
+    await openModerationWithReport(page);
+
+    const approve = page.getByRole('button', { name: 'APPROVE (RESTORE)' });
+    await expect(approve).toBeEnabled();
+    await expect(approve).toHaveAttribute('aria-busy', 'false');
+
+    // 予告なしの高速2クリック（同一タスクで2回 dispatch）。
+    await approve.evaluate((el: HTMLElement) => {
+      el.click();
+      el.click();
+    });
+    await expect.poll(() => voteRequests.length).toBe(1);
+
+    // レスポンス保留中は disabled / aria-busy=true になるまで明示的に待ってから
+    // もう一度送る（固定 sleep は使わない）。ガードが効き POST は増えない。
+    await expect(approve).toBeDisabled();
+    await expect(approve).toHaveAttribute('aria-busy', 'true');
+    await approve.evaluate((el: HTMLElement) => el.click());
+    await expect(approve).toBeDisabled();
+    await expect.poll(() => voteRequests.length).toBe(1);
+
+    // 完了後も再送されず、ガードが解除されて次の操作を受け付ける。
+    releaseResponse();
+    await expect(approve).toBeEnabled();
+    await expect(approve).toHaveAttribute('aria-busy', 'false');
+    await expect(page.getByTestId('vote-notice')).toHaveText(voteNoticeText, { timeout: 10000 });
+    await expect.poll(() => voteRequests.length).toBe(1);
+    expect(voteRequests).toEqual([
+      { method: 'POST', path: '/mod/vote', authorization: 'Bearer mock_jwt_token' },
+    ]);
+  });
 });

@@ -174,7 +174,7 @@ test.describe('Content Upload Flow', () => {
     await expect(priceInput).toHaveAttribute('max', '1000000');
   });
 
-  test('R2 (price boundary): 境界値を実送信し、丸めずに送って上限超過のみ拒否される', async ({ page }) => {
+  test('R2 (price boundary): 境界値をモック応答で送信し、丸めずに送って上限超過のみ拒否される', async ({ page }) => {
     await page.getByRole('button', { name: 'UPLOAD' }).click();
 
     const submittedPrices: string[] = [];
@@ -185,8 +185,9 @@ test.describe('Content Upload Flow', () => {
       const price = /name="price"\r?\n\r?\n([^\r\n]*)/.exec(body)?.[1] ?? '';
       submittedPrices.push(price);
 
-      // 実サーバー（server/src/lib.rs:3472-3483, payments.rs:26）と同じ境界:
-      // <0 と >1000000 のみ拒否し、0 と 1000000 は受理する。
+      // ここはモック応答による送信。実サーバー（server/src/lib.rs:3472-3483,
+      // payments.rs:26）と同じ境界をテスト内で再現しているだけなので、サーバー側の
+      // 境界変更は検出できない。<0 と >1000000 のみ拒否し、0 と 1000000 は受理する。
       const numeric = Number(price);
       if (!Number.isFinite(numeric) || numeric < 0 || numeric > 1000000) {
         await route.fulfill({
@@ -214,12 +215,12 @@ test.describe('Content Upload Flow', () => {
     const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
     const status = page.getByTestId('upload-status');
 
-    // 0: parse().unwrap_or(0) の既定値と一致し、サーバー下限（<0 のみ拒否）でも受理。
+    // 0: parse().unwrap_or(0) の既定値と一致し、モックの下限（<0 のみ拒否）でも受理。
     await priceInput.fill('0');
     await submitButton.click();
     await expect(status).toContainText('SUCCESS: Content registered', { timeout: 15000 });
 
-    // 1000001: 上限超過はサーバー側で拒否され、固定の失敗文言のみ表示。
+    // 1000001: 上限超過はモック応答で拒否され、固定の失敗文言のみ表示。
     await priceInput.fill('1000001');
     await submitButton.click();
     await expect(status).toContainText('Failed to upload content (HTTP 400).', { timeout: 15000 });

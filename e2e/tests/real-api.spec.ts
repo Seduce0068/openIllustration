@@ -267,5 +267,49 @@ test.describe('Real server integration', () => {
     for (const secret of ['token_hash', 'sid', 'family_id']) {
       expect(keys, `"${secret}" must not leak as a field name`).not.toContain(secret);
     }
+
+    // キー名だけでなく「値」の漏洩も検証する。ログインで得た既知のシークレット値
+    // （JWT そのものと、デコードできればその sid クレーム）が、export のどの文字列値
+    // およびキー名にも部分一致しないことを再帰的に確認する。固定文字列 "sid" で
+    // 検索するのではなく既知値との比較なので、CID 等に "sid" が偶然含まれても誤検知しない。
+    const knownSecrets: string[] = session.token.length > 0 ? [session.token] : [];
+    try {
+      const payloadSegment = session.token.split('.')[1];
+      if (typeof payloadSegment === 'string') {
+        const claims = JSON.parse(Buffer.from(payloadSegment, 'base64url').toString('utf8')) as {
+          sid?: unknown;
+        };
+        if (typeof claims.sid === 'string' && claims.sid.length > 0) {
+          knownSecrets.push(claims.sid);
+        }
+      }
+    } catch {
+      // sid を取り出せない環境でも token 自身での検証は続ける。
+    }
+    expect(knownSecrets.length, 'login must yield at least one known secret value').toBeGreaterThan(0);
+
+    const collectStrings = (value: unknown): string[] => {
+      if (typeof value === 'string') return [value];
+      if (Array.isArray(value)) return value.flatMap(collectStrings);
+      if (value !== null && typeof value === 'object') {
+        // 既知シークレット値がキー名として現れるケースも検出するため、値だけでなく
+        // Object.entries のキーも走査対象に含める。
+        return Object.entries(value as Record<string, unknown>).flatMap(([key, child]) => [
+          key,
+          ...collectStrings(child),
+        ]);
+      }
+      return [];
+    };
+    const stringValues = collectStrings(payload);
+    for (const secret of knownSecrets) {
+      for (const value of stringValues) {
+        // シークレット値自体はメッセージに出さない（テストログでの二次漏洩を防ぐ）。
+        expect(
+          value.includes(secret),
+          'known session secret must not appear in any export string value or key name',
+        ).toBe(false);
+      }
+    }
   });
 });
