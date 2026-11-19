@@ -3,10 +3,10 @@
 //! 秘密情報の値は一切出力しない。
 
 use server::{
-    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, graceful_drain_timeout,
-    ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests,
-    moderation_finalize_interval, oidc_http_timeout, production_config_errors, rate_limit_per_min,
-    validate_jwt_secret,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, allowed_origins,
+    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
+    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    production_config_errors, rate_limit_per_min, validate_jwt_secret,
 };
 
 fn print_help() {
@@ -376,19 +376,20 @@ where
     };
     results.push(("expose_internal_errors", expose_internal_errors_errors));
 
-    // ALLOWED_ORIGINS: mock 無効時に未設定／空だと allowed_origins() が空ベクタを
-    // 返し、すべての CORS オリジンが拒否される（fail-closed）。オリジン値は出力しない。
+    // ALLOWED_ORIGINS: mock 無効時に実パーサ allowed_origins() が空ベクタなら
+    // すべての CORS オリジンが拒否される（fail-closed）。scheme なし等の不正要素は
+    // パーサが捨てるため「非空」判定では見逃していた。オリジン値は出力しない。
     let allowed_origins_errors = if !allow_mock_auth {
-        let has_origin = lookup("ALLOWED_ORIGINS")
-            .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
-            .unwrap_or(false);
-        if has_origin {
-            Vec::new()
-        } else {
+        let no_valid_origin = lookup("ALLOWED_ORIGINS")
+            .map(|value| allowed_origins(Some(&value), false).is_empty())
+            .unwrap_or(true);
+        if no_valid_origin {
             vec![
-                "ALLOWED_ORIGINS is not set or empty while mock auth is disabled; all CORS origins are rejected"
+                "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected"
                     .to_string(),
             ]
+        } else {
+            Vec::new()
         }
     } else {
         Vec::new()
@@ -988,7 +989,7 @@ mod tests {
 
     #[test]
     fn allowed_origins_missing_or_empty_warns_without_disclosing_value() {
-        const EXPECTED: &str = "ALLOWED_ORIGINS is not set or empty while mock auth is disabled; all CORS origins are rejected";
+        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
         let scenarios: [&[(&str, &str)]; 3] = [
             &[],
             &[("ALLOWED_ORIGINS", "")],
@@ -1009,6 +1010,35 @@ mod tests {
             assert!(!error.contains(ORIGIN), "オリジン値が漏洩: {error}");
         }
         // mock 有効時は未設定でも警告しない（開発用既定オリジンが使われる）。
+        let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
+        assert!(errors_for(&results, "allowed_origins").is_empty());
+    }
+
+    #[test]
+    fn allowed_origins_uses_real_parser_result_without_disclosing_value() {
+        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+
+        // http(s) scheme のない不正要素は実パーサで全て捨てられ、空ベクタ→警告。
+        // 旧「非空」判定では見逃していたケース。値はエコーしない。
+        const INVALID: &str = "example.com,foo";
+        let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", INVALID)]));
+        let errors = errors_for(&results, "allowed_origins");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], EXPECTED);
+        assert!(!errors[0].contains(INVALID), "オリジン値が漏洩: {errors:?}");
+
+        // 有効なオリジン（複数指定・null）は警告なし。
+        for value in ["https://a.example,https://b.example", "null"] {
+            let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", value)]));
+            assert!(
+                errors_for(&results, "allowed_origins").is_empty(),
+                "value={value}"
+            );
+        }
+
+        // 未設定（mock 偽）は警告、mock 有効時は警告なし（既存挙動を維持）。
+        let results = check_all_with(lookup_from(&[]));
+        assert_eq!(errors_for(&results, "allowed_origins").len(), 1);
         let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
         assert!(errors_for(&results, "allowed_origins").is_empty());
     }
