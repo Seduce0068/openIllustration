@@ -35,7 +35,7 @@ jobs:
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
-        npx --yes markdownlint-cli2@0.24.0 "docs/**/*.md" "todo.md" "README.md" "index.md"
+        npm ci --ignore-scripts --no-audit --no-fund && npx markdownlint-cli2 "docs/**/*.md" "todo.md" "README.md" "index.md"
         bash scripts/test-doc-numbers.sh
         cargo install cargo-deny --version 0.20.2 --locked
         cargo deny check licenses
