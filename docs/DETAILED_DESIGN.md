@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T07:54:20+09:00"
+  at: "2026-11-20T08:18:13+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)

@@ -245,8 +245,28 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     await expect.poll(() => contentBodyRequests.length, { timeout: 10000 }).toBe(2);
 
     // 同一描画ソースは thread_local の REPORTED で除外され POST は1回のまま
-    // （client/src/lib.rs:358-369, 400-425）。
-    await expect.poll(() => captured.length).toBe(1);
+    // （client/src/lib.rs:409-469）。
+    // 再マウント直後に最初の POST を捕まえた時点では captured.length === 1 が
+    // 既に真で、重複 POST がその後に飛んでも検出できない。観測ウィンドウ中に
+    // captured が変化しない（ネットワークが静穏な）状態が続くまで待ってから検証する。
+    const QUIET_WINDOW_MS = 500;
+    let observedLength = -1;
+    let lastChangeAt = Date.now();
+    await expect
+      .poll(
+        () => {
+          const now = Date.now();
+          if (captured.length !== observedLength) {
+            observedLength = captured.length;
+            lastChangeAt = now;
+          }
+          return observedLength === 1 && now - lastChangeAt >= QUIET_WINDOW_MS
+            ? 'stable'
+            : `waiting: captured=${observedLength}, quiet=${now - lastChangeAt}ms`;
+        },
+        { intervals: [100], timeout: 10000 },
+      )
+      .toBe('stable');
     expect(captured.map(call => JSON.parse(call.body) as unknown)).toEqual([
       { event: 'neutralized_url', count: 2 },
     ]);

@@ -369,18 +369,18 @@ P2（品質・保守・プロダクト拡張）:
 ### 2026-11-19 全体レビューで追加（低）
 
 - [ ] **UI 文言を日本語へ統一（英語・内部トークン混在）** — 根拠 `client/src/lib.rs:69-70,1094-1097` / R5-UX01 / 低。
-- [ ] **ナビゲーションへ aria-current を付与** — 根拠 `client/src/lib.rs:836-855` / R5-UX01 / 低。
-- [ ] **SPA ビュー切替で document.title を更新** — 根拠 `client/src/lib.rs:824` / R5-UX01 / 低。
-- [ ] **データ表へ caption と th scope** — 根拠 `client/src/lib.rs:1993-2001` / R5-UX01 / 低。
-- [ ] **canvas へ role=img/aria-label** — 根拠 `client/src/lib.rs:1599-1600` / R5-UX01 / 低。
+- [x] **ナビゲーションへ aria-current を付与** — 根拠 `client/src/lib.rs:836-855` / R5-UX01 / 低。
+- [x] **SPA ビュー切替で document.title を更新** — 根拠 `client/src/lib.rs:824` / R5-UX01 / 低。
+- [x] **データ表へ caption と th scope** — 根拠 `client/src/lib.rs:1993-2001` / R5-UX01 / 低。
+- [x] **canvas へ role=img/aria-label** — 根拠 `client/src/lib.rs:1599-1600` / R5-UX01 / 低。
 - [ ] **PRODUCT 名と (Rust) 表記を統一** — 根拠 `client/index.html:6` / R5-UX01 / 低。
-- [ ] **verify_backup/verify_audit_export のヘルプへ DATABASE_TOKEN 契約** — 根拠
+- [x] **verify_backup/verify_audit_export のヘルプへ DATABASE_TOKEN 契約** — 根拠
   `server/src/bin/verify_backup.rs:12` / disc FG / 低。
-- [ ] **doctor --strict --help 併用を他 CLI と整合** — 根拠 `server/src/bin/doctor.rs:43-50` / disc FG / 低。
-- [ ] **README に運用 CLI 案内を追加** — 根拠 `README.md:34-87` / disc FG / 低。
-- [ ] **ENV_LOCK の読み手保護を設定注入へ** — 根拠 `server/src/tests.rs:87-108` / R5-TS01 / 低。
-- [ ] **定期 finalize テストの固定スリープを同期チャネルへ** — 根拠 `server/src/tests.rs:15490-15564` / R5-TS01 / 低。
-- [ ] **NEUT-URL-03 再送抑制 E2E の quiescence 待ち** — 根拠 `e2e/tests/metrics.spec.ts:227-252` / R5-TS01 / 低。
+- [x] **doctor --strict --help 併用を他 CLI と整合** — 根拠 `server/src/bin/doctor.rs:43-50` / disc FG / 低。
+- [x] **README に運用 CLI 案内を追加** — 根拠 `README.md:34-87` / disc FG / 低。
+- [x] **ENV_LOCK の読み手保護を設定注入へ** — 根拠 `server/src/tests.rs:87-108` / R5-TS01 / 低。
+- [x] **定期 finalize テストの固定スリープを同期チャネルへ** — 根拠 `server/src/tests.rs:15490-15564` / R5-TS01 / 低。
+- [x] **NEUT-URL-03 再送抑制 E2E の quiescence 待ち** — 根拠 `e2e/tests/metrics.spec.ts:227-252` / R5-TS01 / 低。
 
 ## 完了
 

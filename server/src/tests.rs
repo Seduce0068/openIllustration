@@ -84,26 +84,38 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 use tower::ServiceExt;
 
-/// プロセス環境変数を変更するテストの直列化に使う。
+/// プロセス環境変数を扱うテストの直列化に使う。
+/// 書き手（`test_set_env` / `test_remove_env`）の呼び出し側は必ずこのロックを保持し、
+/// 読み手は `lock_env_and_read` を通して値を取得する。
 static ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// `ENV_LOCK` を取得して環境変数を読み、取得したガードを返す。
+/// 読み手も書き手と同じロックを保持したまま値を使い続けられるようにする。
+/// 既にガードを保持している場合はこの関数を呼ばないこと（デッドロックする）。
+async fn lock_env_and_read(key: &str) -> (tokio::sync::MutexGuard<'_, ()>, Option<String>) {
+    let guard = ENV_LOCK.lock().await;
+    let value = std::env::var(key).ok();
+    (guard, value)
+}
 
 /// テスト専用の環境変数設定（呼び出し前に `ENV_LOCK` を保持すること）。
 ///
 /// # Safety
-/// Rust 2024 では `set_var` / `remove_var` が unsafe だが、これは「他スレッドが
-/// 同時に環境変数を読まないこと」の保証を呼び出し側が負う API である。
-/// 本関数は crate 内のテストからしか呼ばれず、すべての呼び出し箇所で
-/// `ENV_LOCK` を保持して直列化しているため、並行読み取りは発生しない。
-/// また対象はテスト固有の環境変数（`ALLOW_IPV4_LOCALHOST` /
-/// `EXPOSE_INTERNAL_ERRORS`）のみで、本番コードパスでは呼ばれない。
+/// Rust 2024 では `set_var` / `remove_var` が unsafe で、呼び出し側は
+/// 「他スレッドが同時に環境変数を読まないこと」を保証する必要がある。
+/// 書き手の呼び出し箇所はすべて `ENV_LOCK` を保持して直列化しており、
+/// テストが直接読む場合も `lock_env_and_read` で同じロックを取得する。
+/// ただしアプリ経由で本番コードが読む `EXPOSE_INTERNAL_ERRORS` /
+/// `OIDC_COOKIE_SECURE` はこのロックを通らないため完全な直列化は保証できず、
+/// 根本解決には `AppOptions` 等の設定注入への移行が必要である。
 fn test_set_env(key: &str, value: &str) {
-    // SAFETY: 上記のとおり ENV_LOCK により並行アクセスが排除されている。
+    // SAFETY: 呼び出し側が ENV_LOCK を保持している（上記コメント参照）。
     unsafe { std::env::set_var(key, value) };
 }
 
 /// テスト専用の環境変数削除（呼び出し前に `ENV_LOCK` を保持すること）。
 fn test_remove_env(key: &str) {
-    // SAFETY: 同上。ENV_LOCK により並行アクセスが排除されている。
+    // SAFETY: 同上。呼び出し側が ENV_LOCK を保持している。
     unsafe { std::env::remove_var(key) };
 }
 
@@ -8331,8 +8343,8 @@ async fn test_logout_clears_refresh_cookie() {
 /// 未設定なら refresh_cookie と同じく Secure を付与する。
 #[tokio::test]
 async fn test_logout_deletion_cookie_follows_cookie_secure_setting() {
-    let _env_guard = ENV_LOCK.lock().await;
-    let previous = std::env::var("OIDC_COOKIE_SECURE").ok();
+    // 読み手も ENV_LOCK を取得してから値を読み、ガードを最後まで保持する。
+    let (_env_guard, previous) = lock_env_and_read("OIDC_COOKIE_SECURE").await;
     let app = setup_app().await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
 
@@ -17133,12 +17145,18 @@ async fn test_startup_lock_wait_is_bounded_and_startup_continues() {
 
 /// 周期 finalize はロック取得後に SELECT/COMMIT をタイムアウトなしで
 /// 件数分すべて完了させることを検証する。
+///
+/// ライターは起動時刻からの固定 sleep を使わず、finalize が write_lock 待ちへ
+/// 入ったことをメトリクスとログで同期してからチャネルで解放される。完了条件は
+/// ログ文字列ではなく DB の `concluded_at` 更新件数で判定する。
 /// mutation でロック取得＋SQL 全体を PURGE_LOCK_WAIT で包む旧実装に戻すと、
-/// 2 秒の予算を使い切って中途中断され件数ログが出ず失敗する。
+/// 待ちの期限直前に解放された残り予算では SQL が中途中断され全件完了できない。
 #[tokio::test]
 async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
     const REPORT_COUNT: usize = 10000;
-    const EXPECTED_LOG: &str = "Auto-finalized 10000 moderation report(s)";
+    // PURGE_LOCK_WAIT(2s) の期限直前に解放するための残り予算。
+    // 起動時刻ではなく「finalize がロック待ちへ入った時点」から計測する。
+    const RELEASE_MARGIN: Duration = Duration::from_millis(1800);
 
     let db = Arc::new(
         Builder::new_local(":memory:")
@@ -17181,15 +17199,16 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
     let _subscriber_guard = tracing::subscriber::set_default(subscriber);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let metrics = Arc::new(crate::Metrics::default());
 
-    // PURGE_LOCK_WAIT(2s) より少し前にロックを解放するライター。
-    // 旧実装ではロック取得後に残った予算では SQL が完了しない。
+    // ライターは固定 sleep ではなく、テストが同期チャネルで送る解放通知を待つ。
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let db_writer = Arc::clone(&db);
     let writer = tokio::spawn(async move {
         let guard = crate::write_lock(&db_writer).lock_owned().await;
         started_tx.send(()).unwrap();
-        tokio::time::sleep(Duration::from_millis(1800)).await;
+        release_rx.await.unwrap();
         drop(guard);
     });
     started_rx.await.unwrap();
@@ -17200,16 +17219,52 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
         Duration::from_millis(50),
         Duration::from_millis(100), // 起動時 finalize はビジーでスキップさせる
         shutdown_rx,
-        Arc::new(crate::Metrics::default()),
+        Arc::clone(&metrics),
     ));
 
+    // 起動時回収（purge 3 件 + finalize 1 件）が上限で打ち切られた時点を同期点にする。
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !logs.contains("Moderation finalization skipped on startup: write lock is busy") {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("startup cleanup must skip while the writer holds the lock");
+    let lock_busy_after_startup = metrics.finalizer_lock_busy.load(Ordering::Relaxed);
+
+    // 周期 purge 3 件がそれぞれ PURGE_LOCK_WAIT でスキップした直後に、
+    // 周期 finalize が同じ write_lock の待ちへ入る。
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while metrics.finalizer_lock_busy.load(Ordering::Relaxed) < lock_busy_after_startup + 3 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("periodic purges must skip before finalize waits for the lock");
+    // finalize が待ちキューへ入るのを確実にしてから、期限直前までロックを保持する。
+    tokio::task::yield_now().await;
+    tokio::time::sleep(RELEASE_MARGIN).await;
+    release_tx.send(()).unwrap();
+
+    // 完了条件はログではなく DB の concluded_at 更新件数。
     tokio::time::timeout(Duration::from_secs(20), async {
-        while !logs.contains_exact(EXPECTED_LOG) {
+        loop {
+            let mut rows = db
+                .query(
+                    "SELECT COUNT(*) FROM reports WHERE concluded_at IS NOT NULL",
+                    (),
+                )
+                .await
+                .unwrap();
+            let concluded: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+            if concluded == REPORT_COUNT as i64 {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("periodic finalize must complete every due report after acquiring the lock");
+    .expect("periodic finalize must conclude every due report after acquiring the lock");
 
     let mut rows = db
         .query(
@@ -17220,6 +17275,10 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
         .unwrap();
     let pending: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(pending, 0, "all due reports must be concluded in one tick");
+    assert!(
+        !logs.contains("Moderation finalization skipped: write lock is busy"),
+        "finalize must acquire the lock and run SQL, not skip it"
+    );
 
     shutdown_tx.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(10), finalizer)
