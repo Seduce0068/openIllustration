@@ -278,13 +278,25 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: optional + dev-console feature、既定off、main()をcfgでゲート。
 - [ ] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。
 - [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
-- [ ] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
+- [x] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
+  2026-11-20 対応: CI は `npm ci --ignore-scripts --no-audit --no-fund` の後に
+  `npx markdownlint-cli2` でローカル固定版を実行。`package.json` へ
+  `engines.node = ">=22"` を明記（markdownlint-cli2 0.24.0 が Node>=22 を要求）。
+  `package-lock.json` は依存記述のみで差分不要（親が `npm ci` で確認）。
 - [ ] **E2E の既定ブラウザを 3 プロジェクトへ** — 根拠 `e2e/ci-e2e.sh:121` / R4-CI01 / 中。
 - [x] **E2E の npm ci を --ignore-scripts 統一** — 根拠 `e2e/ci-e2e.sh:211` / R4-CI01 / 中。
   2026-11-20 対応: client と同一引数（--ignore-scripts --no-audit --no-fund）。
-- [ ] **監視パス (/health,/ready,/metrics) を observe_metrics から除外** — 根拠 `server/src/lib.rs:182-184` / R4-OB01 / 中。
-- [ ] **finalizer/purge のカウンタを /metrics へ公開** — 根拠 `server/src/lib.rs:143-150` / R4-OB01 / 中。
-- [ ] **起動時 IPFS 警告の生 URL を redact_url 経由へ** — 根拠 `server/src/lib.rs:1261-1264` / R4-OB01 / 中。
+- [x] **監視パス (/health,/ready,/metrics) を observe_metrics から除外** — 根拠 `server/src/lib.rs:315-319` / R4-OB01 / 中。
+  2026-11-20 対応: GET スクレイプのみ除外し、POST /metrics などの非 GET は
+  requests / errors へ計上（非 GET 計上テストを追加）。/ready の 503 も GET
+  スクレイプとして除外し、readiness は /ready レスポンス自体で監視（新規メトリクスなし）。
+- [x] **finalizer/purge のカウンタを /metrics へ公開** — 根拠 `server/src/lib.rs:346-392` / R4-OB01 / 中。
+  2026-11-20 対応: ticks / processed / lock_busy / failures / last_success を
+  HELP/TYPE 付きで公開。`test_metrics_expose_finalizer_counters` と
+  `test_periodic_finalize_lock_wait_is_bounded` で差分検証（purge 3 + finalize 1）。
+- [x] **起動時 IPFS 警告の生 URL を redact_url 経由へ** — 根拠 `server/src/lib.rs:1071-1074` / R4-OB01 / 中。
+  2026-11-20 確認: 起動時ログは URL ではなく gateway 件数のみを出力し、
+  取得時エラーは `redact_url` 経由（lib.rs:2679 / 2721 / 2737）で生 URL を残さない。
 - [ ] **投票・通報フォームへ二重送信ガード** — 根拠 `client/src/lib.rs:2205-2237` / disc VU / 中。
 - [ ] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
 - [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
