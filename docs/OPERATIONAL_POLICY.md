@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-19T00:57:21+09:00"
+  at: "2026-11-19T23:13:24+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -94,9 +94,10 @@ generated:
   `generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返し、CID・reason・`user_hash` は露出しない。
   これは認証内のデプロイ向け集計であり、第三者への公開を意図するものではない（DEC-04 未決定）。
 - ローカルDBの `content_audit_log` ハッシュ連鎖は
-  `cargo run -p server --bin verify_audit_log` に `--database-url` / `--database-token` /
-  `--cid` / `--expect-root` の各オプションを付けて実行する。
-   で読み取り専用に検証できる。連鎖に加え `log_id` の連続性と entry_hash 列の Merkle root を出力し、別経路で保存した root を `--expect-root`
+  `cargo run -p server --bin verify_audit_log` に `--database-url` / `--cid` /
+  `--expect-root` の各オプションを付けて読み取り専用に検証できる。
+  リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ渡し、`--database-token` は受け付けない。
+  連鎖に加え `log_id` の連続性と entry_hash 列の Merkle root を出力し、別経路で保存した root を `--expect-root`
   に渡すと末尾切り詰め・欠落を検出できる（実測で検出確認済み）。エントリハッシュは v2（長さプレフィックス付き正規化）を生成し、v1（既存互換）も検証できる。これは計算整合性の確認であり、
   第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
 - 監査スナップショットは `sign_audit_export` で署名し、`verify_audit_export` で公開鍵検証する（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)

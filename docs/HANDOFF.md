@@ -7,8 +7,8 @@ tags:
   - status
   - open-illustration
 generated:
-  by: opencode
-  at: "2026-11-18T13:40:37+09:00"
+  by: dsh
+  at: "2026-11-19T23:13:24+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -81,7 +81,7 @@ cargo test --workspace
 ### 設計
 
 - ADR-0002（JPKI）と ADR-0003（JPYC）を Accepted に昇格。
-- ADR-0004（モデレーション手続）を Proposed として追加。
+- ADR-0004（モデレーション手続）を Accepted として追加。
 - `docs/DOCUMENT_STATUS.md` の DEC-01/03/05 を実装状況に合わせて更新。DEC-02 は方針採用・実装進行中（法的確定/専門家レビュー未完）として更新。
 
 ### 入力バリデーションの防御的強化（2026-11-15）
@@ -289,7 +289,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   )のスキーマ変更時に秘密情報非混入を保つレビュー/テスト整備。
 - JPKI: `acr`/`amr` 保証レベル検証と `auth_time`/`max_age` 検証は実装済み（`OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` /
   `OIDC_MAX_AUTH_AGE_SECS` 設定時のみ、欠落/不一致は fail-closed）。残るは実OP運用整合。
-  リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。残るは失効状態の永続化と実OP運用整合。
+  リフレッシュトークンは実装済み（30日・HttpOnly Cookie・回転・再利用時ファミリ失効）。
+  失効状態の永続化も実装済み。残るは実OP運用整合と複数プロセス共有・実機検証。
   `sub` 単位の全セッション失効は `iat` 閾値方式で、`revoked_subs` テーブルへ永続化し起動時にロード（マイグレーション 008）。再認証で新しい `iat` を発行し DB の閾値も削除。`sid`
   単位の失効も `revoked_sessions` へ永続化し起動時にロード（マイグレーション 009）。実プロセスで再起動後も 401 であることを確認済み。複数プロセス共有・実OP連携/実機検証は残タスク。
 - JPYC: 実RPC検証、2-of-3クォーラム、バックグラウンド確認ワーカー、

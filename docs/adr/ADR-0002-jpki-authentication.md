@@ -1,11 +1,11 @@
 ---
 title: "ADR-0002: JPKI認証連携方式"
 type: Architecture Decision Record
-description: マイナアプリ/JPKI認証の連携方式、検証要件、移行手順を提案する。
-tags: [adr, authentication, jpki, oidc, proposed]
+description: マイナアプリ/JPKI認証の連携方式、検証要件、移行手順を定める。
+tags: [adr, authentication, jpki, oidc, accepted]
 generated:
   by: dsh
-  at: "2026-11-18T10:43:30+09:00"
+  at: "2026-11-19T23:13:24+09:00"
 ---
 
 ## ADR-0002: JPKI認証連携方式
@@ -32,7 +32,7 @@ generated:
 
 ## Decision
 
-以下を提案する。承認後に Status を Accepted へ変更する。
+以下を定める。本 ADR は 2026-11-02 に承認済みである。
 
 1. **認証基盤**: デジタル庁のデジタル認証サービスを採用する。
    J-LISの技術仕様書を直接入手してカードAPライブラリを自前実装する方式は

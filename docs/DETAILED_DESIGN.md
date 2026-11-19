@@ -398,7 +398,8 @@ migration 012 は `favorites` テーブルを作成する。`user_hash` は `use
 `idx_favorites_user_created`（`user_hash, created_at DESC`）を作成する。
 migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_until` インデックスを作成する。既存行は NULL（無期限）として
 読み出され、後方互換。期限切れ判定は判定側の時刻比較で行い、`is_banned` フラグ自体は履歴として保持する。
-ロールバック（downマイグレーション）は未実装。外部キーはlibSQLで強制され、テストでも検証する。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
+ロールバック（downマイグレーション）は未実装。ローカル DB では migration 前に `PRAGMA foreign_keys = ON` を適用して強制・検証する。
+リモート DB では接続単位で効かないため書き込み側で担保する（起動時 warn）。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
 ### バックアップ（`backup_db`）の生存ロック検査
 

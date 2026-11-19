@@ -122,7 +122,7 @@ P2（品質・保守・プロダクト拡張）:
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
   E2E 定義数は37件（現行）。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 49件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 52件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -143,7 +143,7 @@ P2（品質・保守・プロダクト拡張）:
    `export_status_message` が解析失敗時に `エクスポート結果の解析に失敗しました。` を返し、
    「0 件」成功表示へ落とさない。クライアント側単体テスト1件
 - [x] 型境界とビルドゲート（2026-11-18）: 注文のNULL価格を400へ統一、CSS側CDN参照と
-  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 49件。
+  非数値nodeバージョンを拒否、trunk検証の静的回帰を追加。E2E 52件。
   ※ 本番投票は実JPKI署名が未実装のため現状401（外部要因DEC-01）。
 - [x] トランザクション安全性（2026-11-18）: exportのBEGINをwrite_lock配下へ、
   期限切れ更新と固定アドレス注文INSERTをtx内へ統一（高リスクの500を解消）。
@@ -159,7 +159,7 @@ P2（品質・保守・プロダクト拡張）:
   restoreのinstance lock検査、Dashboard/favorite/ContentViewerのエラー表示、cid encode。
 - [x] 定数単一情報源化とエラー表示（2026-11-18）: clock skew 定数を pub use で共有、
   favorite 再試行クリアの E2E、Ledger の /transactions 失敗表示（role=alert）。
-  E2E 49件。
+  E2E 52件。
 - [x] クライアント境界の硬化（2026-11-18）: 中立化URL件数を描画ソース単位で1回に抑制、
   protocol-relative/UNC URL を拒否、ファイル選択解除時に古い File をクリア。
 - [x] E2E契約の監査対応（2026-11-18）: 件数矛盾(37→45)・MOD-07/10/11・Ledger/METシナリオ
@@ -191,7 +191,7 @@ P2（品質・保守・プロダクト拡張）:
   NEUT-URL-02/03へ分離、a11y/CONTENT-ERR/favorites/export/GOV-01のオラクルを明記。
 - [x] dialog/フォーカスとE2E堅牢性（2026-11-18）: aria-modal+初期フォーカス+Tab trap、
   label role=button、CLOSE/SpaceのE2E、否定アサーションの状態確定、MET poll延長。
-  E2E 49件。
+  E2E 52件。
 - [x] Audit dialog のARIA整合（2026-11-18）: 実挙動（背景操作可のnon-modal）に合わせ
   aria-modal を削除し、初期フォーカスとTab/Shift+TabトラップをE2Eで検証。
 - [x] fail-closed・設定診断の実効化（2026-11-18/19）: backup find失敗伝播、CDNゲートの
@@ -215,8 +215,9 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-19 対応: INSERT 前に ensure_user_not_banned、mutation 検証・回帰テスト追加。
 - [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:208-212` / R1-ST01 / 重大度 high。
   security_headers は X-Content-Type-Options/X-Frame-Options のみ。CSP は本番構成確定時に別途設計と明記済み。
-- [ ] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。
+- [x] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。
   libSQL は既定 foreign_keys=OFF。`PRAGMA foreign_keys=ON` と起動時 `foreign_key_check` を追加。
+  2026-11-19 対応: migration前にON、孤立行はwarn、3テスト追加。
 - [x] **CORS の allow_methods に DELETE を追加** — 根拠 `server/src/lib.rs:1773` / R1-AP01 / 重大度 high。
   remove_favorite は DELETE だが許可メソッドは GET/POST のみ。2026-11-19 対応済み。
 - [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
@@ -231,19 +232,20 @@ P2（品質・保守・プロダクト拡張）:
   x-request-id 生成・伝播と method/path/status/duration ログが無く、Internal エラーの事後調査不可。
 - [ ] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:714-750` / R2-BV01 / 重大度 high。
   remove_file + create_new が非原子で、同時起動で排他が破れる。
-- [ ] **通報送信 (/mod/report) の失敗系 E2E を追加** — 根拠 `e2e/tests/moderation.spec.ts:102` / disc TQ / 重大度 high。
-  HTTP 500/network abort の固定文言・サーバー本文非表示が未検証。
+- [x] **通報送信 (/mod/report) の失敗系 E2E を追加** — 根拠 `e2e/tests/moderation.spec.ts:102` / disc TQ / 重大度 high。
+  HTTP 500/network abort の固定文言・サーバー本文非表示が未検証。2026-11-19 対応済み。
 - [ ] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
   現状はシェル文字列パターンのみで fail-open 回帰を実挙動で担保できていない。
 - [ ] **GOV-01 要約 E2E を生 PII 入力→[redacted] 表示へ** — 根拠 `e2e/tests/moderation.spec.ts:9-14` / R5-TS01 / 重大度 high。
   モックが既に要約済み値を返しオラクルが自明。
-- [ ] **Upoad 価格境界 E2E を属性存在→実送信へ** — 根拠 `e2e/tests/upload.spec.ts:172-174` / R5-TS01 / 重大度 high。
-  min/max 属性だけでは JS/API バリデーション回帰を検出できない。
-- [ ] **ADR-0002/0003 の「提案」残存を確定記述へ** — 根拠 `docs/adr/ADR-0002-jpki-authentication.md:35` / R5-DC01 / 重大度 high。
-  Status: Accepted なのに本文・tags が proposed のまま。
-- [ ] **ADR/Runbook/OPERATIONAL_POLICY の矛盾を是正** — 根拠 `docs/HANDOFF.md:84`,
+- [x] **Upoad 価格境界 E2E を属性存在→実送信へ** — 根拠 `e2e/tests/upload.spec.ts:172-174` / R5-TS01 / 重大度 high。
+  min/max 属性だけでは JS/API バリデーション回帰を検出できない。2026-11-19 対応済み。
+- [x] **ADR-0002/0003 の「提案」残存を確定記述へ** — 根拠 `docs/adr/ADR-0002-jpki-authentication.md:35` / R5-DC01 / 重大度 high。
+  Status: Accepted なのに本文・tags が proposed のまま。2026-11-19 対応済み。
+- [x] **ADR/Runbook/OPERATIONAL_POLICY の矛盾を是正** — 根拠 `docs/HANDOFF.md:84`,
   `docs/BACKUP_RESTORE_RUNBOOK.md:264`, `docs/OPERATIONAL_POLICY.md:97-99` / R5-DC01 / 重大度 high。
   ADR-0004 を Proposed とする記載、暗号化・オフサイトの未解決重複、--database-token 付与例と文命題切れ。
+  2026-11-19 対応済み（R4 指摘で保持期間・「のみ」表現も修正）。
 
 ### 2026-11-19 全体レビューで追加（中）
 
@@ -350,7 +352,7 @@ P2（品質・保守・プロダクト拡張）:
   実入力経路は DEC-01 外部待ちのため既存未着手を維持。
 
 - 2026-11-18 時点: 作業ツリーはクリーンで、以下に「未コミット」とある記述は各作業当時の履歴。
-  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は49件（12 spec）。
+  現行状態はすべてコミット済み（最新 `dd9aa7c`）。E2E 定義数は52件（12 spec）。
 - 詳細な残タスク棚卸しは `docs/TASK_INVENTORY.md`、レビュー履歴は `docs/REVIEW_REPORT.md`、
   未知タスク調査は `docs/UNKNOWN_TASKS_INVESTIGATION.md` を参照。
 - 本ファイルにはクロスレビューで統合・採用した項目を追記する。

@@ -1,11 +1,11 @@
 ---
 title: "ADR-0003: JPYC決済方式"
 type: Architecture Decision Record
-description: JPYC決済の対応チェーン、コントラクト検証、最終性、運用を提案する。
-tags: [adr, payment, jpyc, settlement, proposed]
+description: JPYC決済の対応チェーン、コントラクト検証、最終性、運用を定める。
+tags: [adr, payment, jpyc, settlement, accepted]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-19T23:13:24+09:00"
 ---
 
 ## ADR-0003: JPYC決済方式
@@ -36,7 +36,7 @@ Polygon 256、Kaia 12と公表されている。
 
 ## Decision
 
-以下を提案する。承認後に Status を Accepted へ変更する。
+以下を定める。本 ADR は 2026-11-02 に承認済みである。
 
 1. **対応チェーン**: 次の4チェーンをallowlistに登録する。
    - Ethereum Mainnet: chain ID `1`
