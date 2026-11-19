@@ -999,7 +999,7 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
    `ERROR: File exceeds the 10 MiB limit.` を表示し、送信ボタンは無効のまま、
    `/content/upload` へのリクエストが0回（未送信）であることを確認する。
 3. `INT-02: should reject ZIP files`: 許可外 MIME のファイルを送信すると API が400を返し、
-   `ERROR: Upload failed` が表示されることを確認する。
+   `Failed to upload content (HTTP 400).` が表示されることを確認する。
 4. `R1-14: shows an error and re-enables the button when arrayBuffer() rejects`:
    `Blob.prototype.arrayBuffer` を拒否させ、準備フェーズの unwrap パニック
    （`Processing...` のまま固まる状態）を再現する。`data-testid="upload-status"` に固定
@@ -1014,18 +1014,22 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
 
 失敗時は生のエラー値・内部情報を画面へ出さず、固定文言のみを表示する。クライアント
 （`client/src/lib.rs`）は準備・通信・応答読取の各段を `Result` で伝播させ、
-成否にかかわらず `set_loading(false)` を実行してボタンを再活性化する。固定文言は3種類。
+成否にかかわらず `set_loading(false)` を実行してボタンを再活性化する。
+固定文言は準備・応答読取の2種に加え、通信／HTTP応答で4分岐する（後述）。
 
 | 失敗段階 | 固定文言 |
 | --- | --- |
 | 準備（`array_buffer` / `FormData` / `Blob` 生成など） | `アップロードの準備に失敗しました。` |
-| 通信（`Request::send`） | `ネットワークエラーが発生しました。` |
+| 通信（`Request::send` の `Err`） | `Network error uploading content.` |
 | 応答読取（`response.json::<String>()`） | `アップロード結果の読み取りに失敗しました。` |
 
 `data-testid="upload-status"` は `[STATUS]` の接頭辞に続けて状態文言を描画し、
 文言が空のときは `Show` により非表示になる。loading 中は送信ボタンが `Processing...`
 かつ `disabled` で、完了後に `Sign & Submit to Evidence Ledger` へ戻る。
-HTTP エラー応答（非2xx）は固定文言3種とは別に `ERROR: Upload failed.` を表示する。
+通信／HTTP応答は `upload_error_message` の4分岐で固定文言を選ぶ: 401=再ログイン
+（`再ログインが必要です。`）、413=サイズ超過（`ERROR: File exceeds the 10 MiB limit.`）、
+HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータス取得不可）=
+`Network error uploading content.`。サーバー本文・生エラーは表示しない。
 
 ### 中立化URL件数指標の検証（MET-01）
 

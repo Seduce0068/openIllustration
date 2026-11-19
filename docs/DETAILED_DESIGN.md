@@ -149,12 +149,15 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   - `authorized=false`: `認証が許可されませんでした。`
   - `user_hash` / `token` の欠落（情報不足）: `認証情報が不足しています。`
 - クライアントの `Upload` は成否を `data-testid="upload-status"`（`[STATUS]` 接頭辞付き）へ表示し、
-  内部例外や生データを画面へ出さない。準備・通信・レスポンス読み取りの失敗には固定エラー文言3種
-  `アップロードの準備に失敗しました。` / `ネットワークエラーが発生しました。` /
-  `アップロード結果の読み取りに失敗しました。` を使う。ファイル未選択・10 MiB超過・HTTPエラーは
-  それぞれ `ERROR: Select a file first.` / `ERROR: File exceeds the 10 MiB limit.` /
-  `ERROR: Upload failed.` を表示する。成否にかかわらず `finally` 相当で `loading` を解除し、
-  ボタンを再活性化する（パニックで loading が戻らない事故を防ぐ）。
+  内部例外や生データを画面へ出さない。準備失敗は `アップロードの準備に失敗しました。`、
+  応答読み取り失敗は `アップロード結果の読み取りに失敗しました。` を使う。通信／HTTPエラーは
+  `upload_error_message` の4分岐で選ぶ: 401=再ログイン（`再ログインが必要です。`）、
+  413=サイズ超過（`ERROR: File exceeds the 10 MiB limit.`）、HTTP その他=
+  `Failed to upload content (HTTP {status}).`、None（ステータス取得不可）=
+  `Network error uploading content.`。ファイル未選択・クライアント側の10 MiB超過は
+  それぞれ `ERROR: Select a file first.` / `ERROR: File exceeds the 10 MiB limit.` を表示する。
+  成否にかかわらず `finally` 相当で `loading` を解除し、ボタンを再活性化する
+  （パニックで loading が戻らない事故を防ぐ）。
 - `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、

@@ -253,7 +253,10 @@ P2（品質・保守・プロダクト拡張）:
 
 - [x] **verify_audit_export へ take_value を追加（5 CLI の取り残し）** — 根拠
   `server/src/bin/verify_audit_export.rs:33-50` / disc FG / 優先度 中。2026-11-20 対応済み。
-- [ ] **IPFS チェックサム不一致を 401 ではなく 502/409 へ** — 根拠 `server/src/lib.rs:2294` / R1-AP01 / 中。
+- [x] **IPFS チェックサム不一致を 401 ではなく 502/409 へ** — 根拠 `server/src/lib.rs:2294` / R1-AP01 / 中。
+  2026-11-20 対応: `AppError::BadGateway` を 502 で返し、`#[error]` と IntoResponse 本文を
+  `Upstream content failed integrity verification` へ統一（409 は採用せず 502 へ集約）。
+  全ゲートウェイ失敗の 500→502 統一は設計判断で範囲拡大のため見送り。
 - [ ] **一覧 API のページネーション契約を共通化** — 根拠 `server/src/lib.rs:1789,2456` / R1-AP01 / 中。
 - [ ] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:106,192,445` / R1-AP01 / 中。
 - [x] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
@@ -297,10 +300,16 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **起動時 IPFS 警告の生 URL を redact_url 経由へ** — 根拠 `server/src/lib.rs:1071-1074` / R4-OB01 / 中。
   2026-11-20 確認: 起動時ログは URL ではなく gateway 件数のみを出力し、
   取得時エラーは `redact_url` 経由（lib.rs:2679 / 2721 / 2737）で生 URL を残さない。
-- [ ] **投票・通報フォームへ二重送信ガード** — 根拠 `client/src/lib.rs:2205-2237` / disc VU / 中。
+- [x] **投票・通報フォームへ二重送信ガード** — 根拠 `client/src/lib.rs:2205-2237` / disc VU / 中。
+  2026-11-20 対応: `claim_submission` による同期判定と `BusyGuard` のスコープ離脱時解除を実装し、
+  `disabled` は bool のまま、`aria-busy` を `"true"` / `"false"` 文字列列挙値へ整合。
+  通報と投票の横断排他は意図的分離の可能性があるため今回は見送り。
 - [ ] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
 - [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
-- [ ] **アップロード失敗を HTTP ステータス別固定文言へ** — 根拠 `client/src/lib.rs:1825-1826` / disc VU / 中。
+- [x] **アップロード失敗を HTTP ステータス別固定文言へ** — 根拠 `client/src/lib.rs:1825-1826` / disc VU / 中。
+  2026-11-20 対応: `upload_error_message` の4分岐（401=再ログイン / 413=サイズ超過 /
+  その他=`Failed to upload content (HTTP {status}).` / None=`Network error uploading content.`）を
+  TEST_SPECIFICATION / DETAILED_DESIGN / E2E (`upload.spec.ts`) の確定文言へ整合。
 - [ ] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
 - [ ] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
 - [ ] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
@@ -366,6 +375,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-20: real-api.spec.ts の /auth/verify 待ちタイムアウトは、全E2E実行時のみ再現し
+  単独実行（E2E_REUSE=0 E2E_CLIENT_PORT=18125）では4件すべて成功。R4 レビューでも今回の
+  差分（AppError::BadGateway・client 文言/busy ガード）と因果関係なしと判定。
+  既存の環境依存フレーキーとして記録し、後続タスクで webServer 起動待ちを検討する。
 
 - 2026-11-19 却下（Runtime Proof 済み）: 単一ライター・ロックの stale 回収 TOCTOU は
   `server/src/lib.rs:725-733` で再読込一致チェック＋create_new の AlreadyExists 拒否が既にあり、
