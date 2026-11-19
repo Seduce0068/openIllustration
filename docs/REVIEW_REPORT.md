@@ -5,7 +5,7 @@ description: 設計文書とコード変更のセキュリティ、構成、運�
 tags: [review, security, architecture, operations]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-20T08:57:45+09:00"
 ---
 
 ## クロスレビューレポート
@@ -232,7 +232,7 @@ generated:
 
 #### [Medium] ローカル E2E の前提・依存更新手順が未文書化（運用視点）
 
-- **指摘:** Google Chrome・trunk・Node 18 以上の前提と、trunk の
+- **指摘:** Google Chrome・trunk・Node 22 以上の前提と、trunk の
   バージョン更新手順がコメントにしかない。README の trunk は版未指定で
   CI と乖離しうる。
 - **対応:** README とテスト仕様書へ前提と再現手順を追記し、trunk を

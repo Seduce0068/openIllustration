@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-20T08:18:13+09:00"
+  at: "2026-11-20T08:57:45+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T08:18:13+09:00"
+  at: "2026-11-20T08:57:45+09:00"
 status: current
 ---
 
@@ -597,7 +597,7 @@ status: current
 - [中] CI 側の artifact アップロードとチェック結果の分離（共通ワークフロー拡張が必要）。
 - [対応済み] CI E2E スクリプトのローカル再現: trunk 0.21.14 固定版の `NO_COLOR=1` 解釈エラーを `unset NO_COLOR` で回避。8080 占有時に備え `E2E_CLIENT_PORT`
   既定値 18080 を設定。`bash e2e/ci-e2e.sh` が9件成功（CI と同一ゲート）。
-- [対応済み] E2E 依存バージョン検証: `ci-e2e.sh` が `MIN_NODE_MAJOR`（既定18、`package.json` の engines と整合）と `MIN_CHROME_MAJOR`
+- [対応済み] E2E 依存バージョン検証: `ci-e2e.sh` が `MIN_NODE_MAJOR`（既定22、ルート `package.json` の `engines.node` と整合）と `MIN_CHROME_MAJOR`
   （既定120）を検査し、下回れば失敗。拒否ケース（999指定）と通常実行（9件成功）を確認。
 - [対応済み] E2E 依存バージョンの固定: `package-lock.json` が `@playwright/test` 1.60.0 等を固定し `npm ci` が厳密に再現。`ci-e2e.sh`
   の下限検査と併せて環境ばらつきを抑制。

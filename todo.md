@@ -279,7 +279,11 @@ P2（品質・保守・プロダクト拡張）:
   `Upstream content failed integrity verification` へ統一（409 は採用せず 502 へ集約）。
   全ゲートウェイ失敗の 500→502 統一は設計判断で範囲拡大のため見送り。
 - [ ] **一覧 API のページネーション契約を共通化** — 根拠 `server/src/lib.rs:1789,2456` / R1-AP01 / 中。
-- [ ] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:106,192,445` / R1-AP01 / 中。
+- [x] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:548-576` / R1-AP01 / 中。
+  2026-11-20 吟味の結果却下（対応済みとしてクローズ）: AppError の全バリアントとミドルウェアの
+  エラー応答は既に `{"error": message}` に統一済み。`code/message/status` への変更はクライアントの
+  `body.error` 依存を壊す破壊的変更で、現状の利益を上回らない。/ready の `{"status": ...}` は
+  ヘルスチェックの状態表現でエラー契約とは用途が異なる。
 - [x] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
   2026-11-20 対応: is_order_expired をパース比較＋fail-closed、purge を datetime() 正規化。
 - [x] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
@@ -429,6 +433,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-20: エラー本文スキーマ統一を却下クローズ（AppErrorは既に{"error":message}統一済み、
+  code/message/status化はクライアントのbody.error依存を壊す破壊的変更で利益を上回らない）。
+- 2026-11-20: backup暗号文公開順序を修正（先に暗号文mv→平文rm）。公開失敗時に平文が残り、
+  当日バックアップの完全喪失を防止。3経路（assert/mv/gpg）でオラクル検証。
 
 - 2026-11-20: real-api E2E の /auth/verify タイムアウトは他 spec との並走による実サーバー競合が
   真の原因。ci-e2e.sh を real-api 単独実行＋残り11spec の2段階へ分離し、失敗時後処理を
