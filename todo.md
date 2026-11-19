@@ -19,7 +19,7 @@ status: current
 - [x] **OIDC エンドポイントの https 要件を doctor 診断へ反映** — 根拠
   `server/src/bin/doctor.rs:91-100` / `server/src/oidc.rs:249-314` / 発掘 R9 / 中。
   `oidc.rs` と同様に `doctor` も `oidc_endpoint_urls` で5エンドポイントURLの https を検証
-  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は40テスト。
+  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は43テスト。
 - [x] **エクスポート応答の value（機微値）漏洩を精査・是正** — 根拠
   `server/src/lib.rs:4486-4511` / `client/src/lib.rs:811-818` / 発掘 R9 / 中。
   エクスポートのレスポンス値・表示値に機微情報が混ざらないことを確認し是正済み。
@@ -238,7 +238,7 @@ P2（品質・保守・プロダクト拡張）:
   remove_favorite は DELETE だが許可メソッドは GET/POST のみ。2026-11-19 対応済み。
 - [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
   現状 doctor は警告のみで呼び出し経路が無い。
-- [] **backup-rotate に verify_audit_log と暗号化後復号検証を追加** — 根拠 `scripts/backup-rotate.sh:142-143` / R4-DR01 / 重大度 high。
+- [ ] **backup-rotate に verify_audit_log と暗号化後復号検証を追加** — 根拠 `scripts/backup-rotate.sh:142-143` / R4-DR01 / 重大度 high。
   Runbook は両方成功を条件とするが自動取得は verify_backup のみ。
 - [x] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
   EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。2026-11-19 対応済み。
@@ -444,3 +444,14 @@ P2（品質・保守・プロダクト拡張）:
 - 今回の反映は未コミットの `server/src/lib.rs` / `oidc.rs` / `tests.rs` と
   `client/src/lib.rs` を grep した確定値に基づく。
   E2E 定義数40件は `e2e/tests/*.spec.ts` の `test()` 定義数を実測して確認した。
+
+- 2026-11-20 (R5 / R4 採用指摘の反映): 採用分の OIDC 空値検証・doctor max_auth_age 整合・
+  shutdown 2件・シェル2件・filechooser オラクルは全て既に `[x]` であり、該当する未着手は
+  存在しなかった。本次で doctor 内訳の「＋設定検証3件」6箇所（TASK_INVENTORY 3箇所 /
+  TEST_SPECIFICATION 2箇所 / 本ファイル`:22` の 40→43 テスト）、CLI-01 設定判定テスト名
+  34件目（`oidc_max_auth_age_mock_with_complete_oidc_warns_without_disclosing_value`）、
+  backup-rotate の RETENTION_DAYS 境界（36500 受理 / 36501・100000 拒否）を反映。
+  未対応のまま残すもの（本次で確認した未着手）: `doctor --strict` のデプロイ前ゲート
+  組み込み（`:239`）、backup-rotate の verify_audit_log と暗号化後復号検証の追加
+  （`:241`、チェックボックス表記が `- []` で不正）、`doctor --strict --help` 併用の
+  他CLI整合（`:368`）。

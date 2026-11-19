@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-20T04:51:44+09:00"
+  at: "2026-11-20T05:23:08+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T04:51:44+09:00"
+  at: "2026-11-20T05:23:08+09:00"
 status: current
 ---
 
@@ -37,7 +37,7 @@ status: current
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、22カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）で検証（CLI-01 / CFG-01、
+    `server/src/bin/doctor.rs` の43テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件）で検証（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で22 check(s) を確認。
   - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
@@ -63,7 +63,7 @@ status: current
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
-    検査は現行22カテゴリ、bin テストは40件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）。
+    検査は現行22カテゴリ、bin テストは43件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件）。
     `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
     の実出力で22 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
@@ -383,7 +383,7 @@ status: current
   本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
   `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
   差分アサーションのサーバー側テスト4件を追加（MET-02、
-  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は40件のまま変更なし。
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は43件のまま変更なし。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。
@@ -536,7 +536,7 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に40テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件）を追加。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に43テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件）を追加。
   検査は22カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
