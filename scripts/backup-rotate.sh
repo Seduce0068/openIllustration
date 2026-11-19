@@ -228,11 +228,11 @@ if ! "$find_bin" "$backup_dir" -maxdepth 1 -type f \
 	echo "error: failed to enumerate backups in ${backup_dir}" >&2
 	exit 1
 fi
-kept=0
+scanned=0
 pruned=0
 while IFS= read -r -d '' file; do
-	kept=$((kept + 1))
-	if ((kept <= min_keep)); then
+	scanned=$((scanned + 1))
+	if ((scanned <= min_keep)); then
 		continue
 	fi
 	mtime="$(stat -c %Y "$file")"
@@ -243,4 +243,5 @@ while IFS= read -r -d '' file; do
 	fi
 done <"$rotation_list"
 
-echo "==> complete: kept=${kept} pruned=${pruned} retention_days=${retention_days}"
+# kept は走査カウンタ scanned ではなく実際の保持件数 (scanned - pruned) を報告する。
+echo "==> complete: kept=$((scanned - pruned)) pruned=${pruned} retention_days=${retention_days}"

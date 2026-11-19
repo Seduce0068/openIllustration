@@ -139,6 +139,68 @@ fi
 # MIN_KEEP の上限値そのもの（1000）も受理されること（同値除外の回帰防止）。
 expect_success "max min_keep (1000)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=1000 "$script"
 
+# MIN_KEEP の中核契約: 保持期間を超えていても直近 MIN_KEEP 件は残す。
+# 古い mtime(@1) の世代を MIN_KEEP+3 件用意し、ファイル名が新しい順の上位
+# MIN_KEEP 件だけが残り、残りが prune されることをファイル存在で検証する。
+# 上限値 prune テスト（MIN_KEEP=1 の単一案）では MIN_KEEP 判定を削除しても
+# 通ってしまうため、このオラクルで契約を直接担保する。
+min_keep_dir="${work}/min-keep-protection"
+mkdir -p "$min_keep_dir"
+chmod 700 "$min_keep_dir"
+mk_expect_kept=()
+mk_expect_pruned=()
+for day in 1 2 3 4 5 6; do
+	# 未来のファイル名にして、スクリプトが新規作成する世代より新しく並べる。
+	f="${min_keep_dir}/openillustration-2099010${day}T000000Z.db.gpg"
+	printf 'old backup' >"$f"
+	touch -d '@1' "$f"
+	if ((day > 3)); then
+		mk_expect_kept+=("$f") # 新しい順 1〜3 件目（MIN_KEEP で保持）
+	else
+		mk_expect_pruned+=("$f") # 古い 3 件（保持期間超過で prune）
+	fi
+done
+expect_success "MIN_KEEP protects newest generations" env BACKUP_DIR="$min_keep_dir" BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=30 MIN_KEEP=3 "$script"
+mk_bad=0
+for f in "${mk_expect_kept[@]}"; do
+	if [[ ! -e "$f" ]]; then
+		echo "FAIL expected kept generation missing: $f"
+		mk_bad=1
+	fi
+done
+for f in "${mk_expect_pruned[@]}"; do
+	if [[ -e "$f" ]]; then
+		echo "FAIL expected pruned generation still present: $f"
+		mk_bad=1
+	fi
+done
+if ((mk_bad == 0)); then
+	echo "PASS MIN_KEEP kept newest 3 and pruned older 3 generations"
+else
+	failures=$((failures + 1))
+fi
+
+# 完了ログの kept は走査カウンタではなく実際の保持件数 (N-M) であること。
+# 既存テストは "==> complete:" の存在しか見ておらず kept= の値を検証していない。
+# 古い世代 3 件 + スクリプトの新規 1 件 = 走査 4、MIN_KEEP=2 により最古 1 件を
+# prune するため、kept は 3 (=4-1) でなければならない（バグ露呈時は 4 になる）。
+kept_dir="${work}/kept-log"
+mkdir -p "$kept_dir"
+chmod 700 "$kept_dir"
+for day in 1 2 3; do
+	f="${kept_dir}/openillustration-2099010${day}T000000Z.db.gpg"
+	printf 'old backup' >"$f"
+	touch -d '@1' "$f"
+done
+expect_success "kept log reflects actual kept count" env BACKUP_DIR="$kept_dir" BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=30 MIN_KEEP=2 "$script"
+if grep -q '==> complete: kept=3 pruned=1 retention_days=30' "${work}/out.log"; then
+	echo "PASS kept log reports kept=3 (= scanned 4 - pruned 1)"
+else
+	echo "FAIL kept log does not report actual kept count"
+	cat "${work}/out.log" >&2
+	failures=$((failures + 1))
+fi
+
 # オフサイト保存の成功と失敗。
 cat >"${work}/copy.sh" <<'EOF'
 #!/usr/bin/env bash
