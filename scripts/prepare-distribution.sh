@@ -57,7 +57,11 @@ echo "==> NOTICE を生成"
 
 echo "==> クレートのライセンス本文を収集"
 metadata="$(cargo metadata --format-version 1)"
-mkdir -p "${out_dir}/THIRD_PARTY_LICENSES"
+licenses_dir="${out_dir}/THIRD_PARTY_LICENSES"
+mkdir -p "$licenses_dir"
+# 生成前に出力先を作り直す。上書きケースで前回の stale な .txt が残ると
+# 末尾の find 件数が実依存数と一致しなくなるため、cp の前に削除する。
+find "$licenses_dir" -maxdepth 1 -type f -name '*.txt' -delete
 echo "$metadata" | jq -r '
   .packages[]
   | select(.source != null)
@@ -76,7 +80,7 @@ echo "$metadata" | jq -r '
 		done
 	fi
 	if [[ -n "$src" ]]; then
-		cp "$src" "${out_dir}/THIRD_PARTY_LICENSES/${name}-${version}.txt"
+		cp "$src" "${licenses_dir}/${name}-${version}.txt"
 	else
 		# ライセンス本文が取得できない依存は、不完全な配布物を作らないため fail-closed。
 		echo "no license text found for ${name}-${version}" >&2
@@ -84,5 +88,5 @@ echo "$metadata" | jq -r '
 	fi
 done
 
-count="$(find "${out_dir}/THIRD_PARTY_LICENSES" -type f | wc -l)"
+count="$(find "$licenses_dir" -type f | wc -l)"
 echo "==> 完了: ${out_dir} (依存ライセンス本文 ${count} 件)"

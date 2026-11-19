@@ -83,6 +83,9 @@ expect_failure "no recipient" env -u BACKUP_GPG_RECIPIENT -u ALLOW_UNENCRYPTED_B
 expect_failure "offsite plaintext refused" env -u BACKUP_GPG_RECIPIENT OFFSITE_COPY_CMD=/bin/true OFFSITE_DEST=/tmp "$script"
 expect_failure "invalid retention" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=abc "$script"
 expect_failure "octal retention (08)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=08 "$script"
+# RETENTION_DAYS の上限境界（36500 = 100年）。同桁は辞書順、桁超過は長さで拒否される。
+expect_failure "retention above max (36501)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=36501 "$script"
+expect_failure "retention far above max (100000)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=100000 "$script"
 expect_failure "octal min_keep (08)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=08 "$script"
 expect_failure "zero min_keep" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=0 "$script"
 expect_failure "alert without dest" env BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD=/bin/true "$script"
@@ -108,6 +111,9 @@ expect_success "encrypted backup" env BACKUP_GPG_RECIPIENT=test "$script"
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 # デフォルト値と同じ 30/3 を明示指定しても受け付けられること（先頭ゼロ除去の回帰防止）。
 expect_success "explicit retention/min_keep (30/3)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=30 MIN_KEEP=3 "$script"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+# 上限値そのもの（36500）は受理されること（上限比較の off-by-one 回帰防止）。
+expect_success "max retention (36500)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=36500 "$script"
 
 # オフサイト保存の成功と失敗。
 cat >"${work}/copy.sh" <<'EOF'

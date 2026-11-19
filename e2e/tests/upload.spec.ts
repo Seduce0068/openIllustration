@@ -139,11 +139,22 @@ test.describe('Content Upload Flow', () => {
     await expect(label).toHaveAttribute('tabindex', '0');
 
     // ラベルの keydown ハンドラが input.click() を呼び、filechooser が発火する（Enter ケースは維持）。
+    // 待機自体は waitForEvent のタイムアウトで失敗するため、ここでは発火した chooser が
+    // 実際に #file-upload へファイルを設定できることをオラクルにする（単純な toBeTruthy はしない）。
     const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 10000 });
     await label.focus();
     await page.keyboard.press('Enter');
     const fileChooser = await fileChooserPromise;
-    expect(fileChooser).toBeTruthy();
+    await fileChooser.setFiles({
+      name: 'keyboard-enter.jxl',
+      mimeType: 'image/jxl',
+      buffer: Buffer.from('keyboard enter file'),
+    });
+    expect(
+      await page
+        .locator('#file-upload')
+        .evaluate(input => Array.from((input as HTMLInputElement).files ?? []).map(file => file.name)),
+    ).toEqual(['keyboard-enter.jxl']);
 
     // Space (' ') でも filechooser が発火することを検証（client/src/lib.rs:1681-1683, 1823-1825）。
     // is_file_picker_activation_key(" ") が ev.prevent_default() を呼ぶため、
@@ -162,7 +173,16 @@ test.describe('Content Upload Flow', () => {
     await label.focus();
     await page.keyboard.press('Space');
     const spaceChooser = await spaceChooserPromise;
-    expect(spaceChooser).toBeTruthy();
+    await spaceChooser.setFiles({
+      name: 'keyboard-space.jxl',
+      mimeType: 'image/jxl',
+      buffer: Buffer.from('keyboard space file'),
+    });
+    expect(
+      await page
+        .locator('#file-upload')
+        .evaluate(input => Array.from((input as HTMLInputElement).files ?? []).map(file => file.name)),
+    ).toEqual(['keyboard-space.jxl']);
     expect(
       await page.evaluate(
         () => (window as unknown as { __spaceDefaultPrevented: boolean }).__spaceDefaultPrevented,

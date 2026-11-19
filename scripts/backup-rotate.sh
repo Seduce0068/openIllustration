@@ -54,6 +54,20 @@ if ! [[ "$retention_days" =~ ^(0|[1-9][0-9]*)$ && "$min_keep" =~ ^(0|[1-9][0-9]*
 	echo "RETENTION_DAYS and MIN_KEEP must be non-negative integers without leading zeros" >&2
 	exit 1
 fi
+# 実用的な上限（100年）を超える値は cutoff の 64bit 算術をオーバーフローさせる。
+# 桁数と辞書順で比較し、巨大な整数でも算術オーバーフローなしに拒否する
+# （先頭ゼロは上の正規表現で既に拒否済みなので、同桁の辞書順は数値順と一致する）。
+max_retention_days=36500
+if ((${#retention_days} > ${#max_retention_days})); then
+	echo "RETENTION_DAYS must not exceed ${max_retention_days}" >&2
+	exit 1
+fi
+if ((${#retention_days} == ${#max_retention_days})) &&
+	[[ "$retention_days" != "$max_retention_days" ]] &&
+	printf '%s\n%s\n' "$max_retention_days" "$retention_days" | sort -C; then
+	echo "RETENTION_DAYS must not exceed ${max_retention_days}" >&2
+	exit 1
+fi
 if ((min_keep < 1)); then
 	echo "MIN_KEEP must be at least 1" >&2
 	exit 1
