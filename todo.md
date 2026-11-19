@@ -316,8 +316,11 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: is_alphanumeric + to_lowercase再フィルタ（U+0130対策）。
 - [x] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
   2026-11-20 対応: E2E の test 名を `NEUT-URL-02` / `NEUT-URL-03` へ改名し、TEST_SPECIFICATION の表・シナリオ記述も改名済み名へ整合。
-- [ ] **オーファン ゲート ID（EXPORT-12, PAY-06〜08）を整理** — 根拠 `docs/TEST_SPECIFICATION.md:194,209` / disc TQ / 中。
-- [ ] **価格境界 E2E の実送信検証** — disc TQ / 中（R5-TS01 と同一、統合）。
+- [x] **オーファン ゲート ID（EXPORT-12, PAY-06〜08）を整理** — 根拠 `docs/TEST_SPECIFICATION.md:194,209` / disc TQ / 中。
+  2026-11-20 対応: TEST_SPECIFICATION の実 ID（EXPORT-09/10、PAY-01/04）へ統一し、
+  TASK_INVENTORY の旧 ID 記述も置換済み。
+- [x] **価格境界 E2E の実送信検証** — disc TQ / 中（R5-TS01 と同一、統合済み）。
+  2026-11-20: upload.spec.ts の0/1000001/1000000実送信で対応済み。
 
 ### 2026-11-19 全体レビューで追加（低）
 

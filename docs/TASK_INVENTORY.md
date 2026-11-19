@@ -391,9 +391,9 @@ status: current
   完了後に `begin_write_tx` 内の最新 `expires_at` で再判定し、期限切れなら EXPIRED 更新を
   コミットして400を返す（古い status を期待する CAS で FINALIZED へ進ませない）。
   verifier が `expires_at` を過去へ書き換える回帰テスト1件を追加し、再判定削除の mutation で
-  失敗を確認（PAY-08、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
+  失敗を確認（PAY-01、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] トランザクション直列化の回帰5件と仕様反映（2026-11-18、`fa16320` / `d1a8d65`）:
-  export lock 1件（EXPORT-12）、決済期限2件・固定受取アドレス2件（PAY-06〜07）を
+  export lock 1件（EXPORT-09）、決済期限2件・固定受取アドレス2件（PAY-01/04）を
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) へ追記。`me_export` は `begin_write_tx`
   経由で `write_lock` を取得し、共有 `Connection` の BEGIN を書き込みと直列化する。
   旧設計の無ロック記述は [DETAILED_DESIGN.md](DETAILED_DESIGN.md) と
