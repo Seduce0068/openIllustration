@@ -20,33 +20,39 @@ fn print_help() {
     );
 }
 
+/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
+    match it.next() {
+        Some(value) if !value.starts_with('-') => Ok(value),
+        _ => Err(anyhow!("{flag} requires a value")),
+    }
+}
+
 /// 引数を純粋にパースする。必須引数の欠落もここで検出する（`--help` は除外）。
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
+    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
+    let owned: Vec<String> = items.into_iter().collect();
+    parse_str_args(&owned)
+}
+
+fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
     let mut args = Args::default();
-    let mut it = items.into_iter().skip(1);
+    let mut it = items.iter().skip(1).map(String::as_str);
     while let Some(arg) = it.next() {
-        match arg.as_str() {
+        match arg {
             "-h" | "--help" => args.help = true,
             "--snapshot" => {
-                args.snapshot = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--snapshot requires a value"))?,
-                );
+                args.snapshot = Some(take_value(&mut it, "--snapshot")?.to_string());
             }
             "--public-key" => {
-                args.public_key = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--public-key requires a value"))?,
-                );
+                args.public_key = Some(take_value(&mut it, "--public-key")?.to_string());
             }
             "--expect-root" => {
-                args.expect_root = Some(
-                    it.next()
-                        .ok_or_else(|| anyhow!("--expect-root requires a value"))?,
-                );
+                args.expect_root = Some(take_value(&mut it, "--expect-root")?.to_string());
             }
             // argv は ps 等で公開される。トークン値は受け付けず、
             // エラーにも値をエコーしない（秘密値を出力しない）。
@@ -490,6 +496,34 @@ mod tests {
                 "{error:#}"
             );
         }
+    }
+
+    /// オプション風トークン（`-` 始まり）は値として受理しない。
+    /// `--database-token` を値として消費せず `requires a value` で拒否し、
+    /// ダミー値もトークン名もエラーにエコーしないことを検証する。
+    #[test]
+    fn option_like_token_is_rejected_as_value() {
+        const SECRET: &str = "SECRET_VALUE_MUST_NOT_APPEAR";
+        let error = parse_args_from(
+            [
+                "verify_audit_export",
+                "--snapshot",
+                "--database-token",
+                SECRET,
+            ]
+            .map(String::from),
+        )
+        .expect_err("--snapshot must reject an option-like token as its value");
+        let message = error.to_string();
+        assert!(
+            message.contains("--snapshot requires a value"),
+            "must reject with a value-required error: {message}"
+        );
+        assert!(!message.contains(SECRET), "dummy value leaked: {message}");
+        assert!(
+            !message.contains("--database-token"),
+            "consumed option token leaked: {message}"
+        );
     }
 
     #[test]
