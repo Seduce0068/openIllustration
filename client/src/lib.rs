@@ -1716,6 +1716,19 @@ fn is_file_picker_activation_key(key: &str) -> bool {
     matches!(key, "Enter" | " " | "Spacebar")
 }
 
+/// アップロード失敗時の文言を HTTP ステータスから選ぶ固定文言集合。
+/// `None` はステータスを取得できなかった場合（ネットワークエラー）。
+/// サーバーが返した本文や生エラーは決して表示しない。
+/// 401 は再ログイン、413 はクライアント側のサイズ拒否と同じ文言を案内する。
+fn upload_error_message(status: Option<u16>) -> String {
+    match status {
+        Some(401) => "再ログインが必要です。".to_string(),
+        Some(413) => "ERROR: File exceeds the 10 MiB limit.".to_string(),
+        Some(status) => format!("Failed to upload content (HTTP {status})."),
+        None => "Network error uploading content.".to_string(),
+    }
+}
+
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = signal(String::new());
@@ -1763,8 +1776,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         set_status.set("Generating forensic evidence...".to_string());
 
         // 失敗時に表示する文言は固定文字列のみ（生データ・機微情報は出さない）。
+        // HTTP エラー／ネットワークエラーは upload_error_message に統一する。
         const PREPARE_ERROR: &str = "アップロードの準備に失敗しました。";
-        const NETWORK_ERROR: &str = "ネットワークエラーが発生しました。";
         const RESPONSE_ERROR: &str = "アップロード結果の読み取りに失敗しました。";
 
         spawn_local(async move {
@@ -1814,16 +1827,20 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     .append_with_blob("signature", &sig_blob)
                     .map_err(|_| PREPARE_ERROR)?;
 
-                let response = Request::post(&format!("{}/content/upload", API_BASE))
+                let response = match Request::post(&format!("{}/content/upload", API_BASE))
                     .header("Authorization", &format!("Bearer {}", token))
                     .body(form_data)
                     .map_err(|_| PREPARE_ERROR)?
                     .send()
                     .await
-                    .map_err(|_| NETWORK_ERROR)?;
+                {
+                    Ok(response) => response,
+                    // ネットワークエラーも固定文言へ統一（生エラーは出さない）。
+                    Err(_) => return Ok(upload_error_message(None)),
+                };
 
                 if !response.ok() {
-                    return Ok("ERROR: Upload failed.".to_string());
+                    return Ok(upload_error_message(Some(response.status())));
                 }
                 let cid = response
                     .json::<String>()
@@ -2073,6 +2090,25 @@ fn stats_error_message(failure: StatsFailure) -> &'static str {
     }
 }
 
+/// 二重送信ガードの同期判定。送信中（`busy == true`）なら新規送信を開始しない。
+/// `disabled` の DOM 反映より前に届く2回目のクリックも止めるため、
+/// イベントハンドラの先頭で呼ぶ。純粋関数なので単体テストで検証できる。
+fn claim_submission(busy: bool) -> bool {
+    !busy
+}
+
+/// 送信中フラグを確実に解除する RAII ガード。
+/// `spawn_local` 内の `match` を成否いずれのアームで抜けても、スコープ離脱時に `Drop` が走って
+/// busy を解除し、以降の送信が止まることを防ぐ（favorite_busy と同じ方針）。
+/// wasm の panic=abort では unwind しないため、panic 時の `Drop` には依存しない。
+struct BusyGuard(WriteSignal<bool>);
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.set(false);
+    }
+}
+
 #[component]
 fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
@@ -2089,6 +2125,10 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     // 投票結果のフィードバック。成功通知と失敗エラーは固定文言のみを表示する。
     let (vote_error, set_vote_error) = signal(String::new());
     let (vote_notice, set_vote_notice) = signal(String::new());
+    // 通報・投票の二重送信を防ぐガード。favorite_busy と同じく、
+    // 送信開始時に true、レスポンス処理完了後（成否・panic 問わず）に false へ戻す。
+    let (report_busy, set_report_busy) = signal(false);
+    let (vote_busy, set_vote_busy) = signal(false);
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
@@ -2175,11 +2215,18 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     });
 
     let submit_report = move |_| {
+        // 同期ガード: DOM の disabled 反映前に届く2回目のクリックもここで止める。
+        if !claim_submission(report_busy.get()) {
+            return;
+        }
+        set_report_busy.set(true);
         let cid = cid.get();
         let reason = reason.get();
         let token = token_stored.get_value();
         set_status.set("Submitting report...".to_string());
         spawn_local(async move {
+            // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
+            let _release = BusyGuard(set_report_busy);
             let res = Request::post(&format!("{}/mod/report", API_BASE))
                 .header("Authorization", &format!("Bearer {}", token))
                 .json(&serde_json::json!({
@@ -2191,24 +2238,32 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 .unwrap()
                 .send()
                 .await;
-            if let Ok(r) = res
-                && r.ok()
-            {
-                set_status.set("Report accepted. Content marked Reported.".to_string());
-                fetch_reports();
-            } else {
-                set_status.set("Report failed.".to_string());
+            match res {
+                Ok(r) if r.ok() => {
+                    set_status.set("Report accepted. Content marked Reported.".to_string());
+                    fetch_reports();
+                }
+                _ => {
+                    set_status.set("Report failed.".to_string());
+                }
             }
         });
     };
 
     let do_vote = move |report_id: i64, result: String| {
+        // 同期ガード: DOM の disabled 反映前に届く2回目のクリックもここで止める。
+        if !claim_submission(vote_busy.get()) {
+            return;
+        }
+        set_vote_busy.set(true);
         // 新しい試行では前回の通知・エラーを必ず消す。
         set_vote_error.set(String::new());
         set_vote_notice.set(String::new());
         let token = token_stored.get_value();
         let user_hash = user_hash_stored.get_value();
         spawn_local(async move {
+            // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
+            let _release = BusyGuard(set_vote_busy);
             let mock_signature = vec![0u8; 256];
             let res = Request::post(&format!("{}/mod/vote", API_BASE))
                 .header("Authorization", &format!("Bearer {}", token))
@@ -2268,6 +2323,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     class="w-full bg-black border border-white/20 p-3 text-sm h-24"
                 />
                 <button on:click=submit_report
+                    disabled=move || report_busy.get()
+                    aria-busy=move || if report_busy.get() { "true" } else { "false" }
                     class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
                     "SUBMIT FORENSIC REPORT"
                 </button>
@@ -2308,10 +2365,14 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                                     <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
                                     <div class="grid grid-cols-2 gap-4">
                                         <button on:click=move |_| do_vote(rid, "Approve".to_string())
+                                            disabled=move || vote_busy.get()
+                                            aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-green-500/50 text-green-500 text-[8px] hover:bg-green-500 hover:text-black transition-colors">
                                             "APPROVE (RESTORE)"
                                         </button>
                                         <button on:click=move |_| do_vote(rid, "Reject".to_string())
+                                            disabled=move || vote_busy.get()
+                                            aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-red-500/50 text-red-500 text-[8px] hover:bg-red-500 hover:text-black transition-colors">
                                             "REJECT (BAN)"
                                         </button>
@@ -2360,6 +2421,20 @@ mod tests {
     }
 
     #[test]
+    fn claim_submission_rejects_clicks_while_busy_and_recovers_after_release() {
+        // アイドル時は最初のクリックで送信を開始する。
+        let mut busy = false;
+        assert!(super::claim_submission(busy));
+        // 送信中の連打はすべて無視する（vote / report 共通の判定）。
+        busy = true;
+        assert!(!super::claim_submission(busy));
+        assert!(!super::claim_submission(busy));
+        // レスポンス処理後に解除されれば、次の試行を受け付ける。
+        busy = false;
+        assert!(super::claim_submission(busy));
+    }
+
+    #[test]
     fn file_picker_activates_only_on_enter_or_space() {
         assert!(super::is_file_picker_activation_key("Enter"));
         assert!(super::is_file_picker_activation_key(" "));
@@ -2390,6 +2465,57 @@ mod tests {
             super::favorite_error_message(None),
             "Network error updating favorite."
         );
+    }
+
+    #[test]
+    fn upload_error_message_uses_dedicated_401_and_413_text() {
+        assert_eq!(
+            super::upload_error_message(Some(401)),
+            "再ログインが必要です。"
+        );
+        assert_eq!(
+            super::upload_error_message(Some(413)),
+            "ERROR: File exceeds the 10 MiB limit."
+        );
+    }
+
+    #[test]
+    fn upload_error_message_uses_http_status_and_network_text() {
+        assert_eq!(
+            super::upload_error_message(Some(500)),
+            "Failed to upload content (HTTP 500)."
+        );
+        assert_eq!(
+            super::upload_error_message(Some(400)),
+            "Failed to upload content (HTTP 400)."
+        );
+        assert_eq!(
+            super::upload_error_message(None),
+            "Network error uploading content."
+        );
+    }
+
+    #[test]
+    fn upload_error_message_never_leaks_raw_error_or_server_body() {
+        // サーバー本文・生エラーの断片が全分岐で一切混入しないことを確認する。
+        let leaked = [
+            "Disallowed content type",
+            "price must not exceed",
+            "request body exceeds 10 MiB",
+            "forced arrayBuffer failure",
+            "reqwest",
+            "TypeError",
+            "panicked",
+        ];
+        for status in [Some(401), Some(413), Some(400), Some(500), None] {
+            let message = super::upload_error_message(status);
+            for fragment in leaked {
+                assert!(
+                    !message.contains(fragment),
+                    "status={status:?} の文言に生エラー断片 {fragment:?} が含まれる: {message}"
+                );
+            }
+        }
     }
 
     #[test]

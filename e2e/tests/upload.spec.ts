@@ -95,7 +95,7 @@ test.describe('Content Upload Flow', () => {
     const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
     await submitButton.click();
 
-    await expect(page.locator('text=ERROR: Upload failed')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=Failed to upload content (HTTP 400).')).toBeVisible({ timeout: 10000 });
   });
 
   test('R1-14: shows an error and re-enables the button when arrayBuffer() rejects', async ({ page }) => {
@@ -222,7 +222,7 @@ test.describe('Content Upload Flow', () => {
     // 1000001: 上限超過はサーバー側で拒否され、固定の失敗文言のみ表示。
     await priceInput.fill('1000001');
     await submitButton.click();
-    await expect(status).toContainText('ERROR: Upload failed.', { timeout: 15000 });
+    await expect(status).toContainText('Failed to upload content (HTTP 400).', { timeout: 15000 });
     await expect(status).not.toContainText('price must not exceed');
 
     // 1000000: 上限境界は受理。

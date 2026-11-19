@@ -11,14 +11,14 @@ crate-type = ["cdylib"]
 # （内部 URL・リクエストデータ・スタック情報のコンソール流出を防ぐ）。
 # `dep:` 構文で optional dependency の暗黙 feature を作らない。
 [features]
-dev-console = ["dep:console_log", "dep:console_error_panic_hook"]
+dev-console = ["dep:console_log", "dep:console_error_panic_hook", "dep:log"]
 
 [dependencies]
 common = { path = "../common" }
 leptos = { version = "0.8", features = ["csr"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 console_log = { version = "1.0", optional = true }
-log = "0.4"
+log = { version = "0.4", optional = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wasm-bindgen = "0.2"
