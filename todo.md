@@ -335,6 +335,10 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
   2026-11-20 対応: cid_scope_token + prefixed描画、audit id も cid付与、StoredValue化。
 - [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
+  2026-11-20 吟味の結果見送り: A/B で全件並走時に real-api 4件が /auth/verify タイムアウトで
+  失敗したが、単独実行では差分の有無にかかわらず成功。真の原因は他 spec との並走による
+  実サーバー競合で IntersectionObserver 差分とは非因果（ci-e2e.sh で real-api 単独実行へ
+  分離して解消）。遅延ロード自体は再検討候補として残す。
 - [x] **アップロード失敗を HTTP ステータス別固定文言へ** — 根拠 `client/src/lib.rs:1825-1826` / disc VU / 中。
   2026-11-20 対応: `upload_error_message` の4分岐（401=再ログイン / 413=サイズ超過 /
   その他=`Failed to upload content (HTTP {status}).` / None=`Network error uploading content.`）を
@@ -418,6 +422,10 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-20: real-api E2E の /auth/verify タイムアウトは他 spec との並走による実サーバー競合が
+  真の原因。ci-e2e.sh を real-api 単独実行＋残り11spec の2段階へ分離し、失敗時後処理を
+  共通関数化（artifact 収集を両ブロックで実施）。52+4=56件 green を確認。
 
 - 2026-11-20: real-api.spec.ts の /auth/verify 待ちタイムアウトは、全E2E実行時のみ再現し
   単独実行（E2E_REUSE=0 E2E_CLIENT_PORT=18125）では4件すべて成功。R4 レビューでも今回の

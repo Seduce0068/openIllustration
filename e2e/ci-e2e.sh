@@ -226,20 +226,37 @@ echo "==> 型チェック"
 (cd e2e && npm run typecheck)
 
 echo "==> Playwright テスト: ${selected_projects[*]}"
-if ! (cd e2e && npm test -- "${project_args[@]}"); then
-	# extra_gates では artifact を回収できないため、失敗時は Playwright が
-	# 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
-	echo "::error::Playwright E2E failed"
+# extra_gates では artifact を回収できないため、失敗時は Playwright が
+# 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
+report_e2e_failure() {
+	local label="$1"
+	echo "::error::Playwright E2E failed (${label})"
 	find e2e/test-results -name 'error-context.md' -print 2>/dev/null || true
 	find e2e/test-results -name 'error-context.md' -exec head -c 20000 {} \; 2>/dev/null || true
 
 	# トレース・スクリーンショット・HTML レポートをタイムスタンプ付きで保存する。
 	mkdir -p "$artifact_dir" || true
-	archive="${artifact_dir}/e2e-failure-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+	archive="${artifact_dir}/e2e-failure-${label}-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 	if tar -czf "$archive" -C "$repo_root" e2e/test-results e2e/playwright-report 2>/dev/null; then
 		echo "E2E failure artifacts: ${archive}"
 	else
 		echo "warning: failed to archive E2E artifacts" >&2
 	fi
 	exit 1
+}
+
+# 実サーバー結合（real-api）は共有 DB/ポートを使うため、他 spec と同じ
+# プロセスで並走するとログインの /auth/verify がタイムアウトする。
+# 先に real-api 単独で実行し、成功した場合のみ残り11 spec を実行する。
+if ! (cd e2e && npm test -- tests/real-api.spec.ts "${project_args[@]}" --workers=1); then
+	report_e2e_failure "real-api"
+fi
+remaining_specs=(
+	tests/auth.spec.ts tests/build-gate.spec.ts tests/economy.spec.ts
+	tests/error-paths.spec.ts tests/export.spec.ts tests/favorites.spec.ts
+	tests/integrity.spec.ts tests/metrics.spec.ts tests/moderation.spec.ts
+	tests/search.spec.ts tests/upload.spec.ts
+)
+if ! (cd e2e && npm test -- "${remaining_specs[@]}" "${project_args[@]}"); then
+	report_e2e_failure "unit-specs"
 fi
