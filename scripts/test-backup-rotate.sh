@@ -307,6 +307,18 @@ new_backup_dir "$cleanup_dir"
 expect_failure "cleanup on verify_backup failure" env BACKUP_DIR="$cleanup_dir" BIN_DIR="${work}/fail-verify-bin" BACKUP_GPG_RECIPIENT=test "$script"
 cleanup_no_leftovers "verify_backup failure" "$cleanup_dir"
 
+assert_plaintext_retained() {
+	local name="$1" dir="$2"
+	local -a plains=()
+	mapfile -d '' plains < <(find "$dir" -maxdepth 1 -type f -name 'openillustration-*.db' -print0)
+	if ((${#plains[@]} == 1)) && [[ "$(cat "${plains[0]}")" == "dummy backup" ]]; then
+		echo "PASS ${name}: plaintext retained and restorable"
+	else
+		echo "FAIL ${name}: plaintext lost on ciphertext publish failure"
+		failures=$((failures + 1))
+	fi
+}
+
 # gpg 失敗: 暗号化失敗時も作業ディレクトリは残さない（最終パスの平文は fail-closed で維持）。
 cat >"${work}/fail-gpg" <<'EOF'
 #!/usr/bin/env bash
@@ -318,6 +330,50 @@ cleanup_dir="${work}/cleanup-gpg"
 new_backup_dir "$cleanup_dir"
 expect_failure "cleanup on gpg failure" env BACKUP_DIR="$cleanup_dir" GPG_BIN="${work}/fail-gpg" BACKUP_GPG_RECIPIENT=test "$script"
 cleanup_no_leftovers "gpg failure" "$cleanup_dir"
+assert_plaintext_retained "gpg failure" "$cleanup_dir"
+
+# 暗号文公開失敗時に平文が残り復元可能であること（完全喪失の回帰防止）。
+# gpg 暗号化は成功させた上で、公開直前の assert_publishable / mv を失敗させる。
+
+# (a) assert_publishable 失敗: gpg スタブが公開先にダングリング symlink を置く。
+cat >"${work}/publish-assert-fail-gpg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+src="${!#}"
+while (($#)); do
+  if [[ "$1" == --output ]]; then
+    printf 'dummy encrypted' > "$2"
+    break
+  fi
+  shift
+done
+# 平文最終パス + .gpg にダングリング symlink を置き、公開直前の
+# assert_publishable を失敗させる（gpg 暗号化自体は成功）。
+ln -s "${src}.missing" "${src}.gpg"
+EOF
+chmod +x "${work}/publish-assert-fail-gpg"
+publish_dir="${work}/publish-assert-fail"
+new_backup_dir "$publish_dir"
+expect_failure "assert_publishable failure on ciphertext publish" env BACKUP_DIR="$publish_dir" GPG_BIN="${work}/publish-assert-fail-gpg" BACKUP_GPG_RECIPIENT=test "$script"
+assert_plaintext_retained "assert_publishable failure" "$publish_dir"
+
+# (b) mv 失敗: .gpg を含む rename だけを失敗させ、それ以外の mv は委譲する。
+mkdir -p "${work}/mv-fail-bin"
+cat >"${work}/mv-fail-bin/mv" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == *.gpg ]]; then
+    echo "simulated mv failure" >&2
+    exit 12
+  fi
+done
+exec /bin/mv "$@"
+EOF
+chmod +x "${work}/mv-fail-bin/mv"
+publish_dir="${work}/publish-mv-fail"
+new_backup_dir "$publish_dir"
+expect_failure "mv failure on ciphertext publish" env PATH="${work}/mv-fail-bin:${PATH}" BACKUP_DIR="$publish_dir" BACKUP_GPG_RECIPIENT=test "$script"
+assert_plaintext_retained "mv failure" "$publish_dir"
 
 # オフサイト失敗。
 cleanup_dir="${work}/cleanup-offsite"

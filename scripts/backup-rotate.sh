@@ -199,10 +199,11 @@ if [[ -n "$gpg_recipient" ]]; then
 		rm -f "$tmp_encrypted"
 		exit 1
 	fi
-	# 暗号化が成功した場合のみ平文を削除（失敗時は平文を残して復旧可能にする）。
-	rm -f "$output"
+	# 暗号化成功後は暗号文を先に公開し、その成功後に平文を削除する。
+	# assert_publishable / mv が失敗した場合は平文が残り復元できる（fail-closed）。
 	assert_publishable "$encrypted" || exit 1
 	mv -T -- "$tmp_encrypted" "$encrypted"
+	rm -f "$output"
 	echo "==> plaintext removed: ${output}"
 fi
 rmdir "$tmp_dir"

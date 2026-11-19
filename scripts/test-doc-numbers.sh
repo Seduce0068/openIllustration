@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ドキュメント記載の数値（E2E件数 / doctorチェック数 / migration範囲）と
+# ドキュメント記載の数値（E2E件数 / doctorチェック数 / migration範囲 / CLI bin テスト数）と
 # Rust テスト名が実コードと乖離していないことを検査する回帰スクリプト。
 set -euo pipefail
 
@@ -149,6 +149,40 @@ for name in "${doc_test_names[@]}"; do
 		echo "FAIL test name: '${name}' is documented in ${spec} but not found in source" >&2
 		failures=$((failures + 1))
 	fi
+done
+
+# --- 5. bin テスト数の照合 -------------------------------------------------
+# doctor / verify_audit_export / verify_backup の #[test] / #[tokio::test] の実数を
+# grep -c で数え、TEST_SPECIFICATION の記載件数（<bin> <N>件 / <bin> <N>テスト）と照合する。
+# 一方向のみ: ドキュメント側の記載が実コードとずれていれば FAIL とし、実コード側の
+# 全テストがドキュメントへ載っていることは要求しない（履歴表記と衝突しないため）。
+# 「当初 / 旧 / 既存 / 追加」を伴う内訳・増分表記は総数ではないため照合対象外。
+doc_bin_counts() {
+	local bin="$1"
+	grep -oE "${bin}[^0-9]{0,8}[0-9]+(件|テスト)" "$spec" |
+		grep -vE '当初|旧|既存|追加' |
+		grep -oE '[0-9]+' |
+		sort -u ||
+		true
+}
+
+for bin_name in doctor verify_audit_export verify_backup; do
+	case "$bin_name" in
+	doctor) bin_file="server/src/bin/doctor.rs" ;;
+	verify_audit_export) bin_file="server/src/bin/verify_audit_export.rs" ;;
+	verify_backup) bin_file="server/src/bin/verify_backup.rs" ;;
+	esac
+	actual_tests="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$bin_file" || true)"
+	documented_tests="$(doc_bin_counts "$bin_name")"
+	if [[ -z "$documented_tests" ]]; then
+		echo "FAIL ${bin_name} test count: no documented '<${bin_name}> <N>件' line found in ${spec}" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	while IFS= read -r documented_n; do
+		[[ -z "$documented_n" ]] && continue
+		assert_numbers_match "${bin_name} test count" "$actual_tests" "$documented_n"
+	done <<<"$documented_tests"
 done
 
 # --- 結果 ----------------------------------------------------------------
