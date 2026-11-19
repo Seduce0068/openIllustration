@@ -1810,6 +1810,32 @@ fn upload_error_message(status: Option<u16>) -> String {
     }
 }
 
+/// 数値を価格として使える整数かどうかを判定する純粋関数。
+///
+/// `NaN` / 無限大 / 小数 / i32 範囲外は `None` とし、呼び出し側が直前の有効値を保持する。
+/// 旧実装の `unwrap_or(0)` は入力途中の空文字や `e` などを 0 円へ化けていたため、
+/// 失敗時に signal を書き換えないことをここで保証する。
+fn price_from_number(value: f64) -> Option<i32> {
+    if !value.is_finite()
+        || value.fract() != 0.0
+        || value < i32::MIN as f64
+        || value > i32::MAX as f64
+    {
+        return None;
+    }
+    Some(value as i32)
+}
+
+/// 価格入力の文字列を解釈する純粋関数（単体テスト用）。
+///
+/// `str::parse::<f64>()` により `1e3` のような指数表記も受理し、
+/// 整数判定と範囲検査は `price_from_number` へ委譲する。
+/// 実 UI ではブラウザの `input.valueAsNumber` を同じ判定へ通す（下記 `on:input` を参照）。
+#[cfg(test)]
+fn parse_price_input(raw: &str) -> Option<i32> {
+    price_from_number(raw.parse::<f64>().ok()?)
+}
+
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = signal(String::new());
@@ -1973,7 +1999,21 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         name="price"
                         min="1"
                         max="1000000"
-                        on:input=move |ev| set_price.set(event_target_value(&ev).parse().unwrap_or(0))
+                        on:input=move |ev| {
+                            // ブラウザ自身の数値解釈（valueAsNumber）を使う。Rust 側で文字列を
+                            // パースしないため 1e3 のような指数表記も 1000 として受理する。
+                            // 有限・整数・i32 範囲内でなければ signal を更新せず直前値を保持し、
+                            // 受理時は 0 / 1000001 も丸めずにそのまま送る。
+                            let Some(target) = ev.target() else {
+                                return;
+                            };
+                            let Ok(input) = target.dyn_into::<HtmlInputElement>() else {
+                                return;
+                            };
+                            if let Some(value) = price_from_number(input.value_as_number()) {
+                                set_price.set(value);
+                            }
+                        }
                         prop:value=price
                         class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />
                 </div>
@@ -2596,6 +2636,71 @@ mod tests {
                     "status={status:?} の文言に生エラー断片 {fragment:?} が含まれる: {message}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn price_parse_failure_keeps_previous_valid_value() {
+        // parse 成功時は入力値をそのまま返す（0 / 上限超過も丸めない）。
+        assert_eq!(super::parse_price_input("0"), Some(0));
+        assert_eq!(super::parse_price_input("1"), Some(1));
+        assert_eq!(super::parse_price_input("1000000"), Some(1_000_000));
+        assert_eq!(super::parse_price_input("1000001"), Some(1_000_001));
+
+        // 指数表記はブラウザの valueAsNumber と同じく受理（1e3 -> 1000）。
+        assert_eq!(super::parse_price_input("1e3"), Some(1_000));
+        assert_eq!(super::parse_price_input("1E6"), Some(1_000_000));
+
+        // parse 失敗時は None。signal を更新しないため直前の有効値が保持される。
+        let mut price = 100;
+        for raw in [
+            "",
+            "-",
+            "e",
+            "1e",
+            "abc",
+            "1.5",
+            "NaN",
+            "inf",
+            "999999999999999999999999",
+        ] {
+            assert_eq!(super::parse_price_input(raw), None, "raw={raw:?}");
+            if let Some(value) = super::parse_price_input(raw) {
+                price = value;
+            }
+            assert_eq!(price, 100, "raw={raw:?} で直前値が保持されていない");
+        }
+    }
+
+    /// 送信前検証の固定文言。生入力値は決め打ちで混入させない。
+    const PRICE_RANGE_ERROR: &str = "Price must be between 1 and 1000000 JPY.";
+
+    /// 0..=1000000 の範囲外なら dedicated エラーを返す純粋関数（テスト内ヘルパー）。
+    /// サーバーは `price < 0` のみ拒否して 0 を受理するため、下限を 0 へ揃える。
+    /// 価格境界 E2E は 0 / 1000001 / 1000000 の実送信を期待するため、
+    /// `sign_and_upload` への接続は E2E 側の契約変更と同時に行う必要がある。
+    fn price_range_error(price: i32) -> Option<&'static str> {
+        if (0..=1_000_000).contains(&price) {
+            None
+        } else {
+            Some(PRICE_RANGE_ERROR)
+        }
+    }
+
+    #[test]
+    fn price_range_error_is_fixed_text_without_raw_input() {
+        for price in [-1, 1_000_001, i32::MAX] {
+            assert_eq!(
+                price_range_error(price),
+                Some(PRICE_RANGE_ERROR),
+                "price={price}"
+            );
+        }
+        // 生入力値（例: 1000001）は固定文言に混入しない。
+        assert!(!PRICE_RANGE_ERROR.contains("1000001"));
+        // 0 はサーバーと同じく受理（E2E の 0 成功と整合）。
+        for price in [0, 1, 100, 1_000_000] {
+            assert_eq!(price_range_error(price), None, "price={price}");
         }
     }
 
