@@ -254,8 +254,11 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
   現状はシェル文字列パターンのみで fail-open 回帰を実挙動で担保できていない。
   2026-11-19 対応: 検証をverify_trunk_archive.shへ抽出し実改ざんでexit1/未展開を検証（E2E54件）。
-- [ ] **GOV-01 要約 E2E を生 PII 入力→[redacted] 表示へ** — 根拠 `e2e/tests/moderation.spec.ts:9-14` / R5-TS01 / 重大度 high。
-  モックが既に要約済み値を返しオラクルが自明。
+- [x] **GOV-01 要約 E2E を生 PII 入力→[redacted] 表示へ** — 根拠 `e2e/tests/moderation.spec.ts:9-14` / R5-TS01 / 重大度 high。
+  却下してクローズ（2026-11-19 判断、本ファイル「メモ」の Runtime Proof と整合）。要約は
+  `common::summarize_reason` がサーバー側で行い、`e2e/tests/moderation.spec.ts:6-8` のとおり
+  E2E は要約済み値をモックから返す設計。生 PII を E2E 入力へ入れると DOM に露出し実装と
+  矛盾するため却下（R5-TS01 / 過去の判断を維持）。担保は Rust 単体・property テスト。
 - [x] **Upoad 価格境界 E2E を属性存在→実送信へ** — 根拠 `e2e/tests/upload.spec.ts:172-174` / R5-TS01 / 重大度 high。
   min/max 属性だけでは JS/API バリデーション回帰を検出できない。2026-11-19 対応済み。
 - [x] **ADR-0002/0003 の「提案」残存を確定記述へ** — 根拠 `docs/adr/ADR-0002-jpki-authentication.md:35` / R5-DC01 / 重大度 high。

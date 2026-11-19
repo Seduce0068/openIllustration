@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T05:23:08+09:00"
+  at: "2026-11-20T07:54:20+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -610,7 +610,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は各パーサが不正値・範囲外を
   既定へフォールバックするため、`rate_limit` と同じ方式で「生のパース値」と「正規化後の値」を
   比較し、フォールバック時に当該カテゴリへ警告1件を計上する（設定値自体は出力しない）。
-  旧3件＋新規2件（graceful drain / moderation finalize）の計5件を検出し、検査数は旧19→21へ拡張。境界テスト7件（非数値 / `0` / 範囲外 / 有効値）
+  旧3件＋新規2件（graceful drain / moderation finalize）の計5件を検出し、検査数は旧19→22へ拡張（途中21を経由）。境界テスト7件（非数値 / `0` / 範囲外 / 有効値）
   でフォールバック検出と値非出力を検証する。
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。

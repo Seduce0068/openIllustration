@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-20T07:27:11+09:00"
+  at: "2026-11-20T07:54:20+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -192,7 +192,9 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `IPFS_GATEWAYS`: `{cid}` を含む http(s) URL テンプレート。
 - `IPFS_TIMEOUT_SECS`: 1〜300。既定 15。
 - `IPFS_MAX_ATTEMPTS`: ネットワークエラー時の再試行回数。既定 1、有効範囲 1〜5。
-- `PINATA_JWT`: 未設定時は模擬動作。
+- `PINATA_JWT`: 開発（`ALLOW_MOCK_AUTH=1`）のみ模擬動作。本番相当（`ALLOW_MOCK_AUTH` 無効）では
+  実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。
+  `doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。
 
 ### 年齢/地域ポリシー（DEC-02、非秘密・常時公開）
 
@@ -259,7 +261,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。
   `OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
-- `scripts/test-backup-rotate.sh`: 上記の設定分岐（fail-closed 23件・正常系7件、計30件の
+- `scripts/test-backup-rotate.sh`: 上記の設定分岐（fail-closed 23件・正常系9件、計32件の
   `expect_*` 呼び出し）を外部サービスなしで検証する回帰テスト。上限 RETENTION_DAYS=20000 での
   prune 境界テストを含む。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T05:23:08+09:00"
+  at: "2026-11-20T07:54:20+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T05:23:08+09:00"
+  at: "2026-11-20T07:54:20+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -224,6 +224,20 @@ R5-04 の12表エクスポートを単一時点のスナップショットにす
 | `test_fixed_address_order_waits_for_write_transaction` | 固定アドレス分岐の INSERT も HD 分岐と同じく `write_lock` 経由。ロック保持中は完了せず、解放後に成功する。`insert_payment_order(&state.db, ...)` に戻す mutation で失敗 |
 | `test_payment_verify_rechecks_expiry_after_verification` | verifier が `expires_at` を過去へ書き換えても、CAS 前に tx 内の最新値で再判定し、EXPIRED＋400を返す。FINALIZED へ進まず `tx_hash` / `confirmations` も書き込まれない。再判定を外す mutation で失敗 |
 
+### 決済 DB エラー判別のオラクル（PAY）
+
+verify の CAS 更新失敗を「送金の再利用」とみなすのは UNIQUE 違反のみで、
+それ以外の DB エラーは Internal(500) へ写像する（内部詳細はマスク）。
+判別は `is_unique_constraint_violation` がローカル／リモート双方の表現を扱う。
+
+| テスト関数 | 検証する test oracle |
+| --- | --- |
+| `local_unique_error_is_detected` | ローカル `SqliteFailure(2067, "UNIQUE constraint failed: ...")` は違反と判定。`SqliteFailure(5, "database is locked")` は非違反 |
+| `remote_unique_error_is_detected_by_code_and_extended_code` | リモート `RemoteSqliteFailure` を extended code(2067) / basic code(2067) / メッセージの3経路で検出。`RemoteSqliteFailure(19, 5, "database is locked")` は非違反 |
+| `test_payment_verify_maps_non_unique_db_error_to_internal` | CAS 更新に `RAISE(ABORT)` トリガを張り、非 UNIQUE の DB エラーが400（再利用）へ写像されず Internal(500)＋マスク済み本文（`Internal server error`）になることを確認 |
+
+いずれもサーバー側テストであり、E2E 定義数は56件のまま変わらない。
+
 ### 通報理由の要約のテスト設計（R5-04 関連）
 
 `common::summarize_reason` と `GET /mod/reports` を対象に、PII 除去・境界・日本語・
@@ -278,7 +292,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 いずれもダミーの `JWT_SECRET`（32バイト以上）を設定した実測値である（2026-11-18、ビルド済み
 `target/debug/doctor` で確認）。`mock_auth_enabled` / `ipv4_localhost` / `trusted_proxy` の追加に
-より検査数は14となり（その後の追加を経て現行は21）、`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。
+より検査数は14となり（その後の追加を経て現行は22）、`ALLOW_MOCK_AUTH=1` 単独でも問題が1件計上される。
 `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` 未設定なら追加問題は出ない。よって P5 は
 `--strict` で終了コード1であり（旧挙動の0ではない）、`--strict` の判定は
 `should_fail(strict, problems)` に委譲される。P4 の jwt 警告はダミー PEM が無効なことに
@@ -309,7 +323,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 - `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` に加え
   `graceful_drain_timeout` / `moderation_finalize_interval` も `rate_limit` と同じく
   「生のパース値」と「正規化後の値」を比較し、既定へフォールバックした場合に当該カテゴリへ
-  警告1件を計上する。後者2つは新規カテゴリとして追加し `check(s)` は19から21へ増える。
+  警告1件を計上する。後者2つは新規カテゴリとして追加し `check(s)` は19→21→22へ増えた（現行22）。
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
@@ -358,7 +372,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 各テストは警告文の完全一致で値のエコーを防ぎ、有効値と未設定では警告が出ないことも検証する。
 `graceful_drain_timeout` / `moderation_finalize_interval` は新規カテゴリとして追加し、
-`doctor: 22 check(s)` となる（旧19から+2）。`lib.rs` のパーサ範囲（1..=300 / 30..=3600）
+`doctor: 22 check(s)` となる（旧19から+3、途中21を経由）。`lib.rs` のパーサ範囲（1..=300 / 30..=3600）
 と同一の境界を doctor 側でも比較する。
 
 #### CLI-02: `verify_audit_export`（`server/src/bin/verify_audit_export.rs`、19テスト）
