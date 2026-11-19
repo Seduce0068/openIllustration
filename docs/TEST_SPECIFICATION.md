@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T08:18:13+09:00"
+  at: "2026-11-20T08:35:15+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T08:18:13+09:00"
+  at: "2026-11-20T08:35:15+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -933,7 +933,7 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 ### E2E エクスポートシナリオ（R5-04）
 
 `e2e/tests/export.spec.ts` の `R5-04: Export My Data` は、モック認証
-（`ALLOW_MOCK_AUTH=1`）でログイン後、Dashboard の `EXPORT MY DATA`
+（`ALLOW_MOCK_AUTH=1`）でログイン後、Dashboard の `データをエクスポート`
 （`aria-label` 付き、`data-testid="export-my-data"`）ボタンからエクスポートを実行する。
 
 1. 認証トークン付きで `GET /me/export` を呼び、`page.waitForEvent('download')` で

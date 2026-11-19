@@ -247,8 +247,10 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **リクエスト相関 ID とアクセスログを追加** — 根拠 `server/src/lib.rs:234-251` / R4-OB01 / 重大度 high。
   x-request-id 生成・伝播と method/path/status/duration ログが無く、Internal エラーの事後調査不可。
   2026-11-19 対応: tower-http trace feature、MatchedPathベースのJSONログ、3テスト。
-- [ ] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:714-750` / R2-BV01 / 重大度 high。
-  remove_file + create_new が非原子で、同時起動で排他が破れる。
+- [x] **単一ライター・ロックの stale 回収 TOCTOU を解消** — 根拠 `server/src/lib.rs:840-882` / R2-BV01 / 重大度 high。
+  2026-11-20 吟味の結果却下（対応済みとしてクローズ）: 現行実装は stale 判定後の再読込一致チェックと
+  create_new の AlreadyExists 拒否を備え、同時起動では必ず片方が失敗するため排他は破れない。
+  OS の flock への置換は不要（追加依存・プラットフォーム差のリスクのみ）。
 - [x] **通報送信 (/mod/report) の失敗系 E2E を追加** — 根拠 `e2e/tests/moderation.spec.ts:102` / disc TQ / 重大度 high。
   HTTP 500/network abort の固定文言・サーバー本文非表示が未検証。2026-11-19 対応済み。
 - [x] **ビルドゲート E2E を実バイナリ改ざんの統合テストへ** — 根拠 `e2e/tests/build-gate.spec.ts:5-8` / R5-TS01 / 重大度 high。
@@ -368,12 +370,14 @@ P2（品質・保守・プロダクト拡張）:
 
 ### 2026-11-19 全体レビューで追加（低）
 
-- [ ] **UI 文言を日本語へ統一（英語・内部トークン混在）** — 根拠 `client/src/lib.rs:69-70,1094-1097` / R5-UX01 / 低。
+- [x] **UI 文言を日本語へ統一（英語・内部トークン混在）** — 根拠 `client/src/lib.rs:69-70,1094-1097` / R5-UX01 / 低。
+  2026-11-20 対応: E2E アサート文言は維持、内部トークン/進行状態10箇所を日本語化。
+  aria-label を可視文言へ整合（Label in Name）、Processing 否定アサートをE2E側も更新。
 - [x] **ナビゲーションへ aria-current を付与** — 根拠 `client/src/lib.rs:836-855` / R5-UX01 / 低。
 - [x] **SPA ビュー切替で document.title を更新** — 根拠 `client/src/lib.rs:824` / R5-UX01 / 低。
 - [x] **データ表へ caption と th scope** — 根拠 `client/src/lib.rs:1993-2001` / R5-UX01 / 低。
 - [x] **canvas へ role=img/aria-label** — 根拠 `client/src/lib.rs:1599-1600` / R5-UX01 / 低。
-- [ ] **PRODUCT 名と (Rust) 表記を統一** — 根拠 `client/index.html:6` / R5-UX01 / 低。
+- [x] **PRODUCT 名と (Rust) 表記を統一** — 根拠 `client/index.html:6` / R5-UX01 / 低。
 - [x] **verify_backup/verify_audit_export のヘルプへ DATABASE_TOKEN 契約** — 根拠
   `server/src/bin/verify_backup.rs:12` / disc FG / 低。
 - [x] **doctor --strict --help 併用を他 CLI と整合** — 根拠 `server/src/bin/doctor.rs:43-50` / disc FG / 低。

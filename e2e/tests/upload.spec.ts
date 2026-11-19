@@ -126,9 +126,9 @@ test.describe('Content Upload Flow', () => {
     await expect(status).toHaveAttribute('role', 'status');
     await expect(status).toHaveAttribute('aria-live', 'polite');
 
-    // "Processing..." のまま固まらず、ボタンが再活性化されること。
+    // ローディング文言のまま固まらず、ボタンが再活性化されること。
     await expect(submitButton).toBeEnabled({ timeout: 10000 });
-    await expect(submitButton).not.toHaveText(/Processing/i);
+    await expect(submitButton).not.toHaveText(/処理中/);
   });
 
   test('R2: file-upload label is keyboard operable and price input has bounds', async ({ page }) => {

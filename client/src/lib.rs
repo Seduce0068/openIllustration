@@ -251,7 +251,9 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     }
     html.push_str("</tbody></table>");
     if stats.monthly.is_empty() {
-        html.push_str("<p class=\"mt-2 text-[9px] text-gray-600 italic\">NO_MONTHLY_STATS</p>");
+        html.push_str(
+            "<p class=\"mt-2 text-[9px] text-gray-600 italic\">月次集計はありません。</p>",
+        );
     }
     html
 }
@@ -926,7 +928,7 @@ pub fn App() -> impl IntoView {
     view! {
         <div class="min-h-screen bg-black text-white font-mono">
             <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
-                <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD (RUST)</h1>
+                <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
                         <button on:click=move |_| set_view.set("dashboard".to_string())
@@ -967,7 +969,7 @@ pub fn App() -> impl IntoView {
                     "ledger" => view! {
                         <Ledger token=token.get().unwrap_or_default() />
                     }.into_any(),
-                    _ => view! { <div class="text-center mt-20 text-gray-600">"UNKNOWN_VIEW"</div> }.into_any(),
+                    _ => view! { <div class="text-center mt-20 text-gray-600">"不明な画面です。"</div> }.into_any(),
                 }}
             </main>
         </div>
@@ -1044,7 +1046,7 @@ where
 
     view! {
         <div class="max-w-md mx-auto mt-20 border border-white/10 p-8 text-center">
-            <h2 class="text-2xl font-bold mb-8 tracking-tighter italic">"IDENTITY_VERIFICATION_REQUIRED"</h2>
+            <h2 class="text-2xl font-bold mb-8 tracking-tighter italic">"本人確認が必要です。"</h2>
             <p class="text-[10px] text-gray-500 mb-4 leading-relaxed">
                 "IPv6-ONLY ACCESS: Legacy IPv4-only networks are rejected at the API layer (SEC-01)."
             </p>
@@ -1304,7 +1306,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                 />
                 <Show when=move || items.get().is_empty() fallback=|| ()>
                     <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
-                        "NO_APPROVED_CONTENT"
+                        "承認済みコンテンツはありません。"
                     </div>
                 </Show>
             </div>
@@ -1368,11 +1370,11 @@ fn ExportMyData(token: String) -> impl IntoView {
                 type="button"
                 on:click=on_export
                 disabled=busy
-                aria-label="EXPORT MY DATA"
+                aria-label="データをエクスポート"
                 data-testid="export-my-data"
                 class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors disabled:opacity-50"
             >
-                {move || if busy.get() { "EXPORTING..." } else { "EXPORT MY DATA" }}
+                {move || if busy.get() { "エクスポート中..." } else { "データをエクスポート" }}
             </button>
             <Show when=move || !error.get().is_empty() fallback=|| ()>
                 <p role="alert" data-testid="export-error" class="text-xs text-red-500">
@@ -1909,7 +1911,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         let description_val = description.get();
         let tags_val = tags.get();
         set_loading.set(true);
-        set_status.set("Generating forensic evidence...".to_string());
+        set_status.set("監査証跡を生成中...".to_string());
 
         // 失敗時に表示する文言は固定文字列のみ（生データ・機微情報は出さない）。
         // HTTP エラー／ネットワークエラーは upload_error_message に統一する。
@@ -1997,7 +1999,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 
     view! {
         <div class="max-w-2xl mx-auto mt-12 border border-white/10 p-8">
-            <h2 class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine (Rust)"</h2>
+            <h2 class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine"</h2>
             <div class="space-y-6">
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
                     // display:none の代わりに 1px + clip で隠し、フォーカス可能なままにする。
@@ -2096,7 +2098,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 
                 <button on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
-                    {move || if loading.get() { "Processing..." } else { "Sign & Submit to Evidence Ledger" }}
+                    {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
                     <div data-testid="upload-status" role="status" aria-live="polite" class="p-4 bg-white/5 border border-white/20 text-xs">
@@ -2374,7 +2376,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         let cid = cid.get();
         let reason = reason.get();
         let token = token_stored.get_value();
-        set_status.set("Submitting report...".to_string());
+        set_status.set("通報を送信中...".to_string());
         spawn_local(async move {
             // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
             let _release = BusyGuard(set_report_busy);
