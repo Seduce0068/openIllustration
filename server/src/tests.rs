@@ -2259,6 +2259,18 @@ fn test_redact_url_removes_credentials_and_query() {
     assert_eq!(crate::redact_url("not a url#token=secret"), "not a url");
 }
 
+/// ALLOWED_ORIGINS の警告用マスクはオリジン値そのものを漏らさない。
+#[test]
+fn test_redact_origin_does_not_leak_value() {
+    let origin = "https://secret-origin.example.com:8443/path?token=secret";
+    let masked = crate::redact_origin(origin);
+    assert!(!masked.contains(origin));
+    assert!(!masked.contains("secret-origin.example.com"));
+    assert!(!masked.contains("8443"));
+    assert!(!masked.contains("token=secret"));
+    assert_eq!(masked, crate::redact_origin("https://another.invalid"));
+}
+
 /// CID は厳密形式のみ受理し、パス注入文字列と旧ダミー CID を拒否する。
 #[test]
 fn test_cid_validation_rejects_path_characters() {
@@ -7282,6 +7294,7 @@ async fn test_moderation_finalizer_sweeps_expired_oidc_pending_on_startup() {
         Some(oidc.clone()),
         Duration::from_secs(3600),
         shutdown_rx,
+        Arc::new(crate::Metrics::default()),
     ));
     tokio::time::timeout(Duration::from_secs(2), async {
         while oidc.pending_nonce("stale-startup").is_some() {
@@ -7302,6 +7315,55 @@ async fn test_moderation_finalizer_sweeps_expired_oidc_pending_on_startup() {
 
     shutdown_tx.send(()).expect("shutdown signal");
     finalizer.await.expect("finalizer task must stop cleanly");
+}
+
+/// finalizer の tick / 処理件数 / 最終成功時刻カウンタが実際に進むことを検証する。
+#[tokio::test]
+async fn test_finalizer_metrics_increment() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    // 起動時回収で 1 件処理されるよう期限切れトークンを置く。
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+             VALUES ('expired-metric', 'u', 'f', '2000-01-01T00:00:00+00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let metrics = Arc::new(crate::Metrics::default());
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let finalizer = tokio::spawn(crate::run_moderation_finalizer(
+        db,
+        None,
+        Duration::from_millis(20),
+        shutdown_rx,
+        Arc::clone(&metrics),
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while metrics.finalizer_ticks.load(Ordering::Relaxed) == 0
+            || metrics.finalizer_processed.load(Ordering::Relaxed) == 0
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("finalizer counters must advance");
+
+    shutdown_tx.send(()).expect("shutdown signal");
+    finalizer.await.expect("finalizer task must stop cleanly");
+
+    assert!(metrics.finalizer_ticks.load(Ordering::Relaxed) >= 1);
+    assert!(metrics.finalizer_processed.load(Ordering::Relaxed) >= 1);
+    assert!(metrics.finalizer_last_success_secs.load(Ordering::Relaxed) > 0);
 }
 
 /// R1-23: 上限近くまで埋まっていても OIDC start/callback フローは成立する。
@@ -11956,7 +12018,7 @@ fn read_metric(body: &str, name: &str) -> u64 {
 }
 
 /// `/metrics` から HTTP カウンタ（requests, errors）を一組で読み取る。
-/// この読み取り自体も最外側の observe_metrics でカウントされる点に注意。
+/// `/metrics` 自体は observe_metrics の除外対象なので、この読み取りはカウンタを増やさない。
 async fn read_http_metrics(app: &Router) -> (u64, u64) {
     let response = app
         .clone()
@@ -12057,9 +12119,11 @@ async fn test_metrics_expose_prometheus_counters() {
     let errors_after = read_metric(&after_body, "openillustration_http_errors_total");
     let neutralized_after = read_metric(&after_body, "openillustration_neutralized_urls_total");
     // 注入されたカウンタは他テストと共有されないため、正確な差分を検証できる。
+    // 増えるのは /no-such-path と /metrics/client-events の 2 件だけ
+    // （前後の /metrics スクレイプは除外される）。
     assert_eq!(
         requests_after,
-        requests_before + 3,
+        requests_before + 2,
         "requests must be counted exactly"
     );
     assert_eq!(
@@ -12072,6 +12136,109 @@ async fn test_metrics_expose_prometheus_counters() {
         neutralized_before + 3,
         "neutralized URL counter must advance by exactly the reported count"
     );
+}
+
+/// 監視用の 3 パスは observe_metrics から除外され、requests/errors が増えない。
+#[tokio::test]
+async fn test_metrics_exclude_health_ready_and_metrics_paths() {
+    let app = setup_app().await;
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    for path in ["/health", "/ready", "/metrics"] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get(path).body(Body::empty()).unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path} must be healthy");
+        let _ = to_bytes(response.into_body(), 8192).await.unwrap();
+    }
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    assert_eq!(
+        requests_after, requests_before,
+        "monitoring paths must not increment requests"
+    );
+    assert_eq!(
+        errors_after, errors_before,
+        "monitoring paths must not increment errors"
+    );
+}
+
+/// 監視パスでも GET 以外（例: POST /metrics）はカウンタへ計上される。
+/// 除外は GET スクレイプだけを対象にし、非 GET のエラーを取りこぼさないための回帰テスト。
+#[tokio::test]
+async fn test_metrics_count_non_get_requests_to_monitoring_paths() {
+    let app = setup_app().await;
+    let (requests_before, errors_before) = read_http_metrics(&app).await;
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    // /metrics は get(metrics) のみ。POST は 405 となり errors にも計上される。
+    assert_eq!(
+        response.status(),
+        StatusCode::METHOD_NOT_ALLOWED,
+        "POST /metrics must not be treated as a monitoring scrape"
+    );
+    let _ = to_bytes(response.into_body(), 8192).await.unwrap();
+
+    let (requests_after, errors_after) = read_http_metrics(&app).await;
+    assert_eq!(
+        requests_after,
+        requests_before + 1,
+        "non-GET requests to monitoring paths must increment requests"
+    );
+    assert_eq!(
+        errors_after,
+        errors_before + 1,
+        "non-GET error responses on monitoring paths must increment errors"
+    );
+}
+
+/// finalizer/purge カウンタが HELP/TYPE 付きで /metrics に公開される。
+#[tokio::test]
+async fn test_metrics_expose_finalizer_counters() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body =
+        String::from_utf8(to_bytes(response.into_body(), 8192).await.unwrap().to_vec()).unwrap();
+
+    for (name, metric_type) in [
+        ("openillustration_finalizer_ticks_total", "counter"),
+        ("openillustration_finalizer_processed_total", "counter"),
+        ("openillustration_finalizer_lock_busy_total", "counter"),
+        ("openillustration_finalizer_failures_total", "counter"),
+        (
+            "openillustration_finalizer_last_success_timestamp_seconds",
+            "gauge",
+        ),
+    ] {
+        assert!(
+            body.contains(&format!("# HELP {name} ")),
+            "missing HELP line for {name}"
+        );
+        assert!(
+            body.contains(&format!("# TYPE {name} {metric_type}")),
+            "missing TYPE line for {name}"
+        );
+        let _ = read_metric(&body, name);
+    }
 }
 
 // ---- observe_metrics は最外側で全レスポンスを捕捉する ----
@@ -12106,12 +12273,13 @@ async fn test_metrics_count_rate_limited_response() {
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
 
     let (requests_after, errors_after) = read_http_metrics(&app).await;
-    // 429 と事後計測の GET /metrics の 2 件が増え、エラーは 429 の 1 件だけ。
-    assert_eq!(requests_after, requests_before + 2);
+    // 429 の 1 件だけが増える（前後の GET /metrics は除外される）。
+    assert_eq!(requests_after, requests_before + 1);
     assert_eq!(errors_after, errors_before + 1);
 }
 
 /// IP ゲートの 403 は内側で短絡するが、最外側の observe_metrics に計上される。
+/// 監視パスは除外されるため、トリガーには通常のパスを使う。
 #[tokio::test]
 async fn test_metrics_count_ipv4_forbidden_response() {
     let _env_guard = ENV_LOCK.lock().await;
@@ -12122,7 +12290,7 @@ async fn test_metrics_count_ipv4_forbidden_response() {
     let response = app
         .clone()
         .oneshot(with_peer(
-            Request::get("/health").body(Body::empty()).unwrap(),
+            Request::get("/no-such-path").body(Body::empty()).unwrap(),
             IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
         ))
         .await
@@ -12130,7 +12298,7 @@ async fn test_metrics_count_ipv4_forbidden_response() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     let (requests_after, errors_after) = read_http_metrics(&app).await;
-    assert_eq!(requests_after, requests_before + 2);
+    assert_eq!(requests_after, requests_before + 1);
     assert_eq!(errors_after, errors_before + 1);
 }
 
@@ -12155,7 +12323,8 @@ async fn test_metrics_count_oversized_body_rejection() {
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
     let (requests_after, errors_after) = read_http_metrics(&app).await;
-    assert_eq!(requests_after, requests_before + 2);
+    // 413 の 1 件だけが増える（前後の GET /metrics は除外される）。
+    assert_eq!(requests_after, requests_before + 1);
     assert_eq!(errors_after, errors_before + 1);
 }
 
@@ -12184,7 +12353,8 @@ async fn test_metrics_count_cors_preflight() {
     );
 
     let (requests_after, errors_after) = read_http_metrics(&app).await;
-    assert_eq!(requests_after, requests_before + 2);
+    // プリフライトの 1 件だけが増える（前後の GET /metrics は除外される）。
+    assert_eq!(requests_after, requests_before + 1);
     assert_eq!(errors_after, errors_before);
 }
 
@@ -15933,6 +16103,7 @@ async fn test_periodic_finalize_lock_wait_is_bounded() {
 
     let logs = LogMessages::default();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let metrics = Arc::new(crate::Metrics::default());
     let subscriber = tracing_subscriber::layer::SubscriberExt::with(
         tracing_subscriber::registry(),
         logs.clone(),
@@ -15947,9 +16118,14 @@ async fn test_periodic_finalize_lock_wait_is_bounded() {
             None,
             Duration::from_millis(100),
             shutdown_rx,
+            Arc::clone(&metrics),
         ));
         // 起動時の purge/finalize（ここでは対象 0 件）が終わるのを待つ。
         tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // ライター取得前にスナップショットを取り、差分で finalize 側の
+        // インクリメントまで検証できるようにする。
+        let lock_busy_before = metrics.finalizer_lock_busy.load(Ordering::Relaxed);
 
         // ライターが write_lock を保持したまま期限切れ通報を作る。
         let (started, release, writer) = spawn_report_lock_holding_writer(Arc::clone(&db));
@@ -15964,6 +16140,16 @@ async fn test_periodic_finalize_lock_wait_is_bounded() {
         })
         .await
         .expect("periodic finalization must give up on the write lock");
+        // 1 tick で purge 3 件 + finalize 1 件 = 4 件の増分を確認する。
+        // finalize 側の fetch_add を外すと 3 件で止まるためこのアサートが失敗する。
+        let lock_busy_delta = metrics
+            .finalizer_lock_busy
+            .load(Ordering::Relaxed)
+            .saturating_sub(lock_busy_before);
+        assert!(
+            lock_busy_delta >= 4,
+            "3 purge skips plus 1 finalize skip must each increment lock_busy (delta={lock_busy_delta})"
+        );
 
         // ロックが保持されたままでも、finalize が PURGE_LOCK_WAIT を超えて
         // 待たないこと（上の warn）を確認できれば、shutdown 分岐は遅延なく選ばれる。
@@ -16179,6 +16365,7 @@ async fn test_startup_lock_wait_is_bounded_and_startup_continues() {
         Duration::from_millis(100),
         Duration::from_millis(300), // テスト用の短い上限
         shutdown_rx,
+        Arc::new(crate::Metrics::default()),
     ));
 
     // 4 つの起動時回収すべてが上限で打ち切られ、warn が出ること。
@@ -16282,6 +16469,7 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
         Duration::from_millis(50),
         Duration::from_millis(100), // 起動時 finalize はビジーでスキップさせる
         shutdown_rx,
+        Arc::new(crate::Metrics::default()),
     ));
 
     tokio::time::timeout(Duration::from_secs(20), async {

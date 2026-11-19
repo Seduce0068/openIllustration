@@ -147,6 +147,16 @@ pub struct Metrics {
     pub errors: std::sync::atomic::AtomicU64,
     /// クライアントが中立化した危険 URL の件数。URL 本文自体は保持しない。
     pub neutralized_urls: std::sync::atomic::AtomicU64,
+    /// 周期 finalizer の tick 実行回数。
+    pub finalizer_ticks: std::sync::atomic::AtomicU64,
+    /// finalizer / 周期 purge が回収・確定したレコード件数。値や CID は保持しない。
+    pub finalizer_processed: std::sync::atomic::AtomicU64,
+    /// write_lock がビジーで回収をスキップした回数。
+    pub finalizer_lock_busy: std::sync::atomic::AtomicU64,
+    /// purge / 自動確定が失敗した回数。
+    pub finalizer_failures: std::sync::atomic::AtomicU64,
+    /// 直近の回収処理が成功した時刻（Unix秒）。未実行なら 0。
+    pub finalizer_last_success_secs: std::sync::atomic::AtomicU64,
 }
 
 /// レート制限キーを決定する。
@@ -302,6 +312,15 @@ async fn observe_metrics(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    // 監視用の /health, /ready, /metrics は GET スクレイプだけを除外する。
+    // 非 GET（例: POST /metrics の 405）はスクレイプではないため requests / errors へ残す。
+    // /ready の 503（readiness 障害）も GET スクレイプとして除外され errors から消えるが、
+    // readiness の状態は /ready のレスポンス自体で監視する（新規メトリクスは追加しない）。
+    if request.method() == axum::http::Method::GET
+        && matches!(request.uri().path(), "/health" | "/ready" | "/metrics")
+    {
+        return next.run(request).await;
+    }
     state
         .metrics
         .requests
@@ -327,7 +346,22 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
          openillustration_http_errors_total {}\n\
          # HELP openillustration_neutralized_urls_total Total neutralized dangerous URLs reported by clients.\n\
          # TYPE openillustration_neutralized_urls_total counter\n\
-         openillustration_neutralized_urls_total {}\n",
+         openillustration_neutralized_urls_total {}\n\
+         # HELP openillustration_finalizer_ticks_total Total moderation finalizer tick executions.\n\
+         # TYPE openillustration_finalizer_ticks_total counter\n\
+         openillustration_finalizer_ticks_total {}\n\
+         # HELP openillustration_finalizer_processed_total Total records processed by the finalizer and periodic purges.\n\
+         # TYPE openillustration_finalizer_processed_total counter\n\
+         openillustration_finalizer_processed_total {}\n\
+         # HELP openillustration_finalizer_lock_busy_total Total purge/finalize runs skipped due to a busy write lock.\n\
+         # TYPE openillustration_finalizer_lock_busy_total counter\n\
+         openillustration_finalizer_lock_busy_total {}\n\
+         # HELP openillustration_finalizer_failures_total Total failed purge/finalize operations.\n\
+         # TYPE openillustration_finalizer_failures_total counter\n\
+         openillustration_finalizer_failures_total {}\n\
+         # HELP openillustration_finalizer_last_success_timestamp_seconds Unix timestamp of the last successful finalizer/purge run.\n\
+         # TYPE openillustration_finalizer_last_success_timestamp_seconds gauge\n\
+         openillustration_finalizer_last_success_timestamp_seconds {}\n",
         state
             .metrics
             .requests
@@ -339,6 +373,26 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         state
             .metrics
             .neutralized_urls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .finalizer_ticks
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .finalizer_processed
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .finalizer_lock_busy
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .finalizer_failures
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .finalizer_last_success_secs
             .load(std::sync::atomic::Ordering::Relaxed),
     );
     (
@@ -1150,6 +1204,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let worker_db = Arc::clone(&shared_state.db);
     let worker_oidc = shared_state.oidc.clone();
+    let worker_metrics = Arc::clone(&shared_state.metrics);
     let shutdown_flag = Arc::clone(&shared_state.shutting_down);
     let app = build_router(shared_state);
 
@@ -1161,6 +1216,7 @@ pub async fn run() -> anyhow::Result<()> {
         worker_oidc,
         finalize_interval,
         shutdown_rx,
+        worker_metrics,
     ));
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
@@ -1247,6 +1303,21 @@ fn is_origin_shape(origin: &str) -> bool {
     origin == "null" || origin.starts_with("http://") || origin.starts_with("https://")
 }
 
+/// 起動時警告へ出す ALLOWED_ORIGINS エントリのマスク表現。
+/// IPFS 用の `redact_url` と同じ方針で生の設定値をログへ残さず、オリジン値そのものは
+/// 出力しない（区分だけを返す）。
+fn redact_origin(origin: &str) -> &'static str {
+    if origin == "null" {
+        "null-origin"
+    } else if origin.starts_with("https://") {
+        "https-origin"
+    } else if origin.starts_with("http://") {
+        "http-origin"
+    } else {
+        "no-scheme-entry"
+    }
+}
+
 /// Parse the `ALLOWED_ORIGINS` environment value (comma-separated) into
 /// header values. Falls back to the local development origins only when
 /// `allow_dev_defaults` is true (development mock auth); otherwise unset
@@ -1264,15 +1335,18 @@ pub fn allowed_origins(env_value: Option<&str>, allow_dev_defaults: bool) -> Vec
                 }
                 if !is_origin_shape(origin) {
                     warn!(
-                        "Ignoring ALLOWED_ORIGINS entry without an http(s) scheme: {:?}",
-                        origin
+                        "Ignoring ALLOWED_ORIGINS entry without an http(s) scheme ({}; value redacted)",
+                        redact_origin(origin)
                     );
                     return None;
                 }
                 match origin.parse::<HeaderValue>() {
                     Ok(parsed) => Some(parsed),
                     Err(_) => {
-                        warn!("Ignoring invalid ALLOWED_ORIGINS entry: {:?}", origin);
+                        warn!(
+                            "Ignoring invalid ALLOWED_ORIGINS entry ({}; value redacted)",
+                            redact_origin(origin)
+                        );
                         None
                     }
                 }
@@ -1385,8 +1459,7 @@ pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
             .filter(|gateway| {
                 if !gateway.contains("{cid}") {
                     warn!(
-                        "Ignoring IPFS_GATEWAYS entry without a {{cid}} placeholder: {:?}",
-                        gateway
+                        "Ignoring IPFS_GATEWAYS entry without a {{cid}} placeholder (value redacted)"
                     );
                     return false;
                 }
@@ -1399,8 +1472,7 @@ pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
                     Ok(url) if matches!(url.scheme(), "http" | "https") => true,
                     _ => {
                         warn!(
-                            "Ignoring IPFS_GATEWAYS entry that is not an http(s) URL template: {:?}",
-                            gateway
+                            "Ignoring IPFS_GATEWAYS entry that is not an http(s) URL template (value redacted)"
                         );
                         false
                     }
@@ -1640,15 +1712,37 @@ async fn purge_stale_revoked_subs(db: &Connection) -> Result<Option<u64>, libsql
     purge_stale_revoked_subs_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
+/// 1 回の回収処理が成功したことを finalizer メトリクスへ反映する。
+/// 件数だけを加算し、レコードの値や CID は一切保持しない。
+fn note_finalizer_success(metrics: &Metrics, processed: u64) {
+    if processed > 0 {
+        metrics
+            .finalizer_processed
+            .fetch_add(processed, std::sync::atomic::Ordering::Relaxed);
+    }
+    metrics.finalizer_last_success_secs.store(
+        chrono::Utc::now().timestamp().max(0) as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     oidc: Option<Arc<oidc::OidcState>>,
     interval: Duration,
     shutdown: tokio::sync::watch::Receiver<()>,
+    metrics: Arc<Metrics>,
 ) {
-    run_moderation_finalizer_with_startup_wait(db, oidc, interval, STARTUP_LOCK_WAIT, shutdown)
-        .await;
+    run_moderation_finalizer_with_startup_wait(
+        db,
+        oidc,
+        interval,
+        STARTUP_LOCK_WAIT,
+        shutdown,
+        metrics,
+    )
+    .await;
 }
 
 /// 本体。起動時ロック待ちの上限を差し替えられるようにしてある（テストは短い値で呼ぶ）。
@@ -1658,6 +1752,7 @@ async fn run_moderation_finalizer_with_startup_wait(
     interval: Duration,
     startup_lock_wait: Duration,
     mut shutdown: tokio::sync::watch::Receiver<()>,
+    metrics: Arc<Metrics>,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -1677,7 +1772,12 @@ async fn run_moderation_finalizer_with_startup_wait(
             tracing::info!("Moderation finalizer stopped during startup cleanup");
             return;
         }
-        _ = run_startup_cleanup(db.as_ref(), oidc.as_ref(), startup_lock_wait) => {}
+        _ = run_startup_cleanup(
+            db.as_ref(),
+            oidc.as_ref(),
+            startup_lock_wait,
+            metrics.as_ref(),
+        ) => {}
     }
 
     // tick 中のロック待ちでも停止通知があれば即座に打ち切る。
@@ -1686,8 +1786,11 @@ async fn run_moderation_finalizer_with_startup_wait(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
+                metrics
+                    .finalizer_ticks
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 tokio::select! {
-                    _ = run_periodic_cleanup(db.as_ref(), oidc.as_ref()) => {}
+                    _ = run_periodic_cleanup(db.as_ref(), oidc.as_ref(), metrics.as_ref()) => {}
                     _ = tick_shutdown.changed() => {
                         tracing::info!("Moderation finalizer stopped");
                         break;
@@ -1704,23 +1807,66 @@ async fn run_moderation_finalizer_with_startup_wait(
 
 /// 1 tick 分の周期回収。purge 群は既に 2 段構造で、
 /// 自動確定もここで同じ 2 段構造にする。
-async fn run_periodic_cleanup(db: &Connection, oidc: Option<&Arc<oidc::OidcState>>) {
+async fn run_periodic_cleanup(
+    db: &Connection,
+    oidc: Option<&Arc<oidc::OidcState>>,
+    metrics: &Metrics,
+) {
     // 周期実行は purge 関数側で write_lock 取得だけを短時間待ち、
     // 取得できたら SQL はタイムアウトなしで完了させる（外側からは timeout で包まない）。
     match purge_expired_refresh_tokens(db).await {
-        Ok(Some(0) | None) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} expired refresh token(s)", count),
-        Err(error) => tracing::warn!("Refresh token purge failed: {}", error),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} expired refresh token(s)", count);
+        }
+        Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Refresh token purge failed: {}", error);
+        }
     }
     match purge_stale_revoked_sessions(db).await {
-        Ok(Some(0) | None) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} stale revoked session(s)", count),
-        Err(error) => tracing::warn!("Revoked session purge failed: {}", error),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} stale revoked session(s)", count);
+        }
+        Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Revoked session purge failed: {}", error);
+        }
     }
     match purge_stale_revoked_subs(db).await {
-        Ok(Some(0) | None) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} stale revoked sub(s)", count),
-        Err(error) => tracing::warn!("Revoked sub purge failed: {}", error),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} stale revoked sub(s)", count);
+        }
+        Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Revoked sub purge failed: {}", error);
+        }
     }
     // 認証リクエストが来ないままだと register/take の掃除が走らないため、
     // 周期 tick でも期限切れ pending を回収する。
@@ -1729,16 +1875,30 @@ async fn run_periodic_cleanup(db: &Connection, oidc: Option<&Arc<oidc::OidcState
         if count > 0 {
             tracing::info!("Purged {} expired OIDC pending authorization(s)", count);
         }
+        note_finalizer_success(metrics, count as u64);
     }
     // 周期の自動確定も purge 群と同じ 2 段構造:
     // ロック取得だけ PURGE_LOCK_WAIT で待ち、取得後は SELECT/COMMIT を
     // タイムアウトなしで件数分すべて完了させる。
     // "busy" はロック取得を諦めたときだけ警告し、SQL の遅延を誤報しない。
     match finalize_due_reports_with_wait(db, Some(PURGE_LOCK_WAIT)).await {
-        Ok(Some(0)) => {}
-        Ok(Some(count)) => tracing::info!("Auto-finalized {} moderation report(s)", count),
-        Ok(None) => tracing::warn!("Moderation finalization skipped: write lock is busy"),
-        Err(error) => tracing::warn!("Moderation finalization failed: {}", error),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count as u64);
+            tracing::info!("Auto-finalized {} moderation report(s)", count);
+        }
+        Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Moderation finalization skipped: write lock is busy");
+        }
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Moderation finalization failed: {}", error);
+        }
     }
 }
 
@@ -1748,29 +1908,65 @@ async fn run_startup_cleanup(
     db: &Connection,
     oidc: Option<&Arc<oidc::OidcState>>,
     lock_wait: Duration,
+    metrics: &Metrics,
 ) {
     // 起動時に一度、期限切れリフレッシュトークンを回収する。
     match purge_expired_refresh_tokens_with_wait(db, Some(lock_wait)).await {
-        Ok(Some(0)) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} expired refresh token(s) on startup", count),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} expired refresh token(s) on startup", count);
+        }
         Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!("Refresh token purge skipped on startup: write lock is busy")
         }
-        Err(error) => tracing::warn!("Refresh token purge failed on startup: {}", error),
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Refresh token purge failed on startup: {}", error);
+        }
     }
     match purge_stale_revoked_sessions_with_wait(db, Some(lock_wait)).await {
-        Ok(Some(0)) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} stale revoked session(s) on startup", count),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} stale revoked session(s) on startup", count);
+        }
         Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!("Revoked session purge skipped on startup: write lock is busy")
         }
-        Err(error) => tracing::warn!("Revoked session purge failed on startup: {}", error),
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Revoked session purge failed on startup: {}", error);
+        }
     }
     match purge_stale_revoked_subs_with_wait(db, Some(lock_wait)).await {
-        Ok(Some(0)) => {}
-        Ok(Some(count)) => tracing::info!("Purged {} stale revoked sub(s) on startup", count),
-        Ok(None) => tracing::warn!("Revoked sub purge skipped on startup: write lock is busy"),
-        Err(error) => tracing::warn!("Revoked sub purge failed on startup: {}", error),
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+        Ok(Some(count)) => {
+            note_finalizer_success(metrics, count);
+            tracing::info!("Purged {} stale revoked sub(s) on startup", count);
+        }
+        Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Revoked sub purge skipped on startup: write lock is busy")
+        }
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Revoked sub purge failed on startup: {}", error);
+        }
     }
     // pending はメモリ上にあり再起動時は空だが、register/take 以外の経路でも
     // 期限切れを回収できるよう起動時にも sweep しておく。
@@ -1782,20 +1978,30 @@ async fn run_startup_cleanup(
                 count
             );
         }
+        note_finalizer_success(metrics, count as u64);
     }
 
     // 最初の tick まで待つと再起動直後の期限切れ通報が最大 interval のあいだ
     // 未確定のまま残るため、起動時にも一度だけ確定処理を走らせる。
     // ロック待ちは上限付きで、取得後は件数分を完了まで処理する。
     match finalize_due_reports_with_wait(db, Some(lock_wait)).await {
-        Ok(Some(0)) => {}
+        Ok(Some(0)) => note_finalizer_success(metrics, 0),
         Ok(Some(count)) => {
+            note_finalizer_success(metrics, count as u64);
             tracing::info!("Auto-finalized {} moderation report(s) on startup", count)
         }
         Ok(None) => {
+            metrics
+                .finalizer_lock_busy
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!("Moderation finalization skipped on startup: write lock is busy")
         }
-        Err(error) => tracing::warn!("Moderation finalization failed on startup: {}", error),
+        Err(error) => {
+            metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("Moderation finalization failed on startup: {}", error);
+        }
     }
 }
 
