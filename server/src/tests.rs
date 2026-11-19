@@ -15740,6 +15740,47 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
     }
 }
 
+/// 抽出した is_valid_oidc_endpoint の直接境界テスト。
+/// doctor と from_env_with が同じ判定を共有していることを固定する。
+#[test]
+fn test_is_valid_oidc_endpoint_host_boundaries() {
+    // https は mock 有無にかかわらず有効。
+    for allow_mock_auth in [false, true] {
+        assert!(crate::oidc::is_valid_oidc_endpoint(
+            "https://issuer.example.jp/issuer",
+            allow_mock_auth
+        ));
+    }
+
+    // 本番では http は不可。
+    assert!(!crate::oidc::is_valid_oidc_endpoint(
+        "http://issuer.example.jp/issuer",
+        false
+    ));
+
+    // mock 時は localhost 系のみ http を許容。
+    for host in ["localhost", "127.0.0.1", "[::1]", "::1"] {
+        let url = if host == "::1" {
+            "http://[::1]/endpoint".to_string()
+        } else {
+            format!("http://{host}/endpoint")
+        };
+        assert!(
+            crate::oidc::is_valid_oidc_endpoint(&url, true),
+            "host={host}"
+        );
+    }
+
+    // mock 時でもリモート http と不正 URL は不可。
+    assert!(!crate::oidc::is_valid_oidc_endpoint(
+        "http://remote.example.jp/issuer",
+        true
+    ));
+    for raw in ["not a url", "", "ftp://localhost/issuer", "https://"] {
+        assert!(!crate::oidc::is_valid_oidc_endpoint(raw, true), "raw={raw}");
+    }
+}
+
 // ---- proptest: 入力境界と仕様不変条件の網羅 ----
 //
 // fuzz_test.rs の年齢プロパティに続き、CID 検証・金額変換・通報理由要約の

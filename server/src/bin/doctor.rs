@@ -4,8 +4,8 @@
 
 use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, allowed_origins,
-    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
-    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, is_valid_oidc_endpoint,
+    jwt_keys_from_env, max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
     production_config_errors, rate_limit_per_min, validate_jwt_secret,
 };
 
@@ -92,6 +92,14 @@ where
         "OIDC_ISSUER",
         "OIDC_CLIENT_ID",
         "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    // URL 検証の対象は 7 変数のうちエンドポイントを指す 5 つ（クライアントID/秘密鍵は除く）。
+    const OIDC_ENDPOINT_KEYS: [&str; 5] = [
+        "OIDC_ISSUER",
         "OIDC_REDIRECT_URI",
         "OIDC_AUTHORIZATION_ENDPOINT",
         "OIDC_TOKEN_ENDPOINT",
@@ -244,6 +252,23 @@ where
         },
     };
     results.push(("oidc_clock_skew", oidc_clock_skew_errors));
+
+    // OIDC エンドポイント URL: https 必須。ALLOW_MOCK_AUTH 有効時だけ
+    // localhost 系の http を許容する（from_env_with と同じ判定を共有する）。
+    // OIDC 7 変数が揃っているときに 5 エンドポイントを検証し、1 件でも不正なら
+    // 固定文言で警告する。設定値は一切エコーしない。
+    const OIDC_ENDPOINT_URL_WARNING: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
+    let oidc_endpoint_urls_errors = if OIDC_REQUIRED.iter().all(|name| lookup(name).is_some())
+        && OIDC_ENDPOINT_KEYS
+            .iter()
+            .filter_map(|name| lookup(name))
+            .any(|value| !is_valid_oidc_endpoint(&value, allow_mock_auth))
+    {
+        vec![OIDC_ENDPOINT_URL_WARNING.to_string()]
+    } else {
+        Vec::new()
+    };
+    results.push(("oidc_endpoint_urls", oidc_endpoint_urls_errors));
 
     // OIDC_MAX_AUTH_AGE_SECS: server::oidc::OidcState::from_env_with は
     // 0 / 負 / 非数値 / オーバーフローを Err（起動拒否）にして max_age 検証の
@@ -541,12 +566,13 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_twenty_one_categories() {
+    fn check_always_reports_twenty_two_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
         // 5 カテゴリ追加（oidc_max_auth_age / oidc_cookie_secure /
         // oidc_required_assurance / expose_internal_errors / allowed_origins）で
         // 14 -> 19。さらにフォールバック検出の2カテゴリ追加
         // （graceful_drain_timeout / moderation_finalize_interval）で 19 -> 21。
+        // OIDC エンドポイント URL 検証（oidc_endpoint_urls）の追加で 21 -> 22。
         // シナリオに依存せず常に同じカテゴリ数になることを保証する。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
@@ -563,7 +589,7 @@ mod tests {
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                21,
+                22,
                 "pairs={pairs:?}"
             );
         }
@@ -1111,6 +1137,85 @@ mod tests {
         // mock 有効時は警告しない。
         let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
         assert!(errors_for(&results, "oidc_required_assurance").is_empty());
+    }
+
+    // --- 2f. OIDC エンドポイント URL ---------------------------------------
+
+    const OIDC_ENDPOINT_URL_KEYS: [&str; 5] = [
+        "OIDC_ISSUER",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    const OIDC_ENDPOINT_URL_WARNING: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
+
+    /// OIDC 7 変数をすべて揃えた環境を組み立てる（5 エンドポイントは同じ URL）。
+    fn oidc_complete_pairs<'a>(endpoint: &'a str) -> Vec<(&'static str, &'a str)> {
+        let mut pairs: Vec<(&'static str, &'a str)> = vec![
+            ("OIDC_CLIENT_ID", "client-id"),
+            ("OIDC_CLIENT_SECRET", "client-secret"),
+        ];
+        pairs.extend(OIDC_ENDPOINT_URL_KEYS.iter().map(|key| (*key, endpoint)));
+        pairs
+    }
+
+    #[test]
+    fn oidc_endpoint_urls_https_adds_no_warning() {
+        let pairs =
+            oidc_complete_pairs("https://issuer.example.jp/.well-known/openid-configuration");
+        let results = check_all_with(lookup_from(&pairs));
+        assert!(
+            errors_for(&results, "oidc_endpoint_urls").is_empty(),
+            "errors={:?}",
+            errors_for(&results, "oidc_endpoint_urls")
+        );
+
+        // 7 変数が揃っていなければ（例: OIDC_JWKS_URI 欠落）検証しない。
+        let mut incomplete = oidc_complete_pairs("http://remote.example.jp/issuer");
+        incomplete.retain(|(key, _)| *key != "OIDC_JWKS_URI");
+        let results = check_all_with(lookup_from(&incomplete));
+        assert!(errors_for(&results, "oidc_endpoint_urls").is_empty());
+    }
+
+    #[test]
+    fn oidc_endpoint_urls_http_in_production_warns_without_disclosing_value() {
+        const LEAKY: &str = "http://remote-secret.example.jp/path";
+        let pairs = oidc_complete_pairs(LEAKY);
+        let results = check_all_with(lookup_from(&pairs));
+        let errors = errors_for(&results, "oidc_endpoint_urls");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], OIDC_ENDPOINT_URL_WARNING);
+        assert!(!errors[0].contains(LEAKY), "設定値が漏洩: {}", errors[0]);
+    }
+
+    #[test]
+    fn oidc_endpoint_urls_mock_allows_only_localhost_http() {
+        // mock 有効時は localhost 系の http のみ警告なし。
+        for host in ["localhost", "127.0.0.1", "[::1]", "::1"] {
+            let url = if host == "::1" {
+                "http://[::1]/endpoint".to_string()
+            } else {
+                format!("http://{host}/endpoint")
+            };
+            let mut pairs = oidc_complete_pairs(&url);
+            pairs.push(("ALLOW_MOCK_AUTH", "1"));
+            let results = check_all_with(lookup_from(&pairs));
+            let errors = errors_for(&results, "oidc_endpoint_urls");
+            assert!(errors.is_empty(), "host={host}, errors={errors:?}");
+        }
+
+        // mock 有効でもリモートの http は警告する（from_env_with と同じ条件）。
+        const LEAKY: &str = "http://remote-secret.example.jp/issuer";
+        let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
+        pairs.retain(|(key, _)| *key != "OIDC_ISSUER");
+        pairs.push(("OIDC_ISSUER", LEAKY));
+        pairs.push(("ALLOW_MOCK_AUTH", "1"));
+        let results = check_all_with(lookup_from(&pairs));
+        let errors = errors_for(&results, "oidc_endpoint_urls");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], OIDC_ENDPOINT_URL_WARNING);
+        assert!(!errors[0].contains(LEAKY), "設定値が漏洩: {}", errors[0]);
     }
 
     // --- 3. strict 判定 ----------------------------------------------------

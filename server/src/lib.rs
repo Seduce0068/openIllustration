@@ -7,7 +7,9 @@ mod oidc;
 mod payments;
 
 // 設定診断 CLI（bin/doctor.rs）と時刻検証で同じ定数を参照するための再エクスポート。
-pub use oidc::{CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS};
+pub use oidc::{
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, is_valid_oidc_endpoint,
+};
 
 use axum::{
     Json, Router,
