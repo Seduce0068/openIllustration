@@ -319,6 +319,23 @@ impl OidcState {
                 return Err("OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)".to_string());
             }
         }
+        // 必須 7 変数は Some でも trim 後に空文字なら設定ミスとして起動を拒否する。
+        // 空の client_id / client_secret では認証が機能しないため fail-closed。
+        // エラー文言は固定で、設定値（特に秘密情報）を一切エコーしない。
+        // エンドポイントの空文字は上記 URL 検証で先に拒否されるが、配列は全 7 変数を含む。
+        for value in [
+            issuer.as_str(),
+            client_id.as_str(),
+            client_secret.as_str(),
+            redirect_uri.as_str(),
+            authorization_endpoint.as_str(),
+            token_endpoint.as_str(),
+            jwks_uri.as_str(),
+        ] {
+            if value.trim().is_empty() {
+                return Err("OIDC configuration values must not be empty".to_string());
+            }
+        }
         let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
         let cookie_secure = lookup("OIDC_COOKIE_SECURE")
             .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))

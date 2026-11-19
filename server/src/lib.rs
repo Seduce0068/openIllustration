@@ -1215,6 +1215,8 @@ pub async fn run() -> anyhow::Result<()> {
     let worker_db = Arc::clone(&shared_state.db);
     let worker_oidc = shared_state.oidc.clone();
     let worker_metrics = Arc::clone(&shared_state.metrics);
+    // finalizer の JoinHandle 結果を検査する際に使う Metrics（shared_state は build_router へ move される）。
+    let shutdown_metrics = Arc::clone(&shared_state.metrics);
     let shutdown_flag = Arc::clone(&shared_state.shutting_down);
     let app = build_router(shared_state);
 
@@ -1253,7 +1255,15 @@ pub async fn run() -> anyhow::Result<()> {
             );
         }
     }
-    let _ = finalizer.await;
+    match finalizer.await {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::error!("Moderation finalizer task failed: {}", error);
+            shutdown_metrics
+                .finalizer_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
     // ロックファイルを削除して次の起動を許可する。
     if let Some(path) = instance_lock {
         let _ = std::fs::remove_file(&path);
@@ -1264,7 +1274,11 @@ pub async fn run() -> anyhow::Result<()> {
 /// SIGINT / SIGTERM を待つ。受信後は `axum::serve` が処理中リクエストの完了を待って停止する。
 async fn shutdown_signal() {
     let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
+        if tokio::signal::ctrl_c().await.is_err() {
+            // Ctrl-C を購読できない場合は SIGTERM のみで停止する（SIGTERM 側と対称）。
+            tracing::warn!("Failed to register Ctrl-C signal handler; waiting for SIGTERM only");
+            std::future::pending::<()>().await;
+        }
     };
 
     #[cfg(unix)]

@@ -70,15 +70,22 @@ where
         .unwrap_or(false);
 
     // 本番必須設定は既存の fail-closed 判定へ委譲する（再実装しない）。
+    // OIDC 必須値は Some でも trim 後空文字なら「未設定」と同じく警告対象にする。
+    // 値は判定にだけ使い、結果へは含めない（秘密情報の非エコー）。
+    let oidc_value_present = |name: &str| {
+        lookup(name)
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+    };
     let production = production_config_errors(
         allow_mock_auth,
-        lookup("OIDC_ISSUER").is_some()
-            && lookup("OIDC_CLIENT_ID").is_some()
-            && lookup("OIDC_CLIENT_SECRET").is_some()
-            && lookup("OIDC_REDIRECT_URI").is_some()
-            && lookup("OIDC_AUTHORIZATION_ENDPOINT").is_some()
-            && lookup("OIDC_TOKEN_ENDPOINT").is_some()
-            && lookup("OIDC_JWKS_URI").is_some(),
+        oidc_value_present("OIDC_ISSUER")
+            && oidc_value_present("OIDC_CLIENT_ID")
+            && oidc_value_present("OIDC_CLIENT_SECRET")
+            && oidc_value_present("OIDC_REDIRECT_URI")
+            && oidc_value_present("OIDC_AUTHORIZATION_ENDPOINT")
+            && oidc_value_present("OIDC_TOKEN_ENDPOINT")
+            && oidc_value_present("OIDC_JWKS_URI"),
         lookup("PINATA_JWT").as_deref(),
     );
     results.push((
@@ -274,20 +281,24 @@ where
     // 0 / 負 / 非数値 / オーバーフローを Err（起動拒否）にして max_age 検証の
     // 黙った無効化を防ぐ。from_env_with は pub(crate) で doctor から直接呼べない
     // ため、ここで同一のパース検証を行い Err 相当を警告化する。値は出力しない。
-    // mock 有効時は OIDC を使わないため警告しない。
-    let oidc_max_auth_age_errors = if allow_mock_auth {
-        Vec::new()
-    } else {
-        match lookup("OIDC_MAX_AUTH_AGE_SECS") {
-            None => Vec::new(),
-            Some(value) => match value.parse::<u64>() {
-                Ok(0) => vec!["OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()],
-                Ok(_) => Vec::new(),
-                // 負数・非数値・オーバーフローはすべて Err 相当（起動拒否）。
-                Err(_) => vec!["OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string()],
-            },
-        }
-    };
+    // from_env_with は必須 7 変数が揃っていれば mock 有効時も max_auth_age を検証するため、
+    // doctor も 7 変数が揃っている場合は mock 有効でも警告する。
+    // 7 変数未揃いなら from_env_with が Ok(None) を返して max_auth_age を見ないため、
+    // mock 有効時は警告しない（本番相当では従来どおり警告する）。
+    let oidc_max_auth_age_errors =
+        if allow_mock_auth && !OIDC_REQUIRED.iter().all(|name| lookup(name).is_some()) {
+            Vec::new()
+        } else {
+            match lookup("OIDC_MAX_AUTH_AGE_SECS") {
+                None => Vec::new(),
+                Some(value) => match value.parse::<u64>() {
+                    Ok(0) => vec!["OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()],
+                    Ok(_) => Vec::new(),
+                    // 負数・非数値・オーバーフローはすべて Err 相当（起動拒否）。
+                    Err(_) => vec!["OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string()],
+                },
+            }
+        };
     results.push(("oidc_max_auth_age", oidc_max_auth_age_errors));
 
     // OIDC_COOKIE_SECURE: 既定は Secure 付与（fail-closed）。mock 無効構成で
@@ -978,12 +989,74 @@ mod tests {
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "oidc_max_auth_age").is_empty());
-        // mock 有効時は OIDC を使わないため警告しない。
+        // mock 有効かつ 7 変数未揃いなら from_env_with は Ok(None) を返すため警告しない。
         let results = check_all_with(lookup_from(&[
             ("ALLOW_MOCK_AUTH", "1"),
             ("OIDC_MAX_AUTH_AGE_SECS", "0"),
         ]));
         assert!(errors_for(&results, "oidc_max_auth_age").is_empty());
+    }
+
+    #[test]
+    fn oidc_max_auth_age_mock_with_complete_oidc_warns_without_disclosing_value() {
+        // mock 有効でも OIDC 7 変数が揃っていれば from_env_with は max_auth_age を
+        // 検証して Err を返すため、doctor も警告する（値はエコーしない）。
+        const GREATER: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
+        const POSITIVE: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+        for (value, expected) in [("0", GREATER), ("-1", POSITIVE), ("abc", POSITIVE)] {
+            let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
+            pairs.push(("ALLOW_MOCK_AUTH", "1"));
+            pairs.push(("OIDC_MAX_AUTH_AGE_SECS", value));
+            let results = check_all_with(lookup_from(&pairs));
+            let errors = errors_for(&results, "oidc_max_auth_age");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], expected, "value={value}");
+        }
+        // 有効値なら mock 有効・7 変数揃いでも警告しない。
+        let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
+        pairs.push(("ALLOW_MOCK_AUTH", "1"));
+        pairs.push(("OIDC_MAX_AUTH_AGE_SECS", "900"));
+        let results = check_all_with(lookup_from(&pairs));
+        assert!(errors_for(&results, "oidc_max_auth_age").is_empty());
+    }
+
+    #[test]
+    fn oidc_max_auth_age_mock_with_incomplete_oidc_adds_no_warning() {
+        // 7 変数が揃っていなければ from_env_with は Ok(None) を返し max_auth_age を
+        // 解析しないため、mock 有効時は警告しない。
+        let scenarios: [&str; 2] = ["OIDC_JWKS_URI", "OIDC_CLIENT_SECRET"];
+        for missing in scenarios {
+            let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
+            pairs.retain(|(key, _)| *key != missing);
+            pairs.push(("ALLOW_MOCK_AUTH", "1"));
+            pairs.push(("OIDC_MAX_AUTH_AGE_SECS", "0"));
+            let results = check_all_with(lookup_from(&pairs));
+            assert!(
+                errors_for(&results, "oidc_max_auth_age").is_empty(),
+                "missing={missing}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_warns_when_required_oidc_value_is_empty_without_disclosing_value() {
+        // OIDC 必須値が Some でも trim 後空文字なら「未設定」と同じく警告する。
+        // 警告文は固定で、設定値（秘密情報を含む）を一切エコーしない。
+        const EXPECTED: &str = "OIDC is not configured (OIDC_* environment variables are required)";
+        for key in ["OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"] {
+            for raw in ["", "   ", "\t\n"] {
+                let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
+                pairs.retain(|(name, _)| *name != key);
+                pairs.push((key, raw));
+                // PINATA_JWT を揃え、production の警告を OIDC 未設定だけに孤立させる。
+                pairs.push(("PINATA_JWT", "real-production-jwt"));
+                let results = check_all_with(lookup_from(&pairs));
+                let errors = errors_for(&results, "production");
+                assert_eq!(errors.len(), 1, "key={key}, raw={raw:?}, errors={errors:?}");
+                // 固定文言なので空文字・空白の設定値は一切含まれない（値のエコーなし）。
+                assert_eq!(errors[0], EXPECTED, "key={key}, raw={raw:?}");
+            }
+        }
     }
 
     #[test]

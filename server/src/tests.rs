@@ -15495,6 +15495,43 @@ fn test_oidc_from_env_with_missing_required_variable_fails_closed() {
     }
 }
 
+/// 必須変数が Some でも trim 後に空文字なら Err（設定値はエコーしない）。
+/// 空の client_id / client_secret では認証が黙って機能不全になるため fail-closed。
+#[test]
+fn test_oidc_from_env_with_empty_required_values_rejected() {
+    const EMPTY_VALUE_ERROR: &str = "OIDC configuration values must not be empty";
+    for key in ["OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET"] {
+        for raw in ["", "   ", "\t\n"] {
+            let mut env = oidc_required_env();
+            env.insert(key.to_string(), raw.to_string());
+            let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                .err()
+                .unwrap_or_else(|| panic!("empty {key} (raw={raw:?}) must be rejected"));
+            // 固定文言なので設定値（秘密情報を含む）は一切含まれない。
+            assert_eq!(err, EMPTY_VALUE_ERROR, "key={key}, raw={raw:?}");
+        }
+    }
+
+    // 有値なら有効化される（空文字検証が正常値を誤って拒否しないこと）。
+    let env = oidc_required_env();
+    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        .expect("valid OIDC configuration")
+        .expect("all required variables present");
+    assert_eq!(state.config().client_id, "client-123");
+    assert_eq!(state.config().client_secret, "secret-456");
+
+    // 未設定（None）が 1 つでもあれば、別の変数が空でも Ok(None) 契約を維持する。
+    let mut env = oidc_required_env();
+    env.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
+    env.remove("OIDC_JWKS_URI");
+    assert!(
+        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .expect("empty value with a missing required variable must not be an Err")
+            .is_none(),
+        "missing required variable must disable OIDC (Ok(None))"
+    );
+}
+
 /// ClockSkew: 既定 60、1..=300 のみ受け付け、範囲外・不正値は既定へ戻す。
 #[test]
 fn test_oidc_from_env_with_clock_skew_boundaries() {
