@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-19T23:59:01+09:00"
+  at: "2026-11-20T00:16:27+09:00"
 verified:
   by: dsh
-  at: "2026-11-19T23:59:01+09:00"
+  at: "2026-11-20T00:16:27+09:00"
 status: current
 ---
 
@@ -36,9 +36,9 @@ status: current
     上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
-    `check_all_with` / `should_fail` を分離し、19カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の34テスト（既存29件＋境界テスト5件）で検証（CLI-01 / CFG-01、
-    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で19 check(s) を確認。
+    `check_all_with` / `should_fail` を分離し、21カテゴリ固定・秘密値非出力・`--strict` 判定を
+    `server/src/bin/doctor.rs` の36テスト（既存29件＋境界テスト7件）で検証（CLI-01 / CFG-01、
+    [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で21 check(s) を確認。
   - [対応済み] `verify_audit_export` に `--expect-root HEX`（任意）を追加。
     `VerificationOutcome` / `verify_export` を純粋関数化し、`server/src/bin/verify_audit_export.rs`
     に17テスト（有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・
@@ -63,15 +63,15 @@ status: current
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
-    検査は現行19カテゴリ、bin テストは29件（既存26件＋フォールバック境界テスト3件）。
+    検査は現行21カテゴリ、bin テストは36件（既存29件＋フォールバック境界テスト7件）。
     `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
-    の実出力で19 check(s) を確認（CLI-01 / CFG-01、
+    の実出力で21 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
   - [対応済み] `doctor` のタイムアウト/試行回数検査の死コード化を解消:
     `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は不正値を既定へ
     フォールバックするため、正規化後の値が0になる判定は発火しなかった。`rate_limit` と
     同じ方式で生のパース値と正規化後の値を比較し、フォールバック時に当該カテゴリへ
-    警告1件（設定値は非出力）を計上。境界テスト3件を追加し、検査数は19のまま
+    警告1件（設定値は非出力）を計上。当時は境界テスト3件・検査数19、その後5件・21カテゴリへ拡張
     （CLI-01 / CFG-01、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
@@ -334,7 +334,7 @@ status: current
   `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
   Merkle root と大小文字非区別で照合し、不一致は `audit root mismatch` で拒否。
   `VerificationOutcome` / `verify_export` は I/O と `process::exit` を持たない。
-  `server/src/bin/verify_audit_export.rs` に17テスト（有効 v3 / 改ざん entry・root・署名 /
+  `server/src/bin/verify_audit_export.rs` に19テスト（当初17件＋オプション値境界1件等）（有効 v3 / 改ざん entry・root・署名 /
   version 1・2 拒否 / expect-root 不一致 / マスク出力）を追加（CLI-02、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] 監査エクスポートの公開範囲: `reason`/`details` を既定でマスクし、`--include-reasons` オプトインで本文を含める。マスク後の文字列が署名対象（
@@ -536,8 +536,8 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に34テスト（既存29件＋境界テスト5件）を追加。
-  検査は19カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に36テスト（既存29件＋境界テスト7件）を追加。
+  検査は21カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 - [対応済み] エクスポート解析失敗の固定文言: `export_status_message` が

@@ -251,12 +251,13 @@ P2（品質・保守・プロダクト拡張）:
 
 ### 2026-11-19 全体レビューで追加（中）
 
-- [ ] **verify_audit_export へ take_value を追加（5 CLI の取り残し）** — 根拠
-  `server/src/bin/verify_audit_export.rs:33-50` / disc FG / 優先度 中。
+- [x] **verify_audit_export へ take_value を追加（5 CLI の取り残し）** — 根拠
+  `server/src/bin/verify_audit_export.rs:33-50` / disc FG / 優先度 中。2026-11-20 対応済み。
 - [ ] **IPFS チェックサム不一致を 401 ではなく 502/409 へ** — 根拠 `server/src/lib.rs:2294` / R1-AP01 / 中。
 - [ ] **一覧 API のページネーション契約を共通化** — 根拠 `server/src/lib.rs:1789,2456` / R1-AP01 / 中。
 - [ ] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:106,192,445` / R1-AP01 / 中。
-- [ ] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
+- [x] **note 注文期限・refresh purge の RFC3339 文字列比較をパース比較へ** — 根拠 `server/src/payments.rs:524-526` / R2-BV01 / 中。
+  2026-11-20 対応: is_order_expired をパース比較＋fail-closed、purge を datetime() 正規化。
 - [ ] **JPKI 発行セッションへ sid を付与し logout を有効化** — 根拠 `server/src/lib.rs:2046-2051` / R3-AU01 / 中。
 - [ ] **OIDC state を UA/クッキーへバインド（ログイン CSRF）** — 根拠 `server/src/oidc.rs:353-381` / R3-AU01 / 中。
 - [ ] **OIDC エンドポイント URL へ https 必須化** — 根拠 `server/src/oidc.rs:249-276` / R3-AU01 / 中。
@@ -264,7 +265,8 @@ P2（品質・保守・プロダクト拡張）:
 - [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
   `server/migrations/002_payment_orders.sql:16` / R2-DI01 / 中。
 - [ ] **refresh_tokens.expires_at の時刻形式を RFC3339 へ統一** — 根拠 `server/migrations/006_refresh_tokens.sql:7` / R2-DI01 / 中。
-- [ ] **GRACEFUL_DRAIN/MODERATION_FINALIZE を doctor フォールバック検出へ** — 根拠 `server/src/lib.rs:1342,1354` / R1-CF01 / 中。
+- [x] **GRACEFUL_DRAIN/MODERATION_FINALIZE を doctor フォールバック検出へ** — 根拠 `server/src/lib.rs:1342,1354` / R1-CF01 / 中。
+  2026-11-20 対応: 2カテゴリ追加（19→21 check(s)、29→36テスト）。
 - [ ] **ALLOWED_ORIGINS の doctor 判定を allowed_origins() 結果へ** — 根拠 `server/src/bin/doctor.rs:354-369` / R1-CF01 / 中。
 - [ ] **wasm リリースから console_log/panic_hook をゲート** — 根拠 `client/Cargo.toml:13-14` / R3-DE01 / 中。
 - [ ] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。

@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-19T23:13:24+09:00"
+  at: "2026-11-20T00:16:27+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -237,6 +237,8 @@ generated:
 | `MAX_CONCURRENT_REQUESTS` | 任意 | `16` | 同時実行リクエスト上限（1〜256）。超過は 429。`/health`・`/ready`・`/metrics` は対象外。 |
 | `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む http(s) URL であること。空要素、`{cid}` を含まない要素、http(s) 以外の要素は警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
 | `IPFS_TIMEOUT_SECS` | 任意 | `15` | 各ゲートウェイへのリクエストタイムアウト秒（1〜300）。範囲外・不正値は既定値。 |
+| `GRACEFUL_DRAIN_TIMEOUT_SECS` | 任意 | `30` | グレースフル停止の drain タイムアウト秒（1〜300）。範囲外・不正値は既定30へフォールバックし `doctor` が警告（値は出力しない）。 |
+| `MODERATION_FINALIZE_INTERVAL_SECS` | 任意 | `300` | 自動確定ワーカーの周期（秒、30〜3600）。範囲外・不正値は既定300へフォールバックし `doctor` が警告（値は出力しない）。 |
 | `AGE_DEFAULT_MINIMUM` | 任意（非秘密） | `21` | 年齢判定の一律既定最少年齢。保守的安全余裕ベースライン（法的事実の確定主張ではない）。有効設定値は `GET /policy/age` で常時公開。 |
 | `AGE_COUNTRY_OVERRIDES` | 任意（非秘密） | 空 | 国別しきい値上書き（`CC=NN,...`）。 |
 | `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |

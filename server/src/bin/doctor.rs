@@ -3,9 +3,10 @@
 //! 秘密情報の値は一切出力しない。
 
 use server::{
-    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, ipfs_gateways,
-    ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests, oidc_http_timeout,
-    production_config_errors, rate_limit_per_min, validate_jwt_secret,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, graceful_drain_timeout,
+    ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests,
+    moderation_finalize_interval, oidc_http_timeout, production_config_errors, rate_limit_per_min,
+    validate_jwt_secret,
 };
 
 fn print_help() {
@@ -202,6 +203,32 @@ where
             .push("OIDC_HTTP_TIMEOUT_SECS is invalid or outside 1..=60; using default".to_string());
     }
     results.push(("oidc_http_timeout", oidc_timeout_errors));
+
+    // GRACEFUL_DRAIN_TIMEOUT_SECS: lib.rs::graceful_drain_timeout と同一範囲
+    // （1..=300・既定30秒）。不正値・範囲外は既定へフォールバックするため、
+    // 「生のパース値」と「正規化後の値」を比較して警告する。値は出力しない。
+    const DRAIN_WARNING: &str =
+        "GRACEFUL_DRAIN_TIMEOUT_SECS is invalid or outside 1..=300; using default";
+    let mut drain_timeout_errors = Vec::new();
+    if let Some(value) = lookup("GRACEFUL_DRAIN_TIMEOUT_SECS")
+        && graceful_drain_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    {
+        drain_timeout_errors.push(DRAIN_WARNING.to_string());
+    }
+    results.push(("graceful_drain_timeout", drain_timeout_errors));
+
+    // MODERATION_FINALIZE_INTERVAL_SECS: lib.rs::moderation_finalize_interval と
+    // 同一範囲（30..=3600・既定300秒）。上記と同じ方式でフォールバックを検出し、
+    // 設定値は出力しない。
+    const FINALIZE_WARNING: &str =
+        "MODERATION_FINALIZE_INTERVAL_SECS is invalid or outside 30..=3600; using default";
+    let mut finalize_interval_errors = Vec::new();
+    if let Some(value) = lookup("MODERATION_FINALIZE_INTERVAL_SECS")
+        && moderation_finalize_interval(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    {
+        finalize_interval_errors.push(FINALIZE_WARNING.to_string());
+    }
+    results.push(("moderation_finalize_interval", finalize_interval_errors));
 
     // OIDC_CLOCK_SKEW_SECS: 範囲外は既定 60 へフォールバックするため警告する。
     // 値は出力せず、範囲内かどうかのみを診断する。
@@ -513,11 +540,13 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_nineteen_categories() {
+    fn check_always_reports_twenty_one_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
         // 5 カテゴリ追加（oidc_max_auth_age / oidc_cookie_secure /
         // oidc_required_assurance / expose_internal_errors / allowed_origins）で
-        // 14 -> 19。シナリオに依存せず常に同じカテゴリ数になることを保証する。
+        // 14 -> 19。さらにフォールバック検出の2カテゴリ追加
+        // （graceful_drain_timeout / moderation_finalize_interval）で 19 -> 21。
+        // シナリオに依存せず常に同じカテゴリ数になることを保証する。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
             &[("ALLOW_MOCK_AUTH", "1")],
@@ -533,7 +562,7 @@ mod tests {
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                19,
+                21,
                 "pairs={pairs:?}"
             );
         }
@@ -843,6 +872,56 @@ mod tests {
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "oidc_http_timeout").is_empty());
+    }
+
+    #[test]
+    fn graceful_drain_timeout_fallback_is_warned_without_disclosing_value() {
+        const EXPECTED: &str =
+            "GRACEFUL_DRAIN_TIMEOUT_SECS is invalid or outside 1..=300; using default";
+        const LEAKY: &str = "999999999";
+        for value in ["abc", "0", "301", LEAKY] {
+            let results = check_all_with(lookup_from(&[("GRACEFUL_DRAIN_TIMEOUT_SECS", value)]));
+            let errors = errors_for(&results, "graceful_drain_timeout");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
+        for value in ["1", "30", "300"] {
+            let results = check_all_with(lookup_from(&[("GRACEFUL_DRAIN_TIMEOUT_SECS", value)]));
+            assert!(
+                errors_for(&results, "graceful_drain_timeout").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "graceful_drain_timeout").is_empty());
+    }
+
+    #[test]
+    fn moderation_finalize_interval_fallback_is_warned_without_disclosing_value() {
+        const EXPECTED: &str =
+            "MODERATION_FINALIZE_INTERVAL_SECS is invalid or outside 30..=3600; using default";
+        const LEAKY: &str = "999999999";
+        for value in ["abc", "0", "29", "3601", LEAKY] {
+            let results =
+                check_all_with(lookup_from(&[("MODERATION_FINALIZE_INTERVAL_SECS", value)]));
+            let errors = errors_for(&results, "moderation_finalize_interval");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], EXPECTED, "value={value}");
+            assert!(!errors[0].contains(LEAKY), "設定値が漏洩");
+        }
+        for value in ["30", "300", "3600"] {
+            let results =
+                check_all_with(lookup_from(&[("MODERATION_FINALIZE_INTERVAL_SECS", value)]));
+            assert!(
+                errors_for(&results, "moderation_finalize_interval").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "moderation_finalize_interval").is_empty());
     }
 
     // --- 2e. 追加の設定診断（R2 監査対応） --------------------------------
