@@ -35,14 +35,16 @@ else
 		-o "$trunk_archive" \
 		"https://github.com/trunk-rs/trunk/releases/download/${trunk_version}/${trunk_tarball}"
 fi
-# キャッシュヒット時も必ず検証を通す。不一致なら壊れたアーカイブを削除して失敗。
-if ! echo "${trunk_sha256}  ${trunk_archive}" | sha256sum -c -; then
-	rm -f "$trunk_archive"
-	echo "trunk ${trunk_version} の sha256 が一致しない。" >&2
-	exit 1
-fi
-mkdir -p "${workdir}/bin"
-tar -xzf "$trunk_archive" -C "${workdir}/bin" trunk
+# キャッシュヒット時も必ず検証を通す。検証と展開は
+# e2e/verify_trunk_archive.sh に委譲し、checksum 不一致時は exit 1
+# （= アーカイブを展開しない）。固定版の version / sha256 は変更せず、
+# 環境変数として共通ゲートへ渡す。
+env \
+	TRUNK_ARCHIVE="$trunk_archive" \
+	TRUNK_SHA256="$trunk_sha256" \
+	TRUNK_VERSION="$trunk_version" \
+	TRUNK_EXTRACT_DIR="${workdir}/bin" \
+	bash "${repo_root}/e2e/verify_trunk_archive.sh"
 chmod +x "${workdir}/bin/trunk"
 export PATH="${workdir}/bin:${PATH}"
 
