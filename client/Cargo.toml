@@ -7,11 +7,17 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib"]
 
+# デバッグ用コンソール出力は明示的な opt-in。リリース wasm では有効にしない
+# （内部 URL・リクエストデータ・スタック情報のコンソール流出を防ぐ）。
+# `dep:` 構文で optional dependency の暗黙 feature を作らない。
+[features]
+dev-console = ["dep:console_log", "dep:console_error_panic_hook"]
+
 [dependencies]
 common = { path = "../common" }
 leptos = { version = "0.8", features = ["csr"] }
-console_error_panic_hook = "0.1"
-console_log = "1.0"
+console_error_panic_hook = { version = "0.1", optional = true }
+console_log = { version = "1.0", optional = true }
 log = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

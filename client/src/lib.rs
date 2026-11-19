@@ -3193,7 +3193,12 @@ mod tests {
 
 #[wasm_bindgen(start)]
 pub fn main() {
-    _ = console_log::init_with_level(log::Level::Debug);
-    console_error_panic_hook::set_once();
+    // コンソール出力/panic hook は dev-console feature のときだけ有効化する。
+    // trunk build は feature を渡さないため、通常ビルドではコンソールに出力しない。
+    #[cfg(feature = "dev-console")]
+    {
+        _ = console_log::init_with_level(log::Level::Debug);
+        console_error_panic_hook::set_once();
+    }
     mount_to_body(|| view! { <App /> });
 }

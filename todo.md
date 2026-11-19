@@ -264,11 +264,16 @@ P2（品質・保守・プロダクト拡張）:
 - [ ] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
 - [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
   `server/migrations/002_payment_orders.sql:16` / R2-DI01 / 中。
+  2026-11-20 吟味の結果却下: order_id は毎回新規 UUID で同じ ppid/cid の複数注文（再購入）
+  が正当。固定受取アドレスの同一 (chain, recipient, amount) 3回テストが 500 になる回帰を
+  Runtime Proof で確認。DB制約ではなくアプリ側の冪等性設計を維持。
 - [ ] **refresh_tokens.expires_at の時刻形式を RFC3339 へ統一** — 根拠 `server/migrations/006_refresh_tokens.sql:7` / R2-DI01 / 中。
 - [x] **GRACEFUL_DRAIN/MODERATION_FINALIZE を doctor フォールバック検出へ** — 根拠 `server/src/lib.rs:1342,1354` / R1-CF01 / 中。
   2026-11-20 対応: 2カテゴリ追加（19→21 check(s)、29→36テスト）。
-- [ ] **ALLOWED_ORIGINS の doctor 判定を allowed_origins() 結果へ** — 根拠 `server/src/bin/doctor.rs:354-369` / R1-CF01 / 中。
-- [ ] **wasm リリースから console_log/panic_hook をゲート** — 根拠 `client/Cargo.toml:13-14` / R3-DE01 / 中。
+- [x] **ALLOWED_ORIGINS の doctor 判定を allowed_origins() 結果へ** — 根拠 `server/src/bin/doctor.rs:354-369` / R1-CF01 / 中。
+  2026-11-20 対応: 実パーサ結果で判定、警告文を実態に合わせ修正、check数21不変。
+- [x] **wasm リリースから console_log/panic_hook をゲート** — 根拠 `client/Cargo.toml:13-14` / R3-DE01 / 中。
+  2026-11-20 対応: optional + dev-console feature、既定off、main()をcfgでゲート。
 - [ ] **JXL デコーダにサイズ・次元上限と fuzz を追加** — 根拠 `client/Cargo.toml:26` / R3-DE01 / 中。
 - [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
 - [ ] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
