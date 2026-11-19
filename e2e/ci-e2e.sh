@@ -210,7 +210,11 @@ for css_file in "${external_css_files[@]}"; do
 done
 
 echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
-(cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci)
+# npm ci の引数はクライアント側（上の `(cd client && npm ci ...)`）と完全一致させ、
+# 両者を同一の依存導入契約として扱う（lifecycle script を --ignore-scripts で抑制）。
+# ブラウザ導入は下の install_browsers / `npx playwright install` の明示実行であり
+# lifecycle script ではないため、--ignore-scripts でも従来どおり動作する。
+(cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund)
 if ((${#install_browsers[@]} > 0)); then
 	# --with-deps は root 権限が必要なため CI では使わない。
 	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
