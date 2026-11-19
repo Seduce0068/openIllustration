@@ -537,6 +537,10 @@ pub enum AppError {
     TooManyRequests(String),
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+    /// 上流（IPFS ゲートウェイ等）の応答が完全性検証に失敗した場合。
+    /// 認証エラー（401）と混同しないよう、固定文言の 502 として返す。
+    #[error("Upstream content failed integrity verification")]
+    BadGateway,
 }
 
 impl IntoResponse for AppError {
@@ -560,6 +564,10 @@ impl IntoResponse for AppError {
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
             AppError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg),
+            AppError::BadGateway => (
+                StatusCode::BAD_GATEWAY,
+                "Upstream content failed integrity verification".to_string(),
+            ),
         };
 
         (status, Json(serde_json::json!({ "error": message }))).into_response()
@@ -2722,7 +2730,7 @@ pub async fn get_content(
                     cid,
                     redact_url(&gateway_url)
                 );
-                return Err(AppError::Unauthorized("Integrity check failed".to_string()));
+                return Err(AppError::BadGateway);
             }
 
             return Response::builder()

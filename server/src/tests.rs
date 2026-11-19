@@ -4860,7 +4860,8 @@ async fn test_support_api_disabled_returns_501() {
 }
 
 /// INT-01 / CONTENT-03: IPFS から取得したデータの SHA-256 が
-/// DB の checksum と一致しない場合、コンテンツを返さず 401 で拒否する。
+/// DB の checksum と一致しない場合、コンテンツを返さず 502 で拒否する。
+/// 認証切れの 401 と区別し、本文には固定文言のみを返す。
 #[tokio::test]
 async fn test_content_checksum_verification_fails_on_tamper() {
     let gateway = MockGateway::start(MockResponse {
@@ -4898,18 +4899,30 @@ async fn test_content_checksum_verification_fails_on_tamper() {
 
     assert_eq!(
         response.status(),
-        StatusCode::UNAUTHORIZED,
-        "checksum mismatch must reject the content"
+        StatusCode::BAD_GATEWAY,
+        "checksum mismatch must be reported as an upstream failure, not an auth error"
     );
     let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
     let body = String::from_utf8_lossy(&bytes);
     assert!(
-        body.contains("Integrity check failed"),
+        body.contains("Upstream content failed integrity verification"),
         "rejection must come from integrity verification: {body}"
+    );
+    assert!(
+        !body.contains("Integrity check failed"),
+        "the old 401 auth error message must not be reused: {body}"
     );
     assert!(
         !body.contains("tampered content"),
         "gateway body must not be returned: {body}"
+    );
+    assert!(
+        !body.contains("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111f"),
+        "raw CID must not leak into the error body: {body}"
+    );
+    assert!(
+        !body.contains("correct_hash_123"),
+        "raw checksum must not leak into the error body: {body}"
     );
 }
 
