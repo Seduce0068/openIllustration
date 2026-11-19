@@ -819,6 +819,36 @@ pub(crate) fn build_http_client(timeout: Duration) -> reqwest::Result<Client> {
         .build()
 }
 
+/// SQLite/libSQL の外部キー制約をコネクション単位で有効化する。
+///
+/// `PRAGMA foreign_keys` はコネクションごとの設定で、トランザクション中は変更が
+/// 無効になる。そのため migration 実行前に呼び出すこと。リモート DB では
+/// 接続単位で効かないため、呼び出し側で warn を出す（`run()` を参照）。
+pub(crate) async fn enable_foreign_keys(db: &Connection) -> anyhow::Result<()> {
+    db.execute("PRAGMA foreign_keys = ON", ())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to enable SQLite foreign keys: {e}"))?;
+    Ok(())
+}
+
+/// 参照先が存在しない外部キー（孤立行）を検出し、可読な文字列で返す。
+///
+/// 既存 DB に孤立行があっても起動は止めず、呼び出し側で warn のために使う。
+pub(crate) async fn find_foreign_key_violations(db: &Connection) -> anyhow::Result<Vec<String>> {
+    let mut rows = db
+        .query("PRAGMA foreign_key_check", ())
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to run PRAGMA foreign_key_check: {e}"))?;
+    let mut violations = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let table: String = row.get(0)?;
+        let rowid: Option<i64> = row.get(1)?;
+        let parent: String = row.get(2)?;
+        violations.push(format!("{table}(rowid={rowid:?}) -> {parent}"));
+    }
+    Ok(violations)
+}
+
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
 
@@ -849,8 +879,17 @@ pub async fn run() -> anyhow::Result<()> {
     };
 
     let db = if let Some(path) = &local_path {
-        Builder::new_local(path).build().await?.connect()?
+        let connection = Builder::new_local(path).build().await?.connect()?;
+        // SQLite/libSQL の FK 制約はコネクション単位。migration より前に有効化する。
+        // これにより 012_favorites の ON DELETE CASCADE などが本番でも効く。
+        enable_foreign_keys(&connection).await?;
+        connection
     } else {
+        // リモート DB では PRAGMA がコネクション単位で効かないため、書き込み側で
+        // 参照整合性を担保する必要がある（単一ライター警告とは別に明示する）。
+        warn!(
+            "remote DB configured: `PRAGMA foreign_keys = ON` is per-connection and not enforced; ensure referential integrity at the writer"
+        );
         Builder::new_remote(db_url, db_token)
             .build()
             .await?
@@ -874,6 +913,22 @@ pub async fn run() -> anyhow::Result<()> {
     migration::run_migrations(&db).await?;
     // Detect checksum drift in already-applied migrations
     migration::verify_migrations(&db).await?;
+
+    // FK 有効化後に孤立行が残っていないか検査する。既存 DB に孤立行があっても
+    // 起動は止めず、明示的な warn で是正を促す（fail-closed は将来フェーズで検討）。
+    match find_foreign_key_violations(&db).await {
+        Ok(violations) if !violations.is_empty() => {
+            warn!(
+                "foreign key check found {} orphaned row(s): {}",
+                violations.len(),
+                violations.join("; ")
+            );
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("foreign key check could not be completed: {e}");
+        }
+    }
 
     let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
     let require_kid_env = std::env::var("JWT_REQUIRE_KID").ok();

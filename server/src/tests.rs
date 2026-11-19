@@ -12071,6 +12071,155 @@ async fn test_migration_set_applies_and_verifies_cleanly() {
     }
 }
 
+/// 本番起動と同じ順序（FK 有効化 → migration）でローカル DB を組み立て、
+/// 参照先不存在の INSERT が拒否されることと既存の正常系が壊れないことを検証する。
+#[tokio::test]
+async fn test_foreign_keys_enabled_and_enforced_on_local_db() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+
+    // 本番 run() と同じヘルパを migration 前に呼ぶ。
+    crate::enable_foreign_keys(&db).await.unwrap();
+
+    // PRAGMA foreign_keys が実際に 1 になっていること。
+    {
+        let mut rows = db.query("PRAGMA foreign_keys", ()).await.unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let enabled: i64 = row.get(0).unwrap();
+        assert_eq!(
+            enabled, 1,
+            "foreign_keys must be ON after enable_foreign_keys"
+        );
+    }
+
+    init_schema(&db).await;
+
+    // 既存の users / contents / favorites 正常系が壊れないこと。
+    db.execute("INSERT INTO users (user_hash) VALUES ('fk_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, checksum, owner_hash) \
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F', 'sum', 'fk_user')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) \
+         VALUES ('fk_user', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    // 参照先が存在しない INSERT は FK により拒否される。
+    assert!(
+        db.execute(
+            "INSERT INTO favorites (user_hash, cid) \
+             VALUES ('missing_user', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F')",
+            (),
+        )
+        .await
+        .is_err(),
+        "favorites INSERT with a missing user must be rejected by FK"
+    );
+    assert!(
+        db.execute(
+            "INSERT INTO contents (cid, checksum, owner_hash) \
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A112F', 'sum', 'missing_user')",
+            (),
+        )
+        .await
+        .is_err(),
+        "contents INSERT with a missing owner must be rejected by FK"
+    );
+
+    // ON DELETE CASCADE（012_favorites）が本番と同じ FK 有効化で効くこと。
+    // CASCADE が無効なら参照中の contents 削除自体が FK 違反で失敗する。
+    db.execute(
+        "DELETE FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111F'",
+        (),
+    )
+    .await
+    .unwrap();
+    {
+        let mut rows = db
+            .query(
+                "SELECT COUNT(*) FROM favorites WHERE user_hash = 'fk_user'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let count: i64 = row.get(0).unwrap();
+        assert_eq!(count, 0, "favorites must be removed by ON DELETE CASCADE");
+    }
+
+    // 正常系の行は残っており、孤立行は検出されないこと。
+    let violations = crate::find_foreign_key_violations(&db).await.unwrap();
+    assert!(
+        violations.is_empty(),
+        "clean DB must have no FK violations: {violations:?}"
+    );
+}
+
+/// 起動時の warn 契約を固定する。FK 無効な既存 DB に孤立行がある場合、
+/// `foreign_key_check` が検出できることを検証する（fail-closed は採用しない）。
+#[tokio::test]
+async fn test_foreign_key_check_detects_orphan_rows() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    // この :memory: 接続では FK は既定で無効（init_schema は migration のみで
+    // PRAGMA を実行しない）。孤立行を作るため明示的に OFF を指定する。
+    // 接続はテスト専用なので他テストへ波及しない。
+    db.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) VALUES ('orphan_user', 'orphan_cid')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let violations = crate::find_foreign_key_violations(&db).await.unwrap();
+    assert!(
+        violations.iter().any(|value| value.contains("favorites")),
+        "orphan favorites row must be reported: {violations:?}"
+    );
+}
+
+/// 既存ヘルパが組み立てるアプリの users / contents が参照整合性を保ち、
+/// favorites の正常系が壊れないことを回帰検証する（全体テスト非破壊）。
+#[tokio::test]
+async fn test_existing_setup_app_with_db_rows_are_fk_clean() {
+    let (_app, db) = setup_app_with_db().await;
+
+    let violations = crate::find_foreign_key_violations(&db).await.unwrap();
+    assert!(
+        violations.is_empty(),
+        "setup_app_with_db must not create orphan rows: {violations:?}"
+    );
+
+    // 既存ヘルパが挿入した test_user / content へのお気に入り登録は成功する。
+    db.execute(
+        "INSERT INTO favorites (user_hash, cid) \
+         VALUES ('test_user', 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g')",
+        (),
+    )
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn test_migration_011_existing_rows_read_as_empty_metadata() {
     let db = Builder::new_local(":memory:")
