@@ -12,7 +12,7 @@ pub use oidc::{CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS
 use axum::{
     Json, Router,
     body::Body,
-    extract::{ConnectInfo, FromRef, Multipart, Path, Query, State},
+    extract::{ConnectInfo, FromRef, MatchedPath, Multipart, Path, Query, State},
     http::{HeaderValue, StatusCode, header},
     middleware::from_fn,
     response::{IntoResponse, Response},
@@ -26,9 +26,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tower_http::cors::CorsLayer;
-use tracing::warn;
+use std::time::{Duration, Instant};
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::{Span, warn};
 use uuid::Uuid;
 
 /// `/metrics/client-events` が受け付けるリクエストボディの上限（1 KiB）。
@@ -226,6 +226,72 @@ async fn security_headers(
         headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     }
     response
+}
+
+/// リクエストごとの相関 ID。`Request::extensions` と task-local の両方に格納する。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RequestId(pub(crate) Uuid);
+
+tokio::task_local! {
+    /// 現在処理中のリクエスト相関 ID。Internal エラーログから参照する。
+    static REQUEST_ID: Uuid;
+}
+
+/// 相関 ID のレスポンスヘッダ名（大小文字を問わず比較される）。
+const REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// 全レスポンスへ `x-request-id` を付与し、機微値を含まないアクセスログを JSON で出力する。
+///
+/// ログ項目は method / （テンプレート化した）path / status / duration_ms / request_id に限定し、
+/// 生クエリ・生 CID・トークンは一切記録しない。`observe_metrics` の内側・CorsLayer の
+/// 外側に置くため、プリフライトや内側ミドルウェアの短絡レスポンスにもヘッダが付く。
+async fn request_id_and_access_log(
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let request_id = Uuid::new_v4();
+    let method = request.method().clone();
+    // ルーティング済みならテンプレートパス（例: /content/{cid}）を使い、生 CID を出さない。
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched| matched.as_str().to_owned())
+        .unwrap_or_else(|| request.uri().path().to_owned());
+
+    request.extensions_mut().insert(RequestId(request_id));
+    // extensions に格納した値をヘッダの正規ソースとして使う（task-local との不一致を検出）。
+    let header_request_id = request
+        .extensions()
+        .get::<RequestId>()
+        .map(|value| value.0)
+        .unwrap_or(request_id);
+    debug_assert_eq!(header_request_id, request_id);
+
+    let started = Instant::now();
+    let mut response = REQUEST_ID
+        .scope(request_id, async { next.run(request).await })
+        .await;
+    let status = response.status();
+    tracing::info!(
+        method = %method,
+        path = %path,
+        status = u64::from(status.as_u16()),
+        duration_ms = started.elapsed().as_millis() as u64,
+        request_id = %request_id,
+        "access"
+    );
+    response.headers_mut().insert(
+        REQUEST_ID_HEADER,
+        HeaderValue::from_str(&header_request_id.to_string())
+            .expect("UUID string is always a valid header value"),
+    );
+    response
+}
+
+/// TraceLayer の `on_response` コールバック。スパンの status のみを記録し、
+/// 追加のログイベントは出さない（アクセスログは上記ミドルウェアが担当）。
+fn record_response_status(response: &axum::response::Response, _latency: Duration, span: &Span) {
+    span.record("status", u64::from(response.status().as_u16()));
 }
 
 /// リクエスト数と 4xx/5xx 応答数を記録するミドルウェア。
@@ -456,7 +522,12 @@ fn expose_internal_errors() -> bool {
 
 /// 500系レスポンスのボディを決定する。詳細は常にログへ出し、公開はフラグに従う。
 fn internal_error_body(details: String) -> String {
-    tracing::error!("Internal error: {}", details);
+    // ミドルウェアが張った task-local から相関 ID を取る。
+    // 直接呼び出された場合などスコープ外では ID なしでログする。
+    match REQUEST_ID.try_with(|id| *id) {
+        Ok(id) => tracing::error!(request_id = %id, "Internal error: {}", details),
+        Err(_) => tracing::error!("Internal error: {}", details),
+    }
     if expose_internal_errors() {
         details
     } else {
@@ -1766,6 +1837,30 @@ pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<common::
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     let allowed_origins_env = std::env::var("ALLOWED_ORIGINS").ok();
+
+    // TraceLayer のスパン属性は method / path / status のみ。path はルーティングの
+    // テンプレートパスを使い、生 CID やクエリは積まない。既定のイベントは
+    // request_id_and_access_log 側へ一本化するため無効化する（OPTIONS も通過する）。
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|request: &axum::extract::Request| {
+            let path = request
+                .extensions()
+                .get::<MatchedPath>()
+                .map(|matched| matched.as_str())
+                .unwrap_or_else(|| request.uri().path());
+            tracing::info_span!(
+                "http_request",
+                method = %request.method(),
+                path = %path,
+                status = tracing::field::Empty,
+            )
+        })
+        .on_request(())
+        .on_response(record_response_status)
+        .on_failure(())
+        .on_body_chunk(())
+        .on_eos(());
+
     Router::new()
         .route("/auth/login", post(auth_login))
         .route("/auth/verify", post(auth_verify))
@@ -1836,6 +1931,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // CorsLayer の外側にもう一段置く。これで 429/403/500/204 に加え
         // プリフライト応答にも nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
         .layer(from_fn(security_headers))
+        // 相関 ID 付与とアクセスログ。CorsLayer の外側なのでプリフライトや
+        // 429 / 403 / 413 の短絡レスポンスにも x-request-id が付く。
+        .layer(from_fn(request_id_and_access_log))
+        // リクエストスパン（属性は method/path/status のみ）。observe_metrics の内側。
+        .layer(trace_layer)
         // メトリクスは最も外側で観測する。OPTIONS 204 や 429 / 403 / 413 は
         // 内側のミドルウェアで短絡するため、ここで初めて全レスポンスを捕捉できる。
         .layer(axum::middleware::from_fn_with_state(

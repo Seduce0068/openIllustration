@@ -1855,6 +1855,111 @@ async fn test_security_headers_on_no_content_response() {
     assert_security_headers(&response);
 }
 
+// ---- リクエスト相関 ID（x-request-id）----
+
+/// OBS-01: 全レスポンスへ x-request-id が付与され、リクエストごとに異なる v4 UUID になる。
+#[tokio::test]
+async fn test_request_id_header_is_unique_uuid() {
+    let app = setup_app().await;
+    let mut seen = std::collections::HashSet::new();
+    for _ in 0..3 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::get("/health").body(Body::empty()).unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let raw = response
+            .headers()
+            .get("x-request-id")
+            .expect("every response must carry x-request-id")
+            .to_str()
+            .unwrap();
+        let id = uuid::Uuid::parse_str(raw).expect("x-request-id must be a UUID");
+        assert_eq!(id.get_version_num(), 4, "x-request-id must be v4");
+        assert_eq!(id.to_string(), raw, "x-request-id must be a canonical UUID");
+        assert!(seen.insert(id), "x-request-id must differ per request");
+    }
+    assert_eq!(seen.len(), 3);
+}
+
+/// OBS-01: エラー応答・CORS プリフライトにも x-request-id が付き、
+/// 既存のセキュリティヘッダが壊れていないことを検証する。
+#[tokio::test]
+async fn test_request_id_header_on_error_and_preflight_responses() {
+    let app = setup_app().await;
+
+    // 公開 IPv4 は IP ゲートで 403 に短絡する。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/content").body(Body::empty()).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    assert!(
+        response.headers().contains_key("x-request-id"),
+        "403 response must carry x-request-id"
+    );
+    assert_security_headers(&response);
+
+    // OPTIONS は CorsLayer で短絡するが、相関 ID とセキュリティヘッダは付与される。
+    let response = app
+        .oneshot(with_peer(
+            Request::options("/auth/login")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "preflight must be short-circuited by CorsLayer: {}",
+        response.status()
+    );
+    assert!(
+        response.headers().contains_key("x-request-id"),
+        "preflight response must carry x-request-id"
+    );
+    assert_security_headers(&response);
+}
+
+/// OBS-02: 生成した ID がリクエスト extensions にも格納される。
+#[tokio::test]
+async fn test_request_id_stored_in_request_extensions() {
+    async fn echo_request_id(
+        axum::extract::Extension(crate::RequestId(id)): axum::extract::Extension<crate::RequestId>,
+    ) -> String {
+        id.to_string()
+    }
+
+    let app = Router::new()
+        .route("/echo-id", axum::routing::get(echo_request_id))
+        .layer(axum::middleware::from_fn(crate::request_id_and_access_log));
+
+    let response = app
+        .oneshot(Request::get("/echo-id").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let header_id = response
+        .headers()
+        .get("x-request-id")
+        .expect("x-request-id must be present")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let body = to_bytes(response.into_body(), 64).await.unwrap();
+    assert_eq!(String::from_utf8_lossy(&body), header_id);
+}
+
 /// SEC-01: パブリック IPv4 は 403
 #[tokio::test]
 async fn test_ipv4_public_address_forbidden() {
