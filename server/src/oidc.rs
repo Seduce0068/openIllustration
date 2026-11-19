@@ -138,7 +138,10 @@ async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), 
 /// back-channel logout の `sub` 失効後も古いトークンから refresh できると、
 /// 新しい `iat` を付けた JWT で失効閾値を迂回できてしまう。消費状態は DB に
 /// 永続化されるため、プロセス再起動後も失効が維持される。
-async fn revoke_refresh_tokens_for_sub(state: &AppState, sub: &str) -> Result<(), AppError> {
+pub(crate) async fn revoke_refresh_tokens_for_sub(
+    state: &AppState,
+    sub: &str,
+) -> Result<(), AppError> {
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
     tx.execute(
         "UPDATE refresh_tokens SET used_at = datetime('now') WHERE sub = ? AND used_at IS NULL",
@@ -1094,7 +1097,8 @@ pub async fn backchannel_logout(
         tx.execute(
             "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
              ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
-                 updated_at = CURRENT_TIMESTAMP",
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE revoked_subs.revoked_at < excluded.revoked_at",
             (sub, revoked_at as i64),
         )
         .await?;

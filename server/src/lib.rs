@@ -2215,7 +2215,10 @@ pub async fn auth_verify(
     let claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
-        sid: None,
+        // JPKI 発行セッションにも sid を付与し、/auth/logout が
+        // revoke_session を呼べるようにする（refresh は発行しないため
+        // Cookie ファミリ失効は不要）。
+        sid: Some(Uuid::new_v4().to_string()),
         iat: Some(iat),
     };
 
@@ -2254,14 +2257,58 @@ pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(
     Ok(())
 }
 
+/// sid が失効済みかをメモリと DB の両方で確認する（logout の冪等判定用）。
+async fn is_session_revoked(state: &Arc<AppState>, sid: &str) -> Result<bool, AppError> {
+    if state
+        .revoked_sessions
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .contains(sid)
+    {
+        return Ok(true);
+    }
+    let mut rows = state
+        .db
+        .query(
+            "SELECT 1 FROM revoked_sessions WHERE sid = ? LIMIT 1",
+            [sid.to_string()],
+        )
+        .await?;
+    Ok(rows.next().await?.is_some())
+}
+
 /// セッションを失効させる。以後、同じ `sid` の JWT は拒否される。
+/// 二重呼び出しは冪等: 既に失効済みの sid でも 200 を返す。
 pub async fn logout(
     State(state): State<Arc<AppState>>,
-    claims: AuthClaims,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
+    // AuthClaims 抽出器は失効済み sid を 401 で弾くため、logout では署名・期限
+    // のみを検証し、失効判定は下の冪等分岐で行う。検証ロジックは抽出器と同じ
+    // jwt_keys.decode を使うため、改ざん・期限切れトークンは従来どおり拒否される。
+    let claims = {
+        let auth_header = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .ok_or_else(|| AppError::Unauthorized("Missing Authorization header".to_string()))?;
+        if !auth_header.starts_with("Bearer ") {
+            return Err(AppError::Unauthorized(
+                "Invalid Authorization format".to_string(),
+            ));
+        }
+        state
+            .jwt_keys
+            .decode::<Claims>(&auth_header[7..])
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?
+            .claims
+    };
     if let Some(sid) = &claims.sid {
-        revoke_session(&state, sid).await?;
+        // メモリ/DB の両方を確認し、既に失効済みなら二重 logout として成功扱い。
+        // revoke_session は INSERT OR IGNORE なので再記録自体は安全だが、
+        // ここでは不要な再書き込みを避けて冪等に 200 を返す。
+        if !is_session_revoked(&state, sid).await? {
+            revoke_session(&state, sid).await?;
+        }
     }
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
     if let Some(token) = headers
@@ -3155,6 +3202,40 @@ pub async fn ban_user(
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // 下流の revoke_refresh_tokens_for_sub / DB 閾値記録が同じ write_lock を
+    // 取得するため、ここで明示的に解放しないと自己デッドロックする。
+    drop(_write_guard);
+
+    // BAN 以前に発行された JWT は 24h 有効なまま残るため、sub の失効閾値を
+    // 現在時刻で記録して AuthClaims の検証で即座に拒否する。OIDC の
+    // back-channel logout と同じ順序・同じヘルパを使う。
+    let revoked_at = chrono::Utc::now().timestamp() as usize;
+    state
+        .revoked_subs_before
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .insert(user_hash.to_string(), revoked_at);
+    // プロセス再起動後も失効を維持するため、まず DB 側の閾値を確定する。
+    // より新しい閾値だけを反映し、古い値で上書きされないようにする。
+    let (write_guard, tx) = begin_write_tx(&state.db).await?;
+    tx.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+         ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE revoked_subs.revoked_at < excluded.revoked_at",
+        (user_hash.to_string(), revoked_at as i64),
+    )
+    .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // 下流の revoke_refresh_tokens_for_sub が同じ write_lock を取得するため、
+    // コミット後に明示的に解放しないと自己デッドロックする。
+    drop(write_guard);
+    // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
+    // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 側の失効が先に確定しているため、
+    // 中途失敗で JWT が有効なまま残る窓を縮める。
+    oidc::revoke_refresh_tokens_for_sub(&state, user_hash).await?;
     Ok(Json(true))
 }
 

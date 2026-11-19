@@ -2481,6 +2481,122 @@ async fn test_auth_verify_authorized_with_token() {
     assert!(body.token.is_some());
 }
 
+/// auth_verify 発行セッション（モック経路）にも sid が付与され、logout で即失効すること。
+#[tokio::test]
+async fn test_auth_verify_issued_session_sid_and_logout_revokes_it() {
+    let app = setup_app().await;
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(verify_body("2000-01-01", "JP")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body: VerifyResponse = serde_json::from_slice(&body_bytes).unwrap();
+    let token = body.token.expect("auth_verify must issue a JWT");
+    let claims = jsonwebtoken::decode::<Claims>(
+        &token,
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    assert!(
+        claims.sid.is_some(),
+        "auth_verify-issued JWT must carry a sid so /auth/logout can revoke it"
+    );
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "the logged-out auth_verify JWT must be rejected"
+    );
+}
+
+/// 同じ sid で logout を二重呼び出ししても 401 ではなく 200 を返す（冪等）。
+#[tokio::test]
+async fn test_logout_is_idempotent_for_revoked_sid() {
+    let app = setup_app().await;
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(verify_body("2000-01-01", "JP")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body_bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body: VerifyResponse = serde_json::from_slice(&body_bytes).unwrap();
+    let token = body.token.expect("auth_verify must issue a JWT");
+
+    // 2 回目の logout は既に失効済みの sid を送る。AuthExtractor の 401 に
+    // ならず、ハンドラの冪等分岐で 200 が返ることを確認する。
+    for attempt in 1..=2 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/logout")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "logout attempt {attempt} must be idempotent for an already-revoked sid"
+        );
+    }
+
+    // 二重 logout 後も失効自体は維持されている。
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
 /// 開発用モック認証では nonce が必須で、再利用は拒否される。
 #[tokio::test]
 async fn test_mock_auth_nonce_is_single_use() {
@@ -10022,6 +10138,120 @@ async fn test_configured_operator_can_ban_with_audit() {
     assert_eq!(actor, "operator");
     assert_eq!(reason, "repeated violations", "reason must be trimmed");
     assert!(details.unwrap().contains("30"));
+}
+
+/// BAN で BAN 以前に発行済みの JWT / 未使用 refresh token が即失効し、
+/// sub の revoked_subs 閾値が in-memory と DB の両方へ記録される。
+#[tokio::test]
+async fn test_ban_revokes_existing_sessions_and_refresh_tokens() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    // BAN 前に発行された有効な JWT（24h）。
+    let issued_at = chrono::Utc::now().timestamp() as usize;
+    let target_token = encode(
+        &Header::default(),
+        &Claims {
+            sub: "target".to_string(),
+            exp: issued_at + 24 * 3600,
+            sid: None,
+            iat: Some(issued_at),
+        },
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+    )
+    .unwrap();
+
+    // BAN 前は API を利用できる。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {target_token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK, "BAN 前の JWT は有効");
+
+    // BAN 前に発行された未使用 refresh token。
+    let refresh = "target_unused_refresh_before_ban";
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES (?, 'target', 'target-family', '2099-01-01T00:00:00+00:00')",
+        [hex::encode(Sha2Sha256::digest(refresh.as_bytes()))],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "immediate revocation", "duration_days": 30}),
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    // 既存 JWT は失効閾値により拒否される（in-memory 記録の検証）。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {target_token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "BAN 以前の JWT は即座に拒否される"
+    );
+
+    // 未使用 refresh token が DB 上で消費されている。
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE sub = 'target' AND used_at IS NULL",
+            (),
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(active, 0, "BAN で未使用 refresh token を消費する");
+    let (status, _, _) = post_refresh(&app, refresh).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "BAN 以前の refresh token から延長できない"
+    );
+
+    // 再起動後も効く DB の失効閾値が記録されている。
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows
+        .next()
+        .await
+        .unwrap()
+        .expect("ban_user must record a revoked_subs threshold");
+    let recorded: i64 = row.get(0).unwrap();
+    let now = chrono::Utc::now().timestamp();
+    assert!(
+        (now - recorded).abs() <= 120,
+        "revoked_at must be ~now: {recorded}"
+    );
 }
 
 #[tokio::test]
