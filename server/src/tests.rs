@@ -2353,6 +2353,36 @@ fn test_mock_pin_cid_is_valid_and_unique() {
     );
 }
 
+/// PINATA_JWT の前後に空白装飾が付いたモック値でも、実行時の `pin_to_ipfs` が
+/// モック経路を通り外部 Pinata API へ送信しないことを検証する。
+/// `production_config_errors` / doctor の `trim() == "mock_jwt"` 判定と統一する。
+#[tokio::test]
+async fn test_pin_to_ipfs_accepts_whitespace_decorated_mock_jwt() {
+    let _env_guard = ENV_LOCK.lock().await;
+
+    // モック判定が壊れて外部へ送ろうとしても、到達不能なローカルプロキシで
+    // 即座に失敗させ、テストが外部 Pinata API へ到達しないことを保証する。
+    let mut state = (*rate_limit_test_state(1000).await).clone();
+    state.http_client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::https("http://127.0.0.1:1").expect("valid proxy URL"))
+        .build()
+        .expect("build no-network HTTP client");
+
+    let data = b"whitespace-decorated-mock-jwt";
+    let expected = crate::mock_cid_for_data(data);
+
+    // 既存の完全一致 "mock_jwt" も壊さず、空白・タブ・改行装飾でもモック CID を返す。
+    for jwt in ["mock_jwt", " mock_jwt ", "\tmock_jwt\n"] {
+        test_set_env("PINATA_JWT", jwt);
+        let cid = crate::pin_to_ipfs(&state, data.to_vec(), "test.txt")
+            .await
+            .unwrap_or_else(|e| panic!("mock JWT {jwt:?} must not hit Pinata API: {e}"));
+        assert_eq!(cid, expected, "mock JWT {jwt:?} must return the mock CID");
+    }
+
+    test_remove_env("PINATA_JWT");
+}
+
 /// Pinata の外部レスポンスが不正な `IpfsHash` を返した場合、保存前に拒否する。
 /// mutation で `is_safe_cid` 検証を外すと不正ケースが通って失敗する。
 #[test]

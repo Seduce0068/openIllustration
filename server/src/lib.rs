@@ -3780,7 +3780,9 @@ pub async fn pin_to_ipfs(
 ) -> Result<String, AppError> {
     let pinata_jwt = std::env::var("PINATA_JWT").unwrap_or_else(|_| "mock_jwt".to_string());
 
-    if pinata_jwt == "mock_jwt" {
+    // production_config_errors / doctor と統一し、前後の空白装飾付きモック値も
+    // モック経路へ流す（外部 Pinata API への送信を避ける）。
+    if pinata_jwt.trim() == "mock_jwt" {
         return Ok(mock_cid_for_data(&data));
     }
 
