@@ -304,15 +304,18 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: `claim_submission` による同期判定と `BusyGuard` のスコープ離脱時解除を実装し、
   `disabled` は bool のまま、`aria-busy` を `"true"` / `"false"` 文字列列挙値へ整合。
   通報と投票の横断排他は意図的分離の可能性があるため今回は見送り。
-- [ ] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
+- [x] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
+  2026-11-20 対応: cid_scope_token + prefixed描画、audit id も cid付与、StoredValue化。
 - [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
 - [x] **アップロード失敗を HTTP ステータス別固定文言へ** — 根拠 `client/src/lib.rs:1825-1826` / disc VU / 中。
   2026-11-20 対応: `upload_error_message` の4分岐（401=再ログイン / 413=サイズ超過 /
   その他=`Failed to upload content (HTTP {status}).` / None=`Network error uploading content.`）を
   TEST_SPECIFICATION / DETAILED_DESIGN / E2E (`upload.spec.ts`) の確定文言へ整合。
 - [ ] **価格 parse 失敗の 0 円化を防止し dedicated エラー** — 根拠 `client/src/lib.rs:1873-1880` / disc VU / 中。
-- [ ] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
-- [ ] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
+- [x] **日本語見出し slug を Unicode 対応へ** — 根拠 `client/src/lib.rs:261-273` / disc VU / 中。
+  2026-11-20 対応: is_alphanumeric + to_lowercase再フィルタ（U+0130対策）。
+- [x] **MET ID 衝突（仕様 NEUT-URL-02/03 vs E2E MET-02/03）を解消** — 根拠 `e2e/tests/metrics.spec.ts:206` / disc TQ / 中。
+  2026-11-20 対応: E2E の test 名を `NEUT-URL-02` / `NEUT-URL-03` へ改名し、TEST_SPECIFICATION の表・シナリオ記述も改名済み名へ整合。
 - [ ] **オーファン ゲート ID（EXPORT-12, PAY-06〜08）を整理** — 根拠 `docs/TEST_SPECIFICATION.md:194,209` / disc TQ / 中。
 - [ ] **価格境界 E2E の実送信検証** — disc TQ / 中（R5-TS01 と同一、統合）。
 

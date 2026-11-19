@@ -158,9 +158,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を全レスポンスへ付与する。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は未設計 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
-| MET-02 | `observe_metrics` の最外側配置（サーバー側） | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照）。E2E の同名テストは下記 NEUT-URL-02 / NEUT-URL-03 として別管理 |
-| NEUT-URL-02 | プロトコル相対 URL の中立化と件数送信（E2E） | `//host/path` と Windows UNC を `href="#"` / `src="#"` へ中立化し、`{"event":"neutralized_url","count":2}` を1回だけ送る。通常の相対 URL（`/chapter/1` / `../chapter/1`）は維持 | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `MET-02: protocol-relative URL は # に中立化され件数が送信される`。ドキュメント側 ID は NEUT-URL-02（MET-02 はサーバー側 `observe_metrics` の ID で衝突するため使用しない） |
-| NEUT-URL-03 | 同一本文の再描画で client event を再送しない（E2E） | BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントしても本文取得は合計2回、`POST /metrics/client-events` は1回のまま（`REPORTED` 集合による重複除外） | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `MET-03: 同一本文の再描画では client event を再送しない`。仕様 ID は NEUT-URL-03（MET-03 は仕様に存在しない） |
+| MET-02 | `observe_metrics` の最外側配置（サーバー側） | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照）。旧 E2E 名 MET-02 / MET-03 は下記 NEUT-URL-02 / NEUT-URL-03 へ改名済み |
+| NEUT-URL-02 | プロトコル相対 URL の中立化と件数送信（E2E） | `//host/path` と Windows UNC を `href="#"` / `src="#"` へ中立化し、`{"event":"neutralized_url","count":2}` を1回だけ送る。通常の相対 URL（`/chapter/1` / `../chapter/1`）は維持 | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `NEUT-URL-02: protocol-relative URL は # に中立化され件数が送信される`。旧 E2E 名 `MET-02` はサーバー側 `observe_metrics` の ID と衝突したため改名済み |
+| NEUT-URL-03 | 同一本文の再描画で client event を再送しない（E2E） | BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントしても本文取得は合計2回、`POST /metrics/client-events` は1回のまま（`REPORTED` 集合による重複除外） | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `NEUT-URL-03: 同一本文の再描画では client event を再送しない`。旧 E2E 名 `MET-03` は仕様に存在しなかったため改名済み |
 | PROP-01 | `prop_jpy_to_wei_boundaries_and_reference` | 任意の `u64` で panic しない。`0` と `MAX_ORDER_JPY` 超（上限+1 と `u64::MAX`）は `Err`、範囲内は `WEI_PER_JPY = 10^18` の独立参照値（u128 計算）と一致 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-02 | `prop_is_valid_cid_only_accepts_canonical_ascii` | 空・非ASCII・128バイト超は必ず拒否。受理値は独立 oracle（v0: `Qm` + base58btc 44文字で計46文字、v1: `b` + base32lower 1文字以上）を満たす。既知の正規 CID（v0 / v1）は必ず受理 | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
 | PROP-03 | `prop_summarize_reason_is_bounded_and_idempotent` | 任意の Unicode 文字列で panic せず、結果は120 Unicode 文字以下。空文字の対応を保持し、要約結果へ再適用しても値は変わらない（冪等） | 実装済み（128ケース）。下記「proptest の検証（PROP-01〜04）」を参照 |
@@ -977,8 +977,8 @@ AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y の3件を�
    の順に並ぶ。取得成功なので `audit-error` は出ない（AUDIT-04）。
 6. a11y（`R2: Audit toggle exposes ARIA state and dialog closes on Escape`）:
    `data-testid="content-card"` 内の Audit トグルは初期状態で `aria-expanded="false"` と
-   `aria-controls="forensic-timeline"` を持つ。クリックで `aria-expanded="true"` になり、
-   `role="dialog"` かつアクセシブル名 `Forensic Timeline`（`id="forensic-timeline"`）の
+   `aria-controls` が CID 由来の `forensic-timeline-<token>` を持つ。クリックで `aria-expanded="true"` になり、
+   `role="dialog"` かつアクセシブル名 `Forensic Timeline`（`id="forensic-timeline-<token>"`）の
    ダイアログが表示される。トグルへフォーカスを当てて Escape を押すと `aria-expanded` が
    `false` に戻り、ダイアログは `toHaveCount(0)`、フォーカスはトグルへ復帰する（`toBeFocused()`）。
 
@@ -1079,11 +1079,10 @@ HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータ
 `e2e/tests/metrics.spec.ts` の
 `MET-01: neutralized URL count is posted once as a minimal client event` が、モック認証
 （`ALLOW_MOCK_AUTH=1`）で次を確認する（chromium）。metrics.spec.ts は定義3件で、
-残る2件はドキュメント側 ID を NEUT-URL-02 / NEUT-URL-03 とする。
-E2E の `test()` 名（`MET-02` / `MET-03`）は変更せず、仕様上の ID のみを分離する。
-`MET-02` はサーバー側 `observe_metrics` のゲート ID（`observe_metrics` の最外側配置の検証）であり、
-`MET-03` は仕様に存在しない。したがって E2E の protocol-relative は NEUT-URL-02、
-再送抑制は NEUT-URL-03 として参照する。
+残る2件は NEUT-URL-02 / NEUT-URL-03 である。
+E2E の `test()` 名も NEUT-URL-02 / NEUT-URL-03 へ改名済みで、仕様 ID と一致する。
+旧 E2E 名 `MET-02` はサーバー側 `observe_metrics` のゲート ID（`observe_metrics` の最外側配置の検証）と衝突し、
+旧 `MET-03` は仕様に存在しなかったため、それぞれ NEUT-URL-02 / NEUT-URL-03 へ統一した。
 
 1. 危険 URL を 2 件含む Markdown（`[click](javascript:alert(1))` と
    `![img](data:text/html,alert)`）を Novel 本文として返し、チェックサム一致後に
@@ -1094,18 +1093,18 @@ E2E の `test()` 名（`MET-02` / `MET-03`）は変更せず、仕様上の ID �
    キーは `count` と `event` のみ。`authorization` / `x-forwarded-for` ヘッダも送らない。
 4. 204（本文なし）のモック応答で画面に `role="alert"` が出ない。API 側のバリデーションと
    カウンタの差分検証はサーバー側単体テストへ委譲し、本シナリオでは重複して検証しない。
-5. NEUT-URL-02（E2E test 名は `MET-02: protocol-relative URL は # に中立化され件数が送信される`）:
+5. NEUT-URL-02（E2E test 名は `NEUT-URL-02: protocol-relative URL は # に中立化され件数が送信される`）:
    本文 `[phish](//evil.example/phish) ![img](//evil.example/img.png)` を Novel として返す。
    `a[href="#"]` と `img[src="#"]` が各1件、`a[href^="//"]` と `img[src^="//"]` が0件であることを確認し、
    `POST /metrics/client-events` は `{"event":"neutralized_url","count":2}` の1本だけとする。
    通常の相対 URL（`/chapter/1` / `../chapter/1`）は中立化せずカウントにも含めない
    （`client/src/lib.rs:520-539,2507`）。対応ゲートは NEUT-URL-02。
-6. NEUT-URL-03（E2E test 名は `MET-03: 同一本文の再描画では client event を再送しない`）:
+6. NEUT-URL-03（E2E test 名は `NEUT-URL-03: 同一本文の再描画では client event を再送しない`）:
    上記 MET-01 と同じ危険 URL 2件の本文で描画し、本文取得1回・POST1回を確認した後、
    BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントする。本文取得は合計2回へ増えるが、
    `REPORTED` 集合（描画ソースのハッシュ）により同一ソースの再描画では送信せず、
    POST は1本のまま `{"event":"neutralized_url","count":2}` であることを確認する
-   （`client/src/lib.rs:358-369,400-425`）。仕様 ID は NEUT-URL-03 であり MET-03 は使わない。
+   （`client/src/lib.rs:358-369,400-425`）。仕様 ID と E2E test 名は NEUT-URL-03 に統一済みである。
 
 ### observe_metrics の最外側配置の検証（MET-02）
 
