@@ -68,6 +68,22 @@ if ((${#retention_days} == ${#max_retention_days})) &&
 	echo "RETENTION_DAYS must not exceed ${max_retention_days}" >&2
 	exit 1
 fi
+# MIN_KEEP も 64bit 算術のオーバーフローに対して脆弱だった。
+# 例えば 18446744073709551617 (2^64+1) は 1 にラップして
+# 「1 以上」の検査を通過してしまう（fail-open）。RETENTION_DAYS と同じく
+# 桁数と辞書順で比較し、算術を行わずに上限を超える値を拒否する
+# （先頭ゼロは上の正規表現で拒否済みなので同桁の辞書順は数値順と一致する）。
+max_min_keep=1000
+if ((${#min_keep} > ${#max_min_keep})); then
+	echo "MIN_KEEP must not exceed ${max_min_keep}" >&2
+	exit 1
+fi
+if ((${#min_keep} == ${#max_min_keep})) &&
+	[[ "$min_keep" != "$max_min_keep" ]] &&
+	printf '%s\n%s\n' "$max_min_keep" "$min_keep" | sort -C; then
+	echo "MIN_KEEP must not exceed ${max_min_keep}" >&2
+	exit 1
+fi
 if ((min_keep < 1)); then
 	echo "MIN_KEEP must be at least 1" >&2
 	exit 1

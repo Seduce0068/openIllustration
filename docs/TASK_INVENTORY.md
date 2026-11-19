@@ -383,7 +383,7 @@ status: current
   本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
   `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
   差分アサーションのサーバー側テスト4件を追加（MET-02、
-  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 件数は43件のまま変更なし。
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 定義数は56件のまま変更なし。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。

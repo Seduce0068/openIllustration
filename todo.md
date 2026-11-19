@@ -454,8 +454,7 @@ P2（品質・保守・プロダクト拡張）:
   が無いとブラウザが保存を拒否しフローが壊れるため旧名を維持）、同一名 Cookie の重複
   拒否、`doctor` 警告文を session / refresh / OIDC state を含む表現へ更新。`__Host-`
   を常時使わない理由はコードコメントに明記。E2E 定義数は不変（変更はサーバー側のみ）。
-  `docs/OPERATIONAL_POLICY.md:263` の `OIDC_COOKIE_SECURE` 説明は担当外のため未更新
-  （親が判断）。
+  `docs/OPERATIONAL_POLICY.md:263` の `OIDC_COOKIE_SECURE` 説明は `0337d64` で更新済み（クローズ）。
 - 2026-11-20 (R5 / R4 採用指摘の反映): 採用分の OIDC 空値検証・doctor max_auth_age 整合・
   shutdown 2件・シェル2件・filechooser オラクルは全て既に `[x]` であり、該当する未着手は
   存在しなかった。本次で doctor 内訳の「＋設定検証3件」6箇所（TASK_INVENTORY 3箇所 /

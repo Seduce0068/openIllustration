@@ -88,6 +88,11 @@ expect_failure "retention above max (36501)" env BACKUP_GPG_RECIPIENT=test RETEN
 expect_failure "retention far above max (100000)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=100000 "$script"
 expect_failure "octal min_keep (08)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=08 "$script"
 expect_failure "zero min_keep" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=0 "$script"
+# MIN_KEEP の上限境界（1000）。同桁は辞書順、桁超過は長さで拒否される。
+# 2^64+1 は算術演算で 1 にラップするため、オーバーフロー検証としても扱う。
+expect_failure "min_keep above max (1001)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=1001 "$script"
+expect_failure "min_keep far above max (100000)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=100000 "$script"
+expect_failure "min_keep overflow wrap (2^64+1)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=18446744073709551617 "$script"
 expect_failure "alert without dest" env BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD=/bin/true "$script"
 expect_failure "missing gpg" env BACKUP_GPG_RECIPIENT=test GPG_BIN=/no/such/gpg "$script"
 expect_failure "missing alert cmd" env BACKUP_GPG_RECIPIENT=test ALERT_CMD=/no/such/cmd "$script"
@@ -114,6 +119,9 @@ expect_success "explicit retention/min_keep (30/3)" env BACKUP_GPG_RECIPIENT=tes
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 # 上限値そのもの（36500）は受理されること（上限比較の off-by-one 回帰防止）。
 expect_success "max retention (36500)" env BACKUP_GPG_RECIPIENT=test RETENTION_DAYS=36500 "$script"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+# MIN_KEEP の上限値そのもの（1000）も受理されること（同値除外の回帰防止）。
+expect_success "max min_keep (1000)" env BACKUP_GPG_RECIPIENT=test MIN_KEEP=1000 "$script"
 
 # オフサイト保存の成功と失敗。
 cat >"${work}/copy.sh" <<'EOF'
