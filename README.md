@@ -86,6 +86,30 @@ cargo test -p common
 cd e2e && npm test
 ```
 
+### 5. 運用CLI（バックアップ・監査）
+
+サーバー起動前に `doctor --strict` で設定を診断し、バックアップ取得・検証・リストア・
+監査エクスポートの各CLIを Runbook の手順で実行します。トークン値や署名鍵の内容は
+argv に渡さず、`DATABASE_TOKEN` 環境変数または権限を制限したファイルで渡します。
+
+```bash
+# Kubuntu / リポジトリルート
+cargo run -p server --bin doctor -- --strict
+cargo run -p server --bin backup_db -- --database-url file:/path/to/local.db --output /path/to/backup.db
+cargo run -p server --bin verify_backup -- --input /path/to/backup.db
+cargo run -p server --bin restore_db -- --backup /path/to/backup.db --target /path/to/local.db --force
+cargo run -p server --bin sign_audit_export -- --database-url file:/path/to/local.db \
+  --signing-key /secure/path/audit-signing-key.pem --output /path/to/audit-snapshot.json
+cargo run -p server --bin verify_audit_export -- --snapshot /path/to/audit-snapshot.json \
+  --public-key /path/to/audit-public.der
+cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/local.db
+```
+
+各コマンドの前提・失敗時の扱い・復旧手順は
+[バックアップ・リストア Runbook](docs/BACKUP_RESTORE_RUNBOOK.md) と
+[監査エクスポート Runbook](docs/AUDIT_EXPORT_RUNBOOK.md) を参照してください。
+`verify_backup` と `verify_audit_export` は `--database-token` を受け付けません。
+
 ## 年齢/地域ポリシー（DEC-02 方針、公開設定）
 
 - 有効な年齢/地域ポリシー設定値（非秘密）は認証不要 `GET /policy/age` で常時公開される

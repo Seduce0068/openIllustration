@@ -42,10 +42,14 @@ where
     I: IntoIterator<Item = String>,
 {
     let args: Vec<String> = items.into_iter().skip(1).collect();
+    // ヘルプは他引数より優先する。他 CLI と同じく `--strict --help` の併用を受理するため、
+    // 不明引数や引数過多の判定より先にヘルプ要求を検出する（エラー種別は従来どおり）。
+    if args.iter().any(|arg| arg == "-h" || arg == "--help") {
+        return ParseOutcome::Help;
+    }
     match args.as_slice() {
         [] => ParseOutcome::Run { strict: false },
         [arg] if arg == "--strict" => ParseOutcome::Run { strict: true },
-        [arg] if arg == "-h" || arg == "--help" => ParseOutcome::Help,
         [other] => ParseOutcome::UnknownArgument(other.clone()),
         _ => ParseOutcome::TooManyArguments,
     }
@@ -555,13 +559,44 @@ mod tests {
 
     #[test]
     fn parse_multiple_arguments_is_rejected() {
+        // ヘルプを含む併用は Help となるため、ここではヘルプ無しの多引数を検証する。
         assert_eq!(
-            parse_args_from(argv(&["--strict", "--help"])),
+            parse_args_from(argv(&["--strict", "--unknown"])),
             ParseOutcome::TooManyArguments
         );
         assert_eq!(
             parse_args_from(argv(&["--strict", "--strict"])),
             ParseOutcome::TooManyArguments
+        );
+    }
+
+    #[test]
+    fn parse_strict_with_help_requests_help() {
+        // 他 CLI と整合: --strict と --help の併用はエラーではなくヘルプ表示。
+        assert_eq!(
+            parse_args_from(argv(&["--strict", "--help"])),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args_from(argv(&["--strict", "-h"])),
+            ParseOutcome::Help
+        );
+    }
+
+    #[test]
+    fn parse_help_with_strict_requests_help() {
+        // 順序を逆にしてもヘルプが優先される（引数3つ以上も同様）。
+        assert_eq!(
+            parse_args_from(argv(&["--help", "--strict"])),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args_from(argv(&["-h", "--strict"])),
+            ParseOutcome::Help
+        );
+        assert_eq!(
+            parse_args_from(argv(&["--strict", "--bogus", "--help"])),
+            ParseOutcome::Help
         );
     }
 

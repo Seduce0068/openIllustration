@@ -8,16 +8,17 @@ struct Args {
     help: bool,
 }
 
-fn print_help() {
-    eprintln!(
-        "Usage: verify_backup --input PATH\n\
+const HELP: &str = "Usage: verify_backup --input PATH\n\
          \n\
          Verifies that a backup produced by backup_db is structurally usable:\n\
          the file exists, opens as SQLite, passes PRAGMA integrity_check,\n\
          has tables, and has a migration ledger.\n\
          This is a structural check, not a full application-level restore test.\n\
-         Exit code: 0 if valid, 1 on error."
-    );
+         This tool does not connect to a database; no token is used.\n\
+         Exit code: 0 if valid, 1 on error.";
+
+fn print_help() {
+    eprintln!("{HELP}");
 }
 
 /// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
@@ -204,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BackupStats, decide_output, ensure_no_sidecars, parse_args_from, sidecar_of,
+        BackupStats, HELP, decide_output, ensure_no_sidecars, parse_args_from, sidecar_of,
         verify_backup_at,
     };
     use libsql::Builder;
@@ -303,6 +304,12 @@ mod tests {
     }
 
     // --- parse_args_from: 引数パース ---
+
+    #[test]
+    fn help_text_does_not_advertise_database_token() {
+        assert!(!HELP.contains("--database-token"), "{HELP}");
+        assert!(HELP.contains("does not connect to a database"), "{HELP}");
+    }
 
     #[test]
     fn parse_args_accepts_backup_path() {

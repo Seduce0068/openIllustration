@@ -9,15 +9,16 @@ struct Args {
     help: bool,
 }
 
-fn print_help() {
-    eprintln!(
-        "Usage: verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]\n\
+const HELP: &str = "Usage: verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]\n\
          \n\
          Verifies a signed audit snapshot using the operator's public key DER.\n\
          Version 3 snapshots only; v1/v2 are rejected (fail-closed).\n\
          --expect-root compares the Merkle root against a previously recorded value.\n\
-         Exit code: 0 if valid, 1 on error."
-    );
+         This tool does not connect to a database; no token is used.\n\
+         Exit code: 0 if valid, 1 on error.";
+
+fn print_help() {
+    eprintln!("{HELP}");
 }
 
 /// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
@@ -406,6 +407,12 @@ mod tests {
     }
 
     // --- parse_args_from: 引数パース ---
+
+    #[test]
+    fn help_text_does_not_advertise_database_token() {
+        assert!(!HELP.contains("--database-token"), "{HELP}");
+        assert!(HELP.contains("does not connect to a database"), "{HELP}");
+    }
 
     #[test]
     fn parse_args_accepts_all_flags() {
