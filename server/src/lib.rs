@@ -936,7 +936,10 @@ pub fn production_config_errors(
         Some("") => errors.push("PINATA_JWT is empty"),
         // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
         Some(v) if v.trim().is_empty() => errors.push("PINATA_JWT is empty"),
-        Some("mock_jwt") => errors.push("PINATA_JWT is the development mock value"),
+        // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
+        Some(v) if v.trim() == "mock_jwt" => {
+            errors.push("PINATA_JWT is the development mock value")
+        }
         Some(_) => {}
     }
     errors

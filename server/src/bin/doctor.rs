@@ -114,7 +114,10 @@ where
     ];
     let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_some());
     let pinata_production = lookup("PINATA_JWT")
-        .map(|v| !v.trim().is_empty() && v != "mock_jwt")
+        .map(|v| {
+            let trimmed = v.trim();
+            !trimmed.is_empty() && trimmed != "mock_jwt"
+        })
         .unwrap_or(false);
     let mut mock_auth_errors = Vec::new();
     if allow_mock_auth
@@ -677,7 +680,7 @@ mod tests {
 
     #[test]
     fn mock_auth_with_mock_pinata_value_is_not_a_combination() {
-        for pinata in ["mock_jwt", "", " ", "\t"] {
+        for pinata in ["mock_jwt", " mock_jwt ", "\tmock_jwt", "", " ", "\t"] {
             let results = check_all_with(lookup_from(&[
                 ("ALLOW_MOCK_AUTH", "1"),
                 ("PINATA_JWT", pinata),

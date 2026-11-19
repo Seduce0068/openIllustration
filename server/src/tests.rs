@@ -2183,6 +2183,14 @@ fn test_production_config_fail_closed() {
         !crate::production_config_errors(false, true, Some("mock_jwt")).is_empty(),
         "the development mock JWT must not be accepted in production"
     );
+    // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
+    for mock in [" mock_jwt ", "\tmock_jwt"] {
+        assert_eq!(
+            crate::production_config_errors(false, true, Some(mock)),
+            vec!["PINATA_JWT is the development mock value"],
+            "mock={mock:?} must be rejected without echoing the value"
+        );
+    }
 
     // 空白・タブ・改行のみの値も空とみなし fail-closed。固定文言のみで値はエコーしない。
     for blank in [" ", "\t", "\n", "\r\n", " \t\n "] {
@@ -6241,6 +6249,67 @@ async fn test_payment_verify_rejects_reused_transaction() {
         text.contains("transaction is already used by another order"),
         "client must receive the reuse rejection: {text}"
     );
+}
+
+/// JPYC: UNIQUE 違反以外の DB エラーは「送金の再利用」として 400 にせず 500 にする。
+#[tokio::test]
+async fn test_payment_verify_maps_non_unique_db_error_to_internal() {
+    // 既定の内部エラーマスクを確認するため、環境変数を触るテストと直列化する。
+    let _env_guard = ENV_LOCK.lock().await;
+    test_remove_env("EXPOSE_INTERNAL_ERRORS");
+
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xdef".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei,
+    });
+
+    // verify の CAS 更新だけを意図的に失敗させる。紐付け更新より後にトリガを張るため、
+    // 準備段階は通常どおり成功する。RAISE(ABORT) は UNIQUE 違反ではない DB エラーとなる。
+    db.execute(
+        &format!(
+            "CREATE TRIGGER fail_verify_update BEFORE UPDATE ON payment_orders
+             WHEN NEW.order_id = '{order_id}'
+             BEGIN
+                 SELECT RAISE(ABORT, 'injected database failure');
+             END"
+        ),
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "non-UNIQUE DB errors must not be reported as transaction reuse"
+    );
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("Internal server error"),
+        "internal details must be masked by default: {text}"
+    );
+    assert!(
+        !text.contains("transaction is already used by another order"),
+        "must not map non-UNIQUE DB errors to the reuse message: {text}"
+    );
+    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
 
 /// 決済: 期限切れ注文へのウォレット紐付けを拒否する。

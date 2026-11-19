@@ -627,6 +627,29 @@ async fn is_wallet_bound(db: &libsql::Connection, order_id: &str) -> Result<bool
     }
 }
 
+/// libsql の UNIQUE 制約違反を判別する。
+///
+/// ローカル DB の `SqliteFailure` 第1引数は extended SQLite コードで、
+/// UNIQUE 違反は `SQLITE_CONSTRAINT_UNIQUE` (2067) となる。リモート DB (Hrana) の
+/// `RemoteSqliteFailure` は第1引数が基本コード (19)、第2引数が extended コードなので
+/// 両方を見る。コードが基本コードしか渡されない実装に備え、メッセージも補助で確認する
+/// （メッセージは判定だけに使い、クライアントへは返さない）。
+fn is_unique_constraint_violation(error: &libsql::Error) -> bool {
+    const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
+    const UNIQUE_MESSAGE: &str = "UNIQUE constraint failed";
+    match error {
+        libsql::Error::SqliteFailure(code, message) => {
+            *code == SQLITE_CONSTRAINT_UNIQUE || message.contains(UNIQUE_MESSAGE)
+        }
+        libsql::Error::RemoteSqliteFailure(code, extended_code, message) => {
+            *code == SQLITE_CONSTRAINT_UNIQUE
+                || *extended_code == SQLITE_CONSTRAINT_UNIQUE
+                || message.contains(UNIQUE_MESSAGE)
+        }
+        _ => false,
+    }
+}
+
 pub async fn verify_order(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -739,11 +762,19 @@ pub async fn verify_order(
         .await;
 
     if let Err(error) = update {
-        // UNIQUE(chain_id, tx_hash, log_index) は同一送金の再利用を拒否する。
-        warn!("payment verification rejected: {}", error);
-        return Err(AppError::BadRequest(
-            "transaction is already used by another order".to_string(),
-        ));
+        // UNIQUE(chain_id, tx_hash, log_index) 違反だけを同一送金の再利用として 400 にする。
+        // デッドロック・一時障害・容量不足などの DB エラーを「再利用」と誤報告せず、
+        // Internal (500) として伝播させる。詳細は既定のマスク処理に任せる。
+        if is_unique_constraint_violation(&error) {
+            warn!("payment verification rejected: {}", error);
+            return Err(AppError::BadRequest(
+                "transaction is already used by another order".to_string(),
+            ));
+        }
+        return Err(AppError::Internal(format!(
+            "payment verification update failed: {}",
+            error
+        )));
     }
     if tx.changes() != 1 {
         return Err(AppError::Conflict(
@@ -780,4 +811,37 @@ pub async fn verify_order(
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
 
     Ok(Json(load_order(&state, &order_id, &claims.sub).await?))
+}
+
+#[cfg(test)]
+mod unique_violation_tests {
+    use super::is_unique_constraint_violation;
+
+    #[test]
+    fn local_unique_error_is_detected() {
+        let error = libsql::Error::SqliteFailure(2067, "UNIQUE constraint failed: x".to_string());
+        assert!(is_unique_constraint_violation(&error));
+        let other = libsql::Error::SqliteFailure(5, "database is locked".to_string());
+        assert!(!is_unique_constraint_violation(&other));
+    }
+
+    #[test]
+    fn remote_unique_error_is_detected_by_code_and_extended_code() {
+        let by_extended =
+            libsql::Error::RemoteSqliteFailure(19, 2067, "UNIQUE constraint failed: x".to_string());
+        assert!(is_unique_constraint_violation(&by_extended));
+
+        let by_basic = libsql::Error::RemoteSqliteFailure(2067, 0, "constraint failed".to_string());
+        assert!(is_unique_constraint_violation(&by_basic));
+
+        let by_message = libsql::Error::RemoteSqliteFailure(
+            19,
+            0,
+            "UNIQUE constraint failed: payment_orders.x".to_string(),
+        );
+        assert!(is_unique_constraint_violation(&by_message));
+
+        let other = libsql::Error::RemoteSqliteFailure(19, 5, "database is locked".to_string());
+        assert!(!is_unique_constraint_violation(&other));
+    }
 }
