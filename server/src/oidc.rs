@@ -1234,15 +1234,7 @@ pub async fn backchannel_logout(
 
     if let Some(sub) = claims.sub {
         let revoked_at = Utc::now().timestamp() as usize;
-        state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sub.clone(), revoked_at);
-        // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
-        // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
-        revoke_refresh_tokens_for_sub(&state, &sub).await?;
-        // プロセス再起動後も失効を維持するため DB にも記録する。
+        // プロセス再起動後も失効を維持するため DB 側の閾値を先にコミットする。
         // logout token の検証（HTTP / JWKS）はすべて上流で完了済みなので、
         // ロック取得中に外部呼び出しが発生して他書き込みを止めることはない。
         let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
@@ -1251,13 +1243,22 @@ pub async fn backchannel_logout(
              ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
                  updated_at = CURRENT_TIMESTAMP
              WHERE revoked_subs.revoked_at < excluded.revoked_at",
-            (sub, revoked_at as i64),
+            (sub.clone(), revoked_at as i64),
         )
         .await?;
         tx.commit()
             .await
             .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
         drop(write_guard);
+
+        state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .insert(sub.clone(), revoked_at);
+        // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
+        // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
+        revoke_refresh_tokens_for_sub(&state, &sub).await?;
     }
 
     Ok(StatusCode::OK)

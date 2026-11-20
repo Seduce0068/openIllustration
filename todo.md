@@ -52,10 +52,12 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   既存の 401（再利用検知／失効 sub）が fail-closed に働く。BAN ユーザーは延長できず、
   DB 一時障害時も `ensure_user_not_banned` の Err が UPDATE 前に伝播する点も R4 が確認。
   既存の BAN 失効テスト期待値（トークン消費）と整合させるため差分は差し戻し。
-- [ ] **ban_user / revoke_session / backchannel_logout の失効処理を原子的に** — 根拠
-  `server/src/lib.rs:2499-2508,3492-3528` / `server/src/oidc.rs:1231-1248` / R2-ER02〜03 / 重大度 high。
-  DB コミットとメモリ閾値・refresh 消費が非アトミックで、途中失敗時に再起動後セッション/BAN が復活する。
-  単一トランザクション化＋コミット後のメモリ反映。
+- [x] **ban_user / backchannel_logout の失効を DB コミット先行へ統一** — 根拠
+  `server/src/lib.rs:3496-3522` / `server/src/oidc.rs:1235-1261` / R2-ER02〜03 / 重大度 high。
+  2026-11-21 対応: ban_user は revoked_subs UPSERT を users 更新と同じ tx へ移動し、
+  backchannel_logout の sub 分岐は DB UPSERT を refresh 消費・メモリ更新より前にコミット。
+  revoke_session（DB先・メモリ後）は既に安全なため無変更。単一tx化は write_lock 自己
+  デッドロック回避のため見送り、再起動窓の回帰2テストを追加。
 - [ ] **監査スナップショットのマスク判定を完全一致へ** — 根拠 `common/src/lib.rs:403-404` / R2-IV04 / 重大度 high。
   `reason_is_masked` が `starts_with("[redacted:")` のみのため、同接頭辞で始まる平文 reason が
   `reasons_masked=true` の署名スナップショットへ残り、`verify_chain` の entry_hash 再計算もスキップされる。

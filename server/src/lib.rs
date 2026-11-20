@@ -3458,6 +3458,12 @@ pub async fn ban_user(
         ));
     }
 
+    // BAN 以前に発行された JWT は 24h 有効なまま残るため、sub の失効閾値を
+    // 現在時刻で記録して AuthClaims の検証で即座に拒否する。OIDC の
+    // back-channel logout と同じ順序・同じヘルパを使う。
+    // 再起動窓を塞ぐため、閾値は users 更新と同じ tx で先にコミットする。
+    let revoked_at = chrono::Utc::now().timestamp() as usize;
+
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
     let mut rows = tx
         .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
@@ -3489,25 +3495,9 @@ pub async fn ban_user(
         None => Some("{\"indefinite\":true}".to_string()),
     };
     record_governance_action(&tx, "BAN", user_hash, &claims.sub, reason, details).await?;
-    tx.commit()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
-    // 下流の revoke_refresh_tokens_for_sub / DB 閾値記録が同じ write_lock を
-    // 取得するため、ここで明示的に解放しないと自己デッドロックする。
-    drop(_write_guard);
-
-    // BAN 以前に発行された JWT は 24h 有効なまま残るため、sub の失効閾値を
-    // 現在時刻で記録して AuthClaims の検証で即座に拒否する。OIDC の
-    // back-channel logout と同じ順序・同じヘルパを使う。
-    let revoked_at = chrono::Utc::now().timestamp() as usize;
-    state
-        .revoked_subs_before
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .insert(user_hash.to_string(), revoked_at);
-    // プロセス再起動後も失効を維持するため、まず DB 側の閾値を確定する。
-    // より新しい閾値だけを反映し、古い値で上書きされないようにする。
-    let (write_guard, tx) = begin_write_tx(&state.db).await?;
+    // プロセス再起動後も失効を維持するため、DB 側の閾値を users 更新と同じ
+    // トランザクションで確定する。より新しい閾値だけを反映し、古い値で
+    // 上書きされないようにする。
     tx.execute(
         "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
          ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
@@ -3520,8 +3510,16 @@ pub async fn ban_user(
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
     // 下流の revoke_refresh_tokens_for_sub が同じ write_lock を取得するため、
-    // コミット後に明示的に解放しないと自己デッドロックする。
-    drop(write_guard);
+    // ここで明示的に解放しないと自己デッドロックする。
+    drop(_write_guard);
+
+    // コミット後にメモリの失効閾値を更新する。DB 側が先に確定しているため、
+    // メモリ更新が失敗しても再起動後は DB の閾値で失効が維持される。
+    state
+        .revoked_subs_before
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .insert(user_hash.to_string(), revoked_at);
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 側の失効が先に確定しているため、
     // 中途失敗で JWT が有効なまま残る窓を縮める。

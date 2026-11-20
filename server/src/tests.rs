@@ -11080,6 +11080,87 @@ async fn test_ban_revokes_existing_sessions_and_refresh_tokens() {
     );
 }
 
+/// 回帰: ban_user はメモリ閾値の更新より前に DB 側の失効をコミットする。
+/// メモリ lock が poison で失敗しても DB の閾値が残り、再起動後も失効が維持される。
+#[tokio::test]
+async fn test_ban_commits_db_threshold_before_memory_update() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+
+    let revoked_subs_before: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let poison_target = Arc::clone(&revoked_subs_before);
+    let _ = std::thread::spawn(move || {
+        let _guard = poison_target.lock().unwrap();
+        panic!("poison revoked_subs_before");
+    })
+    .join();
+    assert!(revoked_subs_before.is_poisoned());
+
+    let state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before,
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::from(["operator".to_string()])),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    // HTTP 経由（build_router + send_mod_action）では AuthClaims extractor が
+    // revoked_subs_before を先に読み、poison でハンドラに到達できないため、
+    // ban_user を直接呼んで DB コミット→メモリ更新の順序を検証する。
+    let result = crate::ban_user(
+        State(Arc::clone(&state)),
+        crate::AuthClaims(Claims {
+            sub: "operator".to_string(),
+            exp: (chrono::Utc::now().timestamp() + 3600) as usize,
+            sid: None,
+            iat: Some(chrono::Utc::now().timestamp() as usize),
+        }),
+        Path("target".to_string()),
+        Json(crate::BanRequest {
+            reason: "restart window regression".to_string(),
+            duration_days: None,
+        }),
+    )
+    .await;
+
+    // メモリ更新は poison で失敗するが、DB の閾値は先にコミットされている。
+    assert!(
+        result.is_err(),
+        "poisoned in-memory threshold must make ban_user fail"
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM revoked_subs WHERE sub = 'target'", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 1,
+        "DB threshold must be committed before the in-memory update"
+    );
+}
+
 #[tokio::test]
 async fn test_ban_rejects_self_and_invalid_input() {
     let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
@@ -12523,6 +12604,49 @@ async fn test_backchannel_logout_consumes_unused_refresh_tokens() {
         status,
         StatusCode::UNAUTHORIZED,
         "a token issued before logout must not refresh the session"
+    );
+}
+
+/// 回帰: backchannel_logout の sub 失効は refresh 消費より前に DB 閾値をコミットする。
+/// refresh 側の書き込みが失敗しても DB の閾値は残り、再起動後も失効が維持される。
+#[tokio::test]
+async fn test_backchannel_logout_commits_db_threshold_before_refresh_revocation() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (login, _refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        login["token"].as_str().unwrap(),
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let sub = claims.sub.clone();
+    let logout_token = mock.logout_token_for_sub(&sub);
+
+    // refresh 消費を失敗させ、DB 閾値が先に確定していることを確認する。
+    db.execute("DROP TABLE refresh_tokens", ()).await.unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM revoked_subs WHERE sub = ?", [sub])
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 1,
+        "DB threshold must be committed before refresh revocation"
     );
 }
 
