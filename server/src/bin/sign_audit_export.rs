@@ -136,6 +136,23 @@ fn create_snapshot_output(path: &str) -> anyhow::Result<std::fs::File> {
         .context("failed to create snapshot output (it must not already exist)")
 }
 
+/// 本番相当（`ALLOW_MOCK_AUTH` 無効）では平文理由のエクスポートを既定で拒否する。
+/// 正当な調査用途向けの break-glass として `AUDIT_EXPORT_INCLUDE_REASONS=1` の
+/// 明示オプトインを追加で要求する（多層防御）。開発（mock 有効）では従来どおり許可。
+/// フラグ値・環境変数の値はエコーせず、固定文言のみを返す。
+fn ensure_include_reasons_allowed(
+    include_reasons: bool,
+    allow_mock_auth: bool,
+    explicit_opt_in: bool,
+) -> anyhow::Result<()> {
+    if !include_reasons || allow_mock_auth || explicit_opt_in {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "--include-reasons is not allowed in production without explicit opt-in; keep reasons masked or set AUDIT_EXPORT_INCLUDE_REASONS=1 deliberately"
+    ))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
@@ -143,6 +160,15 @@ async fn main() -> anyhow::Result<()> {
         print_help();
         return Ok(());
     }
+    // 本番相当では平文理由のエクスポートを拒否する。値は判定にだけ使いエコーしない。
+    let allow_mock_auth = std::env::var("ALLOW_MOCK_AUTH")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let explicit_opt_in = std::env::var("AUDIT_EXPORT_INCLUDE_REASONS")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    ensure_include_reasons_allowed(args.include_reasons, allow_mock_auth, explicit_opt_in)?;
+
     let signing_key_path = args
         .signing_key
         .ok_or_else(|| anyhow!("--signing-key is required"))?;
@@ -251,7 +277,10 @@ async fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{check_signing_key_permissions, create_snapshot_output, parse_args_from};
+    use super::{
+        check_signing_key_permissions, create_snapshot_output, ensure_include_reasons_allowed,
+        parse_args_from,
+    };
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -443,6 +472,30 @@ mod tests {
         assert_eq!(args.database_url.as_deref(), Some("file:test.db"));
         assert!(args.include_reasons);
         assert!(!args.help);
+    }
+
+    // --- include_reasons: 本番相当での平文理由エクスポート拒否 ---
+
+    #[test]
+    fn include_reasons_requires_explicit_opt_in_in_production() {
+        let error = ensure_include_reasons_allowed(true, false, false)
+            .expect_err("plaintext reasons must be rejected in production without opt-in");
+        let message = error.to_string();
+        assert!(message.contains("--include-reasons"), "{message}");
+        assert!(
+            message.contains("AUDIT_EXPORT_INCLUDE_REASONS"),
+            "{message}"
+        );
+        // 明示オプトインがあれば本番でも許可（break-glass）。
+        ensure_include_reasons_allowed(true, false, true)
+            .expect("explicit opt-in must allow --include-reasons in production");
+    }
+
+    #[test]
+    fn include_reasons_is_allowed_with_mock_auth() {
+        // 開発（mock 有効）では従来どおり許可。
+        ensure_include_reasons_allowed(true, true, false)
+            .expect("mock auth (development) must allow --include-reasons");
     }
 
     // --- create_snapshot_output: 既存ファイルの上書き拒否 ---

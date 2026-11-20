@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -586,7 +586,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 7つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
 閉じ込め、判定を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
-テストは全てサーバー側 bin テストであり、E2E 定義数（当時59件、現在65件）は変更しない。
+テストは全てサーバー側 bin テストであり、E2E 定義数（当時59件、現在69件）は変更しない。
 ゲート ID とテスト名は
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 および「運用 bin のテスト数一覧」を参照。
 
@@ -595,7 +595,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 | `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` | 12 | 詳細設計 §5 |
 | `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 49（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1＋AGE_POLICY_CONFIGURED3） | CLI-01 / CFG-01 |
 | `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 20 | 詳細設計 §5 |
-| `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` | 10 | AUDIT-02 |
+| `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` / `ensure_include_reasons_allowed` | 12（鍵権限・トークン・上書き拒否10＋include_reasons本番ガード2） | AUDIT-02 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
 | `verify_audit_log` | `parse_args_from` / `check_expect_root` | 9 | AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |

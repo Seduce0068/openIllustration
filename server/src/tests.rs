@@ -9559,16 +9559,20 @@ fn test_order_expiry_parses_rfc3339_fractional_digits() {
     }
 }
 
-/// JPYC: derivation_index の u32 境界を超える値は受取アドレス再利用を防ぐため拒否。
+/// JPYC: non-hardened パス m/44'/60'/0'/0/{index} の上限 2^31-1 を超える値は
+/// 受取アドレス再利用を防ぐため拒否する。
 #[test]
 fn test_derivation_index_bounds() {
     assert_eq!(crate::payments::derivation_index_to_u32(0).unwrap(), 0u32);
-    assert_eq!(
-        crate::payments::derivation_index_to_u32(u32::MAX as i64).unwrap(),
-        u32::MAX
-    );
     assert!(crate::payments::derivation_index_to_u32(-1).is_err());
-    assert!(crate::payments::derivation_index_to_u32(u32::MAX as i64 + 1).is_err());
+    // 上限 2^31-1 (=2147483647) は許可。
+    let max_non_hardened = (1i64 << 31) - 1;
+    assert_eq!(
+        crate::payments::derivation_index_to_u32(max_non_hardened).unwrap(),
+        max_non_hardened as u32
+    );
+    // 上限 +1 (=2^31) は拒否。
+    assert!(crate::payments::derivation_index_to_u32(1i64 << 31).is_err());
 }
 
 /// JPYC: BIP44派生が決定的で、indexごとに異なるアドレスを返す。
@@ -13964,6 +13968,53 @@ async fn test_migration_set_applies_and_verifies_cleanly() {
             "applied versions must be contiguous: {versions:?}"
         );
     }
+}
+
+/// 文字列リテラル内の `;` と `--` が文分割されず、値として保持されること。
+#[tokio::test]
+async fn test_migration_splitter_keeps_semicolons_and_dashes_in_literals() {
+    let sql = "CREATE TABLE literal_t (id INTEGER PRIMARY KEY, note TEXT);\n\
+               INSERT INTO literal_t (id, note) \
+               VALUES (1, 'a; b -- not a comment');";
+    let statements = crate::migration::split_statements(sql);
+    assert_eq!(statements.len(), 2, "statements: {statements:?}");
+    assert!(statements[1].contains("'a; b -- not a comment'"));
+
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    for statement in &statements {
+        db.execute(statement.as_str(), ()).await.unwrap();
+    }
+
+    let mut rows = db
+        .query("SELECT note FROM literal_t WHERE id = 1", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let note: String = row.get(0).unwrap();
+    assert_eq!(note, "a; b -- not a comment");
+}
+
+/// 行コメント内の `;` が文分割されないこと。
+#[test]
+fn test_migration_splitter_ignores_semicolons_in_line_comments() {
+    let sql = "-- note; with a semicolon\n\
+               CREATE TABLE comment_t (id INTEGER); -- trailing; comment\n\
+               INSERT INTO comment_t (id) VALUES (1);";
+    let statements = crate::migration::split_statements(sql);
+    assert_eq!(statements.len(), 2);
+    assert_eq!(
+        statements[0].as_str(),
+        "CREATE TABLE comment_t (id INTEGER)"
+    );
+    assert_eq!(
+        statements[1].as_str(),
+        "INSERT INTO comment_t (id) VALUES (1)"
+    );
 }
 
 /// 本番起動と同じ順序（FK 有効化 → migration）でローカル DB を組み立て、

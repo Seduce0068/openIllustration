@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 verified:
   by: dsh
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -82,7 +82,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に10テスト、`doctor` 49件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件） / `verify_audit_export` 20件 / `verify_backup` 19件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）、`doctor` 49件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件） / `verify_audit_export` 20件 / `verify_backup` 19件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 | 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は当時59件のまま（現在69件）。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
@@ -148,7 +148,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
 | AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
-| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に10テストを追加済み。Runbookの手動確認手順も併用する |
+| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に12テスト（既存10件＋include_reasons本番ガード2件）を追加済み。Runbookの手動確認手順も併用する |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
@@ -458,7 +458,7 @@ CLI-01〜03 に加え、`server/src/bin/` 配下の全 bin について実装済
 | `backup_db` | 12件 | `VACUUM INTO` の一貫スナップショット、上書き拒否、生存ロックの fail-closed |
 | `doctor` | 49件 | 23カテゴリの設定診断、`--strict` 判定、秘密値非出力 |
 | `restore_db` | 20件 | 引数検証、サイドカー拒否、生存ロック両側検査、復元前検証とロールバック安全コピー |
-| `sign_audit_export` | 10件 | 署名鍵権限、親ディレクトリ権限、`DATABASE_TOKEN` 限定、出力上書き拒否 |
+| `sign_audit_export` | 12件 | 署名鍵権限、親ディレクトリ権限、`DATABASE_TOKEN` 限定、出力上書き拒否、include_reasons 本番ガード |
 | `verify_audit_export` | 20件 | v3 スナップショット検証、`--expect-root` 照合、改ざん拒否 |
 | `verify_audit_log` | 9件 | `expect-root` 照合、v1/v2 連鎖検証、root 不一致拒否 |
 | `verify_backup` | 19件 | `--database-token` 拒否、サイドカー fail-closed、構造検証 |
@@ -1231,7 +1231,7 @@ E2E の `test()` 名も NEUT-URL-02 / NEUT-URL-03 へ改名済みで、仕様 ID
 ### 監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）
 
 `server/src/bin/sign_audit_export.rs` の硬化項目に対するテスト設計。実装は完了しており、
-同ファイル内に鍵権限・トークン・上書き拒否の10テストを追加済み。下表はその契約の一覧であり、
+同ファイル内に鍵権限・トークン・上書き拒否の10テストと include_reasons 本番ガード2件の計12テスト（内訳: 鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済み。下表はその契約の一覧であり、
 Runbookの手動確認手順を継続して併用する。同じトークン契約は `verify_backup` にも適用される
 （CLI-03 を参照）。
 
@@ -1244,6 +1244,12 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | トークン受け渡し | `--database-token TOKEN` を指定 | エラー（`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`） |
 | トークン受け渡し | `DATABASE_TOKEN` 環境変数を設定 | 読み込んでリモート libSQL へ渡す（未設定は空） |
 | 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` により原子的に失敗） |
+| 平文理由のエクスポート | 本番相当（`ALLOW_MOCK_AUTH` 無効・`AUDIT_EXPORT_INCLUDE_REASONS` 未設定）で `--include-reasons` を指定 | 拒否（`--include-reasons is not allowed in production without explicit opt-in; keep reasons masked or set AUDIT_EXPORT_INCLUDE_REASONS=1 deliberately`）。フラグ値・環境変数値はエコーしない |
+| 平文理由のエクスポート | `ALLOW_MOCK_AUTH=1`（開発）または `AUDIT_EXPORT_INCLUDE_REASONS=1`（明示オプトイン）付きで `--include-reasons` を指定 | 受理（理由をマスクせずエクスポート） |
+
+新規回帰テストは `include_reasons_requires_explicit_opt_in_in_production`
+（本番相当での拒否と明示オプトインによる break-glass 受理）と
+`include_reasons_is_allowed_with_mock_auth`（mock 認証時の受理）の2件。
 
 ## 5. リリース証跡
 

@@ -201,12 +201,16 @@ pub fn amount_jpy_from_wei(amount_wei: &str) -> Result<AmountJpy, AppError> {
 /// DB の derivation_index (i64) を BIP44 用の u32 へ安全に変換する。
 /// 境界を超える値は受取アドレスの再利用を防ぐため拒否する。
 pub fn derivation_index_to_u32(index: i64) -> Result<u32, AppError> {
-    u32::try_from(index).map_err(|_| {
-        AppError::Internal(format!(
+    // non-hardened パス m/44'/60'/0'/0/{index} では index を 0..2^31 に制限する。
+    // 上限を超える値は受取アドレスの再利用を防ぐため拒否する（fail-closed）。
+    if (0..(1i64 << 31)).contains(&index) {
+        Ok(index as u32)
+    } else {
+        Err(AppError::Internal(format!(
             "derivation index {index} exceeds the supported maximum {}",
-            u32::MAX
-        ))
-    })
+            (1u64 << 31) - 1
+        )))
+    }
 }
 
 pub fn jpy_to_wei(amount_jpy: AmountJpy) -> Result<String, AppError> {

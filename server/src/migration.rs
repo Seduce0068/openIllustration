@@ -10,8 +10,9 @@
 //   `_migrations` table together with a SHA-256 checksum of the file content.
 // - Applied migrations must not be edited; edits are detected at startup and
 //   abort boot (see `verify_migrations`).
-// - Statements are split naively on `;` after stripping `--` line comments.
-//   Avoid semicolons and comment markers inside string literals.
+// - Statements are split by a SQL-aware scanner that honours single/double-quoted
+//   literals and `--` line comments, so `;` / `--` inside literals are safe.
+//   Block comments and dollar-quoted strings are not interpreted.
 
 use crate::AppError;
 use libsql::Connection;
@@ -200,6 +201,75 @@ fn validate_migration_sequence(files: &[MigrationFile]) -> Result<(), AppError> 
     Ok(())
 }
 
+/// Split migration SQL into statements for execution.
+///
+/// A single character scan recognises single/double-quoted literals (with SQL's
+/// doubled-quote escapes) and `--` line comments. `;` and `--` inside a quoted
+/// literal are preserved; comment text is discarded before splitting.
+///
+/// LIMITATION: block comments (`/* ... */`) and dollar-quoted strings (`$$...$$`)
+/// are not interpreted, so migrations must avoid them.
+pub(crate) fn split_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = sql.char_indices().peekable();
+
+    while let Some((_, ch)) = chars.next() {
+        match quote {
+            Some(q) => {
+                current.push(ch);
+                if ch == q {
+                    // SQL escapes a quote inside a literal by doubling it.
+                    match chars.peek() {
+                        Some(&(_, next)) if next == q => {
+                            current.push(next);
+                            chars.next();
+                        }
+                        _ => quote = None,
+                    }
+                }
+            }
+            None => match ch {
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    current.push(ch);
+                }
+                '-' => {
+                    if matches!(chars.peek(), Some(&(_, '-'))) {
+                        // Discard the rest of the `--` line comment but keep
+                        // the newline so following lines are parsed normally.
+                        chars.next();
+                        for (_, comment_ch) in chars.by_ref() {
+                            if comment_ch == '\n' {
+                                current.push('\n');
+                                break;
+                            }
+                        }
+                    } else {
+                        current.push(ch);
+                    }
+                }
+                ';' => {
+                    let statement = current.trim().to_owned();
+                    if !statement.is_empty() {
+                        statements.push(statement);
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            },
+        }
+    }
+
+    let tail = current.trim();
+    if !tail.is_empty() {
+        statements.push(tail.to_owned());
+    }
+
+    statements
+}
+
 /// Apply a single migration file
 async fn apply_migration(
     db: &Connection,
@@ -238,29 +308,11 @@ async fn apply_migration(
     // Execute migration SQL in a transaction
     let tx = db.transaction().await?;
 
-    // Statement splitter: strips `--` line comments, then splits on `;`.
-    // LIMITATION: string literals containing `--` or `;` are not supported.
-    // Keep migrations free of semicolons/comment markers inside string literals.
-    let sql_no_comments: String = sql
-        .lines()
-        .map(|line| {
-            if let Some(idx) = line.find("--") {
-                &line[..idx]
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let statements: Vec<&str> = sql_no_comments
-        .split(';')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for statement in statements {
-        tx.execute(statement, ()).await?;
+    // SQL-aware splitter: `;` / `--` inside quoted literals stay intact and
+    // `--` comment text is removed before splitting.
+    // LIMITATION: block comments and dollar quoting are not parsed (see function).
+    for statement in split_statements(sql) {
+        tx.execute(statement.as_str(), ()).await?;
     }
 
     // Record migration as applied

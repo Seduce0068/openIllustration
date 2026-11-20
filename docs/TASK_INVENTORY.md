@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 verified:
   by: dsh
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 status: current
 ---
 
@@ -33,7 +33,7 @@ status: current
   - [対応済み] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
     （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
     `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
-    上書き拒否を実装。bin 内に10テストを追加済み（AUDIT-02、
+    上書き拒否を実装。bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、23カテゴリ固定・秘密値非出力・`--strict` 判定を
@@ -56,7 +56,7 @@ status: current
     `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
     `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
-    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は当時59件のまま変更しない（現在65件）。
+    今回の追加は全てサーバー側 bin テストであり、E2E 定義数は当時59件のまま変更しない（現在69件）。
   - [対応済み] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
     `build_http_client` が `reqwest::redirect::Policy::none()` を設定し、IPFS ゲートウェイ /
     OIDC の 3xx を追従しない。`get_content` は 2xx 以外（3xx を含む）を次のゲートウェイへ
@@ -96,7 +96,7 @@ status: current
     明示 `tx.commit()` を追加。別接続の未コミット BAN 書き込み下で書き込み前の単一時点
     スナップショットを返す検証を含むサーバー側テスト2件（EXPORT-09 / EXPORT-10、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の5件はいずれもサーバー側テストであり、E2E 定義数は当時59件のまま変更しない（現在65件）。
+    今回の5件はいずれもサーバー側テストであり、E2E 定義数は当時59件のまま変更しない（現在69件）。
   - [対応済み] 監査タイムラインの理由マスク: `get_content_audit` が `reason` に
     `common::summarize_reason` を適用し、`entry_hash` は DB の生値を維持（DB 全文も不変）。
     サーバー側テスト1件（AUDIT-03、[DETAILED_DESIGN.md](DETAILED_DESIGN.md),
@@ -113,7 +113,7 @@ status: current
   - [対応済み] エクスポート解析失敗の表示: `export_status_message` が解析失敗時に
     固定文言 `エクスポート結果の解析に失敗しました。` を返し、「0 件」成功表示へ落とさない。
     クライアント側単体テスト1件（EXPORT-11、[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は当時59件のまま変更しない（現在65件）。
+    今回の7件はサーバー側6件＋クライアント側1件であり、E2E 定義数は当時59件のまま変更しない（現在69件）。
 - 直近3コミットの反映（いずれも master 取り込み済み、2026-11-18 再確認）:
   - [対応済み a6eba14] JPKI 証明書検証のエラーパス: 不正base64・非X.509 DER・期限切れ・envelope空・
     空トークンの5テストを追加し、いずれも `Unauthorized` を要求。base64/X.509/有効期限の検証を固定し、
@@ -336,7 +336,7 @@ status: current
   権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
   （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
   `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
-  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に10テストを追加済みで、手動確認手順を
+  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済みで、手動確認手順を
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
 - [対応済み] **`verify_audit_export` の `--expect-root` と純粋関数化**:
   `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
@@ -391,7 +391,7 @@ status: current
   本文サイズ 413 / CORS プリフライト OPTIONS 204 も取りこぼさず
   `openillustration_http_requests_total` / `openillustration_http_errors_total` へ計上。
   差分アサーションのサーバー側テスト4件を追加（MET-02、
-  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 定義数は当時59件のまま変更なし（現在65件）。
+  [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。E2E 定義数は当時59件のまま変更なし（現在69件）。
 - [対応済み] R1-25: `verify_order` に書き込みロックと CAS（`WHERE order_id = ? AND status = ?`）
   を導入。検証中に状態が変わった注文は 409 で拒否し、確定済みを上書きしない。
   `AppError::Conflict`（409）を追加。mutation（CAS 削除）でテスト失敗を確認。
@@ -405,7 +405,7 @@ status: current
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) へ追記。`me_export` は `begin_write_tx`
   経由で `write_lock` を取得し、共有 `Connection` の BEGIN を書き込みと直列化する。
   旧設計の無ロック記述は [DETAILED_DESIGN.md](DETAILED_DESIGN.md) と
-  TEST_SPECIFICATION から削除済み。E2E 定義数は当時59件のまま（現在65件）。
+  TEST_SPECIFICATION から削除済み。E2E 定義数は当時59件のまま（現在69件）。
 - [対応済み] R4-03: `OIDC_HTTP_TIMEOUT_SECS`（1〜60 秒、既定 10 秒）を追加し、
   OIDC の HTTP クライアントへ適用。境界値テストを追加し、mutation（範囲検査削除）で
   テスト失敗を確認。

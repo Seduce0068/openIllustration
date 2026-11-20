@@ -116,19 +116,22 @@ P1（本番運用の健全性）:
 - [x] **amount_wei を u128 数値比較へ** — 根拠 `server/src/payments.rs:166-174,722-730` / R2-IV08 / 中。
   2026-11-21 対応: `parse_amount_wei` で両側 u128 パース比較。非数値/オーバーフローは Internal fail-closed。
   先頭ゼロ受理・非数値拒否・u128 超過の回帰を追加。DB 保存形式と既存 MISMATCH 400 は不変。
-- [ ] **BIP44 derivation_index の 2^31 到達を明示エラーへ** — 根拠 `server/src/payments.rs:195,223,447` / R2-BV07 / 中。
-  上限到達後は INSERT されず index が据え置きで以降の注文がすべて 500 になる。上限前に運用エラーを返す。
+- [x] **BIP44 derivation_index の non-hardened 上限を明示エラーへ** — 根拠 `server/src/payments.rs:200-211` / R2-BV07 / 中。
+  2026-11-21 対応: `derivation_index_to_u32` を `0..2^31` 範囲チェックへ変更。上限到達前に Internal で
+  拒否し、注文がすべて 500 になる問題を解消。境界回帰テストを追加。
 - [ ] **doctor へバックアップ必須設定と TZ の診断を追加** — 根拠 `server/src/bin/doctor.rs:66,356` / R1-CF02,CF07 / 中。
   BACKUP_GPG_RECIPIENT 未設定・OFFSITE 片方設定・ALERT_CMD 実行不可・TZ 未設定が strict を通過する。
-- [ ] **--include-reasons を本番相当で拒否または環境変数化** — 根拠 `server/src/bin/sign_audit_export.rs:72,187` / R1-CF08 / 中。
-  CLI フラグを付けるだけで PII を含む理由本文が平文の署名スナップショットへ入り既定のマスク契約を回避できる。
+- [x] **--include-reasons へ本番ガードと break-glass を追加** — 根拠 `server/src/bin/sign_audit_export.rs:139-170` / R1-CF08 / 中。
+  2026-11-21 対応: 本番相当では `AUDIT_EXPORT_INCLUDE_REASONS=1` の明示オプトインが無ければ拒否。
+  `ALLOW_MOCK_AUTH=1` は認証を無効化するため逃げ道に使わない設計。回帰2テストを追加。
 - [ ] **OIDC 設定バリデータを doctor と run() の共通 API へ** — 根拠 `server/src/oidc.rs:287-340` /
   `server/src/bin/doctor.rs:84-94` / R1-AR07 / 中。
   from_env_with が pub(crate) のため doctor が必須変数・URL・cookie_secure を再実装し、ルール追加時にドリフトする。
 - [ ] **検索条件と SPA ビューを URL / history へ同期** — 根拠 `client/src/lib.rs:116-138,895-1002` / R1-UX03,UX04 / 中。
   リロード・共有で条件が消え、ブラウザ「戻る」が画面遷移と連動しない。hash ベースでも双方向同期＋popstate。
-- [ ] **マイグレーション SQL 分割器を quote 対応へ** — 根拠 `server/src/migration.rs:241-264` / R1-ST04 / 中。
-  文字列リテラル中の `--` / `;` が文を壊す。トークナイザ化＋回帰フィクスチャ。
+- [x] **マイグレーション SQL 分割器を quote 対応へ** — 根拠 `server/src/migration.rs:204-271` / R1-ST04 / 中。
+  2026-11-21 対応: `split_statements` を新設し single/double quote と行コメントを認識。
+  クォート内の `;` / `--` を保持、チェックサムと既存 migration 001-013 は不変。回帰2テストを追加。
 
 - [x] 認証・アップロード・注文作成へレート制限と同時実行上限を導入（R4-02、2026-11-18 対応済み）
 - [x] OIDC HTTP タイムアウト設定キーを追加（R4-03、2026-11-18 対応済み）

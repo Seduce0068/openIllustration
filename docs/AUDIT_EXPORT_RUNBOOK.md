@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-21T06:50:20+09:00"
 ---
 
 ## 目的
@@ -112,7 +112,7 @@ cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされてい
 正常系（鍵 0600・親 0700・新規出力・`DATABASE_TOKEN` 環境変数）は
 「スナップショット作成」の手順に従って実行する。上記はコード上の契約から導いた確認手順であり、
 本ドキュメント更新時点でこの手順の実行は行っていない。
-`server/src/bin/sign_audit_export.rs` には鍵権限・トークン・上書き拒否の10テストを追加済みであり、
+`server/src/bin/sign_audit_export.rs` には鍵権限・トークン・上書き拒否の12テスト（include_reasons本番ガード2件含む）を追加済みであり、
 継続的な検証は Runbook の本手順と
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の AUDIT-02 ゲートで扱う。
 
@@ -237,5 +237,5 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名鍵の HSM 管理、ローテーション、旧公開鍵の配布方針。
 - 公開範囲と個人情報（理由_TEXT 等）のマスキング方針。
 - スナップショットの自動生成頻度と公開手順。
-- AUDIT-02 の自動テストは `sign_audit_export.rs` の10件で充足済み。残るは外部アンカー運用と
+- AUDIT-02 の自動テストは `sign_audit_export.rs` の12件で充足済み。残るは外部アンカー運用と
   HSM 鍵管理の実試験（上記項目と重複）。
