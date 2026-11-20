@@ -465,6 +465,15 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-21 (swarm-limited mixed 第1イテレ): dogfood/ux/ops の新観点で実ユーザー導線を発掘。
+  監査失敗後再取得・LOG OUT 導線・Search 即時検索・投票中ステータス・運用記述5件を完了。
+  E2E 65→66件（auth 3件）。起動10/上限40。
+- 2026-11-21 進行中（型・テスト先行候補、認証パスへは結線しない）: JPKI所有証明の
+  PresentationEnvelope型+純粋署名検証+フィクスチャ、E2E3ブラウザの条件付き選択関数、
+  refresh_tokens の RFC3339 契約テスト、payment_orders の正当な複数注文の回帰固定、
+  VerifiedAgeAttribute 型とフェイルクローズ境界テスト、R5-05/R5-08 の内部データ型。
+  いずれも外部仕様/設計判断が確定する前の安全な部分のみ。
+
 - 2026-11-21 (swarm-limited 完了): 2 イテレーション・起動17/上限40で停止。残6件は外部仕様
   (DEC-01/R5-05/R5-08/JPKI所有証明)・却下(payment_orders部分UNIQUE)・既対応(refresh_tokens
   はdatetime正規化済み)・バイナリ要件(Firefox/WebKit)で、安全なローカル項目は0件。配信側CSPは

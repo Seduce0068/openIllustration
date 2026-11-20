@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # バックアップ取得→検証→古い世代のローテーションを一度に行う。
-# cron 等のスケジューラから実行する想定（サーバーは起動中でも可: VACUUM INTO を使用）。
+# cron 等のスケジューラから実行する想定。backup_db は生存 instance.lock を検出すると
+# VACUUM INTO を実行せず拒否する（fail-closed）。サーバー停止中（メンテナンス窓）に実行する。
 set -euo pipefail
 # 生成する一時ファイル・成果物を 0600 に制限する（service の UMask=0077 と同等）。
 umask 077

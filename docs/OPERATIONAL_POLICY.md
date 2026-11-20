@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-21T02:46:23+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -282,7 +282,12 @@ generated:
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
 | `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら `doctor` の `audit_expect_root` カテゴリで固定文言の警告（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。 |
-| `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | バックアップ運用スクリプトが読む環境ファイル。所有者を固定し権限600で管理する。秘密情報を含むため配布物へ含めない。 |
+| `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | cron 版は `backup-cron-wrapper.sh` がこのパスを読む。systemd 版はこの変数を使わず、`EnvironmentFile=` の固定パス（同パス）から読む。権限600・所有者固定、秘密情報は配布物へ含めない。 |
+| `BACKUP_DIR` | 任意 | リポジトリルートの `backups/` | バックアップ出力先。deploy 設定例では `/var/backups/openillustration`。事前に存在させ、権限を適切に設定する。 |
+| `BIN_DIR` | 任意 | リポジトリルートの `target/debug` | `backup_db` / `verify_backup` / `verify_audit_log` のあるディレクトリ。無ければ `cargo run` へフォールバック（開発用）。本番はビルド済みパスを指定。 |
+| `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
+| `OFFSITE_COPY_CMD` | 任意（`OFFSITE_DEST` と対で設定） | 空（無効） | オフサイトコピーコマンドの実行ファイルパス。`<成果物> <宛先>` の2引数で呼び出す（eval 不使用）。実行不可なら起動拒否（fail-closed）。 |
+| `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。`firefox` / `webkit` はオプトインで、バイナリ導入と共有ライブラリに依存するためホスト環境次第。 |
 
 - OIDC の URL 設定（`OIDC_ISSUER` / `OIDC_REDIRECT_URI` / `OIDC_AUTHORIZATION_ENDPOINT` /

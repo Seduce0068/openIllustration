@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-20T10:20:56+09:00"
+  at: "2026-11-21T02:46:23+09:00"
 ---
 
 ## 目的
@@ -86,15 +86,17 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
 同じファイルへ `AUDIT_EXPECT_ROOT=<別経路保存の Merkle root>` も設定する
 （root は非機微な hex だが、本番では必須）。
 
-`MAILTO` / `SyslogIdentifier` を実際の通知先へ変更してアラートを受け取る。
+アラートの通知先は `ALERT_CMD`（失敗通知コマンド）または cron の `MAILTO` で設定する。
+`SyslogIdentifier` は journald の検索タグであり通知先ではない（変更しても通知は飛ばない）。
 パス・ユーザー・グループは導入環境に合わせて修正する。
 
 `RETENTION_DAYS`（既定30、上限20000＝約55年）を超えた世代数を削除するが、直近
-`MIN_KEEP`（既定3、最小1、上限1000）件は保持期間を超えていても残す。ファイル名の
-UTC タイムスタンプ順に新しいものから判定し、作成したばかりのバックアップは
-削除しない。上限は `cutoff = 現在時刻 - RETENTION_DAYS*86400` が負にならない
-（現在時刻の日数より小さい）範囲に制限しており、上限値でも古い世代が実際に
-削除される。cutoff が非正になる値は起動時に拒否する（fail-closed）。
+`MIN_KEEP`（既定3、最小1、上限1000）件は保持期間を超えていても残す。直近件の選択は
+ファイル名の UTC タイムスタンプ順（新しい順）で行い、残りの保持期間判定は mtime
+（`stat -c %Y`）と `cutoff = 現在時刻 - RETENTION_DAYS*86400` の比較で行う。
+上限は cutoff が負にならない（現在時刻の日数より小さい）範囲に制限しており、
+上限値でも古い世代が実際に削除される。cutoff が非正になる値は起動時に拒否する
+（fail-closed）。
 
 上限を超える値は起動前に拒否する（fail-closed）。比較は算術を行わず、
 桁数と同桁の辞書順で行うため、巨大な整数でも安全に拒否できる。これにより

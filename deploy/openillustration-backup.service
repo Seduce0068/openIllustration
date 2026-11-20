@@ -26,5 +26,6 @@ Group=openillustration
 # 生成するバックアップ/一時ファイルの既定権限を 0600 に制限する
 # （cron 版は backup-rotate.sh 内の umask 077 で同等に制限する）。
 UMask=0077
-# 失敗時に syslog/journal へ明確に記録する（アラート連携の手掛かり）。
+# SyslogIdentifier は journald の検索タグ（通知先ではない）。変更しても通知は飛ばない。
+# 失敗の検知・通知は ALERT_CMD / cron の MAILTO で設定する。
 SyslogIdentifier=openillustration-backup

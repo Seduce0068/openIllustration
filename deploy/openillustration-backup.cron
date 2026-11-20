@@ -14,4 +14,7 @@ MAILTO=admin@example.com
 # 制限付き KEY=VALUE パーサ（source/eval なし、値はリテラル）で読み込み、
 # systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
 # コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
+# 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
+# 利用環境のサーバー停止メンテナンス窓に合わせて起動時刻を変更すること。
+# 停止を前提としない方式を採る場合は、ロック検出の挙動を事前に確認する。
 17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh

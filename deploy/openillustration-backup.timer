@@ -3,6 +3,9 @@ Description=Daily OpenIllustration database backup
 Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 
 [Timer]
+# 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
+# 利用環境のサーバー停止メンテナンス窓に合わせて OnCalendar を変更すること。
+# 停止を前提としない方式を採る場合は、ロック検出の挙動を事前に確認する。
 OnCalendar=*-*-* 03:17:00
 Persistent=true
 RandomizedDelaySec=300
