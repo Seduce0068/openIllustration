@@ -2612,7 +2612,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                                             disabled=move || vote_busy.get()
                                             aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-red-500/50 text-red-500 text-[8px] hover:bg-red-500 hover:text-black transition-colors">
-                                            "REJECT (BAN)"
+                                            "REJECT (VOTE)"
                                         </button>
                                     </div>
                                 </div>

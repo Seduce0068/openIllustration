@@ -61,6 +61,7 @@ pub struct AgePolicy {
     /// 運用者が対象とする地域・運用範囲の宣言（メタデータ、公開可）。
     pub target_regions: Vec<String>,
     /// 運用者が明示的に設定済みと宣言したか（`AGE_POLICY_CONFIGURED`）。
+    /// 単独では必須設定値の充足を意味しない（doctor の `age_policy` 診断で警告）。
     pub operator_configured: bool,
     /// 明示設定がない場合に fail closed するか（`AGE_REQUIRE_EXPLICIT_CONFIGURATION`）。
     pub require_explicit_configuration: bool,

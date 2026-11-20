@@ -70,6 +70,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'MODERATION' }).click();
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'REJECT (VOTE)' })).toBeVisible();
   };
 
   // 投票一覧の取得失敗を検証するため、認証だけモックして MODERATION 画面へ進む。

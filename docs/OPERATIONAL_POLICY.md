@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-21T03:31:36+09:00"
+  at: "2026-11-21T05:32:50+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -240,7 +240,7 @@ generated:
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | `1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
-| `DATABASE_URL` | 任意 | `file:local.db` | libSQL接続先。 |
+| `DATABASE_URL` | 任意 | `file:local.db` | libSQL接続先（既定値の運用上の差分は下記注記を参照）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
@@ -290,6 +290,11 @@ generated:
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし警告を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
+- `DATABASE_URL` の既定値はサーバー・CLI ともに `file:local.db`（後方互換のため変更しない）。
+  一方 deploy 設定例（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）は
+  `file:/var/lib/openillustration/local.db` を使い、両者は別 DB を指す。
+  手動で CLI を実行するときは `--database-url` または `DATABASE_URL` を明示し、
+  誤った DB を検証して成功と誤信するのを防ぐ。
 - OIDC の URL 設定（`OIDC_ISSUER` / `OIDC_REDIRECT_URI` / `OIDC_AUTHORIZATION_ENDPOINT` /
   `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI`）は https が必須。`ALLOW_MOCK_AUTH` が有効な場合のみ
   `localhost` / `127.0.0.1` / `[::1]` / `::1` の http を許容し、それ以外の http や不正 URL は

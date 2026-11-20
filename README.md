@@ -108,7 +108,13 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/local
 各コマンドの前提・失敗時の扱い・復旧手順は
 [バックアップ・リストア Runbook](docs/BACKUP_RESTORE_RUNBOOK.md) と
 [監査エクスポート Runbook](docs/AUDIT_EXPORT_RUNBOOK.md) を参照してください。
-`verify_backup` と `verify_audit_export` は `--database-token` を受け付けません。
+7 つの運用 CLI のうち `doctor` は設定診断専用の別契約で DB トークンを扱わない。
+残り6つ（`backup_db` / `restore_db` / `sign_audit_export` / `verify_audit_log` /
+`verify_audit_export` / `verify_backup`）はすべて `--database-token` を拒否する
+（argv は ps 等で公開されるため）。トークンが必要な DB 接続3 CLI
+（`backup_db` / `sign_audit_export` / `verify_audit_log`）は `DATABASE_TOKEN`
+環境変数のみを使用し、`restore_db`（ローカル DB のみ）と
+`verify_backup` / `verify_audit_export`（DB 非接続）はトークン自体を使わない。
 
 ## 年齢/地域ポリシー（DEC-02 方針、公開設定）
 

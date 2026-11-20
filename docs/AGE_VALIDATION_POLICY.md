@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-21T03:31:36+09:00"
+  at: "2026-11-21T05:32:50+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -61,9 +61,18 @@ generated:
 | `AGE_TARGET_REGIONS` | 空 | 対象地域コードのカンマ区切り（例: `JP,US,DE`）。英字2文字を大文字化し重複除去・ソート。英字2文字以外（例: `jpn`, `12`, `j-P`）は起動拒否（fail-closed）。 |
 | `AGE_ENFORCEMENT_MODE` | `self_reported` | `self_reported` / `self_reported_dob_country`: 申告された生年月日・国コードで判定（信頼属性ではない）。`trusted_attribute_required` / `trusted_attribute`: 検証済み属性入力が未実装のため現時点では常に拒否（フェイルクローズ）。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。明示設定を要求。 |
-| `AGE_POLICY_CONFIGURED` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。設定確認/確定フラグ（前項目と併用）。 |
+| `AGE_POLICY_CONFIGURED` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。設定確認/確定フラグ（前項目と併用）。単独では充足を意味しない。 |
 
 不正な値（未知モード、不正な真偽値、不正な国コード/年齢形式、範囲外年齢など）は `AgePolicy::from_env()` がエラーを返し、サーバー起動は失敗する（fail closed）。
+
+`AGE_POLICY_CONFIGURED=1` は運用者の宣言であり、
+`AGE_DEFAULT_MINIMUM` / `AGE_TARGET_REGIONS` / `AGE_COUNTRY_OVERRIDES` の明示設定を保証しない。
+フラグのみが真で必須設定値が既定のまま（最少年齢が既定値・対象地域と国別上書きが空）の場合、
+`doctor` の `age_policy` カテゴリが固定文言で警告する。
+後方互換を保つため `AgePolicy::operator_configured` の意味と
+`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` の fail-closed 契約
+（フラグ未設定なら `ConfigurationRequired` として 403）は変更しない。
+警告は既定では終了コードに影響せず、`--strict` のときのみ 1 となる。
 
 ### 2.3 公開エンドポイント
 

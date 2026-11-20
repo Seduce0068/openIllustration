@@ -64,17 +64,21 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   `mask_reason` の出力形式と verify_chain / sign_audit_snapshot の契約は不変。
 - [ ] **AGE_POLICY_CONFIGURED を実際の設定充足から導出** — 根拠 `common/src/age.rs:63,163,334` / R1-CF03 / 重大度 high。
   手動フラグ 1 だけで既定値（21歳・target_regions 空）のまま `AGE_REQUIRE_EXPLICIT_CONFIGURATION` を通過できる。
-  必須設定値の充足結果として導出し、doctor が整合を検証する。
+  2026-11-21 部分対応: doctor の age_policy カテゴリへフラグ単独＋既定値の固定警告を追加（check23不変）。
+  フラグを充足結果へ導出すると /policy/age の公開値とゲート契約が変わるため後方互換のため見送り、未着手を維持。
 - [ ] **DATABASE_URL の既定値を CLI と deploy 設定例で統一** — 根拠 `server/src/bin/backup_db.rs:202` /
   `deploy/openillustration-backup.cron:20` / R1-CF01 / 重大度 high。
   CLI 既定 `file:local.db` と deploy の `/var/lib/openillustration/local.db` が別 DB を指し、
-  未設定の手動 CLI が誤った DB を検証して OK と誤信する。doctor の診断対象にも含める。
-- [ ] **README の --database-token 拒否を全 7 CLI へ修正** — 根拠 `README.md:111` / R3-FG03 / 重大度 high。
-  README は 2 CLI だけと書くが、実際は backup_db / restore_db / sign_audit_export / verify_audit_log も拒否する。
-  argv へトークンを渡した運用者が ps 等で露出するおそれ。
-- [ ] **投票ボタンの「REJECT (BAN)」表示を ADR-0004 に合わせる** — 根拠 `client/src/lib.rs:2605-2616` /
-  `docs/adr/ADR-0004-moderation-procedure.md:48-58` / R1-UX02 / 重大度 high。
-  ADR は 7 日後の集計で確定し自動 BAN は行わない。即時 BAN と誤認する旅程を修正し E2E のボタン名も更新する。
+  2026-11-21 部分対応: CLI コメントと OPERATIONAL_POLICY へ差異と明示設定の案内を追記（既定値は後方互換のため不変）。
+  既定値の統一と doctor 診断対象への追加は未着手を維持。
+- [x] **README の --database-token 拒否を実契約へ修正** — 根拠 `README.md:111-117` / R3-FG03 / 重大度 high。
+  2026-11-21 対応: 6 運用 CLI（backup_db / restore_db / sign_audit_export / verify_audit_log /
+  verify_audit_export / verify_backup）が拒否し doctor は別契約である旨を明記。各 CLI の
+  DATABASE_TOKEN 利用有無（3 CLI のみ環境変数を使用）も記載。
+- [x] **投票ボタンを「REJECT (VOTE)」へ変更** — 根拠 `client/src/lib.rs:2615` /
+  `e2e/tests/moderation.spec.ts:73` / R1-UX02 / 重大度 high。
+  2026-11-21 対応: ADR-0004 の「7日後確定・自動BANなし」に合わせラベルと E2E アサーションを更新。
+  E2E 件数69件は不変。
 
 - [x] 年齢ゲートの OIDC バイパスを遮断（R1-17、2026-11-18 未コミット対応）: callback / refresh が
   共通ゲート `ensure_age_policy_configured` を state / Cookie の消費前に呼び、

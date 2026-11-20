@@ -199,6 +199,9 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
+    // 既定値 file:local.db は後方互換のため残す。deploy 設定例の
+    // /var/lib/openillustration/local.db とは別 DB を指すため、手動 CLI 実行時は
+    // --database-url または DATABASE_URL で接続先を明示する。
     let database_url = args
         .database_url
         .or_else(|| std::env::var("DATABASE_URL").ok())

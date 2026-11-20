@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-21T04:28:01+09:00"
+  at: "2026-11-21T05:32:50+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -593,7 +593,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート / 参照 |
 | --- | --- | --- | --- |
 | `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` | 12 | 詳細設計 §5 |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 46（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1） | CLI-01 / CFG-01 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 49（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1＋AGE_POLICY_CONFIGURED3） | CLI-01 / CFG-01 |
 | `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 20 | 詳細設計 §5 |
 | `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` | 10 | AUDIT-02 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |

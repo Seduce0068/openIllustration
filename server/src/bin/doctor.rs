@@ -23,6 +23,19 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+/// 手動フラグのみで年齢ゲートを通過できる設定への固定警告（値はエコーしない）。
+const AGE_POLICY_FLAG_ONLY_WARNING: &str =
+    "AGE_POLICY_CONFIGURED is set but required age policy values are at defaults";
+
+/// `AGE_POLICY_CONFIGURED` が真でも必須設定値が既定のままかを判定する。
+/// 既定値との比較のみ行い、設定値を結果に含めない（医師的閾値は変更しない）。
+fn age_policy_values_at_defaults(policy: &common::age::AgePolicy) -> bool {
+    let defaults = common::age::AgePolicy::default();
+    policy.default_minimum_age == defaults.default_minimum_age
+        && policy.country_minimums.is_empty()
+        && policy.target_regions.is_empty()
+}
+
 /// 引数解析の結果。副作用（ヘルプ表示・exit）は含めず、main 側で実行する。
 #[derive(Debug, PartialEq, Eq)]
 enum ParseOutcome {
@@ -353,10 +366,17 @@ where
 
     // 年齢ポリシー: 不正値は AgePolicy::from_env_with がエラーを返す。
     // プロセス環境を触らず lookup を渡すことで、CLI と同じ分岐をテストできる。
-    let age_errors = match common::age::AgePolicy::from_env_with(&lookup) {
-        Ok(_) => Vec::new(),
-        Err(error) => vec![error],
-    };
+    let mut age_errors = Vec::new();
+    match common::age::AgePolicy::from_env_with(&lookup) {
+        Ok(policy) => {
+            // 手動フラグ 1 だけで必須設定値が既定のままなら年齢ゲートを通過できてしまう。
+            // 後方互換を保つため判定ロジックは変えず、警告のみとする。
+            if policy.operator_configured && age_policy_values_at_defaults(&policy) {
+                age_errors.push(AGE_POLICY_FLAG_ONLY_WARNING.to_string());
+            }
+        }
+        Err(error) => age_errors.push(error),
+    }
     results.push(("age_policy", age_errors));
 
     // レート制限: 既定値へフォールバックしていても警告する。
@@ -1401,6 +1421,60 @@ mod tests {
         }
         let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
         assert!(errors_for(&results, "audit_expect_root").is_empty());
+    }
+
+    // --- 2h. AGE_POLICY_CONFIGURED と必須設定値の整合 ----------------------
+
+    #[test]
+    fn age_policy_flag_only_warns_without_disclosing_values() {
+        for value in ["1", "true", "TRUE"] {
+            let results = check_all_with(lookup_from(&[("AGE_POLICY_CONFIGURED", value)]));
+            let errors = errors_for(&results, "age_policy");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], AGE_POLICY_FLAG_ONLY_WARNING, "value={value}");
+        }
+        // require=1 を併用しても警告は同じ。fail-closed 契約を緩めていない。
+        let results = check_all_with(lookup_from(&[
+            ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
+            ("AGE_POLICY_CONFIGURED", "1"),
+        ]));
+        assert_eq!(errors_for(&results, "age_policy").len(), 1);
+    }
+
+    #[test]
+    fn age_policy_flag_with_explicit_values_has_no_warning() {
+        // 必須設定値が 1 つでも既定と異なれば「既定のまま」ではない。
+        let scenarios: [&[(&str, &str)]; 3] = [
+            &[
+                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_DEFAULT_MINIMUM", "20"),
+            ],
+            &[("AGE_POLICY_CONFIGURED", "1"), ("AGE_TARGET_REGIONS", "JP")],
+            &[
+                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_COUNTRY_OVERRIDES", "JP=20"),
+            ],
+        ];
+        for pairs in scenarios {
+            let results = check_all_with(lookup_from(pairs));
+            assert!(
+                errors_for(&results, "age_policy").is_empty(),
+                "pairs={pairs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn age_policy_flag_unset_keeps_existing_behavior() {
+        // フラグ未設定なら必須設定値が既定でも警告しない（従来どおり）。
+        let results = check_all_with(lookup_from(&[]));
+        assert!(errors_for(&results, "age_policy").is_empty());
+        // 設定値だけ明示されていても警告しない。
+        let results = check_all_with(lookup_from(&[("AGE_TARGET_REGIONS", "JP")]));
+        assert!(errors_for(&results, "age_policy").is_empty());
+        // require=1 のみなら年齢判定側が 403 を返し、doctor は警告しない（従来どおり）。
+        let results = check_all_with(lookup_from(&[("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1")]));
+        assert!(errors_for(&results, "age_policy").is_empty());
     }
 
     // --- 3. strict 判定 ----------------------------------------------------
