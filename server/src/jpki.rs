@@ -1,5 +1,7 @@
 use crate::AppError;
 use base64::Engine;
+use rsa::pkcs8::DecodePublicKey;
+use rsa::sha2::Sha256;
 use serde::Deserialize;
 use x509_parser::{prelude::*, public_key::PublicKey};
 
@@ -121,6 +123,46 @@ struct PresentationEnvelope {
     certificate: Option<String>,
     #[serde(rename = "verifiableCredential")]
     verifiable_credential: Option<String>,
+}
+
+/// 所有証明（nonce 署名検証）用の envelope。
+///
+/// 外部仕様（OID4VP の証明形式・nonce 発行契約）が確定する前の先行定義であり、
+/// 既存の `PresentationEnvelope` は一切変更しない（後方互換）。
+/// 現時点ではどの認証ハンドラもこの型をデコードしない（未結線）。
+///
+/// `deny_unknown_fields` により、仕様外のキーを含む JSON は受け付けない。
+#[allow(dead_code)] // 外部仕様確定後の結線まで本番コードから参照されない（未結線）。
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProofOfPossession {
+    /// 検証対象の nonce。発行契約が確定するまでは文字列として保持する。
+    pub nonce: String,
+    /// nonce に対する署名値（base64 等で符号化されたバイト列を想定）。
+    pub signature: String,
+}
+
+/// nonce に対する所有証明署名を検証する純粋関数。
+///
+/// 公開鍵 DER（SPKI）・nonce・署名だけを入力とし、RSASSA-PKCS1-v1_5 + SHA-256
+/// による検証の成否のみを返す。セッション／トークン等の認証状態は一切変更しない。
+///
+/// 未結線: いかなる既存ハンドラ（`verify_presentation` / `auth_verify` /
+/// `VerifyRequest`）もこの関数を呼ばない。外部仕様の確定後に結線する。
+///
+/// # Errors
+/// 公開鍵 DER のデコード失敗、または署名が無効な場合は `AppError::Unauthorized`。
+#[allow(dead_code)] // 外部仕様確定後の結線まで本番コードから呼ばれない（未結線）。
+pub fn verify_proof_of_possession(
+    public_key_der: &[u8],
+    nonce: &str,
+    signature: &[u8],
+) -> Result<(), AppError> {
+    let public_key = rsa::PublicKey::from_public_key_der(public_key_der)
+        .map_err(|e| AppError::Unauthorized(format!("Invalid PoP public key DER: {e}")))?;
+    public_key
+        .pkcs1v15_verify::<Sha256>(nonce.as_bytes(), signature)
+        .map_err(|_| AppError::Unauthorized("Proof-of-possession signature is invalid".into()))
 }
 
 #[cfg(test)]

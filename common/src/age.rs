@@ -29,6 +29,28 @@ impl fmt::Display for AgeEnforcementMode {
     }
 }
 
+/// 検証済み年齢属性のペイロード（DEC-01 連携準備用・外部仕様待ち）。
+///
+/// 現行の年齢判定には結線しておらず、この型の値が署名検証・発行者検証済みを意味しない。
+/// 未知フィールドを拒否し、自己申告の `birth_date` / `country_code` を
+/// 「検証済み属性」として誤って受け付けないようにする。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+pub struct VerifiedAgeAttribute {
+    /// 属性の発行者識別子（JPKI / OID4VP / IdP 等、外部仕様待ち）。
+    pub issuer: String,
+    /// 署名がカバーする対象（属性クレームの識別子、外部仕様待ち）。
+    pub signed_subject: String,
+    /// 提示ごとのリプレイ防止 nonce（検証手順は外部仕様待ち）。
+    pub nonce: String,
+}
+
+/// `VerifiedAgeAttribute` の serde フィクスチャ（秘密情報を含まないテスト値）。
+pub const VERIFIED_AGE_ATTRIBUTE_FIXTURE: &str = concat!(
+    r#"{"issuer":"jpki-test","signed_subject":"age-over-20","#,
+    r#""nonce":"fixture-nonce-0001"}"#
+);
+
 /// 公開可能な年齢判定の有効設定。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgePolicy {
@@ -707,5 +729,56 @@ mod tests {
                 .expect_err("invalid region code must be rejected");
             assert!(!err.contains(raw), "error must not echo input: {err}");
         }
+    }
+
+    #[test]
+    fn verified_age_attribute_fixture_roundtrips_and_denies_self_reported_fields() {
+        let attribute: VerifiedAgeAttribute =
+            serde_json::from_str(VERIFIED_AGE_ATTRIBUTE_FIXTURE).unwrap();
+        assert_eq!(attribute.issuer, "jpki-test");
+        assert_eq!(attribute.signed_subject, "age-over-20");
+        assert_eq!(attribute.nonce, "fixture-nonce-0001");
+        let roundtrip: VerifiedAgeAttribute =
+            serde_json::from_str(&serde_json::to_string(&attribute).unwrap()).unwrap();
+        assert_eq!(roundtrip, attribute);
+
+        // 自己申告の birth_date / country_code を混ぜた JSON は検証済み属性として拒否する。
+        let self_reported = concat!(
+            r#"{"issuer":"jpki-test","signed_subject":"age-over-20","#,
+            r#""nonce":"fixture-nonce-0001","#,
+            r#""birth_date":"2000-01-01","country_code":"JP"}"#
+        );
+        assert!(
+            serde_json::from_str::<VerifiedAgeAttribute>(self_reported).is_err(),
+            "self-reported fields must not be accepted as a verified attribute"
+        );
+    }
+
+    /// 自己申告の birth_date / country_code は TrustedAttributeRequired を通過しない。
+    #[test]
+    fn trusted_attribute_mode_rejects_self_reported_birth_date_and_country() {
+        #[derive(Deserialize)]
+        struct SelfReportedClaim {
+            birth_date: String,
+            country_code: String,
+        }
+
+        let claim: SelfReportedClaim =
+            serde_json::from_str(r#"{"birth_date":"2000-01-01","country_code":"JP"}"#).unwrap();
+        let policy = AgePolicy {
+            enforcement_mode: AgeEnforcementMode::TrustedAttributeRequired,
+            ..AgePolicy::default()
+        };
+        let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
+        // 成人として十分古い申告値・国コード指定でも、検証済み属性が無い限り拒否される。
+        for (birth, country) in [("2000-01-01", "JP"), ("1990-01-01", " us ")] {
+            let err = is_age_allowed_with_policy(&policy, birth, country, today).unwrap_err();
+            assert_eq!(err, AgeValidationError::TrustedAttributeRequired);
+        }
+        // serde フィクスチャから読んだ申告値も同じ境界を通過しない。
+        let err =
+            is_age_allowed_with_policy(&policy, &claim.birth_date, &claim.country_code, today)
+                .unwrap_err();
+        assert_eq!(err, AgeValidationError::TrustedAttributeRequired);
     }
 }
