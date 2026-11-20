@@ -2946,6 +2946,112 @@ async fn test_invalid_jpki_signature_rejected() {
     );
 }
 
+// ---- JPKI 所有証明（PoP）の純粋関数テスト（未結線） ----
+//
+// 補足: jpki.rs の `mod tests` 内にある `rsa_signing_key()` / `named_params()` は
+// モジュール私的で sister module の `tests` から参照できない。そのため同じ
+// 決定的 RNG (`TestRng`) と rcgen による CA 署名 RSA 2048 リーフで
+// jpki.rs:179-188 / 226-242 のフィクスチャを再現する。
+// `verify_proof_of_possession` はいかなるハンドラからも呼ばれない（未結線）。
+
+/// CA 署名の RSA 2048 リーフ証明書を作り、`verify_presentation` 経由で
+/// リーフの SPKI 公開鍵 DER を取り出す。署名用の秘密鍵も一緒に返す。
+fn pop_test_ca_signed_leaf() -> (Vec<u8>, PrivateKey) {
+    use rsa::pkcs8::EncodePrivateKey;
+
+    let mut ca_rng = TestRng::new();
+    let ca_private = PrivateKey::new(&mut ca_rng, 2048).expect("generate CA RSA 2048 key");
+    let ca_pkcs8 = ca_private.to_pkcs8_der().expect("CA PKCS#8 DER");
+    let ca_keypair = rcgen::KeyPair::try_from(ca_pkcs8.as_bytes()).expect("CA keypair");
+    let mut ca_params =
+        rcgen::CertificateParams::new(vec!["pop-ca.jpki.test".to_string()]).expect("CA params");
+    let mut ca_dn = rcgen::DistinguishedName::new();
+    ca_dn.push(rcgen::DnType::CommonName, "pop-ca");
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca = rcgen::CertifiedIssuer::self_signed(ca_params, ca_keypair).expect("self-signed CA");
+
+    let mut leaf_rng = TestRng::new();
+    let leaf_private = PrivateKey::new(&mut leaf_rng, 2048).expect("generate leaf RSA 2048 key");
+    let leaf_pkcs8 = leaf_private.to_pkcs8_der().expect("leaf PKCS#8 DER");
+    let leaf_keypair = rcgen::KeyPair::try_from(leaf_pkcs8.as_bytes()).expect("leaf keypair");
+    let mut leaf_params =
+        rcgen::CertificateParams::new(vec!["pop-leaf.jpki.test".to_string()]).expect("leaf params");
+    let mut leaf_dn = rcgen::DistinguishedName::new();
+    leaf_dn.push(rcgen::DnType::CommonName, "pop-leaf");
+    leaf_params.distinguished_name = leaf_dn;
+    let leaf = leaf_params
+        .signed_by(&leaf_keypair, &ca)
+        .expect("CA-signed leaf");
+
+    let cert_b64 = base64::engine::general_purpose::STANDARD.encode(leaf.der());
+    let public_der = crate::jpki::verify_presentation(&cert_b64, None, false)
+        .expect("CA-signed RSA 2048 leaf must be accepted");
+    (public_der, leaf_private)
+}
+
+/// 秘密鍵で nonce に PKCS#1 v1.5 + SHA-256 署名する（テスト専用）。
+fn pop_sign(private_key: &PrivateKey, nonce: &str) -> Vec<u8> {
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+    let signing_key = SigningKey::<Sha256>::new(private_key.clone());
+    signing_key.sign(nonce.as_bytes()).to_bytes().to_vec()
+}
+
+/// 正しい nonce + 署名で `Ok(())`。
+#[test]
+fn test_proof_of_possession_valid_signature() {
+    let (public_der, private_key) = pop_test_ca_signed_leaf();
+    let nonce = "nonce-r2-jpki-pop-001";
+    let signature = pop_sign(&private_key, nonce);
+    assert!(crate::jpki::verify_proof_of_possession(&public_der, nonce, &signature).is_ok());
+}
+
+/// 改ざん nonce では `Err`（署名は元 nonce のまま）。
+#[test]
+fn test_proof_of_possession_tampered_nonce_is_rejected() {
+    let (public_der, private_key) = pop_test_ca_signed_leaf();
+    let nonce = "nonce-r2-jpki-pop-002";
+    let signature = pop_sign(&private_key, nonce);
+    let err = crate::jpki::verify_proof_of_possession(&public_der, "tampered-nonce", &signature)
+        .expect_err("tampered nonce must fail");
+    assert!(
+        matches!(&err, AppError::Unauthorized(msg) if msg.contains("signature is invalid")),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// 別鍵で署名した値は `Err`。
+#[test]
+fn test_proof_of_possession_other_key_signature_is_rejected() {
+    let (public_der, _leaf_private) = pop_test_ca_signed_leaf();
+    let (_other_public_der, other_private) = pop_test_ca_signed_leaf();
+    let nonce = "nonce-r2-jpki-pop-003";
+    let signature = pop_sign(&other_private, nonce);
+    let err = crate::jpki::verify_proof_of_possession(&public_der, nonce, &signature)
+        .expect_err("signature from another key must fail");
+    assert!(
+        matches!(&err, AppError::Unauthorized(_)),
+        "unexpected error: {err:?}"
+    );
+}
+
+/// `ProofOfPossession` は nonce / signature を保持し、未知フィールドを拒否する。
+#[test]
+fn test_proof_of_possession_envelope_denies_unknown_fields() {
+    use crate::jpki::ProofOfPossession;
+    let valid = r#"{"nonce":"n","signature":"c2ln"}"#;
+    let pop: ProofOfPossession = serde_json::from_str(valid).expect("valid PoP envelope");
+    assert_eq!(pop.nonce, "n");
+    assert_eq!(pop.signature, "c2ln");
+
+    let unknown = r#"{"nonce":"n","signature":"c2ln","extra":1}"#;
+    assert!(
+        serde_json::from_str::<ProofOfPossession>(unknown).is_err(),
+        "unknown fields must be denied"
+    );
+}
+
 /// GOV-03: BAN ユーザーは再認証不可
 #[tokio::test]
 async fn test_banned_user_blocked_directly() {
@@ -5944,6 +6050,73 @@ async fn create_payment_order(
         created["order_id"].as_str().unwrap().to_string(),
         created["amount_wei"].as_str().unwrap().to_string(),
     )
+}
+
+/// 回帰固定: 同一 ppid / cid / 受取先 / 金額の注文は正当に複数作成できる。
+///
+/// 部分 UNIQUE (ppid, cid, recipient_address, amount_wei) は却下済み。根拠:
+/// 同じコンテンツを同じ金額で複数回購入するのは正当なユースケースであり、
+/// 注文の同一性は order_id（UUID）で識別される。signature bind も order_id 単位で
+/// 行われるため、部分 UNIQUE は 2 回目以降の正当な注文を作成不能にする。
+/// 既存の UNIQUE (chain_id, tx_hash, log_index) はオンチェーン送金の二重計上を
+/// 防ぐものであり、注文作成回数を制限するものではない。
+/// payments.rs は担当外のため、却下根拠はこのテスト側に記録する。
+#[tokio::test]
+async fn test_duplicate_ppid_cid_recipient_amount_orders_are_allowed() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+
+    let (first_id, first_amount) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    let (second_id, second_amount) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    assert_ne!(
+        first_id, second_id,
+        "each order must have a distinct order_id"
+    );
+    assert_eq!(first_amount, second_amount);
+
+    let mut rows = db
+        .query(
+            "SELECT order_id, ppid, cid, recipient_address, amount_wei
+               FROM payment_orders WHERE order_id IN (?, ?)
+              ORDER BY order_id",
+            (first_id.clone(), second_id.clone()),
+        )
+        .await
+        .unwrap();
+    let mut stored = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        let order_id: String = row.get(0).unwrap();
+        let ppid: String = row.get(1).unwrap();
+        let cid: String = row.get(2).unwrap();
+        let recipient: String = row.get(3).unwrap();
+        let amount: String = row.get(4).unwrap();
+        stored.push((order_id, ppid, cid, recipient, amount));
+    }
+    assert_eq!(stored.len(), 2, "both legitimate orders must be stored");
+    let keys: Vec<_> = stored
+        .iter()
+        .map(|(_, ppid, cid, recipient, amount)| {
+            (
+                ppid.as_str(),
+                cid.as_str(),
+                recipient.as_str(),
+                amount.as_str(),
+            )
+        })
+        .collect();
+    let expected = keys[0];
+    assert!(
+        keys.iter().all(|key| *key == expected),
+        "all four fields must match"
+    );
+    assert_eq!(keys[0].0, "test_user", "ppid is the token sub");
+    assert_eq!(keys[0].1, "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z");
+    assert_eq!(keys[0].2, receiving);
+    assert_eq!(keys[0].3, first_amount.as_str());
 }
 
 /// R1-25: 検証中に状態が変わった注文は CAS で拒否し、上書きしない。
@@ -12078,6 +12251,39 @@ fn test_refresh_token_expired_parses_rfc3339() {
         "",
         at("2026-01-01T00:00:00+00:00")
     ));
+}
+
+/// R2 契約: 発行処理は `parse_from_rfc3339` 可能な RFC3339 を `expires_at` へ書く。
+///
+/// migration 006 は `expires_at DATETIME` と宣言するが、SQLite の DATETIME は
+/// 型 affinity であり、実際の格納値は `chrono::to_rfc3339()` の TEXT である。
+/// マイグレーションの型宣言から SQL datetime 形式を推測してはならない。
+/// マイグレーション自体は SHA-256 チェックサム保護のため編集しない。
+#[tokio::test]
+async fn test_issued_refresh_token_expires_at_is_rfc3339() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let (_body, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+    let hash = hex::encode(Sha2Sha256::digest(refresh.as_bytes()));
+
+    let mut rows = db
+        .query(
+            "SELECT expires_at FROM refresh_tokens WHERE token_hash = ?",
+            [hash],
+        )
+        .await
+        .unwrap();
+    let row = rows
+        .next()
+        .await
+        .unwrap()
+        .expect("issued refresh token must be stored");
+    let expires_at: String = row.get(0).unwrap();
+    let parsed = chrono::DateTime::parse_from_rfc3339(&expires_at)
+        .unwrap_or_else(|e| panic!("issued expires_at must be RFC3339: {expires_at}: {e}"));
+    assert!(
+        parsed.with_timezone(&chrono::Utc) > chrono::Utc::now(),
+        "newly issued refresh token must not be expired"
+    );
 }
 
 /// 期限切れの refresh token（小数秒付き）は /auth/refresh で拒否される。
