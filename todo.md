@@ -229,20 +229,31 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
   auth_verify/refresh は確認するが callback は欠落し、BAN 済み sub が再認証でセッション取得可能。
   2026-11-19 対応: INSERT 前に ensure_user_not_banned、mutation 検証・回帰テスト追加。
-- [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:208-212` / R1-ST01 / 重大度 high。
+- [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:220-241` / R1-ST01 / 重大度 high。
+  2026-11-20 再評価: サーバは HTML を配信せず（Leptos CSR は trunk serve が描画）、API 側 CSP は
+  nosniff の多層化に留まり実益が限定的。配信側 CSP は dist/index.html のインライン script に
+  nonce/hash が必要で本番配信構成（reverse proxy 等）の設計判断が先。段階: API 側 default-src 'none'
+  等を nosniff と同じ二層へ追加 → 配信側は別タスク。
   security_headers は X-Content-Type-Options/X-Frame-Options のみ。CSP は本番構成確定時に別途設計と明記済み。
 - [x] **外部キー制約を有効化** — 根拠 `server/src/lib.rs:851-858` / R2-DI01 / 重大度 high。
   libSQL は既定 foreign_keys=OFF。`PRAGMA foreign_keys=ON` と起動時 `foreign_key_check` を追加。
   2026-11-19 対応: migration前にON、孤立行はwarn、3テスト追加。
 - [x] **CORS の allow_methods に DELETE を追加** — 根拠 `server/src/lib.rs:1773` / R1-AP01 / 重大度 high。
   remove_favorite は DELETE だが許可メソッドは GET/POST のみ。2026-11-19 対応済み。
-- [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
+- [x] **doctor --strict をデプロイ前ゲートへ組み込み（ローカル／Runbook）** — 根拠 `AGENTS.md:53` / R4-DR01 / 重大度 high。
+  2026-11-20 対応: AGENTS.md / HANDOFF.md の検証コマンドと OPERATIONAL_POLICY の Runbook へ追加。
+  CI の extra_gates は `ALLOW_IPV4_LOCALHOST=1` で strict が必ず失敗するため未変更（別ジョブ化が条件）。
+  共通ワークフロー @v1 参照は不変。
   現状 doctor は警告のみで呼び出し経路が無い。
 - [x] **backup-rotate に audit log 検証の自動統合を追加** — 根拠 `scripts/backup-rotate.sh:190-194` / R4-DR01 / 重大度 high。
   Runbook は両方成功を条件とするが自動取得は verify_backup のみだった。2026-11-20 対応済み:
   `verify_backup` 直後に生成直後の平文 tmp_db へ `verify_audit_log --database-url file:${tmp_db}` を実行し、
   失敗時は成果物を公開せず一時平文を清掃して `ALERT_CMD` で通知する（fail-closed）。
-- [ ] **暗号化後復号検証の自動化（GPG 秘密鍵の運用依存・外部判断）** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:97-104` / R4-DR01 / 重大度 high。
+- [ ] **暗号化後復号検証のテスト限定自動化** — 根拠 `scripts/test-backup-rotate.sh:43-57` / R4-DR01 / 重大度 high。
+  2026-11-20 再評価: 本番は作成者が復号鍵を持たない設計を維持し、自動化はテスト内の使い捨て GPG
+  鍵（mktemp GNUPGHOME + trap、リポジトリへ秘密鍵を置かない）で暗号化→復号→バイト一致を検証する
+  スコープへ絞るのが妥当。gpg 未インストール環境では skip するゲートが必要。本番自動化は外部運用
+  判断（鍵保管場所・復号担当者・検証タイミング）が確定するまで保留。
   復号には GPG 秘密鍵が必要だが、バックアップ作成者が復号鍵を持たない運用が安全なため自動化は対象外。
   鍵の保管場所・復号担当者・検証タイミングは外部運用側の判断待ち（未着手）。現状はリストア時の手動検証で担保。
 - [x] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
@@ -283,7 +294,11 @@ P2（品質・保守・プロダクト拡張）:
   2026-11-20 対応: `AppError::BadGateway` を 502 で返し、`#[error]` と IntoResponse 本文を
   `Upstream content failed integrity verification` へ統一（409 は採用せず 502 へ集約）。
   全ゲートウェイ失敗の 500→502 統一は設計判断で範囲拡大のため見送り。
-- [ ] **一覧 API のページネーション契約を共通化** — 根拠 `server/src/lib.rs:1789,2456` / R1-AP01 / 中。
+- [x] **一覧 API のページネーション共通化（段1）** — 根拠 `server/src/lib.rs:2849-2873` / R1-AP01 / 中。
+  2026-11-20 対応: limit/offset 解析を `parse_pagination` へ抽出し `parse_content_query` が委譲。
+  既定50・範囲1..=100・offset>=0・trim・フォールバック・レスポンスは不変。単体テスト2件追加。
+  段2（/transactions・/mod/reports への省略可 limit/offset）と段3（page/per_page+メタデータ）は
+  利用側の要求が確認できてから別タスク（既存の裸配列レスポンスを壊さないため）。
 - [x] **エラー本文スキーマを code/message/status へ統一** — 根拠 `server/src/lib.rs:548-576` / R1-AP01 / 中。
   2026-11-20 吟味の結果却下（対応済みとしてクローズ）: AppError の全バリアントとミドルウェアの
   エラー応答は既に `{"error": message}` に統一済み。`code/message/status` への変更はクライアントの
@@ -322,7 +337,10 @@ P2（品質・保守・プロダクト拡張）:
   決定論的 xorshift64* による 10,000 通りの fuzz プロパティテストを追加。R5 で R4 採用指摘を反映し、
   「独立オラクル」表現を「上限定義との整合を再確認する」へ是正、`expected` に既に含まれる
   冗長な面積 assert を削除（fuzz 本体・10,000 サンプリングは維持）。
-- [ ] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
+- [x] **再利用ワークフロー参照をコミット SHA 固定へ** — 根拠 `.github/workflows/ci.yml:26` / R3-DE01 / 中。
+  2026-11-20 再評価の結果「対応しない」としてクローズ: 共通指示（~/.agents/AGENTS.md:85）と
+  リポジトリ AGENTS.md:55 が `rust-gates.yml@v1` タグピンを明記しており、SHA 固定は方針と矛盾。
+  変更するなら提供側 Seduce0068/workflows のタグ運用設計が必要で本リポジトリのスコープ外。
 - [x] **npx --yes を package-lock + npm ci へ** — 根拠 `.github/workflows/ci.yml:38` / R3-DE01 / 中。
   2026-11-20 対応: CI は `npm ci --ignore-scripts --no-audit --no-fund` の後に
   `npx markdownlint-cli2` でローカル固定版を実行。`package.json` へ
@@ -348,7 +366,10 @@ P2（品質・保守・プロダクト拡張）:
   通報と投票の横断排他は意図的分離の可能性があるため今回は見送り。
 - [x] **複数カードの DOM id / TOC アンカーを cid 名前空間化** — 根拠 `client/src/lib.rs:505-517,1649` / disc VU / 中。
   2026-11-20 対応: cid_scope_token + prefixed描画、audit id も cid付与、StoredValue化。
-- [ ] **一覧カードの本文/監査取得を遅延ロード** — 根拠 `client/src/lib.rs:1189-1208` / disc VU / 中。
+- [x] **一覧カードの監査取得をトグル時のみへ削減** — 根拠 `client/src/lib.rs:1543-1582` / disc VU / 中。
+  2026-11-20 対応: IntersectionObserver は真因ではないため使わず、監査 GET を show_audit=true 初回
+  遷移時のみへ移動（audit_fetched_cid フラグを await 前に設定）。本文 GET は従来どおり。
+  前回の real-api 失敗は他 spec との並走が真因で既に 2 段階実行で解消済み。
   2026-11-20 吟味の結果見送り: A/B で全件並走時に real-api 4件が /auth/verify タイムアウトで
   失敗したが、単独実行では差分の有無にかかわらず成功。真の原因は他 spec との並走による
   実サーバー競合で IntersectionObserver 差分とは非因果（ci-e2e.sh で real-api 単独実行へ
@@ -438,6 +459,10 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-20 (swarm-limited): 未着手を再評価し、ページネーション段1・監査GET削減・doctor strict
+  ローカルゲートを完了、SHA固定は方針矛盾でクローズ。CSP・復号検証は設計判断のため条件付きで残す。
+  起動 11 担当 / 上限 40、連続イテレーション 1 / 上限 3。
 
 - 2026-11-20: prepare-distribution成果物を公開用権限(dir755/file644)へ修正。
   umask077は生成中のみ維持し公開直前にchmod、実行ビット付きライセンスも644へ

@@ -101,6 +101,8 @@ cargo test --workspace
 cargo deny check licenses
 cargo deny check advisories
 cargo build -p client --target wasm32-unknown-unknown --locked
+# デプロイ前ゲート: 本番相当の環境変数を注入して実行（秘密値は秘密管理基盤から）
+cargo run -p server --bin doctor -- --strict
 ```
 
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない

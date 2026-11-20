@@ -198,6 +198,11 @@ generated:
    `doctor --strict` の警告対象には `ALLOW_IPV4_LOCALHOST`（有効時）と `TRUSTED_PROXY_CIDRS`
    （設定時）も含まれる。いずれも設定値は出力せず有無のみを警告する。前者は本番で無効化し、
    後者は信頼済みプロキシ範囲のみを設定して意図を確認する（意図的な利用なら警告は許容）。
+- **Runbook（本番起動前ローカルゲート）**: 秘密管理基盤から本番相当の環境変数を注入し、
+  `cargo run -p server --bin doctor -- --strict` を実行して終了コード0を確認してからデプロイする。
+  診断は既存の23カテゴリ固定（`check23`）と `audit_expect_root` / `production` /
+  `oidc_endpoint_urls` 等のカテゴリを対象とし、カテゴリ数・判定ロジックは変更しない。
+  問題検出時は終了コード1でゲート失敗とし、設定是正後に再実行する。
 - liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503
   を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。
 - readiness の意味は「このインスタンスが API リクエストを受けられるか」に限定する。IPFS / JPKI / チェーンなどの外部依存が壊れても、影響を受けるエンドポイントは個別にエラーを返し、他機能は継続できるため

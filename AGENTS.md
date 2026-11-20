@@ -50,6 +50,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
 cargo test
 cargo build -p client --target wasm32-unknown-unknown --locked
+# デプロイ前ゲート: 本番相当の環境変数を注入して実行（秘密値は秘密管理基盤から）
+cargo run -p server --bin doctor -- --strict
 ```
 
 CI は `Seduce0068/workflows/rust-gates.yml@v1` に委譲している。
