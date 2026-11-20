@@ -95,11 +95,13 @@ fn extract_subject_public_key(cert_der: &[u8]) -> Result<Vec<u8>, AppError> {
         ));
     }
 
-    // 発行者と主体が等しい自己署名リーフは受け付けない。
+    // 発行者=主体の DN 一致は自己署名の予備検知にとどめ、暗号学的自己署名検証を主判定とする。
+    // verify_signature(None) は証明書自身の公開鍵で署名を検証するため、
+    // issuer 名を別名に変えた自己署名（署名鍵と主体鍵が同一）も拒否できる。
     // 信頼アンカーが確定していない証明書を「検証済み」として扱うのは危険なため。
     // 完全な chain 検証は信頼アンカーの配布という外部要因に依存するため、
     // ここでは自己署名の拒否と公開鍵ポリシーのみを適用する（SEC-02）。
-    if cert.issuer() == cert.subject() {
+    if cert.issuer() == cert.subject() || cert.verify_signature(None).is_ok() {
         return Err(AppError::Unauthorized(
             "Self-signed JPKI certificate is not trusted".into(),
         ));
@@ -281,6 +283,28 @@ mod tests {
         let b64 = base64::engine::general_purpose::STANDARD.encode(leaf.der());
         let pk = verify_presentation(&b64, None, false).unwrap();
         assert!(!pk.is_empty());
+    }
+
+    /// DN 比較の迂回攻撃: CA と同一の署名鍵で発行したリーフは issuer != subject だが、
+    /// 暗号学的には自身の公開鍵で署名が検証できるため自己署名として拒否する。
+    #[test]
+    fn rejects_leaf_signed_by_issuer_key_with_different_dn() {
+        use rcgen::{CertifiedIssuer, IsCa};
+
+        let ca_key = rsa_signing_key();
+        // 同じ PKCS#8 秘密鍵から二つの rcgen::KeyPair を作り、署名鍵と主体鍵を一致させる。
+        let shared_key_der = ca_key.serialize_der();
+        let mut ca_params = named_params("jpki-test-shared-key-ca");
+        ca_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = CertifiedIssuer::self_signed(ca_params, ca_key).unwrap();
+
+        let leaf_key = rcgen::KeyPair::try_from(shared_key_der).expect("import shared CA key");
+        let leaf = named_params("jpki-test-shared-key-leaf")
+            .signed_by(&leaf_key, &ca)
+            .unwrap();
+        let b64 = base64::engine::general_purpose::STANDARD.encode(leaf.der());
+        let err = verify_presentation(&b64, None, false).unwrap_err();
+        assert_unauthorized_contains(err, "Self-signed");
     }
 
     /// CA 署名でも非 RSA リーフは鍵ポリシーで拒否する。

@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-21T04:28:01+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -158,7 +158,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   それぞれ `ERROR: Select a file first.` / `ERROR: File exceeds the 10 MiB limit.` を表示する。
   成否にかかわらず `finally` 相当で `loading` を解除し、ボタンを再活性化する
   （パニックで loading が戻らない事故を防ぐ）。
-- `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、信頼チェーン、失効、VP署名、nonce、audience検証を完了していない。実JPKI認証として使用しない。
+- `server/src/jpki.rs` は提示データからX.509証明書を解析し公開鍵を抽出するが、自己署名は発行者=主体の DN 一致
+  に加え証明書自身の公開鍵による暗号学的署名検証でも拒否する。信頼チェーン、失効、VP署名、nonce、audience検証
+  を完了していない。実JPKI認証として使用しない。
 - 年齢判定は `common::age::AgePolicy`（起動時に環境変数から読込・検証）に基づく。既定は保守的一律ベースライン `21`（法的事実の確定主張ではない）で、
   国別上書き・対象地域・適用モード・明示設定必須のフェイルクローズを構成可能。`trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。現行の生年月日・国コードは申告値であり、
   モック環境を含め本人確認済み属性として信頼しない。詳細は [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) を参照。
@@ -475,9 +477,12 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
 
 現行コードの確認範囲: `server/src/jpki.rs` の `verify_presentation` は提示トークン（または envelope の
 `certificate` / `verifiableCredential`）を base64 デコードし、X.509 DER を解析して有効期限を確認してから
-公開鍵を抽出する。不正base64・非X.509バイト・期限切れ証明書・envelope空・空トークンの5エラーパスを
+公開鍵を抽出する。自己署名は発行者=主体の DN 一致を予備検知とし、証明書自身の公開鍵による暗号学的署名検証
+（`verify_signature(None)`）を主判定として拒否するため、issuer 名を変えた DN 比較の迂回も塞ぐ。
+不正base64・非X.509バイト・期限切れ証明書・envelope空・空トークンの5エラーパスを
 テストで固定し、いずれも `Unauthorized` を要求する（mutation 3パターンで検出を確認）。
-これは証明書の解析と有効期限の検証に限り、信頼チェーン・失効・VP署名・nonce・audience の検証は未実装。
+これは公開鍵抽出と自己署名拒否にとどまり本人確認ではない。証明書の解析と有効期限の検証に限り、
+信頼チェーン・失効・VP署名・nonce・audience の検証は未実装。
 
 トークン発行は検証済み認証トランザクションにサーバー側で結び付ける。クライアントが送る `user_hash` を認証主体として信用しない。安定識別子の生成方式は個人間追跡可能性を抑える設計と合わせて決定する。
 

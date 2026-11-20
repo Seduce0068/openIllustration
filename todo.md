@@ -39,9 +39,10 @@ status: current
 
 P0（本番公開前に解消すべきセキュリティ／データ完全性）:
 
-- [ ] **JPKI 証明書の発行者署名・チェーン・失効を検証する** — 根拠 `server/src/jpki.rs:98-118` / R3-AU02 / 重大度 high。
-  現行は `cert.issuer() == cert.subject()` の DN 比較のみで、issuer 名を変えた自己署名 RSA 2048 証明書が通過する。
-  信頼アンカー照合・X.509 チェーン検証・OCSP/CRL を必須化し、DN 等価は予備チェックに留める。
+- [x] **JPKI 証明書の暗号学的自己署名検証を追加（DN 迂回の遮断）** — 根拠 `server/src/jpki.rs:98-108` / R3-AU02 / 重大度 high。
+  2026-11-21 対応: `x509-parser` の `verify` feature を有効化し `cert.verify_signature(None).is_ok()` を
+  DN 比較と OR で判定。issuer 名を変えた同一鍵署名リーフを拒否する回帰テストを追加。
+  信頼アンカー照合・チェーン構築・OCSP/CRL は外部要因（ADR-0002）のため未実装のまま。
 - [ ] **auth_verify へ年齢属性の署名済み入力と共通ゲートを結線** — 根拠 `server/src/lib.rs:2376-2384,4416-4444` / R3-AU03 / 重大度 high。
   クライアント送信の `birth_date`/`country_code` を生のまま判定しており改ざんで閾値を回避できる。
   検証済みクレーム由来のみ受け付け、JPKI 経路でも `ensure_age_policy_configured` を呼ぶ（DEC-01 の入力経路確定と simultaneous）。
