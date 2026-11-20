@@ -25,6 +25,17 @@ offsitecopy="${OFFSITE_COPY_CMD:-}"
 offsitedest="${OFFSITE_DEST:-}"
 # 失敗通知: 実行ファイルのパス。呼び出しは <メッセージ> の1引数（eval 不使用）。
 alert_cmd="${ALERT_CMD:-}"
+# 別経路で保存した監査 Merkle root（hex、非機微）。設定時は verify_audit_log の
+# --expect-root へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。
+# 未設定時は内部整合性チェックのみ（既存運用を壊さない後方互換）。
+# root 値はエラー文言へエコーしない既存契約を維持する。
+audit_expect_root="${AUDIT_EXPECT_ROOT:-}"
+# 非空時は Merkle root の hex 形式のみ受理する。空白のみ・先頭ダッシュ等の
+# 不正値は fail-closed で拒否し、エラーには設定名のみを出して値はエコーしない。
+if [[ -n "$audit_expect_root" && ! "$audit_expect_root" =~ ^[0-9a-fA-F]+$ ]]; then
+	echo "AUDIT_EXPECT_ROOT must be a non-empty hexadecimal Merkle root" >&2
+	exit 1
+fi
 
 run_bin() {
 	local name="$1"
@@ -133,6 +144,8 @@ fi
 rotation_list=""
 tmp_dir=""
 tmp_db=""
+# 失敗通知に添える段階名。初期値は setup とし、各検証・公開段階の直前で更新する。
+stage="setup"
 on_failure() {
 	local code=$?
 	if [[ -n "$tmp_dir" ]]; then
@@ -145,7 +158,7 @@ on_failure() {
 		return 0
 	fi
 	if [[ -n "$alert_cmd" ]]; then
-		"$alert_cmd" "openIllustration backup failed (exit ${code}) on $(hostname)" >/dev/null 2>&1 || true
+		"$alert_cmd" "openIllustration backup failed at ${stage} (exit ${code}) on $(hostname)" >/dev/null 2>&1 || true
 	fi
 	return "$code"
 }
@@ -186,16 +199,26 @@ tmp_db="${tmp_dir}/${prefix}.db"
 tmp_encrypted="${tmp_dir}/${prefix}.db.gpg"
 
 echo "==> backup: ${output}"
+stage="backup_db"
 run_bin backup_db --output "$tmp_db"
+stage="verify_backup"
 run_bin verify_backup --input "$tmp_db"
 # Runbook と同じく verify_backup / verify_audit_log の両方が成功しなければ
 # バックアップとして認めない（fail-closed）。検証対象は生成直後の平文 tmp_db。
-# ローカルファイルなのでトークンは不要で、--database-url のみを渡す。
-run_bin verify_audit_log --database-url "file:${tmp_db}"
+# ローカルファイルなのでトークンは不要で、--database-url を渡す。
+# AUDIT_EXPECT_ROOT が非空のときだけ --expect-root を追加し、別経路保存の root と照合する。
+stage="verify_audit_log"
+audit_verify_args=(--database-url "file:${tmp_db}")
+if [[ -n "$audit_expect_root" ]]; then
+	audit_verify_args+=(--expect-root "$audit_expect_root")
+fi
+run_bin verify_audit_log "${audit_verify_args[@]}"
+stage="publish"
 assert_publishable "$output" || exit 1
 mv -T -- "$tmp_db" "$output"
 
 if [[ -n "$gpg_recipient" ]]; then
+	stage="encrypt"
 	echo "==> encrypting backup for ${gpg_recipient}"
 	if ! "$gpg_bin" --batch --yes --encrypt --recipient "$gpg_recipient" \
 		--output "$tmp_encrypted" "$output"; then
@@ -205,14 +228,18 @@ if [[ -n "$gpg_recipient" ]]; then
 	fi
 	# 暗号化成功後は暗号文を先に公開し、その成功後に平文を削除する。
 	# assert_publishable / mv が失敗した場合は平文が残り復元できる（fail-closed）。
+	stage="publish"
 	assert_publishable "$encrypted" || exit 1
 	mv -T -- "$tmp_encrypted" "$encrypted"
 	rm -f "$output"
 	echo "==> plaintext removed: ${output}"
 fi
+# rmdir 失敗時に実際の処理と一致する段階名を通知する。
+stage="finalize"
 rmdir "$tmp_dir"
 
 if [[ -n "$offsitecopy" ]]; then
+	stage="offsite"
 	artifact="$output"
 	if [[ -n "$gpg_recipient" ]]; then
 		artifact="${output}.gpg"
@@ -223,6 +250,7 @@ fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
 # 保持期間を超えていても残す（誤設定で全削除されるのを防ぐ）。
+stage="rotate"
 cutoff=$((now_epoch - retention_days * 86400))
 # process substitution の終了ステータスは親シェルに伝わらないため、
 # find の出力を一時ファイルへ書き出してから明示的に成否を確認する。

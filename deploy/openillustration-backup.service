@@ -10,7 +10,11 @@ Environment=BIN_DIR=/opt/openIllustration/target/release
 Environment=RETENTION_DAYS=30
 Environment=MIN_KEEP=3
 Environment=DATABASE_URL=file:/var/lib/openillustration/local.db
-# BACKUP_GPG_RECIPIENT（必須）と ALERT_CMD / OFFSITE_* は 600 権限の環境ファイルで管理する。
+# BACKUP_GPG_RECIPIENT（必須）と AUDIT_EXPECT_ROOT（本番必須）、ALERT_CMD /
+# OFFSITE_* は 600 権限の環境ファイルで管理する。
+# AUDIT_EXPECT_ROOT は別経路保存の Merkle root（hex、非機微）。設定時は
+# verify_audit_log --expect-root で外部 root と照合し、未設定時は内部整合性
+# チェックのみ（既存運用を壊さない後方互換）。値はエラー文言へエコーしない。
 # 環境ファイルの解釈は cron 版と異なる: cron 版は backup-cron-wrapper.sh の
 # 制限付き KEY=VALUE パーサ（source/eval なし、値はリテラル）で読み込み、
 # systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、

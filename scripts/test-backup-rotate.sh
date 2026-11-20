@@ -320,10 +320,11 @@ cleanup_no_leftovers "verify_backup failure" "$cleanup_dir"
 # === verify_audit_log の自動統合 ===
 # (a) 正常系: 生成直後の平文 tmp_db に対して verify_audit_log が呼ばれること。
 #     公開先ではなく mktemp の作業ディレクトリ配下の .db であることを引数で確認する。
+#     テスト実行環境の AUDIT_EXPECT_ROOT に汚されないよう env -u で明示的に外す。
 : >"$AUDIT_VERIFY_LOG"
 audit_ok_dir="${work}/audit-verify-ok"
 new_backup_dir "$audit_ok_dir"
-expect_success "verify_audit_log invoked on success" env BACKUP_DIR="$audit_ok_dir" BACKUP_GPG_RECIPIENT=test "$script"
+expect_success "verify_audit_log invoked on success" env -u AUDIT_EXPECT_ROOT BACKUP_DIR="$audit_ok_dir" BACKUP_GPG_RECIPIENT=test "$script"
 if grep -Fq -- "--database-url file:${audit_ok_dir}" "$AUDIT_VERIFY_LOG" &&
 	grep -Eq -- '--database-url file:.*/\.openillustration-[^ ]+/openillustration\.db$' "$AUDIT_VERIFY_LOG"; then
 	echo "PASS verify_audit_log invoked on plaintext tmp_db before publish"
@@ -331,6 +332,36 @@ else
 	echo "FAIL verify_audit_log not invoked on plaintext tmp_db"
 	cat "$AUDIT_VERIFY_LOG" >&2
 	failures=$((failures + 1))
+fi
+
+# AUDIT_EXPECT_ROOT の受け渡し（受け入れ条件 a/b）。
+# Merkle root は非機微な hex のため、既存の引数ログオラクルへ残してよい。
+# (a') 設定時: verify_audit_log スタブへ --expect-root <値> が渡ること。
+expect_root="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+: >"$AUDIT_VERIFY_LOG"
+expect_root_dir="${work}/audit-expect-root"
+new_backup_dir "$expect_root_dir"
+expect_success "AUDIT_EXPECT_ROOT forwarded to verify_audit_log" env BACKUP_DIR="$expect_root_dir" BACKUP_GPG_RECIPIENT=test AUDIT_EXPECT_ROOT="$expect_root" "$script"
+if grep -Fq -- "--expect-root ${expect_root}" "$AUDIT_VERIFY_LOG"; then
+	echo "PASS AUDIT_EXPECT_ROOT forwarded as --expect-root"
+else
+	echo "FAIL AUDIT_EXPECT_ROOT not forwarded as --expect-root"
+	cat "$AUDIT_VERIFY_LOG" >&2
+	failures=$((failures + 1))
+fi
+
+# (b') 未設定時: 既存運用を壊さず --expect-root を渡さないこと。
+# 実行環境側で AUDIT_EXPECT_ROOT が設定されていても env -u で明示的に外す。
+: >"$AUDIT_VERIFY_LOG"
+no_expect_dir="${work}/audit-no-expect-root"
+new_backup_dir "$no_expect_dir"
+expect_success "no --expect-root when AUDIT_EXPECT_ROOT unset" env -u AUDIT_EXPECT_ROOT BACKUP_DIR="$no_expect_dir" BACKUP_GPG_RECIPIENT=test "$script"
+if grep -Eq -- '--expect-root' "$AUDIT_VERIFY_LOG"; then
+	echo "FAIL --expect-root passed while AUDIT_EXPECT_ROOT unset"
+	cat "$AUDIT_VERIFY_LOG" >&2
+	failures=$((failures + 1))
+else
+	echo "PASS no --expect-root when AUDIT_EXPECT_ROOT unset"
 fi
 
 # (b) verify_audit_log 失敗: Runbook の「両方成功しなければ認めない」に従い、
@@ -369,6 +400,15 @@ if [[ -s "${ALERT_LOG}" ]]; then
 	echo "PASS alert invoked on verify_audit_log failure"
 else
 	echo "FAIL alert not invoked on verify_audit_log failure"
+	failures=$((failures + 1))
+fi
+# (c') 通知本文に失敗段階名が含まれること。接頭辞 `openIllustration backup failed` は維持。
+# 直前に ALERT_LOG をクリアしているため、この1行だけを検証すればよい。
+if grep -Fq 'openIllustration backup failed at verify_audit_log' "${ALERT_LOG}"; then
+	echo "PASS alert message includes failing stage (verify_audit_log)"
+else
+	echo "FAIL alert message does not include failing stage"
+	cat "${ALERT_LOG}" >&2
 	failures=$((failures + 1))
 fi
 
