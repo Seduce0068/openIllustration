@@ -2846,6 +2846,20 @@ pub struct ContentFilter {
 pub const DEFAULT_CONTENT_LIMIT: i64 = 50;
 pub const MAX_CONTENT_LIMIT: i64 = 100;
 
+/// `limit` / `offset` を安全側の既定値へ正規化する純粋関数。
+/// 範囲外・非数値の `limit` は 400 にせず既定 50、負・非数値の `offset` は 0 とする。
+pub fn parse_pagination(limit: Option<&str>, offset: Option<&str>) -> (i64, i64) {
+    let limit = limit
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| (1..=MAX_CONTENT_LIMIT).contains(value))
+        .unwrap_or(DEFAULT_CONTENT_LIMIT);
+    let offset = offset
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(0);
+    (limit, offset)
+}
+
 /// 検索クエリを純粋に解析する。範囲外・非数値の `limit` は 400 にせず既定 50
 /// （安全側）へフォールバックする。負・非数値の `offset` は 0 とする。
 /// `type` は完全一致を保つため前後の空白を除去しない（未知の値は 0 件になる）。
@@ -2856,18 +2870,7 @@ pub fn parse_content_query(query: &ContentQuery) -> ContentFilter {
             .filter(|value| !value.is_empty())
             .map(ToString::to_string)
     };
-    let limit = query
-        .limit
-        .as_deref()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|value| (1..=MAX_CONTENT_LIMIT).contains(value))
-        .unwrap_or(DEFAULT_CONTENT_LIMIT);
-    let offset = query
-        .offset
-        .as_deref()
-        .and_then(|value| value.trim().parse::<i64>().ok())
-        .filter(|value| *value >= 0)
-        .unwrap_or(0);
+    let (limit, offset) = parse_pagination(query.limit.as_deref(), query.offset.as_deref());
     // favorite_only は "1" / "true"（大文字小文字・前後空白を無視）だけを真とし、
     // それ以外は安全側の false（絞り込みなし）として扱う。
     let favorite_only = query

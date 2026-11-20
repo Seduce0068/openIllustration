@@ -4,7 +4,7 @@ use crate::{
     MAX_CONTENT_TAGS, MAX_CONTENT_TITLE_BYTES, ModAuditCountRow, ModConclusionCountRow,
     ModGovernanceCountRow, ModStatsMonthly, ModStatsResponse, ModStatsTotals, VerifyRequest,
     VerifyResponse, allowed_origins, build_content_query, build_mod_stats, build_router,
-    ensure_user_not_banned, escape_like, parse_content_query, parse_tags_field,
+    ensure_user_not_banned, escape_like, parse_content_query, parse_pagination, parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
     process_report_conclusion, today_for_policy, update_content_status, validate_age,
     validate_age_at, validate_content_metadata, validate_jwt_secret, validate_upload_content,
@@ -13194,6 +13194,57 @@ fn test_content_query_parser_defaults_and_bounds() {
     assert_eq!(parsed.q.as_deref(), Some("cat"));
     assert_eq!(parsed.tag.as_deref(), Some("fantasy"));
     assert_eq!(parsed.content_type.as_deref(), Some("Novel"));
+}
+
+#[test]
+fn test_parse_pagination_defaults_and_bounds() {
+    // 未指定は安全側の既定値（limit=50 / offset=0）。
+    assert_eq!(parse_pagination(None, None), (DEFAULT_CONTENT_LIMIT, 0));
+
+    // 有効境界（1..=100 / offset>=0）はそのまま通す。
+    assert_eq!(parse_pagination(Some("1"), Some("7")), (1, 7));
+    assert_eq!(parse_pagination(Some("100"), Some("0")), (100, 0));
+
+    // 範囲外・非数値の limit は 400 にせず既定 50 へフォールバックする。
+    for limit in ["0", "101", "-1", "abc", ""] {
+        assert_eq!(
+            parse_pagination(Some(limit), Some("0")),
+            (DEFAULT_CONTENT_LIMIT, 0),
+            "limit={limit:?}"
+        );
+    }
+
+    // 負・非数値の offset は 0 とする。
+    for offset in ["-1", "abc", ""] {
+        assert_eq!(
+            parse_pagination(Some("50"), Some(offset)),
+            (DEFAULT_CONTENT_LIMIT, 0),
+            "offset={offset:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parse_pagination_trims_and_matches_content_query() {
+    // 前後の空白は trim してから解析する。
+    assert_eq!(parse_pagination(Some(" 2 "), Some(" 3 ")), (2, 3));
+
+    // parse_content_query が共通ヘルパへ委譲していることを確認する。
+    let limit = Some(" 2 ");
+    let offset = Some(" 3 ");
+    let query = ContentQuery {
+        q: None,
+        tag: None,
+        content_type: None,
+        limit: limit.map(str::to_string),
+        offset: offset.map(str::to_string),
+        favorite_only: None,
+    };
+    let filter = parse_content_query(&query);
+    assert_eq!(
+        (filter.limit, filter.offset),
+        parse_pagination(limit, offset)
+    );
 }
 
 #[test]
