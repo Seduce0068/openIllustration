@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-20T14:41:22+09:00"
+  at: "2026-11-21T03:31:36+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -41,7 +41,8 @@ generated:
 ### 2.1 実装箇所
 
 - [common/src/age.rs](../common/src/age.rs): `AgePolicy`, `AgeEnforcementMode`, `AgeValidationError`,
-  `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`。
+  `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`,
+  `VerifiedAgeAttribute` と `VERIFIED_AGE_ATTRIBUTE_FIXTURE`（未結線の型契約、2.5 参照）。
 - [server/src/lib.rs](../server/src/lib.rs): 起動時に `AgePolicy::from_env()` を読み込み検証（不正値は起動失敗）、`AppState.age_policy` に保持、
   `GET /policy/age` を公開、`/auth/verify` の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
   `validate_age_at` / `today_for_policy` が基準日をローカル TZ で求め、`ensure_age_policy_configured` が
@@ -86,6 +87,20 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
 2024-01-02 時点で 21 歳として受理され、UTC（`TZ` 未設定 / `UTC`）基準では 2024-01-01 時点で
 20 歳として 403 で拒否される。基準日が 1 日ずれるだけでも判定が反転し得るため、
 本番では `TZ` を対象地域に合わせて明示設定する（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) 参照）。
+
+### 2.5 `VerifiedAgeAttribute`（型の定義のみ・外部仕様待ち）
+
+- [common/src/age.rs](../common/src/age.rs) に公開型 `VerifiedAgeAttribute` と serde フィクスチャ
+  `VERIFIED_AGE_ATTRIBUTE_FIXTURE` を追加した。フィールドは `issuer`（発行者）、
+  `signed_subject`（署名対象）、`nonce`（リプレイ防止）で、`deny_unknown_fields` により
+  未知フィールドを拒否する。
+- これは将来の DEC-01 連携に備えたデータ型と契約テストのみである。発行者識別子、
+  署名対象の表現、nonce の検証手順、信頼ルート、失効確認を含む外部仕様は未確定である。
+- 現行の年齢判定（`is_age_allowed_with_policy` 等）には結線していない。自己申告の
+  `birth_date` / `country_code` は本型へは受け付けず、`trusted_attribute_required` モードでは
+  従来どおり `TrustedAttributeRequired` でフェイルクローズする。
+- 本型のフィールドは署名検証・発行者検証済みを意味しない。検証済み属性のみを扱う経路の実装は
+  外部仕様確定後の課題である。
 
 ## 3. 現行の制約・未完了事項
 

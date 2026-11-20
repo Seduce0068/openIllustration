@@ -42,6 +42,56 @@ assert_major_numeric() {
 	fi
 }
 
+# 実行対象プロジェクトを選択する純粋関数（副作用なし・E2E_LIB_ONLY=1 で
+# source 可能）。実際のブラウザ検出は行わず、渡された実行可能性だけを見る。
+# 入力:
+#   $1 = E2E_PROJECTS の明示値（空なら未指定）
+#   $2 = firefox が実行可能か (1/0)
+#   $3 = webkit が実行可能か (1/0)
+# 出力（nameref）:
+#   $4 = 選択プロジェクト配列
+#   $5 = 警告フラグ (1=chromium へフォールバック)
+# 戻り値: 明示値に未知プロジェクトがあれば 1（呼び出し側で終了する）。
+# ルール: 明示時は指定を厳守（未知値は拒否）。未指定時は firefox/webkit が
+# 両方実行可能なら3プロジェクト、片方でも不可なら chromium へフォールバック
+# し警告を立てる。
+select_e2e_projects() {
+	local explicit="${1:-}"
+	local firefox_ok="${2:-0}"
+	local webkit_ok="${3:-0}"
+	local -n out_projects="$4"
+	local -n out_warning="$5"
+	local -a all_projects=(chromium firefox webkit)
+	local -a parsed=()
+	local project
+
+	out_projects=()
+	out_warning=0
+
+	if [[ -n "$explicit" ]]; then
+		IFS=',' read -r -a parsed <<<"$explicit"
+		for project in "${parsed[@]}"; do
+			case "$project" in
+			chromium | firefox | webkit) ;;
+			*)
+				echo "unknown E2E project: ${project} (allowed: ${all_projects[*]})" >&2
+				return 1
+				;;
+			esac
+		done
+		out_projects=("${parsed[@]}")
+		return 0
+	fi
+
+	if [[ "$firefox_ok" == "1" && "$webkit_ok" == "1" ]]; then
+		out_projects=("${all_projects[@]}")
+	else
+		out_projects=(chromium)
+		out_warning=1
+	fi
+	return 0
+}
+
 # テストから関数定義だけを source 可能にする（E2E_LIB_ONLY=1 のときは
 # 副作用のあるダウンロード/ビルドへ進まず、ここで source を終了する）。
 # 通常の CI 実行では環境変数が無いため、以降の処理はこれまでどおり動く。
@@ -167,23 +217,62 @@ export DATABASE_URL="file:${workdir}/e2e.db"
 # 未指定時は代替ポートを使う（CI では環境変数で上書き可能）。
 export E2E_CLIENT_PORT="${E2E_CLIENT_PORT:-18080}"
 
-# 実行対象プロジェクトを E2E_PROJECTS（カンマ区切り）で選択する。
-# 未指定時は既存どおり chromium（システム Chrome）のみを実行する。
-# firefox / webkit はオプトイン（ブラウザ導入と共有ライブラリが必要）。
-all_projects=(chromium firefox webkit)
-if [[ -n "${E2E_PROJECTS:-}" ]]; then
-	IFS=',' read -r -a selected_projects <<<"$E2E_PROJECTS"
-	for project in "${selected_projects[@]}"; do
-		case "$project" in
-		chromium | firefox | webkit) ;;
-		*)
-			echo "unknown E2E project: ${project} (allowed: ${all_projects[*]})" >&2
-			exit 1
-			;;
-		esac
-	done
-else
-	selected_projects=(chromium)
+# firefox / webkit の実行可能性を検出する（fail-closed）。
+# 既存の Chrome 検出（command -v + --version）と同じく、実際に導入済みで
+# 共有ライブラリも解決できる場合だけ実行可能と判定する。満たさなければ 1
+# （実行不可）を返し、呼び出し側は chromium へフォールバックする。
+detect_browser_executable() {
+	local browser="$1"
+	local cache_root="${PLAYWRIGHT_BROWSERS_PATH:-${HOME}/.cache/ms-playwright}"
+	local binary="" ldd_out=""
+	case "$browser" in
+	firefox)
+		binary="$(
+			find "$cache_root" -maxdepth 4 -type f -name firefox-bin \
+				-perm -u+x -print -quit 2>/dev/null || true
+		)"
+		;;
+	webkit)
+		binary="$(
+			find "$cache_root" -maxdepth 5 -type f -path '*/bin/MiniBrowser' \
+				-perm -u+x -print -quit 2>/dev/null || true
+		)"
+		;;
+	*)
+		return 1
+		;;
+	esac
+	[[ -n "$binary" ]] || return 1
+	ldd_out="$(ldd "$binary" 2>/dev/null)" || return 1
+	# 共有ライブラリ不足（CI を壊し得る事象）が見つかったら実行不可とする。
+	if [[ "$ldd_out" == *"not found"* ]]; then
+		return 1
+	fi
+	return 0
+}
+
+# 実行対象プロジェクトを選択する。
+# E2E_PROJECTS の明示値がある場合は指定を厳守（未知値は拒否）。
+# 未指定時は firefox/webkit の実行可能性を検出し、両方実行可能なら
+# 3 プロジェクト、片方でも不可なら chromium へ警告付きでフォールバックする
+# （共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は chromium 維持）。
+e2e_projects_explicit="${E2E_PROJECTS:-}"
+firefox_executable=0
+webkit_executable=0
+if [[ -z "$e2e_projects_explicit" ]]; then
+	if detect_browser_executable firefox; then firefox_executable=1; fi
+	if detect_browser_executable webkit; then webkit_executable=1; fi
+fi
+declare -a selected_projects=()
+declare warn_fallback=0
+if ! select_e2e_projects \
+	"$e2e_projects_explicit" "$firefox_executable" "$webkit_executable" \
+	selected_projects warn_fallback; then
+	exit 1
+fi
+if ((warn_fallback)); then
+	echo "warning: firefox=${firefox_executable} webkit=${webkit_executable};" \
+		"chromium へフォールバックします。" >&2
 fi
 
 # --project 引数と、導入が必要なブラウザバイナリを組み立てる。

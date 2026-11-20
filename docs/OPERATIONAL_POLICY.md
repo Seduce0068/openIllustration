@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-21T02:46:23+09:00"
+  at: "2026-11-21T03:31:36+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -288,7 +288,7 @@ generated:
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_COPY_CMD` | 任意（`OFFSITE_DEST` と対で設定） | 空（無効） | オフサイトコピーコマンドの実行ファイルパス。`<成果物> <宛先>` の2引数で呼び出す（eval 不使用）。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
-| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。`firefox` / `webkit` はオプトインで、バイナリ導入と共有ライブラリに依存するためホスト環境次第。 |
+| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし警告を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
 - OIDC の URL 設定（`OIDC_ISSUER` / `OIDC_REDIRECT_URI` / `OIDC_AUTHORIZATION_ENDPOINT` /
   `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI`）は https が必須。`ALLOW_MOCK_AUTH` が有効な場合のみ

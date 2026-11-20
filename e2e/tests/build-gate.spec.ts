@@ -266,3 +266,76 @@ test.describe('Version gate (VG-01)', () => {
     expect(result.stdout).toBe('');
   });
 });
+
+// ci-e2e.sh のプロジェクト選択ロジックの単体テスト（EPS-01）。
+// E2E_LIB_ONLY=1 で source するとダウンロード/ビルド等の副作用なしで
+// select_e2e_projects が呼べる。明示指定の厳守・両利用可で3プロジェクト・
+// 片方不可で chromium＋警告 の3ケースを確認する。
+test.describe('E2E project selection (EPS-01)', () => {
+  const e2eDir = path.resolve(__dirname, '..');
+  const scriptPath = path.join(e2eDir, 'ci-e2e.sh');
+
+  type SelectionResult = { status: number | null; stdout: string; stderr: string };
+
+  // bash -c の位置パラメータで純粋関数へ入力を渡す。
+  // $1=scriptPath, $2=E2E_PROJECTS 明示値, $3=firefox 可否, $4=webkit 可否。
+  const runSelection = (
+    explicit: string,
+    firefoxOk: string,
+    webkitOk: string,
+  ): SelectionResult => {
+    const inner = [
+      'source "$1"; shift',
+      'declare -a projects=()',
+      'declare warn=0',
+      'select_e2e_projects "$@" projects warn || exit $?',
+      'printf "PROJECTS=%s\\n" "${projects[*]}"',
+      'printf "WARN=%s\\n" "$warn"',
+    ].join('\n');
+    const result = spawnSync(
+      'bash',
+      ['-c', inner, '_', scriptPath, explicit, firefoxOk, webkitOk],
+      {
+        encoding: 'utf8',
+        env: { ...process.env, E2E_LIB_ONLY: '1' },
+      },
+    );
+    if (result.error) throw result.error;
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+
+  test('explicit E2E_PROJECTS is honored even when browsers are unavailable', () => {
+    // (a) 明示指定は実行可能性に関わらず厳守され、警告も出ない。
+    const result = runSelection('firefox', '0', '0');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PROJECTS=firefox');
+    expect(result.stdout).toContain('WARN=0');
+
+    // 既存の未知プロジェクト拒否も維持される。
+    const unknown = runSelection('bogus', '1', '1');
+    expect(unknown.status).toBe(1);
+    expect(unknown.stderr).toContain('unknown E2E project: bogus');
+  });
+
+  test('both browsers executable selects all three projects without warning', () => {
+    // (b) 未指定かつ firefox/webkit が両方実行可能なら3プロジェクト。
+    const result = runSelection('', '1', '1');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('PROJECTS=chromium firefox webkit');
+    expect(result.stdout).toContain('WARN=0');
+  });
+
+  test('one browser unavailable falls back to chromium with a warning', () => {
+    // (c) 未指定で片方でも実行不可なら chromium のみ＋警告フラグ。
+    const noWebkit = runSelection('', '1', '0');
+    expect(noWebkit.status).toBe(0);
+    expect(noWebkit.stdout).toContain('PROJECTS=chromium');
+    expect(noWebkit.stdout).not.toContain('PROJECTS=chromium firefox');
+    expect(noWebkit.stdout).toContain('WARN=1');
+
+    const noFirefox = runSelection('', '0', '1');
+    expect(noFirefox.status).toBe(0);
+    expect(noFirefox.stdout).toContain('PROJECTS=chromium');
+    expect(noFirefox.stdout).toContain('WARN=1');
+  });
+});

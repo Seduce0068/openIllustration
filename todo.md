@@ -468,7 +468,11 @@ P2（品質・保守・プロダクト拡張）:
 - 2026-11-21 (swarm-limited mixed 第1イテレ): dogfood/ux/ops の新観点で実ユーザー導線を発掘。
   監査失敗後再取得・LOG OUT 導線・Search 即時検索・投票中ステータス・運用記述5件を完了。
   E2E 65→66件（auth 3件）。起動10/上限40。
-- 2026-11-21 進行中（型・テスト先行候補、認証パスへは結線しない）: JPKI所有証明の
+- 2026-11-21 完了（型・テスト先行）: JPKI所有証明の ProofOfPossession + 純粋署名検証 + 4テスト、
+  E2E_PROJECTS条件付き選択関数 + 3テスト、VerifiedAgeAttribute 型と境界テスト、refresh_tokens
+  RFC3339発行契約テスト、payment_orders正当複数注文の回帰固定。いずれも認証パス/DB制約へは未結線。
+  起動累計14/上限40。E2E 66→69件。
+- 2026-11-21 進行中（外部仕様確定後に結線する項目）: JPKI所有証明の
   PresentationEnvelope型+純粋署名検証+フィクスチャ、E2E3ブラウザの条件付き選択関数、
   refresh_tokens の RFC3339 契約テスト、payment_orders の正当な複数注文の回帰固定、
   VerifiedAgeAttribute 型とフェイルクローズ境界テスト、R5-05/R5-08 の内部データ型。
@@ -534,7 +538,7 @@ P2（品質・保守・プロダクト拡張）:
 
 - 2026-11-20: CIバージョン閾値の fail-open（"08" が8進数解釈で比較 false、2^64+1 が
   オーバーフロー）を修正。assert_major_numeric に先頭ゼロ拒否と桁数＋辞書順上限、
-  比較側へ 10# 化を追加しオラクル(f)(g)(h)。E2E 65件（build-gate 12件）。
+  比較側へ 10# 化を追加しオラクル(f)(g)(h)。E2E 65件（build-gate 15件）。
 
 - 2026-11-20: 最終レビューで doc-numbers の照合漏れ（DETAILED_DESIGN の CLI 件数表・個別
   spec 実行例）を発見しゲートを拡張。doc numbers が green でもドキュメント間矛盾が残る問題を
