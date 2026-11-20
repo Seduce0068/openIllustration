@@ -116,10 +116,7 @@ fn verify_export(
         && !expected.eq_ignore_ascii_case(&snapshot.merkle_root)
     {
         return VerificationOutcome::Rejected {
-            message: format!(
-                "audit root mismatch: expected={expected}, computed={}",
-                snapshot.merkle_root
-            ),
+            message: common::AUDIT_ROOT_MISMATCH.to_string(),
         };
     }
     VerificationOutcome::Accepted {
@@ -608,17 +605,28 @@ mod tests {
 
     #[test]
     fn mismatched_expect_root_is_rejected() {
+        const EXPECTED_ROOT: &str = "deadbeef";
         let fixture = TestFixture::new();
         let snapshot = fixture.masked_snapshot();
-        let outcome = verify_export(&snapshot, &fixture.public_der, Some("deadbeef"));
+        let computed_root = snapshot.merkle_root.clone();
+        let outcome = verify_export(&snapshot, &fixture.public_der, Some(EXPECTED_ROOT));
         assert_rejected(&outcome, "audit root mismatch");
         match &outcome {
             VerificationOutcome::Rejected { message } => {
-                assert!(message.contains("expected=deadbeef"), "{message}");
+                // 固定文言へ変更済み。expected / computed の値は出ない（非エコー契約）。
+                assert!(message.contains(common::AUDIT_ROOT_MISMATCH), "{message}");
                 assert!(
-                    message.contains(&format!("computed={}", snapshot.merkle_root)),
-                    "{message}"
+                    !message.contains(EXPECTED_ROOT),
+                    "expected root leaked: {message}"
                 );
+                assert!(
+                    !message.contains(&computed_root),
+                    "computed root leaked: {message}"
+                );
+                // main が実際に出す stderr 行でも非エコーであることを確認する。
+                let rendered = format!("Error: {message}");
+                assert!(!rendered.contains(EXPECTED_ROOT), "{rendered}");
+                assert!(!rendered.contains(&computed_root), "{rendered}");
             }
             _ => unreachable!(),
         }

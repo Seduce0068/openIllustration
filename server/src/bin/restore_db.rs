@@ -228,6 +228,45 @@ async fn validate_backup(path: &Path) -> anyhow::Result<(i64, i64)> {
     Ok((tables, migrations))
 }
 
+/// rename 失敗時に safety copy を target へ書き戻す。
+/// 復元に成功した場合は元の rename エラーへ「safety copy から復元できた」旨と
+/// safety_copy のパスを併記し、失敗した場合は握り潰さずパスと rename エラーを
+/// 併せたメッセージを返す（safety copy 作成の fail-closed と対称）。
+fn rollback_safety_copy(
+    safety_copy: Option<&Path>,
+    target: &Path,
+    rename_error: std::io::Error,
+) -> anyhow::Error {
+    let Some(copy) = safety_copy else {
+        return anyhow::Error::new(rename_error).context("failed to replace target database");
+    };
+    match std::fs::copy(copy, target) {
+        Ok(_) => anyhow::Error::new(rename_error).context(format!(
+            "failed to replace target database; \
+             safety copy was restored successfully from {}",
+            copy.display()
+        )),
+        Err(copy_error) => anyhow!(
+            "failed to replace target database ({rename_error}); \
+             additionally failed to restore safety copy from {}: {copy_error}",
+            copy.display()
+        ),
+    }
+}
+
+/// ステージ済みファイルを target へ原子的に置き換える。
+/// rename が失敗した場合は一時ファイルを片付け、safety copy の復元を試み、
+/// その成否を呼び出し側へ返す。
+fn replace_target(tmp: &Path, target: &Path, safety_copy: Option<&Path>) -> anyhow::Result<()> {
+    match std::fs::rename(tmp, target) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(tmp);
+            Err(rollback_safety_copy(safety_copy, target, error))
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
@@ -290,13 +329,7 @@ async fn main() -> anyhow::Result<()> {
         return Err(anyhow!("staging file already exists: {}", tmp.display()));
     }
     std::fs::copy(&backup, &tmp).context("failed to stage backup")?;
-    if let Err(error) = std::fs::rename(&tmp, &target) {
-        let _ = std::fs::remove_file(&tmp);
-        if let Some(copy) = safety_copy {
-            let _ = std::fs::copy(&copy, &target);
-        }
-        return Err(error).context("failed to replace target database");
-    }
+    replace_target(&tmp, &target, safety_copy.as_deref())?;
 
     let (t, m) = validate_backup(&target).await?;
     println!(
@@ -570,5 +603,91 @@ mod tests {
             parse_args_from(["restore_db", "--backup", "b", "--target", "t"].map(String::from))
                 .expect("complete args must parse");
         assert!(validate_args(&both).is_ok());
+    }
+
+    // --- rename 失敗時の safety copy 復元エラー伝播 ---
+
+    fn injected_rename_error() -> std::io::Error {
+        std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected rename failure",
+        )
+    }
+
+    #[test]
+    fn safety_copy_restore_failure_reports_path_and_rename_error() {
+        // target をディレクトリ化して safety copy の書き戻しを失敗させる。
+        let dir = TempDir::new();
+        let target = dir.path("target.db");
+        std::fs::create_dir(&target).expect("make target a directory to break copy");
+        let copy = dir.path("target.db.pre-restore-test");
+        std::fs::write(&copy, b"safety").expect("write safety copy");
+
+        let error = rollback_safety_copy(Some(&copy), &target, injected_rename_error());
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("failed to restore safety copy"),
+            "{message}"
+        );
+        assert!(message.contains(&copy.display().to_string()), "{message}");
+        // 元の rename エラーも握り潰さずに伝わること。
+        assert!(message.contains("injected rename failure"), "{message}");
+        assert!(
+            message.contains("failed to replace target database"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn safety_copy_restore_success_reports_restoration_confirmation() {
+        let dir = TempDir::new();
+        let target = dir.path("target.db");
+        std::fs::write(&target, b"old").expect("write target");
+        let copy = dir.path("target.db.pre-restore-test");
+        std::fs::write(&copy, b"safety").expect("write safety copy");
+
+        let error = rollback_safety_copy(Some(&copy), &target, injected_rename_error());
+        let message = format!("{error:#}");
+        // 元の rename エラーは保持したまま、復元成功とその出所パスも併記される。
+        assert!(
+            message.contains("failed to replace target database"),
+            "{message}"
+        );
+        assert!(message.contains("injected rename failure"), "{message}");
+        assert!(
+            message.contains("safety copy was restored successfully"),
+            "{message}"
+        );
+        assert!(message.contains(&copy.display().to_string()), "{message}");
+        assert!(
+            !message.contains("failed to restore safety copy"),
+            "{message}"
+        );
+        // safety copy の内容が target へ戻っていること（復元の成否が観測できる）。
+        assert_eq!(std::fs::read(&target).unwrap(), b"safety".to_vec());
+    }
+
+    #[test]
+    fn replace_target_with_directory_target_reports_safety_copy_failure() {
+        // 実 rename を失敗させ（target をディレクトリ化）、復元失敗が
+        // replace_target の Result まで伝播することを検証する。
+        let dir = TempDir::new();
+        let tmp = dir.path("stage.tmp");
+        std::fs::write(&tmp, b"staged").expect("write staging file");
+        let target = dir.path("target.db");
+        std::fs::create_dir(&target).expect("make target a directory to break rename");
+        let copy = dir.path("copy");
+        std::fs::write(&copy, b"safety").expect("write safety copy");
+
+        let error = replace_target(&tmp, &target, Some(&copy)).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("failed to restore safety copy"),
+            "{message}"
+        );
+        assert!(
+            !tmp.exists(),
+            "staging file must be cleaned up on rename failure"
+        );
     }
 }

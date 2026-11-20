@@ -358,6 +358,11 @@ pub fn compute_audit_chain_digest(entries: &[(i64, String)]) -> Result<AuditChai
     })
 }
 
+/// `--expect-root` 不一致時の固定エラー文言。
+/// expected / computed の root 値は一切含めない（非エコー契約）。
+/// verify_audit_log / verify_audit_export の両 CLI で共有し、片方だけの文言変更を構造的に防ぐ。
+pub const AUDIT_ROOT_MISMATCH: &str = "audit root mismatch (expected and computed roots withheld)";
+
 /// 現在サポートする監査エクスポート形式のバージョン。
 pub const AUDIT_SNAPSHOT_VERSION: u32 = 3;
 

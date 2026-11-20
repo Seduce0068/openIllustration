@@ -83,6 +83,27 @@ fn parse_args() -> anyhow::Result<Args> {
     parse_args_from(std::env::args())
 }
 
+/// `--expect-root` の照合結果（I/O なし・終了コード判定は呼び出し側が行う）。
+#[derive(Debug, PartialEq, Eq)]
+enum ExpectRootOutcome {
+    /// `--expect-root` 未指定（照合しない）。
+    NotChecked,
+    /// 大小文字を区別せず一致。
+    Matched,
+    /// 不一致。root 値を含まない固定文言のエラーを保持する。
+    Mismatched(String),
+}
+
+/// 記録済み root と計算出的 root を照合する。既存の `eq_ignore_ascii_case` 比較は不変。
+/// 不一致文言は `common::AUDIT_ROOT_MISMATCH` を参照する（両 CLI で共有）。
+fn check_expect_root(expected: Option<&str>, computed: &str) -> ExpectRootOutcome {
+    match expected {
+        None => ExpectRootOutcome::NotChecked,
+        Some(expected) if expected.eq_ignore_ascii_case(computed) => ExpectRootOutcome::Matched,
+        Some(_) => ExpectRootOutcome::Mismatched(common::AUDIT_ROOT_MISMATCH.to_string()),
+    }
+}
+
 async fn open_db(
     database_url: String,
     database_token: String,
@@ -199,15 +220,10 @@ async fn main() -> anyhow::Result<()> {
                 "audit_chain_digest: count={} first={:?} last={:?} root={}",
                 digest.count, digest.first_log_id, digest.last_log_id, digest.root_hash
             );
-            if let Some(expected) = args.expect_root.as_ref() {
-                if expected.eq_ignore_ascii_case(&digest.root_hash) {
-                    println!("audit_root_verification: OK");
-                } else {
-                    errors.push(format!(
-                        "audit root mismatch: expected={expected}, computed={}",
-                        digest.root_hash
-                    ));
-                }
+            match check_expect_root(args.expect_root.as_deref(), &digest.root_hash) {
+                ExpectRootOutcome::NotChecked => {}
+                ExpectRootOutcome::Matched => println!("audit_root_verification: OK"),
+                ExpectRootOutcome::Mismatched(message) => errors.push(message),
             }
         }
         Err(error) => errors.push(format!("audit chain digest error: {error}")),
@@ -311,5 +327,46 @@ mod tests {
     fn help_flag_is_parsed() {
         let args = parse_args_from(["verify_audit_log", "--help"].map(String::from)).unwrap();
         assert!(args.help);
+    }
+
+    // --- check_expect_root: 不一致エラーの非エコー契約 ---
+
+    #[test]
+    fn mismatched_expect_root_error_does_not_echo_roots() {
+        const EXPECTED_ROOT: &str =
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        const COMPUTED_ROOT: &str =
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+
+        // 既存の eq_ignore_ascii_case 照合・未指定時の挙動は不変。
+        let upper = EXPECTED_ROOT.to_uppercase();
+        assert_eq!(
+            check_expect_root(Some(upper.as_str()), EXPECTED_ROOT),
+            ExpectRootOutcome::Matched
+        );
+        assert_eq!(
+            check_expect_root(None, COMPUTED_ROOT),
+            ExpectRootOutcome::NotChecked
+        );
+
+        let outcome = check_expect_root(Some(EXPECTED_ROOT), COMPUTED_ROOT);
+        match &outcome {
+            ExpectRootOutcome::Mismatched(message) => {
+                assert!(message.contains("audit root mismatch"), "{message}");
+                assert!(
+                    !message.contains(EXPECTED_ROOT),
+                    "expected root leaked: {message}"
+                );
+                assert!(
+                    !message.contains(COMPUTED_ROOT),
+                    "computed root leaked: {message}"
+                );
+                // main が実際に出す stderr 行でも非エコーであることを確認する。
+                let rendered = format!("ERROR: {message}");
+                assert!(!rendered.contains(EXPECTED_ROOT), "{rendered}");
+                assert!(!rendered.contains(COMPUTED_ROOT), "{rendered}");
+            }
+            other => panic!("expected Mismatched, got {other:?}"),
+        }
     }
 }
