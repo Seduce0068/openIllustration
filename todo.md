@@ -465,6 +465,11 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-21 (swarm-limited 完了): 2 イテレーション・起動17/上限40で停止。残6件は外部仕様
+  (DEC-01/R5-05/R5-08/JPKI所有証明)・却下(payment_orders部分UNIQUE)・既対応(refresh_tokens
+  はdatetime正規化済み)・バイナリ要件(Firefox/WebKit)で、安全なローカル項目は0件。配信側CSPは
+  本番配信構成の設計判断が先のため別タスクとして残す。
+
 - 2026-11-20 (swarm-limited 第2イテレーション): テスト限定 GPG 往復検証（ケース8）と API 側 CSP
   を完了。R4 が TASK_INVENTORY の「CSP は未設計」残存を指摘し是正。起動 16 担当 / 上限 40。
 
