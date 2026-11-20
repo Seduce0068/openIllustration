@@ -634,6 +634,80 @@ else
 fi
 rm -f "${work}/backups/linktest-"*.db
 
+echo "=== ケース8: 実 gpg による暗号化→復号→バイト一致 ==="
+# gpg 未インストール／使い捨て鍵の生成失敗時はスキップ（PASS 扱い）し、CI を壊さない。
+# 判定は command -v gpg と鍵生成コマンドの終了コードのみに基づく。
+real_gpg="$(command -v gpg || true)"
+if [[ -z "$real_gpg" ]]; then
+	echo "PASS case 8: skipped (gpg not found via command -v)"
+else
+	# 一時 GNUPGHOME は work 配下に作り、既存の EXIT trap で削除する（リポジトリへ鍵を置かない）。
+	gnupg_home="$(mktemp -d "${work}/gnupg.XXXXXX")"
+	chmod 700 "$gnupg_home"
+	cat >"${gnupg_home}/gpg.conf" <<'EOF'
+trust-model always
+no-tty
+EOF
+	cat >"${work}/case8-key.params" <<'EOF'
+%echo generating disposable backup-rotate test key
+Key-Type: RSA
+Key-Length: 2048
+Key-Usage: sign
+Subkey-Type: RSA
+Subkey-Length: 2048
+Subkey-Usage: encrypt
+Name-Real: Backup Rotate Test
+Name-Email: backup-rotate-test@example.invalid
+Expire-Date: 0
+%no-protection
+%commit
+%echo done
+EOF
+	if ! GNUPGHOME="$gnupg_home" "$real_gpg" --batch --generate-key \
+		"${work}/case8-key.params" >"${work}/case8-keygen.log" 2>&1; then
+		echo "PASS case 8: skipped (disposable GPG key generation failed)"
+	else
+		recipient="$(
+			GNUPGHOME="$gnupg_home" "$real_gpg" --batch --list-keys --with-colons \
+				backup-rotate-test@example.invalid 2>/dev/null |
+				awk -F: '$1 == "fpr" { print $10; exit }' || true
+		)"
+		if [[ -z "$recipient" ]]; then
+			echo "PASS case 8: skipped (generated key fingerprint unavailable)"
+		else
+			gpg_backup_dir="${work}/gpg-roundtrip-backups"
+			new_backup_dir "$gpg_backup_dir"
+			# GPG_BIN はスタブではなく実 gpg（command -v で解決）。GNUPGHOME を env で渡す。
+			expect_success "case 8: real gpg encrypted backup" env \
+				GNUPGHOME="$gnupg_home" \
+				GPG_BIN="$real_gpg" \
+				BACKUP_GPG_RECIPIENT="$recipient" \
+				BACKUP_DIR="$gpg_backup_dir" \
+				"$script"
+			# 公開された .db.gpg を同じ一時 GNUPGHOME で復号し、元の平文とバイト一致を検証する。
+			mapfile -d '' case8_ciphers < <(find "$gpg_backup_dir" -maxdepth 1 -type f \
+				-name 'openillustration-*.db.gpg' -print0)
+			if ((${#case8_ciphers[@]} != 1)); then
+				echo "FAIL case 8: expected exactly one published .db.gpg artifact"
+				failures=$((failures + 1))
+			elif ! GNUPGHOME="$gnupg_home" "$real_gpg" --batch --decrypt \
+				"${case8_ciphers[0]}" >"${work}/case8-plaintext.bin" 2>"${work}/case8-decrypt.log"; then
+				echo "FAIL case 8: gpg --decrypt failed"
+				cat "${work}/case8-decrypt.log" >&2
+				failures=$((failures + 1))
+			else
+				printf 'dummy backup' >"${work}/case8-expected.bin"
+				if cmp -s "${work}/case8-expected.bin" "${work}/case8-plaintext.bin"; then
+					echo "PASS case 8: decrypt matches original plaintext byte-for-byte"
+				else
+					echo "FAIL case 8: decrypted plaintext differs from original"
+					failures=$((failures + 1))
+				fi
+			fi
+		fi
+	fi
+fi
+
 if ((failures > 0)); then
 	echo "backup-rotate tests FAILED (${failures})" >&2
 	exit 1
