@@ -42,10 +42,10 @@ assert_numbers_match "e2e total" "$e2e_total" "$measured_n"
 # 注記語は古い件数の直前に置かれるものだけを許容し、"現在" は救済語に含めない。
 # 個別 spec の内訳件数・テスト名/パス内の数値・セクション6で照合済みの
 # 個別 spec 実行例コメント件数は総数文脈ではないため、総数キーワード直後の
-# 数値（注記語を最大6文字まで許容） only を抽出し、注記判定も同じマッチに対して行う。
-# 外側の行走査と内側のマッチ抽出は同一パターン変数を共有し、
-# 内側で検出可能な行を外側が取りこぼさないことを保証する。
-total_count_pattern='(定義数は|実測は全)[^0-9]{0,6}[0-9]+[[:space:]]*件'
+# 数値（注記語の長さに上限なし） only を抽出し、注記判定も同じマッチに対して行う。
+# 外側の行走査と内側のマッチ抽出は同一パターン変数を共有し、パターンが一致する行の
+# 取りこぼしはない。修飾語の長さに上限を設けないため、長い注記付きの行も走査対象になる。
+total_count_pattern='(定義数は|実測は全)[^0-9]*[0-9]+[[:space:]]*件'
 while IFS= read -r total_entry; do
 	[[ -z "$total_entry" ]] && continue
 	line_no="${total_entry%%:*}"
@@ -188,8 +188,9 @@ for name in "${doc_test_names[@]}"; do
 done
 
 # --- 5. bin テスト数の照合 -------------------------------------------------
-# doctor / verify_audit_export / verify_backup の #[test] / #[tokio::test] の実数を
-# grep -c で数え、TEST_SPECIFICATION の記載件数（<bin> <N>件 / <bin> <N>テスト）と照合する。
+# 7 bin（backup_db / doctor / restore_db / sign_audit_export / verify_audit_export /
+# verify_audit_log / verify_backup）の #[test] / #[tokio::test] の実数を grep -c で数え、
+# TEST_SPECIFICATION の記載件数（<bin> <N>件 / <bin> <N>テスト）と照合する。
 # 一方向のみ: ドキュメント側の記載が実コードとずれていれば FAIL とし、実コード側の
 # 全テストがドキュメントへ載っていることは要求しない（履歴表記と衝突しないため）。
 # 内訳・増分表記（"当初17件" / "追加4件" / "追加警告 2件" 等）は総数ではないため、
@@ -224,11 +225,31 @@ doc_cli_table_count() {
 	' "$design" || true
 }
 
-for bin_name in doctor verify_audit_export verify_backup; do
+# server/src/bin/*.rs の実ファイルを列挙し、basename（.rs を除く）を bin 名へ変換する。
+# 既知 7 bin は従来どおり照合し、新規 bin（既知一覧に無いもの）は未知 bin として
+# 既存の unknown bin 分岐を再利用して fail-closed に FAIL させる。
+mapfile -t bin_names < <(
+	for bin_file in server/src/bin/*.rs; do
+		[[ -f "$bin_file" ]] || continue
+		name="${bin_file##*/}"
+		printf '%s\n' "${name%.rs}"
+	done | sort
+)
+
+for bin_name in "${bin_names[@]}"; do
 	case "$bin_name" in
+	backup_db) bin_file="server/src/bin/backup_db.rs" ;;
 	doctor) bin_file="server/src/bin/doctor.rs" ;;
+	restore_db) bin_file="server/src/bin/restore_db.rs" ;;
+	sign_audit_export) bin_file="server/src/bin/sign_audit_export.rs" ;;
 	verify_audit_export) bin_file="server/src/bin/verify_audit_export.rs" ;;
+	verify_audit_log) bin_file="server/src/bin/verify_audit_log.rs" ;;
 	verify_backup) bin_file="server/src/bin/verify_backup.rs" ;;
+	*)
+		echo "FAIL unknown bin ${bin_name}" >&2
+		failures=$((failures + 1))
+		continue
+		;;
 	esac
 	actual_tests="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$bin_file" || true)"
 
