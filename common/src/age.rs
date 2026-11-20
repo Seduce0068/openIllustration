@@ -121,8 +121,11 @@ impl AgePolicy {
                     AgeEnforcementMode::TrustedAttributeRequired
                 }
                 _ => {
+                    // 受理値は入力値をエコーせず、別名と既定（空）を含めて列挙する。
                     return Err(
-                        "AGE_ENFORCEMENT_MODE must be self_reported_dob_country or trusted_attribute_required"
+                        "AGE_ENFORCEMENT_MODE must be one of: empty (default/self_reported), \
+                         self_reported, self_reported_dob_country, \
+                         trusted_attribute, trusted_attribute_required"
                             .to_string(),
                     );
                 }
@@ -184,10 +187,13 @@ fn validate_minimum_age(age: u32, label: &str) -> Result<u32, String> {
     Ok(age)
 }
 
+/// 真偽値はドキュメントどおり `1`/`true` と `0`/`false` のみ受理する。
+/// `yes`/`on`/`no`/`off` のような別名を受理すると、ドキュメント外の設定が
+/// 黙って有効化される fail-open を招くため拒否する（trim・小文字化は維持）。
 fn parse_bool_env(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
+        "1" | "true" => Some(true),
+        "0" | "false" => Some(false),
         _ => None,
     }
 }
@@ -520,6 +526,93 @@ mod tests {
                 AgeEnforcementMode::TrustedAttributeRequired
             );
         }
+    }
+
+    #[test]
+    fn parse_bool_env_accepts_only_documented_values() {
+        // 有効値: 1/true。無効値: 0/false。trim と小文字化は維持される。
+        for raw in ["1", "true", " TRUE ", "0", "false", " FALSE "] {
+            assert!(parse_bool_env(raw).is_some(), "{raw:?} must be accepted");
+        }
+        assert_eq!(parse_bool_env("1"), Some(true));
+        assert_eq!(parse_bool_env("true"), Some(true));
+        assert_eq!(parse_bool_env("0"), Some(false));
+        assert_eq!(parse_bool_env("false"), Some(false));
+        assert_eq!(parse_bool_env(" TRUE "), Some(true));
+        assert_eq!(parse_bool_env(" FALSE "), Some(false));
+    }
+
+    #[test]
+    fn parse_bool_env_rejects_undocumented_aliases() {
+        // yes/on/no/off はドキュメント外。受理すると fail-open を招くため拒否する。
+        for raw in ["yes", "on", "no", "off", "YES", " On ", "NO ", "maybe", ""] {
+            assert_eq!(parse_bool_env(raw), None, "{raw:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn from_env_with_rejects_undocumented_boolean_alias_fail_open() {
+        // AGE_POLICY_CONFIGURED=yes のような設定が黙って有効化されないことを保証する。
+        for raw in ["yes", "on", "no", "off"] {
+            let err = AgePolicy::from_env_with(getter_from(&[("AGE_POLICY_CONFIGURED", raw)]))
+                .unwrap_err();
+            assert!(
+                err.contains("AGE_POLICY_CONFIGURED"),
+                "error must name the variable: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_env_with_accepts_enforcement_mode_aliases() {
+        // 別名と既定（空）が受理され、対応するモードへ正規化されること。
+        for (raw, expected) in [
+            ("", AgeEnforcementMode::SelfReportedDobCountry),
+            ("self_reported", AgeEnforcementMode::SelfReportedDobCountry),
+            (
+                " SELF_REPORTED ",
+                AgeEnforcementMode::SelfReportedDobCountry,
+            ),
+            (
+                "self_reported_dob_country",
+                AgeEnforcementMode::SelfReportedDobCountry,
+            ),
+            (
+                "trusted_attribute",
+                AgeEnforcementMode::TrustedAttributeRequired,
+            ),
+            (
+                "trusted_attribute_required",
+                AgeEnforcementMode::TrustedAttributeRequired,
+            ),
+        ] {
+            let policy =
+                AgePolicy::from_env_with(getter_from(&[("AGE_ENFORCEMENT_MODE", raw)])).unwrap();
+            assert_eq!(policy.enforcement_mode, expected, "raw={raw:?}");
+        }
+    }
+
+    #[test]
+    fn enforcement_mode_error_lists_all_accepted_values_without_echoing_input() {
+        let invalid = "totally_invalid_mode";
+        let err = AgePolicy::from_env_with(getter_from(&[("AGE_ENFORCEMENT_MODE", invalid)]))
+            .expect_err("invalid mode must be rejected");
+        // 別名と既定（空）を含む全受理値が列挙されていること。
+        for accepted in [
+            "empty",
+            "default",
+            "self_reported",
+            "self_reported_dob_country",
+            "trusted_attribute",
+            "trusted_attribute_required",
+        ] {
+            assert!(
+                err.contains(accepted),
+                "error must list {accepted:?}: {err}"
+            );
+        }
+        // 入力値自体はエコーしない（設定名のみで機微情報を扱わない）。
+        assert!(!err.contains(invalid), "error must not echo input: {err}");
     }
 
     #[test]
