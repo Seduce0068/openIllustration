@@ -434,6 +434,10 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20: 最終レビューで doc-numbers の照合漏れ（DETAILED_DESIGN の CLI 件数表・個別
+  spec 実行例）を発見しゲートを拡張。doc numbers が green でもドキュメント間矛盾が残る問題を
+  根本解消。E2E 62件（build-gate 9件）・バックアップ35件・CLI 45/20/19 を実測値へ統一。
+
 - 2026-11-20: エラー本文スキーマ統一を却下クローズ（AppErrorは既に{"error":message}統一済み、
   code/message/status化はクライアントのbody.error依存を壊す破壊的変更で利益を上回らない）。
 - 2026-11-20: backup暗号文公開順序を修正（先に暗号文mv→平文rm）。公開失敗時に平文が残り、
@@ -500,7 +504,7 @@ P2（品質・保守・プロダクト拡張）:
    設定した古い世代が実際に prune されるテストを追加。定数・テスト・
    `docs/BACKUP_RESTORE_RUNBOOK.md` の記載をすべて整合させた（上記の
    36500 は R5 当時の履歴）。`scripts/test-backup-rotate.sh` の実測は
-   `expect_*` 23件（fail-closed）+7件（正常系）=30件で、
+   `expect_failure` 26件＋`expect_success` 9件=35件で、
    `docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の「5件・5件」を是正。
    `docs/OPERATIONAL_POLICY.md:265` の `PINATA_JWT` を本番必須・実トークン必須
    （未設定/空/空白/mock_jwt 前後空白含むは起動拒否、`doctor` の `production`

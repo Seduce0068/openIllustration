@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T08:18:13+09:00"
+  at: "2026-11-20T09:34:17+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -580,15 +580,15 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 3つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
 閉じ込め、判定を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
-テストは全てサーバー側 bin テストであり、E2E 定義数（37件）は変更しない。
+テストは全てサーバー側 bin テストであり、E2E 定義数（59件）は変更しない。
 ゲート ID とテスト名は
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 を参照。
 
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
 | --- | --- | --- | --- |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 40（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1） | CLI-01 / CFG-01 |
-| `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 19 | CLI-02 / AUDIT-01 |
-| `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 17 | CLI-03 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 45（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2） | CLI-01 / CFG-01 |
+| `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
+| `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |
 
 ### doctor（`server/src/bin/doctor.rs`）
 
