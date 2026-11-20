@@ -550,6 +550,10 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-21 swarm コンボ完了: review(7担当)+discovery+coding を9サイクル・起動38/上限40で実行。
+  最終レビューで新規の安全なローカル項目0件のため停止。残15件は外部仕様(DEC-01/04)・
+  後方互換判断・大規模リファクタ・却下済み。全ゲート green（E2E69/check23/doctor53/migration13）。
+
 - 2026-11-21 コンボ初回（swarm-project-review + swarm-todo-discovery、7担当・深度1）:
   約60件の指摘を重複排除・Runtime Proof で裁定し、新規17件を上記へ反映。
   却下: JPKI PoP/VerifiedAgeAttribute 未結線（外部仕様待ちで既記録・型先行済み）、価格 min/max
