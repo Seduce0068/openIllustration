@@ -439,6 +439,10 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20: doc-numbers堅牢性3件（sign_audit前方切り詰め削除・backup triple全マッチ照合・
+  doc_bin_counts履歴除外のマッチ部分限定）を反映。R4のL49誤除外指摘は隣接制約復元で解消。
+  破壊テスト（古いtriple・L49単独改変）でいずれもFAIL・復元PASSを確認。
+
 - 2026-11-20: doc-numbersへbackup回帰期待数(28+12=40)とsign_audit_export10件の
   他ドキュメント(HANDOFF/TASK_INVENTORY)との照合を追加。破壊テストで expect_failure
   29件→HANDOFF/TASK_INVENTORYの両方でFAILを確認。履歴除外はマッチ部分前方30文字に限定。

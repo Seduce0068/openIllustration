@@ -194,15 +194,29 @@ done
 # 一方向のみ: ドキュメント側の記載が実コードとずれていれば FAIL とし、実コード側の
 # 全テストがドキュメントへ載っていることは要求しない（履歴表記と衝突しないため）。
 # 内訳・増分表記（"当初17件" / "追加4件" / "追加警告 2件" 等）は総数ではないため、
-# 抽出後の短い一致ではなく元の行の段階で除外する。総数行の括弧内にある "既存29件" 等の
-# 内訳は <bin> 直後の総数だけが抽出されるため照合対象に残る（既存件数自体は誤抽出されない）。
+# 抽出マッチの直前30文字を見て履歴判定し、そのマッチだけを除外する（行全体は落とさない）。
+# 同じ行に旧件数と現行件数が同居しても現行側は照合対象に残る。総数行の括弧内にある
+# "既存29件" 等は <bin> 直後ではないため抽出されず、誤抽出されない。
 doc_bin_counts() {
 	local bin="$1"
-	grep -vE '(当初|旧|追加)[^0-9]{0,4}[0-9]+(件|テスト)' "$spec" |
-		grep -oE "${bin}[^0-9]*[0-9]+(件|テスト)" |
-		grep -oE '[0-9]+' |
-		sort -u ||
-		true
+	local token num
+	{
+		while IFS= read -r token; do
+			[[ -z "$token" ]] && continue
+			# マッチの直前30文字（.{0,30} 部分）とマッチ本体だけを見て履歴判定する。
+			# 除外語彙は数値に隣接する場合だけ（例: '追加4件' '当初17件'）除外し、
+			# L49 の 'テスト追加（doctor 46件' のような現行総数は誤除外しない。
+			if grep -qE '(当初|旧|追加)[^0-9]{0,4}[0-9]+(件|テスト)$' <<<"$token"; then
+				continue
+			fi
+			# 前方30文字側の数値を誤採用しないよう、<bin> 直後の数値だけを採る。
+			num="$(grep -oE "${bin}[^0-9]*[0-9]+(件|テスト)" <<<"$token" |
+				grep -oE '[0-9]+' | head -n1 || true)"
+			if [[ -n "$num" ]]; then
+				printf '%s\n' "$num"
+			fi
+		done < <(grep -oE ".{0,30}${bin}[^0-9]*[0-9]+(件|テスト)" "$spec" || true)
+	} | sort -u || true
 }
 
 # DETAILED_DESIGN.md の CLI 表から「テスト数」列（3列目）の総数を取り出す。
@@ -448,22 +462,31 @@ backup_failure_actual="${backup_failure_actual:-0}"
 backup_success_actual="${backup_success_actual:-0}"
 backup_total_actual=$((backup_failure_actual + backup_success_actual))
 
-# 折り返しを吸収するため改行を空白へ結合し、3数値（failure/success/total）を抽出する。
+# 折り返しを吸収するため改行を空白へ結合し、全マッチの3数値（failure/success/total）を抽出する。
 # バッククォートは文字クラス（[^0-9]）に吸収させ、shellcheck のトークン解釈を避ける。
 backup_expect_triple() {
-	local doc="$1" joined match failure success total
+	local doc="$1" joined match failure success total found=0 ok=1
 	local re_failure='expect_failure[^0-9]*[0-9]+件'
 	local re_success='expect_success[^0-9]*[0-9]+件'
 	local re_total='計[0-9]+件'
 	local pattern="${re_failure}[^0-9]*${re_success}[^0-9]*${re_total}"
 	joined="$(tr '\n' ' ' <"$doc")"
-	match="$(grep -oE "$pattern" <<<"$joined" | head -n1 || true)"
-	[[ -n "$match" ]] || return 1
-	failure="$(grep -oE "$re_failure" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
-	success="$(grep -oE "$re_success" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
-	total="$(grep -oE "$re_total" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
-	[[ -n "$failure" && -n "$success" && -n "$total" ]] || return 1
-	printf '%s %s %s\n' "$failure" "$success" "$total"
+	# head -n1 で先頭だけを採らず全マッチを走査し、3数値を1行ずつ返す。
+	# 呼び出し側が全件を実測値と照合するため、1つでも古い値があれば FAIL になる。
+	while IFS= read -r match; do
+		[[ -n "$match" ]] || continue
+		failure="$(grep -oE "$re_failure" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+		success="$(grep -oE "$re_success" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+		total="$(grep -oE "$re_total" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+		if [[ -z "$failure" || -z "$success" || -z "$total" ]]; then
+			ok=0
+			continue
+		fi
+		printf '%s %s %s\n' "$failure" "$success" "$total"
+		found=1
+	done < <(grep -oE "$pattern" <<<"$joined" || true)
+	# マッチ0件・抽出失敗はいずれも fail-closed で FAIL とするため戻り値 1 を返す。
+	((found > 0 && ok > 0)) || return 1
 }
 
 for cross_doc in docs/HANDOFF.md docs/TASK_INVENTORY.md; do
@@ -472,16 +495,19 @@ for cross_doc in docs/HANDOFF.md docs/TASK_INVENTORY.md; do
 		failures=$((failures + 1))
 		continue
 	fi
-	triple="$(backup_expect_triple "$cross_doc" || true)"
-	if [[ -z "$triple" ]]; then
+	if ! triples="$(backup_expect_triple "$cross_doc")" || [[ -z "$triples" ]]; then
 		echo "FAIL backup expect_* counts: no 'expect_failure N件＋expect_success M件、計K件' in ${cross_doc}" >&2
 		failures=$((failures + 1))
 		continue
 	fi
-	read -r doc_failure doc_success doc_total <<<"$triple"
-	assert_numbers_match "backup expect_failure @ ${cross_doc}" "$backup_failure_actual" "$doc_failure"
-	assert_numbers_match "backup expect_success @ ${cross_doc}" "$backup_success_actual" "$doc_success"
-	assert_numbers_match "backup expect_total @ ${cross_doc}" "$backup_total_actual" "$doc_total"
+	# 全マッチを検証する（1件でも古い値があれば FAIL）。
+	while IFS= read -r triple; do
+		[[ -z "$triple" ]] && continue
+		read -r doc_failure doc_success doc_total <<<"$triple"
+		assert_numbers_match "backup expect_failure @ ${cross_doc}" "$backup_failure_actual" "$doc_failure"
+		assert_numbers_match "backup expect_success @ ${cross_doc}" "$backup_success_actual" "$doc_success"
+		assert_numbers_match "backup expect_total @ ${cross_doc}" "$backup_total_actual" "$doc_total"
+	done <<<"$triples"
 done
 
 # --- 9. sign_audit_export の bin テスト数と TASK_INVENTORY の照合 ------------
@@ -493,12 +519,12 @@ inventory="docs/TASK_INVENTORY.md"
 sign_audit_bin="server/src/bin/sign_audit_export.rs"
 sign_audit_actual="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$sign_audit_bin" || true)"
 # 行全体ではなく 'bin 内にNテスト' の直前30文字だけを見て履歴表記を除外する。
+# grep -oE の .{0,30} が前方30文字へ限定するため行頭の切り詰めは不要で、行全体を渡す。
 # これにより現行行の後半に便宜上 '旧' 等が入っても行ごと落ちることを防ぐ。
 sign_audit_doc_lines="$(
 	grep -nE 'bin[[:space:]]*内に[0-9]+[[:space:]]*テスト' "$inventory" |
 		while IFS= read -r sa_line; do
-			sa_prefix="${sa_line:0:120}"
-			sa_token="$(grep -oE '.{0,30}bin[[:space:]]*内に[0-9]+' <<<"$sa_prefix" | head -n1 || true)"
+			sa_token="$(grep -oE '.{0,30}bin[[:space:]]*内に[0-9]+' <<<"$sa_line" | head -n1 || true)"
 			if grep -qE '当時|旧|当初|履歴|[0-9]{4}-[0-9]{2}-[0-9]{2}|20[0-9]{2}年' <<<"$sa_token"; then
 				continue
 			fi
