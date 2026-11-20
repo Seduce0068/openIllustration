@@ -256,13 +256,25 @@ fn rollback_safety_copy(
 
 /// ステージ済みファイルを target へ原子的に置き換える。
 /// rename が失敗した場合は一時ファイルを片付け、safety copy の復元を試み、
-/// その成否を呼び出し側へ返す。
+/// その成否を呼び出し側へ返す。一時ファイルの削除に失敗した場合は握り潰さず、
+/// tmp のパスと削除エラーを rename エラー・safety copy の成否へ併記して返す。
 fn replace_target(tmp: &Path, target: &Path, safety_copy: Option<&Path>) -> anyhow::Result<()> {
     match std::fs::rename(tmp, target) {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = std::fs::remove_file(tmp);
-            Err(rollback_safety_copy(safety_copy, target, error))
+            let cleanup = std::fs::remove_file(tmp);
+            // rollback_safety_copy が rename エラーと safety copy の成否を
+            // 併記した Error を返す。削除失敗はそこへ context として積み、
+            // 既存の通知を壊さずに一時ファイルの残置を利用者へ見せる。
+            let rollback_error = rollback_safety_copy(safety_copy, target, error);
+            let combined_error = match cleanup {
+                Ok(()) => rollback_error,
+                Err(cleanup_error) => rollback_error.context(format!(
+                    "failed to clean up staging file {}: {cleanup_error}",
+                    tmp.display()
+                )),
+            };
+            Err(combined_error)
         }
     }
 }
@@ -688,6 +700,83 @@ mod tests {
         assert!(
             !tmp.exists(),
             "staging file must be cleaned up on rename failure"
+        );
+    }
+
+    #[test]
+    fn rename_failure_without_safety_copy_keeps_original_error() {
+        // safety_copy=None のときも rename エラー自身(io::Error)が chain に残り、
+        // staging ファイルは片付けられること。
+        let dir = TempDir::new();
+        let tmp = dir.path("stage.tmp");
+        std::fs::write(&tmp, b"staged").expect("write staging file");
+        let target = dir.path("target.db");
+        std::fs::create_dir(&target).expect("make target a directory to break rename");
+
+        let error = replace_target(&tmp, &target, None).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("failed to replace target database"),
+            "{message}"
+        );
+        assert!(
+            error.chain().any(|cause| cause.is::<std::io::Error>()),
+            "original rename error must be preserved: {message}"
+        );
+        // 削除は成功しているので cleanup 失敗の context は付かない。
+        assert!(
+            !message.contains("failed to clean up staging file"),
+            "{message}"
+        );
+        assert!(
+            !tmp.exists(),
+            "staging file must be cleaned up on rename failure"
+        );
+    }
+
+    #[test]
+    fn replace_target_success_returns_ok_and_removes_staging_path() {
+        let dir = TempDir::new();
+        let tmp = dir.path("stage.tmp");
+        std::fs::write(&tmp, b"staged").expect("write staging file");
+        let target = dir.path("target.db");
+
+        assert!(replace_target(&tmp, &target, None).is_ok());
+        // rename により staging パスは消え、中身は target へ移る。
+        assert!(!tmp.exists(), "staging path must be gone after rename");
+        assert_eq!(std::fs::read(&target).unwrap(), b"staged".to_vec());
+    }
+
+    #[test]
+    fn replace_target_reports_staging_cleanup_failure_alongside_rollback() {
+        // staging パスをディレクトリ化して remove_file を失敗させる(unlink は
+        // ディレクトリに対して EISDIR)。rename も target を通常ファイルにして
+        // 失敗させ、削除失敗が rename エラー・safety copy 成否と併記されることを検証する。
+        let dir = TempDir::new();
+        let tmp = dir.path("stage.tmp");
+        std::fs::create_dir(&tmp).expect("make staging path a directory");
+        std::fs::write(tmp.join("child"), b"x").expect("write child file");
+        let target = dir.path("target.db");
+        std::fs::write(&target, b"old").expect("write target file to force rename failure");
+        let copy = dir.path("copy");
+        std::fs::write(&copy, b"safety").expect("write safety copy");
+
+        let error = replace_target(&tmp, &target, Some(&copy)).unwrap_err();
+        let message = format!("{error:#}");
+        // 削除失敗の旨・tmp パス・削除エラーが現れること。
+        assert!(
+            message.contains("failed to clean up staging file"),
+            "{message}"
+        );
+        assert!(message.contains(&tmp.display().to_string()), "{message}");
+        // 既存の rollback_safety_copy 通知が壊れていないこと。
+        assert!(
+            message.contains("failed to replace target database"),
+            "{message}"
+        );
+        assert!(
+            message.contains("safety copy was restored successfully"),
+            "{message}"
         );
     }
 }
