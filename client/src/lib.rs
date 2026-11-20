@@ -925,6 +925,27 @@ pub fn App() -> impl IntoView {
         set_view.set("dashboard".to_string());
     };
 
+    // ナビゲーションの LOG OUT から呼ぶ。トークン／ユーザー状態を破棄して
+    // ログイン画面へ戻す。API の成否にかかわらず画面は必ずログインへ戻し、
+    // 未認証（トークン無し／401 済み）でも安全なよう失敗はすべて無視する。
+    let handle_logout = move |_| {
+        let token = token.get_untracked();
+        set_token.set(None);
+        set_user_hash.set(None);
+        set_view.set("login".to_string());
+        // トークンが無い場合は API を呼ばない。あっても 401／ネットワーク
+        // エラーは握りつぶし、再ログイン導線を妨げない。
+        if let Some(jwt) = token {
+            spawn_local(async move {
+                // 既存の /auth/logout 契約どおり Bearer でセッションを失効させる。
+                let _ = Request::post(&format!("{API_BASE}/auth/logout"))
+                    .header("Authorization", &format!("Bearer {}", jwt))
+                    .send()
+                    .await;
+            });
+        }
+    };
+
     view! {
         <div class="min-h-screen bg-black text-white font-mono">
             <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
@@ -950,6 +971,11 @@ pub fn App() -> impl IntoView {
                             aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
                             "LEDGER"
+                        </button>
+                        <button type="button" on:click=handle_logout
+                            data-testid="logout-button"
+                            class="text-gray-500 hover:text-white transition-colors">
+                            "LOG OUT"
                         </button>
                         <span data-testid="user-hash" class="text-green-500 border border-green-500/20 px-2">
                             {move || user_hash.get().map(|h| h[0..8.min(h.len())].to_string()).unwrap_or_default()}
@@ -1077,6 +1103,9 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     // トグル成功後に一覧を再取得するためのトリガー。
     let (refresh_counter, set_refresh_counter) = signal(0u32);
     let on_favorite_changed = move || set_refresh_counter.update(|n| *n += 1);
+    // Search ボタン（form submit）押下時の即時検索トリガー。
+    // テキスト入力の 250ms デバウンスは維持したまま、明示操作だけ即時取得へ切り替える。
+    let (search_submit, set_search_submit) = signal(0u32);
 
     let token_stored = StoredValue::new(token);
     // ContentViewer への受け渡しを廃止したため未使用。StoredValue 自体は残す方針のため保持する。
@@ -1087,9 +1116,12 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     // wasm シングルスレッド前提の Rc を Effect クロージャで直接共有する。
     let generation = Rc::new(Cell::new(0u64));
     // 直近の「即時取得トリガー」の値。テキスト入力との切り分けに使う。
-    let last_immediate = Rc::new(Cell::new((false, 0u32)));
+    // 第3要素は Search ボタンの submit カウンタ。
+    let last_immediate = Rc::new(Cell::new((false, 0u32, 0u32)));
     // 実行中のデバウンスタイマー。
     let pending_fetch = Rc::new(RefCell::new(None::<PendingFetch>));
+    // submit ハンドラから保留中タイマーを同期キャンセルするための参照。
+    let search_pending = Rc::clone(&pending_fetch);
     // on_cleanup は Send+Sync を要求するため、Rc を含む PendingFetch ではなく
     // タイマーハンドル（i32）だけを StoredValue に持つ。
     let timer_handle = StoredValue::new(None::<i32>);
@@ -1109,13 +1141,15 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
         });
         let favorite = favorite_only.get();
         let refresh = refresh_counter.get();
+        let submit = search_submit.get();
         let previous = last_immediate.get();
         // 採用した方式: q/tag/type のテキスト入力だけ 250ms デバウンスする。
-        // favorite_only の変更と refresh_counter（お気に入りトグルの成功通知）は
-        // 即時取得する。これらはユーザーの明示操作なので待たせず、
+        // favorite_only の変更・refresh_counter（お気に入りトグルの成功通知）・
+        // search_submit（Search ボタン／Enter の submit）は即時取得する。
+        // これらはユーザーの明示操作なので待たせず、
         // かつ連続テキスト入力による 1 文字ごとの GET を防ぐ。
-        let immediate = favorite != previous.0 || refresh != previous.1;
-        last_immediate.set((favorite, refresh));
+        let immediate = favorite != previous.0 || refresh != previous.1 || submit != previous.2;
+        last_immediate.set((favorite, refresh, submit));
 
         // テキスト signal もここで読み、入力変化を Effect の追跡対象にする。
         let query = build_content_query(&q.get(), &tag.get(), &content_type.get(), favorite);
@@ -1198,7 +1232,21 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             </section>
             <search>
                 <form
-                    on:submit=move |ev| ev.prevent_default()
+                    on:submit=move |ev| {
+                        ev.prevent_default();
+                        // 保留中のデバウンスタイマーを同期キャンセルし、重複 GET を防ぐ。
+                        let old = search_pending.borrow_mut().take();
+                        if let Some(old) = old {
+                            if let Some(handle) = old.handle
+                                && let Some(window) = web_sys::window()
+                            {
+                                window.clear_timeout_with_handle(handle);
+                            }
+                            drop(old.closure);
+                        }
+                        // Effect を再実行させ、現在の条件で delay=0 の即時検索を予約する。
+                        set_search_submit.update(|n| *n += 1);
+                    }
                     class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto_auto] gap-4 items-end border border-white/10 p-4"
                 >
                     <div class="space-y-1">
@@ -1541,7 +1589,8 @@ where
     };
 
     // 監査ログは本文取得とは独立に、show_audit が true へ遷移した初回だけ取得する。
-    // cid ごとの取得済みフラグで二重取得を防ぐ（閉じて再オープンしても再取得しない）。
+    // cid ごとの取得済みフラグで二重取得を防ぐ（成功時は閉じて再オープンしても再取得しない）。
+    // 失敗時はフラグを戻すため、再オープン時に再取得されて再試行できる。
     let audit_cid = cid.clone();
     let audit_fetched_cid: StoredValue<Option<String>> = StoredValue::new(None);
     Effect::new(move |_| {
@@ -1567,13 +1616,25 @@ where
                         set_audit_error.set(String::new());
                         set_audit_logs.set(logs);
                     }
-                    Err(_) => set_audit_error.set("監査ログの解析に失敗しました。".to_string()),
+                    Err(_) => {
+                        // 解析失敗は再試行対象。フラグを戻して再オープン時に再取得できるようにする。
+                        audit_fetched_cid.set_value(None);
+                        set_audit_error.set("監査ログの解析に失敗しました。".to_string());
+                    }
                 },
-                Ok(response) => set_audit_error.set(format!(
-                    "監査ログの取得に失敗しました (HTTP {}).",
-                    response.status()
-                )),
-                Err(_) => set_audit_error.set("Network error loading audit log.".to_string()),
+                Ok(response) => {
+                    // HTTP エラーも再試行対象。フラグを戻す。
+                    audit_fetched_cid.set_value(None);
+                    set_audit_error.set(format!(
+                        "監査ログの取得に失敗しました (HTTP {}).",
+                        response.status()
+                    ));
+                }
+                Err(_) => {
+                    // ネットワークエラーも再試行対象。フラグを戻す。
+                    audit_fetched_cid.set_value(None);
+                    set_audit_error.set("Network error loading audit log.".to_string());
+                }
             }
         });
     });
@@ -2431,6 +2492,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         // 新しい試行では前回の通知・エラーを必ず消す。
         set_vote_error.set(String::new());
         set_vote_notice.set(String::new());
+        // submit_report と同じく、送信開始を固定文言で通知する。
+        // 成功・失敗が決まったら通知（vote_notice / vote_error）へ切り替える。
+        set_status.set("投票を送信中...".to_string());
         let token = token_stored.get_value();
         let user_hash = user_hash_stored.get_value();
         spawn_local(async move {
@@ -2460,6 +2524,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     set_vote_error.set(vote_error_message(None));
                 }
             }
+            // 進捗表示を消し、通知（vote_notice / vote_error）へ切り替える。
+            set_status.set(String::new());
         });
     };
 
