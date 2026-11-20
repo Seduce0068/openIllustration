@@ -458,6 +458,14 @@ P2（品質・保守・プロダクト拡張）:
   合計44→46件を実 #[test] 46件へ整合。`scripts/test-doc-numbers.sh` へ群テーブル件数の
   合計照合を追加し、抽出失敗は fail-closed で FAIL とする。
 
+- 2026-11-20 (impl-docnum-allbins): doc-numbers の bin テスト数照合を3 bin から全7 bin
+  （backup_db / doctor / restore_db / sign_audit_export / verify_audit_export /
+  verify_audit_log / verify_backup）へ拡張。記載なしで FAIL になるため、新規4 bin は
+  TEST_SPECIFICATION へ「運用 bin のテスト数一覧」を、DETAILED_DESIGN へ CLI 件数表4行を追加。
+  陳腐化件数は sign_audit_export 9→10（6箇所）・backup_db 7→12（うち生存ロック検査は7件）へ是正。
+  実測 verify_backup は19件（指示書の12は backup_db との取り違え）で既存記載どおり変更なし。
+  check23 / E2E65件 / migration13 / doctor46 は不変、fail-closed 維持。
+
 - 2026-11-20: CIバージョン閾値の fail-open（"08" が8進数解釈で比較 false、2^64+1 が
   オーバーフロー）を修正。assert_major_numeric に先頭ゼロ拒否と桁数＋辞書順上限、
   比較側へ 10# 化を追加しオラクル(f)(g)(h)。E2E 65件（build-gate 12件）。
@@ -532,8 +540,9 @@ P2（品質・保守・プロダクト拡張）:
    設定した古い世代が実際に prune されるテストを追加。定数・テスト・
    `docs/BACKUP_RESTORE_RUNBOOK.md` の記載をすべて整合させた（上記の
    36500 は R5 当時の履歴）。`scripts/test-backup-rotate.sh` の実測は
-   `expect_failure` 27件＋`expect_success` 12件=39件で、
-   `docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の「5件・5件」を是正。
+   `expect_failure` 28件＋`expect_success` 12件=40件（4fb80e0 で root 不一致オラクル1件を追加、
+   R14 時点は 27＋12=39件）。`docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の
+   「5件・5件」を是正。
    `docs/OPERATIONAL_POLICY.md:265` の `PINATA_JWT` を本番必須・実トークン必須
    （未設定/空/空白/mock_jwt 前後空白含むは起動拒否、`doctor` の `production`
    カテゴリで診断）へ更新し `docs/DETAILED_DESIGN.md:123` と整合。
@@ -559,3 +568,13 @@ P2（品質・保守・プロダクト拡張）:
   併せて AUDIT_ROOT_MISMATCH を `common/src/lib.rs` の `pub const` へ単一化し両 CLI から参照、
   restore_db の safety copy 復元成功時に「safety copy was restored successfully from `<path>`」を
   併記して成否を観測可能とした（失敗時文言・`safety_copy:` 出力・instance lock・引数契約は不変）。
+
+- 2026-11-20 (R5 / 採用指摘の反映): `redact_url` のパース失敗時フォールバックを、先に
+  `scheme://` 直後の authority（最初の `/` まで）を切り出して userinfo を除去し、その後に
+  クエリ/フラグメントを除去する順序へ是正。userinfo 内に `?` / `#` を含む
+  `https://user:pa?ss@exa mple.com/path` でも userinfo が残存しない回帰テストを追加。
+  スキームレス URL（`//` 始まりを含む）は authority 走査の対象外として userinfo を除去しない
+  （クエリ/フラグメントは従来どおり除去）判断を doc コメントへ明記。
+  `scripts/test-doc-numbers.sh` は E2E 総数ゲートの修飾語上限（`{0,40}`）を撤廃し、
+  bin 照合を `server/src/bin/*.rs` の実ファイル列挙へ変更（未知 bin は既存分岐で fail-closed）。
+  check23 / E2E65件 / migration13 / doctor46 は不変。

@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T11:14:28+09:00"
+  at: "2026-11-20T13:21:31+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -421,7 +421,8 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   `refusing backup: a live server instance holds the instance lock`、`restore_db` は
   `refusing restore: a live server instance holds the <side> instance lock`（`<side>` は
   `backup` / `target`）で拒否する。`/proc` が読めない等で判定不能な場合も「生存」として
-  扱い拒否する（fail-closed）。`backup_db` は7テストと実 CLI で拒否を実証済み。
+  扱い拒否する（fail-closed）。`backup_db` は bin 全体で12テスト（うち生存ロック検査は7テスト）と
+  実 CLI で拒否を実証済み。
   `restore_db` は `live_backup_lock_is_rejected` / `live_target_lock_is_rejected`
   で両側の拒否を確認済み。
 
@@ -576,18 +577,22 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - 決定前に削除 API を提供すると、監査連鎖の連続性・バックアップからの復元経路と矛盾するため、
   現時点では提供しない。
 
-## 10. 運用CLI（doctor / verify_audit_export / verify_backup）の設計
+## 10. 運用CLI（7 bin）の設計
 
-3つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
+7つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
 閉じ込め、判定を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
 テストは全てサーバー側 bin テストであり、E2E 定義数（当時59件、現在65件）は変更しない。
 ゲート ID とテスト名は
-[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 を参照。
+[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 および「運用 bin のテスト数一覧」を参照。
 
-| CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
+| CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート / 参照 |
 | --- | --- | --- | --- |
+| `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` | 12 | 詳細設計 §5 |
 | `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 46（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1） | CLI-01 / CFG-01 |
+| `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 20 | 詳細設計 §5 |
+| `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` | 10 | AUDIT-02 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
+| `verify_audit_log` | `parse_args_from` / `check_expect_root` | 9 | AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |
 
 ### doctor（`server/src/bin/doctor.rs`）

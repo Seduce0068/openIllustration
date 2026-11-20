@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-20T12:06:40+09:00"
+  at: "2026-11-20T13:21:31+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -261,9 +261,9 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。
   `OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
-- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 27件＋`expect_success` 12件、計39件の
+- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 28件＋`expect_success` 12件、計40件の
   `expect_*` 呼び出し）を外部サービスなしで検証する回帰テスト。上限 RETENTION_DAYS=20000 での
-  prune 境界テストを含む。
+  prune 境界テストを含む。`AUDIT_EXPECT_ROOT` 不一致の fail-closed オラクルも含む。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。
 - `server/src/bin/sign_audit_export.rs` / `verify_audit_export.rs`: 署名付き監査エクスポートと公開鍵検証（ADR-0005、
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
