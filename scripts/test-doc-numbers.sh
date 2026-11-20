@@ -33,6 +33,42 @@ measured_line="$(grep -m1 '実測は全[0-9][0-9]*件' "$spec" || true)"
 measured_n="$(grep -oE '実測は全[0-9]+件' <<<"$measured_line" | grep -oE '[0-9]+' | head -n1 || true)"
 assert_numbers_match "e2e total" "$e2e_total" "$measured_n"
 
+# --- 1b. E2E 総数表記の古い件数検出（未注記は fail-closed） ----------------
+# 走査対象は TEST_SPECIFICATION.md（$spec）のみ。他ドキュメントは対象外だが、
+# 現状は全て注記済み（当時 / 旧 / 履歴 / 当初）のため実害はない。
+# フルスイートの E2E 総数を示す文脈（"定義数はN件" / "実測は全N件"）の数値を走査し、
+# 実測値（e2e_total / measured_n）と異なる数値には同じ行の注記
+# （当時 / 旧 / 履歴 / 当初）を要求する。注記が無ければ FAIL。
+# 注記語は古い件数の直前に置かれるものだけを許容し、"現在" は救済語に含めない。
+# 個別 spec の内訳件数・テスト名/パス内の数値・セクション6で照合済みの
+# 個別 spec 実行例コメント件数は総数文脈ではないため、総数キーワード直後の
+# 数値（注記語を最大6文字まで許容） only を抽出し、注記判定も同じマッチに対して行う。
+# 外側の行走査と内側のマッチ抽出は同一パターン変数を共有し、
+# 内側で検出可能な行を外側が取りこぼさないことを保証する。
+total_count_pattern='(定義数は|実測は全)[^0-9]{0,6}[0-9]+[[:space:]]*件'
+while IFS= read -r total_entry; do
+	[[ -z "$total_entry" ]] && continue
+	line_no="${total_entry%%:*}"
+	line_body="${total_entry#*:}"
+	while IFS= read -r total_match; do
+		[[ -z "$total_match" ]] && continue
+		# マッチ部分だけから数値を取り、注記も同じマッチ部分で判定する
+		# （行全体だと他セルの注記に誤って救われるため）。
+		total_n="$(grep -oE '[0-9]+' <<<"$total_match" | head -n1 || true)"
+		[[ -z "$total_n" ]] && continue
+		[[ "$total_n" == "$e2e_total" || "$total_n" == "$measured_n" ]] && continue
+		if grep -qE '当時|旧|履歴|当初' <<<"$total_match"; then
+			continue
+		fi
+		echo "FAIL e2e stale total @ ${spec}:${line_no}: ${total_n} vs ${e2e_total} without annotation" >&2
+		failures=$((failures + 1))
+	done < <(
+		printf '%s\n' "$line_body" |
+			grep -oE "$total_count_pattern" ||
+			true
+	)
+done < <(grep -nE "$total_count_pattern" "$spec" || true)
+
 # 内訳は「実測は全...件」から「この内訳は...」までの行に限定して抽出する。
 breakdown_block="$(awk '/実測は全[0-9]+件/{inside=1} inside{print} /この内訳は/{inside=0}' "$spec")"
 
