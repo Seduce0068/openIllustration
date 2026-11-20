@@ -46,9 +46,12 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [ ] **auth_verify へ年齢属性の署名済み入力と共通ゲートを結線** — 根拠 `server/src/lib.rs:2376-2384,4416-4444` / R3-AU03 / 重大度 high。
   クライアント送信の `birth_date`/`country_code` を生のまま判定しており改ざんで閾値を回避できる。
   検証済みクレーム由来のみ受け付け、JPKI 経路でも `ensure_age_policy_configured` を呼ぶ（DEC-01 の入力経路確定と simultaneous）。
-- [ ] **リフレッシュトークンの BAN 判定を消費前に移動** — 根拠 `server/src/oidc.rs:1157-1175` / R2-ER01 / 重大度 high。
-  `used_at` 更新・コミット後に `ensure_user_not_banned` を呼ぶため、BAN 済みユーザーはトークンを失ったうえ 403 になる。
-  DB 一時障害でも同様にトークンだけ消費され再認証なしで復活できない。全チェック成功後に consumption する。
+- [x] **リフレッシュトークンの BAN 判定順序は現状維持（対応不要と裁定）** — 根拠 `server/src/oidc.rs:1127-1175` / R2-ER01 / 重大度 high。
+  2026-11-21 吟味の結果却下: BAN 判定を消費前に移動する実装を試したが、実環境の `ban_user()` は
+  `revoked_subs` 記録＋未使用トークン消費を先に行うため refresh 側の BAN 判定には到達せず、
+  既存の 401（再利用検知／失効 sub）が fail-closed に働く。BAN ユーザーは延長できず、
+  DB 一時障害時も `ensure_user_not_banned` の Err が UPDATE 前に伝播する点も R4 が確認。
+  既存の BAN 失効テスト期待値（トークン消費）と整合させるため差分は差し戻し。
 - [ ] **ban_user / revoke_session / backchannel_logout の失効処理を原子的に** — 根拠
   `server/src/lib.rs:2499-2508,3492-3528` / `server/src/oidc.rs:1231-1248` / R2-ER02〜03 / 重大度 high。
   DB コミットとメモリ閾値・refresh 消費が非アトミックで、途中失敗時に再起動後セッション/BAN が復活する。
