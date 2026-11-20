@@ -319,6 +319,19 @@ assert_plaintext_retained() {
 	fi
 }
 
+# 暗号文が公開先へ atomic rename 済みであることを検証する。
+assert_ciphertext_published() {
+	local name="$1" dir="$2"
+	local -a ciphers=()
+	mapfile -d '' ciphers < <(find "$dir" -maxdepth 1 -type f -name 'openillustration-*.db.gpg' -print0)
+	if ((${#ciphers[@]} == 1)) && [[ "$(cat "${ciphers[0]}")" == "dummy encrypted" ]]; then
+		echo "PASS ${name}: ciphertext published"
+	else
+		echo "FAIL ${name}: ciphertext not published before plaintext removal"
+		failures=$((failures + 1))
+	fi
+}
+
 # gpg 失敗: 暗号化失敗時も作業ディレクトリは残さない（最終パスの平文は fail-closed で維持）。
 cat >"${work}/fail-gpg" <<'EOF'
 #!/usr/bin/env bash
@@ -374,6 +387,37 @@ publish_dir="${work}/publish-mv-fail"
 new_backup_dir "$publish_dir"
 expect_failure "mv failure on ciphertext publish" env PATH="${work}/mv-fail-bin:${PATH}" BACKUP_DIR="$publish_dir" BACKUP_GPG_RECIPIENT=test "$script"
 assert_plaintext_retained "mv failure" "$publish_dir"
+
+# (c) rm 失敗: 暗号文公開後の平文削除（rm -f "$output"）だけを失敗させる。
+# backup-rotate.sh は先に暗号文を公開してから平文を削除するため、rm が
+# 失敗しても暗号文は公開済み・平文は残存し、alert_cmd が呼ばれる必要がある。
+# Trap の後片付け（rm -rf -- "$tmp_dir" / rm -f -- "$rotation_list"）は
+# .db でないため委譲され、残留物は残らない。
+mkdir -p "${work}/rm-fail-bin"
+cat >"${work}/rm-fail-bin/rm" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+  if [[ "$arg" == *.db ]]; then
+    echo "simulated rm failure" >&2
+    exit 13
+  fi
+done
+exec /bin/rm "$@"
+EOF
+chmod +x "${work}/rm-fail-bin/rm"
+: >"${ALERT_LOG}" # 直前のテストの通知をクリアし、今回の呼び出しだけを検証する。
+publish_dir="${work}/publish-rm-fail"
+new_backup_dir "$publish_dir"
+expect_failure "rm failure on plaintext removal" env PATH="${work}/rm-fail-bin:${PATH}" BACKUP_DIR="$publish_dir" BACKUP_GPG_RECIPIENT=test ALERT_CMD="${work}/alert.sh" "$script"
+assert_ciphertext_published "rm failure" "$publish_dir"
+assert_plaintext_retained "rm failure" "$publish_dir"
+if [[ -s "${ALERT_LOG}" ]]; then
+	echo "PASS alert invoked on rm failure"
+else
+	echo "FAIL alert not invoked on rm failure"
+	failures=$((failures + 1))
+fi
+cleanup_no_leftovers "rm failure" "$publish_dir"
 
 # オフサイト失敗。
 cleanup_dir="${work}/cleanup-offsite"

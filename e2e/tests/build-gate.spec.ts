@@ -152,3 +152,59 @@ test.describe('Build gate (BG-01)', () => {
     expect(fs.existsSync(path.join(extractDir, 'trunk'))).toBe(false);
   });
 });
+
+// ci-e2e.sh の major バージョン検査の実挙動テスト（VG-01）。
+// E2E_LIB_ONLY=1 で ci-e2e.sh を source すると、ダウンロード/ビルド等の
+// 副作用を一切起こさずに assert_major_numeric の定義だけが読み込める。
+// node/google-chrome のスタブは不要（検査対象の関数は外部コマンドを呼ばない）。
+test.describe('Version gate (VG-01)', () => {
+  const e2eDir = path.resolve(__dirname, '..');
+  const scriptPath = path.join(e2eDir, 'ci-e2e.sh');
+
+  type AssertResult = { status: number | null; stderr: string };
+
+  // bash -c の位置パラメータで値を渡すため、ラベル/値の quoting に依存しない。
+  // $1=scriptPath, $2=label, $3=value, $4=allow_empty(任意)。
+  const runAssertMajorNumeric = (
+    label: string,
+    value: string,
+    allowEmpty?: string,
+  ): AssertResult => {
+    const args = [
+      '-c',
+      'source "$1"; shift; assert_major_numeric "$@"',
+      '_',
+      scriptPath,
+      label,
+      value,
+    ];
+    if (allowEmpty !== undefined) args.push(allowEmpty);
+    const result = spawnSync('bash', args, {
+      encoding: 'utf8',
+      env: { ...process.env, E2E_LIB_ONLY: '1' },
+    });
+    if (result.error) throw result.error;
+    return { status: result.status, stderr: result.stderr };
+  };
+
+  test('non-numeric extracted major exits 1', () => {
+    // (a) node --version 等から抽出された値が非数値なら即座に失敗する。
+    const result = runAssertMajorNumeric('Node major version', 'abc');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Node major version is not numeric: 'abc'.");
+  });
+
+  test('non-numeric threshold exits 1 even when empty is allowed', () => {
+    // (b) MIN_NODE_MAJOR=abc 等、閾値側の非数値も allow_empty=1 でも失敗する。
+    const result = runAssertMajorNumeric('MIN_NODE_MAJOR', 'abc', '1');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("MIN_NODE_MAJOR is not numeric: 'abc'.");
+  });
+
+  test('empty MAX_* with allow_empty is skipped without warning', () => {
+    // (c) MAX_* の空文字は従来どおり警告なしでスキップされる。
+    const result = runAssertMajorNumeric('MAX_NODE_MAJOR', '', '1');
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+});

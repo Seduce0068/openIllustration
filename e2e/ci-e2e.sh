@@ -5,6 +5,39 @@
 # ローカル実行は `cd e2e && npm test`（docs/TEST_SPECIFICATION.md）。
 set -euo pipefail
 
+# major バージョン（抽出値・閾値とも）を検査する共通ヘルパ。
+# allow_empty=1 のときだけ空文字を「未設定」として許容する（MAX_* の既定）。
+# 空以外の非数値は bash 算術で 0 として扱われ、下限/上限チェックが黙って
+# スキップされるため、抽出値・閾値の別なく即座に失敗させる。
+assert_major_numeric() {
+	local label="$1"
+	local value="$2"
+	local allow_empty="${3:-0}"
+	if [[ -z "$value" ]]; then
+		if ((allow_empty)); then
+			return 0
+		fi
+		echo "${label} is empty: expected a numeric major version." >&2
+		exit 1
+	fi
+	if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+		echo "${label} is not numeric: '${value}'." >&2
+		exit 1
+	fi
+}
+
+# テストから関数定義だけを source 可能にする（E2E_LIB_ONLY=1 のときは
+# 副作用のあるダウンロード/ビルドへ進まず、ここで source を終了する）。
+# 通常の CI 実行では環境変数が無いため、以降の処理はこれまでどおり動く。
+if [[ "${E2E_LIB_ONLY:-0}" == "1" ]]; then
+	# source された場合は return、直接実行された場合は明示拒否（ゲート回避防止）。
+	if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+		return 0
+	fi
+	echo "E2E_LIB_ONLY=1 is for sourcing function definitions only; direct execution is refused." >&2
+	exit 1
+fi
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -57,26 +90,8 @@ trunk --version
 node --version
 npm --version
 
-# major バージョン（抽出値・閾値とも）を検査する共通ヘルパ。
-# allow_empty=1 のときだけ空文字を「未設定」として許容する（MAX_* の既定）。
-# 空以外の非数値は bash 算術で 0 として扱われ、下限/上限チェックが黙って
-# スキップされるため、抽出値・閾値の別なく即座に失敗させる。
-assert_major_numeric() {
-	local label="$1"
-	local value="$2"
-	local allow_empty="${3:-0}"
-	if [[ -z "$value" ]]; then
-		if ((allow_empty)); then
-			return 0
-		fi
-		echo "${label} is empty: expected a numeric major version." >&2
-		exit 1
-	fi
-	if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-		echo "${label} is not numeric: '${value}'." >&2
-		exit 1
-	fi
-}
+# assert_major_numeric はファイル先頭で定義済み。E2E_LIB_ONLY=1 で
+# 関数だけを source して実挙動を検証できるようにしている（VG-01）。
 
 # 最低バージョンを検証する（ルート package.json の engines.node と整合）。
 min_node_major="${MIN_NODE_MAJOR:-22}"
