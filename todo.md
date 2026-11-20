@@ -229,7 +229,10 @@ P2（品質・保守・プロダクト拡張）:
 - [x] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
   auth_verify/refresh は確認するが callback は欠落し、BAN 済み sub が再認証でセッション取得可能。
   2026-11-19 対応: INSERT 前に ensure_user_not_banned、mutation 検証・回帰テスト追加。
-- [ ] **認証前アクセスの CSP を追加** — 根拠 `server/src/lib.rs:220-241` / R1-ST01 / 重大度 high。
+- [x] **API レスポンスへの CSP 付与** — 根拠 `server/src/lib.rs:241-247` / R1-ST01 / 重大度 high。
+  2026-11-20 対応: `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+  を nosniff/DENY と同じ二層ミドルウェアで付与（contains_key ガード・プリフライト両対応）。
+  配信側 CSP（dist/index.html のインライン script に nonce/hash が必要）は本番配信構成の設計判断のため別タスク。
   2026-11-20 再評価: サーバは HTML を配信せず（Leptos CSR は trunk serve が描画）、API 側 CSP は
   nosniff の多層化に留まり実益が限定的。配信側 CSP は dist/index.html のインライン script に
   nonce/hash が必要で本番配信構成（reverse proxy 等）の設計判断が先。段階: API 側 default-src 'none'
@@ -249,7 +252,9 @@ P2（品質・保守・プロダクト拡張）:
   Runbook は両方成功を条件とするが自動取得は verify_backup のみだった。2026-11-20 対応済み:
   `verify_backup` 直後に生成直後の平文 tmp_db へ `verify_audit_log --database-url file:${tmp_db}` を実行し、
   失敗時は成果物を公開せず一時平文を清掃して `ALERT_CMD` で通知する（fail-closed）。
-- [ ] **暗号化後復号検証のテスト限定自動化** — 根拠 `scripts/test-backup-rotate.sh:43-57` / R4-DR01 / 重大度 high。
+- [x] **暗号化後復号検証のテスト限定自動化** — 根拠 `scripts/test-backup-rotate.sh:637-709` / R4-DR01 / 重大度 high。
+  2026-11-20 対応: ケース8で一時 GNUPGHOME の使い捨て鍵による暗号化→復号→バイト一致を検証。
+  秘密鍵は一時領域にのみ存在し trap で削除、gpg 不在時はスキップ PASS。本番は鍵非保持設計を維持。
   2026-11-20 再評価: 本番は作成者が復号鍵を持たない設計を維持し、自動化はテスト内の使い捨て GPG
   鍵（mktemp GNUPGHOME + trap、リポジトリへ秘密鍵を置かない）で暗号化→復号→バイト一致を検証する
   スコープへ絞るのが妥当。gpg 未インストール環境では skip するゲートが必要。本番自動化は外部運用
@@ -459,6 +464,9 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-20 (swarm-limited 第2イテレーション): テスト限定 GPG 往復検証（ケース8）と API 側 CSP
+  を完了。R4 が TASK_INVENTORY の「CSP は未設計」残存を指摘し是正。起動 16 担当 / 上限 40。
 
 - 2026-11-20 (swarm-limited): 未着手を再評価し、ページネーション段1・監査GET削減・doctor strict
   ローカルゲートを完了、SHA固定は方針矛盾でクローズ。CSP・復号検証は設計判断のため条件付きで残す。

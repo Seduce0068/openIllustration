@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-21T00:15:58+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-21T00:15:58+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -62,7 +62,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
-| セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は未設計 |
+| セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
@@ -160,7 +160,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
-| ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を全レスポンスへ付与する。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は未設計 |
+| ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を全レスポンスへ付与する。HTML 配信の CSP は配信側担当。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
 | MET-02 | `observe_metrics` の最外側配置（サーバー側） | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照）。旧 E2E 名 MET-02 / MET-03 は下記 NEUT-URL-02 / NEUT-URL-03 へ改名済み |
 | NEUT-URL-02 | プロトコル相対 URL の中立化と件数送信（E2E） | `//host/path` と Windows UNC を `href="#"` / `src="#"` へ中立化し、`{"event":"neutralized_url","count":2}` を1回だけ送る。通常の相対 URL（`/chapter/1` / `../chapter/1`）は維持 | 実装済み・検証済み: `e2e/tests/metrics.spec.ts` の `NEUT-URL-02: protocol-relative URL は # に中立化され件数が送信される`。旧 E2E 名 `MET-02` はサーバー側 `observe_metrics` の ID と衝突したため改名済み |
