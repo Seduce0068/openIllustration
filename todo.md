@@ -513,9 +513,12 @@ P2（品質・保守・プロダクト拡張）:
    設定した古い世代が実際に prune されるテストを追加。定数・テスト・
    `docs/BACKUP_RESTORE_RUNBOOK.md` の記載をすべて整合させた（上記の
    36500 は R5 当時の履歴）。`scripts/test-backup-rotate.sh` の実測は
-   `expect_failure` 27件＋`expect_success` 10件=37件で、
+   `expect_failure` 27件＋`expect_success` 12件=39件で、
    `docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の「5件・5件」を是正。
    `docs/OPERATIONAL_POLICY.md:265` の `PINATA_JWT` を本番必須・実トークン必須
    （未設定/空/空白/mock_jwt 前後空白含むは起動拒否、`doctor` の `production`
    カテゴリで診断）へ更新し `docs/DETAILED_DESIGN.md:123` と整合。
    今回の発掘分は3件すべて対応済みで、新たな未着手はなし。
+
+- 2026-11-20 (R5 / R4 採用指摘の反映): `doctor --strict` への `AUDIT_EXPECT_ROOT`
+  警告追加は後方互換を優先し今回見送り（次ラウンド候補）。

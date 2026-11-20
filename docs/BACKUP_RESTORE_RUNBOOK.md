@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-20T10:01:48+09:00"
+  at: "2026-11-20T10:20:56+09:00"
 ---
 
 ## 目的
@@ -49,6 +49,7 @@ cargo run -p server --bin backup_db -- \
 BACKUP_DIR=/var/backups/openillustration \
 BIN_DIR=/opt/openIllustration/target/release \
 RETENTION_DAYS=30 MIN_KEEP=3 \
+AUDIT_EXPECT_ROOT=<別経路で保存した Merkle root（hex）> \
 DATABASE_URL=file:/var/lib/openillustration/local.db \
   /opt/openIllustration/scripts/backup-rotate.sh
 ```
@@ -63,6 +64,14 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 暗号化後の復号検証は GPG 秘密鍵の保管運用に依存するため自動化対象外で、
 リストア時の手動検証で担保する。
 
+監査ログの空化・末尾切詰めを自動取得時にも検出するには、別経路で保存した
+Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotate.sh` が
+`verify_audit_log --database-url file:<平文 DB> --expect-root <値>` を実行し、
+外部 root との照合まで自動化する（引数ログやエラー文言へ root 値をエコーしない
+既存契約は維持）。**本番では `AUDIT_EXPECT_ROOT` の設定が必須**である。
+未設定時は内部整合性チェックのみを行い、外部 root 照合は行わない
+（既存運用を壊さないための後方互換動作）。
+
 `BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
 無ければ `cargo run` にフォールバックする（開発用）。設定例:
 
@@ -74,6 +83,8 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 `BACKUP_GPG_RECIPIENT=<GPG 公開鍵のメール/ID>` を設定する。未設定なら
 `backup-rotate.sh` は平文作成を拒否して失敗する（fail-closed）。systemd は
 `EnvironmentFile=-`、cron は `scripts/backup-cron-wrapper.sh` 経由でこのファイルを読む。
+同じファイルへ `AUDIT_EXPECT_ROOT=<別経路保存の Merkle root>` も設定する
+（root は非機微な hex だが、本番では必須）。
 
 `MAILTO` / `SyslogIdentifier` を実際の通知先へ変更してアラートを受け取る。
 パス・ユーザー・グループは導入環境に合わせて修正する。
@@ -159,9 +170,12 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 テーブルと `_migrations` が存在することを確認する。破損したページを持つ
 バックアップを実 DB で作り、integrity_check エラーで拒否されることを確認済み。
 `verify_audit_log` は監査ハッシュ連鎖・`log_id` 連続性・Merkle root を検証する。
+別経路で保存した root を `--expect-root` に渡すと空化・末尾切り詰めを検出できる
+（手動手順は下記「リストア（復旧訓練）」を参照）。
 両方成功しなければバックアップを本番バックアップとして認めない。
-`backup-rotate.sh` はこの2つを生成直後の平文 DB に対して自動実行し、失敗時は
-fail-closed となる（上記「バックアップ取得」を参照）。
+`backup-rotate.sh` はこの2つを生成直後の平文 DB に対して自動実行し、
+`AUDIT_EXPECT_ROOT` 設定時は同じ root 照合も自動で行う。失敗時は fail-closed となる
+（上記「バックアップ取得」を参照）。
 
 ### `verify_backup` の契約（トークン・サイドカー・出力）
 
@@ -239,6 +253,8 @@ cargo run -p server --bin restore_db -- \
    別経路で保存した Merkle root を `--expect-root` に渡すと、監査ログの欠落・
    末尾切り詰めを検出できる。`verify_backup` はテーブル数とマイグレーション台帳
    のみを検査するため、監査ログの空化はこの外部 root 照合で検出する。
+   自動取得時は同じ照合を `AUDIT_EXPECT_ROOT` で行う（本番では設定必須、
+   上記「バックアップ取得」を参照）。
 1. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
 
 ## マイグレーション失敗時のロールバック判断
