@@ -1752,6 +1752,10 @@ async fn test_security_headers_on_error_response() {
 fn assert_security_headers(response: &Response) {
     assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
     assert_eq!(response.headers()["X-Frame-Options"], "DENY");
+    assert_eq!(
+        response.headers()["Content-Security-Policy"],
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    );
 }
 
 /// SEC-01: CORS プリフライト（OPTIONS）にもセキュリティヘッダを付与する。

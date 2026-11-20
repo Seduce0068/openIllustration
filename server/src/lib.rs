@@ -219,9 +219,10 @@ async fn rate_limit_middleware(
 
 /// 全レスポンスへ最小限のセキュリティヘッダを付与する。
 /// MIME スニッフィング防止（nosniff）と、ブラウザがユーザー投稿を
-/// フレーム内へ埋め込むことを防ぐ（frame-ancestors 'none'）相当の
-/// X-Frame-Options。CSP はクライアントのリソース読み込みに影響するため
-/// 本番構成確定時に別途設計する。
+/// フレーム内へ埋め込むことを防ぐ X-Frame-Options（DENY）、および
+/// API レスポンスへ実害のない CSP（既定全拒否・base-uri / form-action /
+/// frame-ancestors を 'none' に固定）を付与する。HTML 配信の CSP は
+/// 配信側担当とし、ここでは API レスポンスにのみ適用する。
 async fn security_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
@@ -236,6 +237,14 @@ async fn security_headers(
     }
     if !headers.contains_key("X-Frame-Options") {
         headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
+    }
+    if !headers.contains_key("Content-Security-Policy") {
+        headers.insert(
+            "Content-Security-Policy",
+            HeaderValue::from_static(
+                "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            ),
+        );
     }
     response
 }
