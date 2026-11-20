@@ -109,11 +109,12 @@ P1（本番運用の健全性）:
   doctor は pub ヘルパを使わず再実装。不正値は fail-closed、doctor とランタイムで同一関数を呼ぶ。
 - [ ] **get_content の chunk() エラーでもゲートウェイフェイルオーバー** — 根拠 `server/src/lib.rs:2783-2787` / R2-ER05 / 中。
   ストリーム途中切断で即 Internal になり後続の正常ゲートウェイを試さない。接続エラーと同様に次ゲートウェイへ進む。
-- [ ] **refresh/logout の refresh_token Cookie 重複を拒否** — 根拠 `server/src/oidc.rs:1095-1101` /
-  `server/src/lib.rs:2570-2577` / R2-IV06 / 中。
-  state Cookie は重複拒否するのに refresh/logout は `find_map` の先勝ち。攻撃者の先置き Cookie で意図しないトークンが回転・失効する。
-- [ ] **amount_wei を数値比較へ** — 根拠 `server/src/payments.rs:717,170` / R2-IV08 / 中。
-  検証器と DB 保存値を文字列比較するため先頭ゼロ・正規化差で正しい送金が MISMATCH になる。両側 u128 パース＋失敗 Internal。
+- [x] **refresh/logout の refresh_token Cookie 重複を拒否** — 根拠 `server/src/oidc.rs:212-242` / R2-IV06 / 中。
+  2026-11-21 対応: `refresh_cookie_from_headers` を state Cookie と同じ基準で追加し refresh/logout の双方で利用。
+  複数出現時は 401／ファミリ失効スキップ。回帰2テストを追加。
+- [x] **amount_wei を u128 数値比較へ** — 根拠 `server/src/payments.rs:166-174,722-730` / R2-IV08 / 中。
+  2026-11-21 対応: `parse_amount_wei` で両側 u128 パース比較。非数値/オーバーフローは Internal fail-closed。
+  先頭ゼロ受理・非数値拒否・u128 超過の回帰を追加。DB 保存形式と既存 MISMATCH 400 は不変。
 - [ ] **BIP44 derivation_index の 2^31 到達を明示エラーへ** — 根拠 `server/src/payments.rs:195,223,447` / R2-BV07 / 中。
   上限到達後は INSERT されず index が据え置きで以降の注文がすべて 500 になる。上限前に運用エラーを返す。
 - [ ] **doctor へバックアップ必須設定と TZ の診断を追加** — 根拠 `server/src/bin/doctor.rs:66,356` / R1-CF02,CF07 / 中。

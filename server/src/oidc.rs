@@ -209,6 +209,38 @@ fn state_from_cookie(headers: &HeaderMap, secure: bool) -> Option<&str> {
     found
 }
 
+/// `Cookie` ヘッダから refresh_token Cookie の値を取り出す。
+///
+/// `state_from_cookie` と同じ基準で、同一名 Cookie が2つ以上ある場合は
+/// 攻撃の兆候として `None` を返す。先勝ちの `find_map` では攻撃者値が
+/// 先に来たときにすり替えられるため、重複は検証失敗へつなげる。
+/// `get_all` で全ヘッダを走査し、デコード不能なヘッダも fail-closed で
+/// `None` にする。値は比較のためだけに使い、エラーには含めない。
+///
+/// `lib.rs` の logout 経路からも参照するため `pub` にしている。
+pub fn refresh_cookie_from_headers(headers: &HeaderMap) -> Option<&str> {
+    let mut found: Option<&str> = None;
+    for header_value in headers.get_all(header::COOKIE) {
+        // デコード不能なヘッダは検証失敗扱い（fail-closed）。
+        let Ok(cookies) = header_value.to_str() else {
+            return None;
+        };
+        for part in cookies.split(';') {
+            let Some((cookie_name, value)) = part.trim().split_once('=') else {
+                continue;
+            };
+            if cookie_name != "refresh_token" {
+                continue;
+            }
+            if found.is_some() {
+                return None;
+            }
+            found = Some(value);
+        }
+    }
+    found
+}
+
 /// 再認証で不要になった古い失効閾値だけを DB から削除する。
 /// 新しい閾値が back-channel logout で登録された場合は残す。
 pub(crate) async fn delete_superseded_revocation(
@@ -1110,15 +1142,7 @@ pub async fn refresh(
 ) -> Result<Response, AppError> {
     // R1-17: refresh も callback と同じ共通ゲートを通し、年齢判定を迂回できないようにする。
     crate::ensure_age_policy_configured(&state.age_policy)?;
-    let token = headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|part| {
-                let (name, value) = part.trim().split_once('=')?;
-                (name == "refresh_token").then_some(value)
-            })
-        })
+    let token = refresh_cookie_from_headers(&headers)
         .ok_or_else(|| AppError::Unauthorized("refresh token is missing".to_string()))?;
 
     let token_hash = hash_refresh_token(token);

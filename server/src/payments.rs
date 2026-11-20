@@ -163,14 +163,22 @@ pub fn wallet_bind_message_v2(
     )
 }
 
+/// amount_wei の文字列表現を u128 へ正規化する。
+/// 先頭ゼロなどの表記差は同じ値として扱うため、金額の比較は必ずこの値で行う。
+/// 非数値や u128 の範囲超過（オーバーフロー）はデータ不整合として Internal を返す
+/// （fail-closed）。DB の保存形式（文字列）は変更しない。
+fn parse_amount_wei(amount_wei: &str, source: &str) -> Result<u128, AppError> {
+    amount_wei
+        .parse::<u128>()
+        .map_err(|_| AppError::Internal(format!("invalid amount_wei in {source}: {amount_wei}")))
+}
+
 /// DB に保存された amount_wei から円建て金額を導出する。
 /// amount_wei は常に `jpy_to_wei` の 10^18 スケールで保存されるため、
 /// 割り切れない値はデータ不整合として拒否する。
 /// ゼロも `jpy_to_wei(0)` と同じく「注文金額は正」という契約に反するため拒否する。
 pub fn amount_jpy_from_wei(amount_wei: &str) -> Result<AmountJpy, AppError> {
-    let wei = amount_wei
-        .parse::<u128>()
-        .map_err(|_| AppError::Internal(format!("invalid amount_wei in order: {amount_wei}")))?;
+    let wei = parse_amount_wei(amount_wei, "order")?;
     let scale = 10u128
         .checked_pow(JPYC_DECIMALS)
         .ok_or_else(|| AppError::Internal("JPYC decimal scale overflow".to_string()))?;
@@ -711,10 +719,15 @@ pub async fn verify_order(
         return Err(AppError::BadRequest("order has expired".to_string()));
     }
 
+    // amount_wei は文字列で保存されるため、先頭ゼロなどの表記差で誤判定しないよう
+    // 両側を u128 としてパースして数値比較する。パース失敗は Internal（fail-closed）。
+    let verified_wei = parse_amount_wei(&verification.amount_wei, "transfer")?;
+    let order_wei = parse_amount_wei(&order.amount_wei, "order")?;
+
     if verification.chain_id != order.chain_id
         || normalize_address(&verification.from) != order.wallet_address
         || normalize_address(&verification.to) != order.recipient_address
-        || verification.amount_wei != order.amount_wei
+        || verified_wei != order_wei
     {
         tx.execute(
             "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')

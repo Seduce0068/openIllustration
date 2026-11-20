@@ -5383,6 +5383,133 @@ async fn test_get_content_falls_back_to_next_gateway() {
     assert_eq!(&bytes[..], &body[..]);
 }
 
+/// CONTENT-02: 先頭ゲートウェイがストリーム途中で切断（chunk() エラー）しても、
+/// 次のゲートウェイへフェイルオーバーして完全な本文を返す。
+#[tokio::test]
+async fn test_get_content_chunk_error_falls_back_to_next_gateway() {
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K";
+    let truncated = b"partial content from broken gateway".to_vec();
+    let failing = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: truncated.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some(cid.to_string()),
+        // 実際より長い Content-Length を宣言して chunk() をエラーにする。
+        inflated_content_length: Some(truncated.len() as u64 + 100),
+    })
+    .await;
+    let body = b"content from healthy gateway".to_vec();
+    let checksum = sha256::digest(&body);
+    let healthy = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: body.clone(),
+        delay: Duration::ZERO,
+        expected_cid: Some(cid.to_string()),
+        inflated_content_length: None,
+    })
+    .await;
+    let (app, db) = setup_app_with_options(
+        vec![failing.template.clone(), healthy.template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', ?, 'Approved');",
+        [cid, checksum.as_str()],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}"))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..], &body[..]);
+    assert!(
+        !bytes
+            .windows(truncated.len())
+            .any(|window| window == truncated.as_slice()),
+        "truncated gateway body must not leak: {}",
+        String::from_utf8_lossy(&bytes)
+    );
+}
+
+/// CONTENT-02: 全ゲートウェイがストリーム途中で切断した場合は 500 を返し、
+/// 部分データを完全なコンテンツとして返さない（fail-closed）。
+#[tokio::test]
+async fn test_get_content_all_gateways_chunk_error_returns_error() {
+    let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A1115";
+    let secret = b"secret partial body";
+    let first = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: secret.to_vec(),
+        delay: Duration::ZERO,
+        expected_cid: Some(cid.to_string()),
+        inflated_content_length: Some(secret.len() as u64 + 100),
+    })
+    .await;
+    let second = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body: secret.to_vec(),
+        delay: Duration::ZERO,
+        expected_cid: Some(cid.to_string()),
+        inflated_content_length: Some(secret.len() as u64 + 100),
+    })
+    .await;
+    let (app, db) = setup_app_with_options(
+        vec![first.template.clone(), second.template.clone()],
+        Duration::from_secs(1),
+        true,
+    )
+    .await;
+
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', 'unused', 'Approved');",
+        [cid],
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{cid}"))
+                .header(
+                    "authorization",
+                    format!("Bearer {}", generate_token(TEST_JWT_SECRET, "tester").await),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+    let body = String::from_utf8_lossy(&bytes);
+    assert!(body.contains("Internal server error"), "{body}");
+    assert!(
+        !body.contains("secret partial body"),
+        "gateway body leaked: {body}"
+    );
+}
+
 /// SSRF-REDIRECT: ゲートウェイが 302 で内部サービスへリダイレクトしても
 /// 追従せず、リダイレクト先へ到達しないことを検証する。
 /// リダイレクトを追従すれば checksum が一致して 200 になるよう仕掛ける。
@@ -6451,6 +6578,90 @@ async fn test_payment_verify_rejects_transfer_mismatch() {
         crate::payments::STATUS_MISMATCH,
         "mismatched order must be marked as MISMATCH"
     );
+}
+
+/// 回帰: verifier が返す amount_wei に先頭ゼロが付いても、DB 保存値と数値として
+/// 等しければ送金一致として受理される（文字列表記差の誤判定を防ぐ）。
+#[tokio::test]
+async fn test_payment_verify_accepts_leading_zero_amount_wei() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, _db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    // 同じ値の先頭ゼロ付き表記。文字列比較なら不一致だが数値比較では等価。
+    let padded_amount = format!("00{amount_wei}");
+    assert_ne!(padded_amount, amount_wei);
+    assert_eq!(
+        padded_amount.parse::<u128>().unwrap(),
+        amount_wei.parse::<u128>().unwrap()
+    );
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: padded_amount,
+    });
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let order: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
+    assert_eq!(
+        order["status"], "FINALIZED",
+        "numerically equal amount must not be marked as MISMATCH"
+    );
+}
+
+/// 回帰: verifier が返す amount_wei が非数値なら Internal で拒否し、
+/// MISMATCH 遷移も行わない（fail-closed）。
+#[tokio::test]
+async fn test_payment_verify_rejects_non_numeric_amount_wei_as_internal() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let verifier = Arc::new(MockVerifier::default());
+    let (app, db) = setup_app_with_payments(receiving, verifier.clone()).await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _amount_wei) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xabc".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: "not-a-number".to_string(),
+    });
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "unparsable amount_wei must be handled as Internal (fail-closed)"
+    );
+
+    // パース失敗は不一致判定ではないため、注文を MISMATCH に進めない。
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(status, crate::payments::STATUS_PENDING);
 }
 
 /// JPYC: 同一送金の再利用は拒否される（UNIQUE(chain_id, tx_hash, log_index)）。
@@ -9114,9 +9325,14 @@ fn test_amount_jpy_from_wei_bounds() {
         );
     }
 
-    // 拒否: 数値として解析できない文字列 (空文字・非数字・負数・小数・空白混入・16進表記)。
-    for invalid in ["", "abc", "-1", "1.5", " 1", "0x1"] {
-        let err = crate::payments::amount_jpy_from_wei(invalid).unwrap_err();
+    // 拒否: 数値として解析できない文字列 (空文字・非数字・負数・小数・空白混入・16進表記)
+    // と u128::MAX を超える桁数 (parse::<u128> のオーバーフローも fail-closed で Internal)。
+    for invalid in ["", "abc", "-1", "1.5", " 1", "0x1"]
+        .iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(format!("{}0", u128::MAX)))
+    {
+        let err = crate::payments::amount_jpy_from_wei(&invalid).unwrap_err();
         assert!(
             matches!(&err, AppError::Internal(msg) if msg.contains("invalid amount_wei")),
             "unexpected error for {invalid:?}: {err}"
@@ -12412,6 +12628,74 @@ async fn test_refresh_rejects_expired_token_with_fractional_seconds() {
         StatusCode::UNAUTHORIZED,
         "an expired refresh token must be rejected: {body}"
     );
+}
+
+/// refresh_token Cookie が同一名で重複した場合は攻撃の兆候として 401 にする。
+/// 旧 find_map の先勝ちだと攻撃者値が先に来たときに正規値へすり替えられる。
+#[tokio::test]
+async fn test_refresh_rejects_duplicate_refresh_cookies() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (_login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+
+    const ATTACKER: &str = "attacker-controlled-refresh";
+
+    // 単一ヘッダ内で同一名が重複。順序に関わらず 401 になることを検証する。
+    for cookies in [
+        format!("refresh_token={ATTACKER}; refresh_token={refresh}"),
+        format!("refresh_token={refresh}; refresh_token={ATTACKER}"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/refresh")
+                    .header(header::COOKIE, cookies.as_str())
+                    .body(Body::empty())
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(ATTACKER), "token 値をエコーしない: {text}");
+        assert!(
+            !text.contains(refresh.as_str()),
+            "token 値をエコーしない: {text}"
+        );
+    }
+
+    // 重複を拒否しただけなので正規トークンは未消費のまま、通常どおり成功する。
+    let (status, _, _) = post_refresh(&app, &refresh).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "重複拒否で正規トークンは消費されない"
+    );
+}
+
+/// refresh_token Cookie が別々の Cookie ヘッダに分かれて重複しても 401 にする。
+/// 旧コードは headers.get() で先頭ヘッダしか見ていなかった。
+#[tokio::test]
+async fn test_refresh_rejects_duplicate_refresh_cookie_headers() {
+    let (app, oidc, mock, _db) = setup_app_with_oidc().await;
+    let (_login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+
+    // 正規値を先頭ヘッダ、攻撃者値を第2ヘッダに置く。旧コードは先頭のみを
+    // 見て 200 になっていたが、全ヘッダを走査して 401 になることを検証する。
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/refresh")
+                .header(header::COOKIE, format!("refresh_token={refresh}"))
+                .header(header::COOKIE, "refresh_token=attacker-controlled-refresh")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// /auth/refresh へリクエストし、(status, _new_refresh_cookie, body) を返す。

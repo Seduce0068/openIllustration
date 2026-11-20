@@ -2567,16 +2567,8 @@ pub async fn logout(
         }
     }
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
-    if let Some(token) = headers
-        .get(header::COOKIE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|part| {
-                let (name, value) = part.trim().split_once('=')?;
-                (name == "refresh_token").then_some(value)
-            })
-        })
-    {
+    // state Cookie と同じ基準で重複を拒否する（先勝ちで攻撃者の値を選ばない）。
+    if let Some(token) = oidc::refresh_cookie_from_headers(&headers) {
         let token_hash = sha256::digest(token.as_bytes());
         // 読み取りカーソルを先に閉じてから BEGIN する。
         let family_id = {
@@ -2777,17 +2769,33 @@ pub async fn get_content(
                 ));
             }
             let mut bytes = Vec::new();
-            while let Some(chunk) = response
-                .chunk()
-                .await
-                .map_err(|e| AppError::Internal(format!("Failed to read response body: {e}")))?
-            {
-                if bytes.len().saturating_add(chunk.len()) > MAX_CONTENT_BYTES {
-                    return Err(AppError::BadRequest(
-                        "IPFS content exceeds size limit".to_string(),
-                    ));
+            // ストリーム途中の切断（chunk() のエラー）は即 500 とせず、接続エラーと
+            // 同様に last_error へ記録して次のゲートウェイへフェイルオーバーする。
+            let mut chunk_error = None;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) => {
+                        if bytes.len().saturating_add(chunk.len()) > MAX_CONTENT_BYTES {
+                            return Err(AppError::BadRequest(
+                                "IPFS content exceeds size limit".to_string(),
+                            ));
+                        }
+                        bytes.extend_from_slice(&chunk);
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        chunk_error = Some(describe_reqwest_error(&e));
+                        break;
+                    }
                 }
-                bytes.extend_from_slice(&chunk);
+            }
+            if let Some(error) = chunk_error {
+                last_error = format!(
+                    "{}: Failed to read response body: {}",
+                    redact_url(&gateway_url),
+                    error
+                );
+                continue;
             }
 
             let actual_checksum = sha256::digest(&bytes[..]);
