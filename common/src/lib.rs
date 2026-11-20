@@ -399,9 +399,19 @@ pub fn mask_reason(reason: &str, include: bool) -> String {
 
 /// `mask_reason(reason, false)` が生成し得る値か。
 /// 平文はスナップショットに残らないため、再適用による一致は検証できず、
-/// マスク関数が付ける接頭辞（空文字は正当）で判定する。
+/// 空文字または `[redacted:<ASCII digits> bytes]` の完全一致で判定する。
+/// 接頭辞だけを見ると平文がマスク済みと誤判定されるため、末尾と数字部も検証する。
 fn reason_is_masked(reason: &str) -> bool {
-    reason.is_empty() || reason.starts_with("[redacted:")
+    if reason.is_empty() {
+        return true;
+    }
+    let Some(inner) = reason.strip_prefix("[redacted:") else {
+        return false;
+    };
+    let Some(digits) = inner.strip_suffix(" bytes]") else {
+        return false;
+    };
+    !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// モデレーション画面向けの通報理由要約。
@@ -1590,6 +1600,23 @@ mod tests {
         assert_eq!(mask_reason("secret details", false), "[redacted:14 bytes]");
         assert_eq!(mask_reason("", false), "");
         assert_eq!(mask_reason("secret details", true), "secret details");
+    }
+
+    #[test]
+    fn reason_is_masked_accepts_only_canonical_masked_form() {
+        // (a) mask_reason の出力はマスク済みと判定される。
+        assert!(reason_is_masked(&mask_reason("secret", false)));
+        // (b) 正規形 `[redacted:<digits> bytes]` はマスク済み。
+        assert!(reason_is_masked("[redacted:123 bytes]"));
+        // (c) 数字部が整数でない場合は平文扱い。
+        assert!(!reason_is_masked("[redacted:not-a-number bytes]"));
+        // (d) 正規形に平文が続く場合は平文扱い（prefix 一致だけでは誤判定する）。
+        assert!(!reason_is_masked("[redacted:12 bytes] and more plaintext"));
+        // (e) 末尾の ` bytes]` が欠落する場合は平文扱い。
+        assert!(!reason_is_masked("[redacted:12 bytes"));
+        // 空文字（mask_reason("") の結果）と include=true の平文も区別する。
+        assert!(reason_is_masked(""));
+        assert!(!reason_is_masked(&mask_reason("secret", true)));
     }
 
     #[test]

@@ -58,10 +58,10 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   backchannel_logout の sub 分岐は DB UPSERT を refresh 消費・メモリ更新より前にコミット。
   revoke_session（DB先・メモリ後）は既に安全なため無変更。単一tx化は write_lock 自己
   デッドロック回避のため見送り、再起動窓の回帰2テストを追加。
-- [ ] **監査スナップショットのマスク判定を完全一致へ** — 根拠 `common/src/lib.rs:403-404` / R2-IV04 / 重大度 high。
-  `reason_is_masked` が `starts_with("[redacted:")` のみのため、同接頭辞で始まる平文 reason が
-  `reasons_masked=true` の署名スナップショットへ残り、`verify_chain` の entry_hash 再計算もスキップされる。
-  `^\[redacted:\d+ bytes\]$` 完全一致で検証する。
+- [x] **監査スナップショットのマスク判定を完全一致へ** — 根拠 `common/src/lib.rs:400-415` / R2-IV04 / 重大度 high。
+  2026-11-21 対応: `reason_is_masked` を `^\[redacted:\d+ bytes\]$` の正規形完全一致へ変更（空文字は維持）。
+  平文が `[redacted:` で始まるだけでマスク済みと誤判定される経路を塞ぎ、回帰テスト5件を追加。
+  `mask_reason` の出力形式と verify_chain / sign_audit_snapshot の契約は不変。
 - [ ] **AGE_POLICY_CONFIGURED を実際の設定充足から導出** — 根拠 `common/src/age.rs:63,163,334` / R1-CF03 / 重大度 high。
   手動フラグ 1 だけで既定値（21歳・target_regions 空）のまま `AGE_REQUIRE_EXPLICIT_CONFIGURATION` を通過できる。
   必須設定値の充足結果として導出し、doctor が整合を検証する。
