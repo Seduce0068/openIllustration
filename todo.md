@@ -39,6 +39,37 @@ status: current
 
 P0（本番公開前に解消すべきセキュリティ／データ完全性）:
 
+- [ ] **JPKI 証明書の発行者署名・チェーン・失効を検証する** — 根拠 `server/src/jpki.rs:98-118` / R3-AU02 / 重大度 high。
+  現行は `cert.issuer() == cert.subject()` の DN 比較のみで、issuer 名を変えた自己署名 RSA 2048 証明書が通過する。
+  信頼アンカー照合・X.509 チェーン検証・OCSP/CRL を必須化し、DN 等価は予備チェックに留める。
+- [ ] **auth_verify へ年齢属性の署名済み入力と共通ゲートを結線** — 根拠 `server/src/lib.rs:2376-2384,4416-4444` / R3-AU03 / 重大度 high。
+  クライアント送信の `birth_date`/`country_code` を生のまま判定しており改ざんで閾値を回避できる。
+  検証済みクレーム由来のみ受け付け、JPKI 経路でも `ensure_age_policy_configured` を呼ぶ（DEC-01 の入力経路確定と simultaneous）。
+- [ ] **リフレッシュトークンの BAN 判定を消費前に移動** — 根拠 `server/src/oidc.rs:1157-1175` / R2-ER01 / 重大度 high。
+  `used_at` 更新・コミット後に `ensure_user_not_banned` を呼ぶため、BAN 済みユーザーはトークンを失ったうえ 403 になる。
+  DB 一時障害でも同様にトークンだけ消費され再認証なしで復活できない。全チェック成功後に consumption する。
+- [ ] **ban_user / revoke_session / backchannel_logout の失効処理を原子的に** — 根拠
+  `server/src/lib.rs:2499-2508,3492-3528` / `server/src/oidc.rs:1231-1248` / R2-ER02〜03 / 重大度 high。
+  DB コミットとメモリ閾値・refresh 消費が非アトミックで、途中失敗時に再起動後セッション/BAN が復活する。
+  単一トランザクション化＋コミット後のメモリ反映。
+- [ ] **監査スナップショットのマスク判定を完全一致へ** — 根拠 `common/src/lib.rs:403-404` / R2-IV04 / 重大度 high。
+  `reason_is_masked` が `starts_with("[redacted:")` のみのため、同接頭辞で始まる平文 reason が
+  `reasons_masked=true` の署名スナップショットへ残り、`verify_chain` の entry_hash 再計算もスキップされる。
+  `^\[redacted:\d+ bytes\]$` 完全一致で検証する。
+- [ ] **AGE_POLICY_CONFIGURED を実際の設定充足から導出** — 根拠 `common/src/age.rs:63,163,334` / R1-CF03 / 重大度 high。
+  手動フラグ 1 だけで既定値（21歳・target_regions 空）のまま `AGE_REQUIRE_EXPLICIT_CONFIGURATION` を通過できる。
+  必須設定値の充足結果として導出し、doctor が整合を検証する。
+- [ ] **DATABASE_URL の既定値を CLI と deploy 設定例で統一** — 根拠 `server/src/bin/backup_db.rs:202` /
+  `deploy/openillustration-backup.cron:20` / R1-CF01 / 重大度 high。
+  CLI 既定 `file:local.db` と deploy の `/var/lib/openillustration/local.db` が別 DB を指し、
+  未設定の手動 CLI が誤った DB を検証して OK と誤信する。doctor の診断対象にも含める。
+- [ ] **README の --database-token 拒否を全 7 CLI へ修正** — 根拠 `README.md:111` / R3-FG03 / 重大度 high。
+  README は 2 CLI だけと書くが、実際は backup_db / restore_db / sign_audit_export / verify_audit_log も拒否する。
+  argv へトークンを渡した運用者が ps 等で露出するおそれ。
+- [ ] **投票ボタンの「REJECT (BAN)」表示を ADR-0004 に合わせる** — 根拠 `client/src/lib.rs:2605-2616` /
+  `docs/adr/ADR-0004-moderation-procedure.md:48-58` / R1-UX02 / 重大度 high。
+  ADR は 7 日後の集計で確定し自動 BAN は行わない。即時 BAN と誤認する旅程を修正し E2E のボタン名も更新する。
+
 - [x] 年齢ゲートの OIDC バイパスを遮断（R1-17、2026-11-18 未コミット対応）: callback / refresh が
   共通ゲート `ensure_age_policy_configured` を state / Cookie の消費前に呼び、
   `TrustedAttributeRequired` と `ConfigurationRequired`（`AGE_POLICY_CONFIGURED` 未設定）を 403 にする。
@@ -58,6 +89,34 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 ### 優先度: 中
 
 P1（本番運用の健全性）:
+
+- [ ] **logout の refresh Cookie 削除を OidcConfig.cookie_secure に統一** — 根拠 `server/src/lib.rs:2607-2622` / R1-AP06 / 中。
+  発行側は `OidcConfig.cookie_secure` を単一ソースにしているのに削除側は環境変数を再読込。
+  注入構成で Secure 属性が不一致になり Cookie が消えず logout 後も refresh が可能になり得る。
+- [ ] **全フラグの真偽値解釈を共通 parse_bool_env へ統一** — 根拠 `common/src/age.rs:212-221` /
+  `server/src/lib.rs:1424-1428` / `server/src/bin/doctor.rs:157` / R1-AR03+R1-CF05 / 中。
+  AGE_* は未定義値を起動拒否する一方 JWT_REQUIRE_KID / OIDC_COOKIE_SECURE / ALLOW_IPV4_LOCALHOST は「0/false 以外」を真とし、
+  doctor は pub ヘルパを使わず再実装。不正値は fail-closed、doctor とランタイムで同一関数を呼ぶ。
+- [ ] **get_content の chunk() エラーでもゲートウェイフェイルオーバー** — 根拠 `server/src/lib.rs:2783-2787` / R2-ER05 / 中。
+  ストリーム途中切断で即 Internal になり後続の正常ゲートウェイを試さない。接続エラーと同様に次ゲートウェイへ進む。
+- [ ] **refresh/logout の refresh_token Cookie 重複を拒否** — 根拠 `server/src/oidc.rs:1095-1101` /
+  `server/src/lib.rs:2570-2577` / R2-IV06 / 中。
+  state Cookie は重複拒否するのに refresh/logout は `find_map` の先勝ち。攻撃者の先置き Cookie で意図しないトークンが回転・失効する。
+- [ ] **amount_wei を数値比較へ** — 根拠 `server/src/payments.rs:717,170` / R2-IV08 / 中。
+  検証器と DB 保存値を文字列比較するため先頭ゼロ・正規化差で正しい送金が MISMATCH になる。両側 u128 パース＋失敗 Internal。
+- [ ] **BIP44 derivation_index の 2^31 到達を明示エラーへ** — 根拠 `server/src/payments.rs:195,223,447` / R2-BV07 / 中。
+  上限到達後は INSERT されず index が据え置きで以降の注文がすべて 500 になる。上限前に運用エラーを返す。
+- [ ] **doctor へバックアップ必須設定と TZ の診断を追加** — 根拠 `server/src/bin/doctor.rs:66,356` / R1-CF02,CF07 / 中。
+  BACKUP_GPG_RECIPIENT 未設定・OFFSITE 片方設定・ALERT_CMD 実行不可・TZ 未設定が strict を通過する。
+- [ ] **--include-reasons を本番相当で拒否または環境変数化** — 根拠 `server/src/bin/sign_audit_export.rs:72,187` / R1-CF08 / 中。
+  CLI フラグを付けるだけで PII を含む理由本文が平文の署名スナップショットへ入り既定のマスク契約を回避できる。
+- [ ] **OIDC 設定バリデータを doctor と run() の共通 API へ** — 根拠 `server/src/oidc.rs:287-340` /
+  `server/src/bin/doctor.rs:84-94` / R1-AR07 / 中。
+  from_env_with が pub(crate) のため doctor が必須変数・URL・cookie_secure を再実装し、ルール追加時にドリフトする。
+- [ ] **検索条件と SPA ビューを URL / history へ同期** — 根拠 `client/src/lib.rs:116-138,895-1002` / R1-UX03,UX04 / 中。
+  リロード・共有で条件が消え、ブラウザ「戻る」が画面遷移と連動しない。hash ベースでも双方向同期＋popstate。
+- [ ] **マイグレーション SQL 分割器を quote 対応へ** — 根拠 `server/src/migration.rs:241-264` / R1-ST04 / 中。
+  文字列リテラル中の `--` / `;` が文を壊す。トークナイザ化＋回帰フィクスチャ。
 
 - [x] 認証・アップロード・注文作成へレート制限と同時実行上限を導入（R4-02、2026-11-18 対応済み）
 - [x] OIDC HTTP タイムアウト設定キーを追加（R4-03、2026-11-18 対応済み）
@@ -100,6 +159,15 @@ P1（本番運用の健全性）:
 ### 優先度: 低
 
 P2（品質・保守・プロダクト拡張）:
+
+- [ ] **ドキュメントの数値・記述を現行実装へ同期** — 根拠 `docs/DETAILED_DESIGN.md:584`（E2E 65件→69件）/
+  `docs/TEST_SPECIFICATION.md:25`（同）/ `docs/OPERATIONAL_POLICY.md:243,263`（全CLIトークン・TZ）/
+  `README.md:19,111`（LOG_FORMAT / 全CLI）/ `AGENTS.md:22`（共通正本は ~/.agents/AGENTS.md）/
+  `docs/UNKNOWN_TASKS_INVESTIGATION.md:16`（status: historical 候補）/ R3-FG01〜11 / 低。
+- [ ] **finalizer/purge メトリクス5種と POST /metrics/client-events を設計・運用仕様へ追記** — 根拠
+  `server/src/lib.rs:361-375,2169` / R3-FG01,FG02 / 低。実装済みだと仕様から見えない。
+- [ ] **支援オーバーレイをタッチ到達可能へ / UTC 日時をローカライズ / スキップリンク追加** — 根拠
+  `client/src/lib.rs:1800-1808,1859,949-987` / R1-UX05,UX06,UX10 / 低。WCAG 2.1.1 / 2.4.1 観点。
 
 - [x] 現行状態を謳う設計・状態ドキュメントを更新（C4 / R2-17〜R2-21、2026-11-18 対応済み）
 - [x] セキュリティ勧告の受容根拠を RS256 本番署名に合わせて再評価（C6、2026-11-18 対応済み）
@@ -464,6 +532,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-21 コンボ初回（swarm-project-review + swarm-todo-discovery、7担当・深度1）:
+  約60件の指摘を重複排除・Runtime Proof で裁定し、新規17件を上記へ反映。
+  却下: JPKI PoP/VerifiedAgeAttribute 未結線（外部仕様待ちで既記録・型先行済み）、価格 min/max
+  未接続（E2E契約で記録済み）、部分UNIQUE/refresh migration（却下・チェックサム保護）、
+  lib.rs god module 分割（前回レビューで大規模リファクタとして却下済み）、TRANSPARENCY
+  DASHBOARD/公開範囲（DEC-04 要判断で speculative）、JWKS サイズ上限（speculative）。
 
 - 2026-11-21 (swarm-limited mixed 完了): 2イテレーション・起動15/上限40で停止。
   dogfood/ux/ops の新観点と型先行候補を消化後、最終レビューで新規の安全なローカル項目は0件。
