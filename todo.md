@@ -439,6 +439,11 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20 (impl-cli01-breakdown): CLI-01 群内訳テーブルの引数パースを6→8件へ是正
+  （`parse_strict_with_help_requests_help` / `parse_help_with_strict_requests_help` の2件を追記）、
+  合計44→46件を実 #[test] 46件へ整合。`scripts/test-doc-numbers.sh` へ群テーブル件数の
+  合計照合を追加し、抽出失敗は fail-closed で FAIL とする。
+
 - 2026-11-20: CIバージョン閾値の fail-open（"08" が8進数解釈で比較 false、2^64+1 が
   オーバーフロー）を修正。assert_major_numeric に先頭ゼロ拒否と桁数＋辞書順上限、
   比較側へ 10# 化を追加しオラクル(f)(g)(h)。E2E 65件（build-gate 12件）。
@@ -533,3 +538,10 @@ P2（品質・保守・プロダクト拡張）:
   TEST_SPECIFICATION の E2E 59件表記6箇所へ「当時59件、現在65件」を注記し、
   `23 check(s)` 実測の出所を 2026-11-20 再確認へ更新。DETAILED_DESIGN の
   フォールバック5変数（新規カテゴリ2件）と 19→21→22→23（カテゴリ数）の内訳を分離。
+
+- 2026-11-20 (R5 / 採用指摘の反映): 実バイナリ起動テストの指摘は見送り。親が Runtime Proof で
+  実 stderr の非エコー（値0回）を確認済みであり、純粋関数オラクル＋固定 `eprintln!` により
+  実装上の漏えい余地が無いため、実バイナリ起動テストはコスト対効果が低いと判断した。
+  併せて AUDIT_ROOT_MISMATCH を `common/src/lib.rs` の `pub const` へ単一化し両 CLI から参照、
+  restore_db の safety copy 復元成功時に「safety copy was restored successfully from `<path>`」を
+  併記して成否を観測可能とした（失敗時文言・`safety_copy:` 出力・instance lock・引数契約は不変）。

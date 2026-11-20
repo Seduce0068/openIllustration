@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T10:50:12+09:00"
+  at: "2026-11-20T11:14:28+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -641,7 +641,7 @@ INSERT を同じトランザクションでコミットする。この原子的�
   v1 / v2 は `unsupported audit snapshot version: N` で fail-closed 拒否、
   改ざん entry / root / 署名は `Invalid signature` で拒否する。
 - `--expect-root` の照合は `eq_ignore_ascii_case`（大小文字非区別）で、不一致なら
-  `audit root mismatch: expected=<値>, computed=<root>` を返す。受理1行の形式は
+  `audit root mismatch (expected and computed roots withheld)` を返す。受理1行の形式は
   `audit_export_verification: OK version=3 entries=N governance=N root=<hex>` である。
   理由本文（マスク済み・平文の双方）と秘密値は出力しない。
 - 運用上の使い方は

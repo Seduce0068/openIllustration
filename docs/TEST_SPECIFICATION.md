@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T10:50:12+09:00"
+  at: "2026-11-20T11:14:28+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T10:50:12+09:00"
+  at: "2026-11-20T11:14:28+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -329,7 +329,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
-| 引数パース | 6 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` |
+| 引数パース | 8 | `parse_no_arguments_runs_non_strict` / `parse_strict_flag_runs_strict` / `parse_help_flags_request_help` / `parse_unknown_argument_is_reported` / `parse_multiple_arguments_is_rejected` / `parse_only_the_exact_strict_flag_enables_strict` / `parse_strict_with_help_requests_help` / `parse_help_with_strict_requests_help` |
 | 設定判定 | 35 | `check_always_reports_twenty_three_categories` / `audit_expect_root_warns_in_production_without_disclosing_value` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` / `oidc_clock_skew_in_range_and_unset_add_no_warning` / `oidc_clock_skew_out_of_range_warns_without_disclosing_value` / `ipfs_timeout_fallback_is_warned_without_disclosing_value` / `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` / `oidc_http_timeout_fallback_is_warned_without_disclosing_value` / `graceful_drain_timeout_fallback_is_warned_without_disclosing_value` / `moderation_finalize_interval_fallback_is_warned_without_disclosing_value` / `oidc_endpoint_urls_https_adds_no_warning` / `oidc_endpoint_urls_http_in_production_warns_without_disclosing_value` / `oidc_endpoint_urls_mock_allows_only_localhost_http` / `oidc_max_auth_age_mock_with_incomplete_oidc_adds_no_warning` / `oidc_max_auth_age_mock_with_complete_oidc_warns_without_disclosing_value` / `production_warns_when_required_oidc_value_is_empty_without_disclosing_value` / `expose_internal_errors_truthy_warns_without_disclosing_value` / `allowed_origins_missing_or_empty_warns_without_disclosing_value` / `allowed_origins_uses_real_parser_result_without_disclosing_value` / `oidc_cookie_secure_falsy_warns_without_disclosing_value` / `oidc_required_assurance_unset_warns_without_disclosing_value` / `oidc_max_auth_age_invalid_warns_without_disclosing_value` |
 | strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
 
@@ -407,7 +407,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 - `verify_export(snapshot, public_key, expect_root) -> VerificationOutcome` は I/O も
   `std::process::exit` も行わない。`common::verify_audit_snapshot` が version 3 のみ受理し、
   署名・連鎖・Merkle root を検証する。`--expect-root` は `eq_ignore_ascii_case` で照合し、
-  不一致なら `audit root mismatch: expected=<値>, computed=<root>` を返す。
+  不一致なら `audit root mismatch (expected and computed roots withheld)` を返す。
 - 受理時の1行は
   `audit_export_verification: OK version=3 entries=N governance=N root=<hex>` である。
 

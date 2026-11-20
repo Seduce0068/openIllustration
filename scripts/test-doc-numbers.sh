@@ -259,6 +259,33 @@ while IFS= read -r example_line; do
 	assert_numbers_match "e2e spec example ${spec_name}" "$actual_n" "$documented_n"
 done <<<"$spec_example_lines"
 
+# --- 7. CLI-01 群内訳テーブルの件数合計照合 ---------------------------------
+# TEST_SPECIFICATION の CLI-01 群テーブル（| 群 | 件数 | テスト名 |）から件数列を抽出し
+# 合計して、doctor.rs の実 #[test] 数と照合する。CLI-02/03 の同名テーブルは対象外
+# （CLI-01 見出しから次の CLI 見出しまでに限定）。抽出失敗は fail-closed で FAIL。
+doctor_group_sum="$(
+	awk -F'|' '
+		/^#### CLI-01:/ { in_cli = 1 }
+		in_cli && /^#### CLI-0[23]:/ { exit }
+		in_cli && /^\| *群 *\|/ { in_table = 1; next }
+		in_table && /^\|/ {
+			cell = $3
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+			if (cell ~ /^[0-9]+$/) { sum += cell; n++ }
+			next
+		}
+		in_table && n > 0 { exit }
+		END { if (n > 0) print sum }
+	' "$spec" || true
+)"
+if [[ ! "$doctor_group_sum" =~ ^[0-9]+$ ]]; then
+	echo "FAIL doctor group breakdown: no valid CLI-01 '| 群 | 件数 |' table in ${spec}" >&2
+	failures=$((failures + 1))
+else
+	doctor_test_total="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' server/src/bin/doctor.rs || true)"
+	assert_numbers_match "doctor group breakdown sum" "$doctor_test_total" "$doctor_group_sum"
+fi
+
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then
 	echo "doc numbers FAILED (${failures})" >&2

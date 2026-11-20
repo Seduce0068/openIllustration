@@ -364,6 +364,61 @@ else
 	echo "PASS no --expect-root when AUDIT_EXPECT_ROOT unset"
 fi
 
+# (d') AUDIT_EXPECT_ROOT に不一致値（有効な hex だが記録済み root と異なる）を設定した
+#     とき、その値が ALERT ログ／スクリプト stderr へエコーされないこと。
+#     実 verify_audit_log の不一致エラーは固定文言（root 値なし）なので、
+#     同じ文言を出すスタブで fail-closed にし、backup-rotate.sh 側の非エコーを検証する。
+#     既存の引数ログオラクル（値が --expect-root として渡ること）も同時に維持する。
+mismatch_root="fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+mismatch_bin="${work}/mismatch-audit-bin"
+mkdir -p "$mismatch_bin"
+cp "${work}/bin/backup_db" "${mismatch_bin}/backup_db"
+cp "${work}/bin/verify_backup" "${mismatch_bin}/verify_backup"
+cat >"${mismatch_bin}/verify_audit_log" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${AUDIT_VERIFY_LOG:-}" ]]; then
+  printf 'MISMATCHED_ROOT %s\n' "$*" >> "$AUDIT_VERIFY_LOG"
+fi
+echo "ERROR: audit root mismatch (expected and computed roots withheld)" >&2
+exit 1
+EOF
+chmod +x "${mismatch_bin}/verify_audit_log"
+mismatch_dir="${work}/audit-root-mismatch"
+new_backup_dir "$mismatch_dir"
+: >"${ALERT_LOG}"
+: >"${work}/mismatch-audit.log"
+expect_failure "mismatched AUDIT_EXPECT_ROOT is fail-closed" env BIN_DIR="$mismatch_bin" BACKUP_DIR="$mismatch_dir" BACKUP_GPG_RECIPIENT=test ALERT_CMD="${work}/alert.sh" AUDIT_VERIFY_LOG="${work}/mismatch-audit.log" AUDIT_EXPECT_ROOT="$mismatch_root" "$script"
+nonleak_bad=0
+if grep -Fq -- "$mismatch_root" "${ALERT_LOG}"; then
+	echo "FAIL mismatched root leaked into ALERT log"
+	cat "${ALERT_LOG}" >&2
+	nonleak_bad=1
+fi
+if grep -Fq -- "$mismatch_root" "${work}/out.log"; then
+	echo "FAIL mismatched root leaked into script stderr/stdout"
+	cat "${work}/out.log" >&2
+	nonleak_bad=1
+fi
+if grep -Fq -- "--expect-root ${mismatch_root}" "${work}/mismatch-audit.log"; then
+	echo "PASS AUDIT_EXPECT_ROOT mismatch value still forwarded (arg-log oracle intact)"
+else
+	echo "FAIL AUDIT_EXPECT_ROOT mismatch value not forwarded"
+	cat "${work}/mismatch-audit.log" >&2
+	nonleak_bad=1
+fi
+if grep -Fq 'openIllustration backup failed at verify_audit_log' "${ALERT_LOG}"; then
+	echo "PASS alert invoked at verify_audit_log on root mismatch"
+else
+	echo "FAIL alert missing failing stage on root mismatch"
+	cat "${ALERT_LOG}" >&2
+	nonleak_bad=1
+fi
+if ((nonleak_bad == 0)); then
+	echo "PASS mismatched AUDIT_EXPECT_ROOT value not echoed to ALERT/stderr"
+else
+	failures=$((failures + 1))
+fi
+
 # (b) verify_audit_log 失敗: Runbook の「両方成功しなければ認めない」に従い、
 #     公開前に失敗して成果物を出さず、一時平文を清掃し、ALERT_CMD が通知する。
 mkdir -p "${work}/fail-audit-bin"

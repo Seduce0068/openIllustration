@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-18T14:55:44+09:00"
+  at: "2026-11-20T11:14:28+09:00"
 ---
 
 ## 目的
@@ -181,7 +181,7 @@ cargo run -p server --bin verify_audit_export -- \
 
 署名検証に加え、過去に記録した Merkle root と突き合わせる場合は `--expect-root HEX` を付ける。
 省略時は照合しない。比較は大小文字を区別せず（実装は `eq_ignore_ascii_case`）、
-不一致なら `audit root mismatch: expected=<指定値>, computed=<スナップショットの root>`
+不一致なら `audit root mismatch (expected and computed roots withheld)`
 を stderr へ出力し終了コード1となる。値を忘れた場合は `--expect-root requires a value`
 で拒否される（いずれも実 CLI で確認）。
 
@@ -207,7 +207,7 @@ cargo run -p server --bin verify_audit_export -- \
 ```
 
 期待結果: 2 は root が一致すれば `audit_export_verification: OK` と終了コード0、
-3 は `Error: audit root mismatch: expected=deadbeef, computed=<root>` と終了コード1。
+3 は `Error: audit root mismatch (expected and computed roots withheld)` と終了コード1。
 `--expect-root` は署名・連鎖・Merkle root の再計算検証の代替ではなく、記録済み root との
 突き合わせ（切詰め・差し替え検知）を追加するオプションである。
 
