@@ -436,6 +436,91 @@ if ((${#cli01_doc_test_names[@]} > 0 && ${#doctor_test_fn_names[@]} > 0)); then
 	done
 fi
 
+# --- 8. backup-rotate expect_* 件数と他ドキュメントの照合 -------------------
+# scripts/test-backup-rotate.sh の expect_failure / expect_success 呼び出し数を実測し、
+# HANDOFF.md / TASK_INVENTORY.md の
+# 「expect_failure N件＋expect_success M件、計K件」記載と照合する。
+# 行が折り返されているため改行を空白へ結合してから3数値を抽出する。
+# 抽出失敗・不一致は fail-closed で FAIL（実コード増減時にドキュメントは追随しない）。
+backup_failure_actual="$(grep -c '^expect_failure ' scripts/test-backup-rotate.sh || true)"
+backup_success_actual="$(grep -c '^expect_success ' scripts/test-backup-rotate.sh || true)"
+backup_failure_actual="${backup_failure_actual:-0}"
+backup_success_actual="${backup_success_actual:-0}"
+backup_total_actual=$((backup_failure_actual + backup_success_actual))
+
+# 折り返しを吸収するため改行を空白へ結合し、3数値（failure/success/total）を抽出する。
+# バッククォートは文字クラス（[^0-9]）に吸収させ、shellcheck のトークン解釈を避ける。
+backup_expect_triple() {
+	local doc="$1" joined match failure success total
+	local re_failure='expect_failure[^0-9]*[0-9]+件'
+	local re_success='expect_success[^0-9]*[0-9]+件'
+	local re_total='計[0-9]+件'
+	local pattern="${re_failure}[^0-9]*${re_success}[^0-9]*${re_total}"
+	joined="$(tr '\n' ' ' <"$doc")"
+	match="$(grep -oE "$pattern" <<<"$joined" | head -n1 || true)"
+	[[ -n "$match" ]] || return 1
+	failure="$(grep -oE "$re_failure" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+	success="$(grep -oE "$re_success" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+	total="$(grep -oE "$re_total" <<<"$match" | grep -oE '[0-9]+' | head -n1 || true)"
+	[[ -n "$failure" && -n "$success" && -n "$total" ]] || return 1
+	printf '%s %s %s\n' "$failure" "$success" "$total"
+}
+
+for cross_doc in docs/HANDOFF.md docs/TASK_INVENTORY.md; do
+	if [[ ! -f "$cross_doc" ]]; then
+		echo "FAIL backup expect_* counts: missing ${cross_doc}" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	triple="$(backup_expect_triple "$cross_doc" || true)"
+	if [[ -z "$triple" ]]; then
+		echo "FAIL backup expect_* counts: no 'expect_failure N件＋expect_success M件、計K件' in ${cross_doc}" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	read -r doc_failure doc_success doc_total <<<"$triple"
+	assert_numbers_match "backup expect_failure @ ${cross_doc}" "$backup_failure_actual" "$doc_failure"
+	assert_numbers_match "backup expect_success @ ${cross_doc}" "$backup_success_actual" "$doc_success"
+	assert_numbers_match "backup expect_total @ ${cross_doc}" "$backup_total_actual" "$doc_total"
+done
+
+# --- 9. sign_audit_export の bin テスト数と TASK_INVENTORY の照合 ------------
+# server/src/bin/sign_audit_export.rs の #[test] / #[tokio::test] 実数を実測し、
+# TASK_INVENTORY.md の現行状態を謳う「bin 内にNテスト」行と照合する。
+# 履歴表記（当時 / 旧 / 当初 / 履歴 / 日付付き）は除外してよい。
+# 現行行が無い・抽出失敗・不一致は fail-closed で FAIL。
+inventory="docs/TASK_INVENTORY.md"
+sign_audit_bin="server/src/bin/sign_audit_export.rs"
+sign_audit_actual="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$sign_audit_bin" || true)"
+# 行全体ではなく 'bin 内にNテスト' の直前30文字だけを見て履歴表記を除外する。
+# これにより現行行の後半に便宜上 '旧' 等が入っても行ごと落ちることを防ぐ。
+sign_audit_doc_lines="$(
+	grep -nE 'bin[[:space:]]*内に[0-9]+[[:space:]]*テスト' "$inventory" |
+		while IFS= read -r sa_line; do
+			sa_prefix="${sa_line:0:120}"
+			sa_token="$(grep -oE '.{0,30}bin[[:space:]]*内に[0-9]+' <<<"$sa_prefix" | head -n1 || true)"
+			if grep -qE '当時|旧|当初|履歴|[0-9]{4}-[0-9]{2}-[0-9]{2}|20[0-9]{2}年' <<<"$sa_token"; then
+				continue
+			fi
+			printf '%s\n' "$sa_line"
+		done || true
+)"
+if [[ -z "$sign_audit_doc_lines" ]]; then
+	echo "FAIL sign_audit_export bin tests: no current 'bin 内にNテスト' line in ${inventory}" >&2
+	failures=$((failures + 1))
+fi
+while IFS= read -r sign_line; do
+	[[ -z "$sign_line" ]] && continue
+	loc="${sign_line%%:*}"
+	documented="$(grep -oE 'bin[[:space:]]*内に[0-9]+' <<<"$sign_line" | grep -oE '[0-9]+' | head -n1 || true)"
+	if [[ -z "$documented" ]]; then
+		echo "FAIL sign_audit_export bin tests @ ${inventory}:${loc}: no number extracted" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	assert_numbers_match "sign_audit_export bin tests @ ${inventory}:${loc}" "$sign_audit_actual" "$documented"
+done <<<"$sign_audit_doc_lines"
+
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then
 	echo "doc numbers FAILED (${failures})" >&2

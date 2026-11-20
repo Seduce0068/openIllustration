@@ -439,6 +439,10 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20: doc-numbersへbackup回帰期待数(28+12=40)とsign_audit_export10件の
+  他ドキュメント(HANDOFF/TASK_INVENTORY)との照合を追加。破壊テストで expect_failure
+  29件→HANDOFF/TASK_INVENTORYの両方でFAILを確認。履歴除外はマッチ部分前方30文字に限定。
+
 - 2026-11-20: doc-numbersへE2E総数の未注記・古い件数を検出するfail-closedゲートを追加。
   MOD-07/EXPORT-10の59件残存を注記し、注記キーワード/正規表現の不整合（現在59件の誤救済、
   外側5〜6文字prefixの未走査）を是正。破壊テストで2通りともFAILを確認。
