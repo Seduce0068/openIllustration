@@ -286,6 +286,57 @@ else
 	assert_numbers_match "doctor group breakdown sum" "$doctor_test_total" "$doctor_group_sum"
 fi
 
+# 群テーブルのテスト名列（バッククォート `name` トークン）に載っている各名前が
+# doctor.rs に `fn <name>` として実在するかを照合する（CLI bin 用の独立ゲート）。
+# セクション4の `fn test_` 走査・除外ロジックは変更せず、ここでは doctor.rs のみを対象にする。
+# 抽出失敗・typo・存在しない名前は fail-closed で FAIL。
+cli01_group_name_cells="$(
+	awk -F'|' '
+		/^#### CLI-01:/ { in_cli = 1 }
+		in_cli && /^#### CLI-0[23]:/ { exit }
+		in_cli && /^\| *群 *\|/ { in_table = 1; next }
+		in_table && /^\|/ {
+			cell = $3
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+			if (cell ~ /^[0-9]+$/) { print $4; printed++ }
+			next
+		}
+		in_table && printed > 0 { exit }
+	' "$spec" || true
+)"
+
+declare -A cli01_doc_test_names=()
+while IFS= read -r name; do
+	[[ -z "$name" ]] && continue
+	cli01_doc_test_names["$name"]=1
+done < <(
+	printf '%s\n' "$cli01_group_name_cells" |
+		# バッククォートは 16 進エスケープ (\x60) で表現し shellcheck のトークン解釈を避ける。
+		grep -oE $'\x60[A-Za-z0-9_]+\x60' |
+		tr -d '`' |
+		sort -u || true
+)
+
+# 実在関数名集合（`fn ` を除去）。doctor.rs の全 fn を採取するため、テスト関数以外も
+# 集合に残して誤検知を避ける（存在照合はドキュメント側 -> 実コード側の一方向）。
+declare -A doctor_fn_names=()
+while IFS= read -r fn; do
+	[[ -z "$fn" ]] && continue
+	doctor_fn_names["$fn"]=1
+done < <(grep -oE 'fn [A-Za-z0-9_]+' server/src/bin/doctor.rs | awk '{print $2}' | sort -u || true)
+
+if ((${#cli01_doc_test_names[@]} == 0)); then
+	echo "FAIL doctor group test names: no backtick test name found in CLI-01 '| 群 | 件数 | テスト名 |' table in ${spec}" >&2
+	failures=$((failures + 1))
+else
+	for name in "${!cli01_doc_test_names[@]}"; do
+		if [[ -z "${doctor_fn_names[$name]:-}" ]]; then
+			echo "FAIL doctor group test name: '${name}' is listed in CLI-01 group table but 'fn ${name}' not found in server/src/bin/doctor.rs" >&2
+			failures=$((failures + 1))
+		fi
+	done
+fi
+
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then
 	echo "doc numbers FAILED (${failures})" >&2

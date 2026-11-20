@@ -439,6 +439,10 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20: restore_db の一時ファイル削除結果を伝播し残置を通知。safety_copy=None /
+  置換成功 / 削除失敗の3分岐をオラクル化。doc-numbers へ CLI-01 群テスト名の実在照合を追加
+  （46名すべて doctor.rs の fn と一致、typo で fail-closed）。
+
 - 2026-11-20 (impl-cli01-breakdown): CLI-01 群内訳テーブルの引数パースを6→8件へ是正
   （`parse_strict_with_help_requests_help` / `parse_help_with_strict_requests_help` の2件を追記）、
   合計44→46件を実 #[test] 46件へ整合。`scripts/test-doc-numbers.sh` へ群テーブル件数の
