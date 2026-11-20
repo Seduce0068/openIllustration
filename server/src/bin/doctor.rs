@@ -439,6 +439,28 @@ where
     };
     results.push(("allowed_origins", allowed_origins_errors));
 
+    // AUDIT_EXPECT_ROOT: 本番相当（mock 無効）では別経路保存の Merkle root（hex）が必須。
+    // 未設定・空白のみ・前後空白付き・不正 hex なら固定文言で警告する。値はエコーしない。
+    // backup-rotate.sh は未設定でも内部整合性チェックのみで動作する既存契約を維持し、
+    // doctor は既定で警告のみ（`--strict` のときだけ失敗）。共有の
+    // production_config_errors は起動判定へ影響するため変更しない。
+    const AUDIT_EXPECT_ROOT_WARNING: &str =
+        "AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)";
+    let audit_expect_root_errors = if allow_mock_auth {
+        Vec::new()
+    } else {
+        // backup-rotate.sh と同じく生値へ [0-9a-fA-F]+ を適用する（trim しない）。
+        let valid = lookup("AUDIT_EXPECT_ROOT")
+            .map(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .unwrap_or(false);
+        if valid {
+            Vec::new()
+        } else {
+            vec![AUDIT_EXPECT_ROOT_WARNING.to_string()]
+        }
+    };
+    results.push(("audit_expect_root", audit_expect_root_errors));
+
     results
 }
 
@@ -615,13 +637,14 @@ mod tests {
     // --- 2. 設定判定（依存注入） ------------------------------------------
 
     #[test]
-    fn check_always_reports_twenty_two_categories() {
+    fn check_always_reports_twenty_three_categories() {
         // CLI が表示する "N check(s)" を固定する（既存挙動の回帰防止）。
         // 5 カテゴリ追加（oidc_max_auth_age / oidc_cookie_secure /
         // oidc_required_assurance / expose_internal_errors / allowed_origins）で
         // 14 -> 19。さらにフォールバック検出の2カテゴリ追加
         // （graceful_drain_timeout / moderation_finalize_interval）で 19 -> 21。
         // OIDC エンドポイント URL 検証（oidc_endpoint_urls）の追加で 21 -> 22。
+        // AUDIT_EXPECT_ROOT 診断（audit_expect_root）の追加で 22 -> 23。
         // シナリオに依存せず常に同じカテゴリ数になることを保証する。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
@@ -638,7 +661,7 @@ mod tests {
         for pairs in scenarios {
             assert_eq!(
                 check_all_with(lookup_from(pairs)).len(),
-                22,
+                23,
                 "pairs={pairs:?}"
             );
         }
@@ -1326,6 +1349,58 @@ mod tests {
         assert_eq!(errors.len(), 1, "errors={errors:?}");
         assert_eq!(errors[0], OIDC_ENDPOINT_URL_WARNING);
         assert!(!errors[0].contains(LEAKY), "設定値が漏洩: {}", errors[0]);
+    }
+
+    // --- 2g. AUDIT_EXPECT_ROOT --------------------------------------------
+
+    #[test]
+    fn audit_expect_root_warns_in_production_without_disclosing_value() {
+        const EXPECTED: &str = "AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)";
+        const INVALID: &str = "deadbeefcafebabe-nothex-ZZZZ";
+        // 本番相当（mock 無効）: 未設定・空白のみ・不正 hex は警告。
+        let scenarios: [&[(&str, &str)]; 4] = [
+            &[],
+            &[("AUDIT_EXPECT_ROOT", "")],
+            &[("AUDIT_EXPECT_ROOT", " \t ")],
+            &[("AUDIT_EXPECT_ROOT", INVALID)],
+        ];
+        for pairs in scenarios {
+            let results = check_all_with(lookup_from(pairs));
+            let errors = errors_for(&results, "audit_expect_root");
+            assert_eq!(errors.len(), 1, "pairs={pairs:?}, errors={errors:?}");
+            // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+            assert_eq!(errors[0], EXPECTED, "pairs={pairs:?}");
+            assert!(!errors[0].contains(INVALID), "設定値が漏洩: {}", errors[0]);
+        }
+        // 有効 hex は警告なし（生値判定のため前後の空白は許容しない）。
+        for value in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+            let results = check_all_with(lookup_from(&[("AUDIT_EXPECT_ROOT", value)]));
+            assert!(
+                errors_for(&results, "audit_expect_root").is_empty(),
+                "value={value}"
+            );
+        }
+        // 前後空白付き hex は生値へ hex 判定するため警告（backup-rotate と統一）。
+        // 固定文言なので設定値は一切含まれない（値のエコーなし）。
+        const PADDED: &str = "  ABCDEF0123456789  ";
+        let results = check_all_with(lookup_from(&[("AUDIT_EXPECT_ROOT", PADDED)]));
+        let errors = errors_for(&results, "audit_expect_root");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], EXPECTED);
+        assert!(!errors[0].contains("ABCDEF"), "設定値が漏洩: {}", errors[0]);
+        // mock 有効時は開発環境として警告しない（後方互換を維持）。
+        for value in ["", INVALID, "deadbeefcafebabe"] {
+            let results = check_all_with(lookup_from(&[
+                ("ALLOW_MOCK_AUTH", "1"),
+                ("AUDIT_EXPECT_ROOT", value),
+            ]));
+            assert!(
+                errors_for(&results, "audit_expect_root").is_empty(),
+                "value={value}"
+            );
+        }
+        let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
+        assert!(errors_for(&results, "audit_expect_root").is_empty());
     }
 
     // --- 3. strict 判定 ----------------------------------------------------
