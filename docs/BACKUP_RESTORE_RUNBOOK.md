@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-20T09:15:36+09:00"
+  at: "2026-11-20T10:01:48+09:00"
 ---
 
 ## 目的
@@ -41,8 +41,8 @@ cargo run -p server --bin backup_db -- \
 （`verify_backup` はさらに `PRAGMA integrity_check` も実施する二段構え）。
 
 定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
-古い世代の削除を一行で行う（サーバー停止中に実行する。稼働中は下記のとおり
-`backup_db` がロックを検出して拒否する）:
+`verify_audit_log` 検証→古い世代の削除を一行で行う（サーバー停止中に実行する。
+稼働中は下記のとおり `backup_db` がロックを検出して拒否する）:
 
 ```bash
 # Kubuntu / cron 等から実行（BIN_DIR はビルド済みバイナリのディレクトリ）
@@ -53,8 +53,18 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
   /opt/openIllustration/scripts/backup-rotate.sh
 ```
 
-`BIN_DIR` に `backup_db` / `verify_backup` があればそれを使い、無ければ
-`cargo run` にフォールバックする（開発用）。設定例:
+自動取得では、生成直後の平文 DB（mktemp の作業ディレクトリ）に対して
+`verify_backup` と `verify_audit_log` の両方を実行し、両方成功した場合のみ
+成果物を公開する。監査ログの検証は
+`verify_audit_log --database-url file:<平文 DB>` で行い、argv にトークンを
+渡さない（リモート DB のトークンは `DATABASE_TOKEN` 環境変数のみ）。
+いずれかが失敗した場合は公開せず、一時平文を清掃して終了し、`ALERT_CMD`
+設定時は通知する（fail-closed）。各 CLI の契約は下記「バックアップ検証」を参照。
+暗号化後の復号検証は GPG 秘密鍵の保管運用に依存するため自動化対象外で、
+リストア時の手動検証で担保する。
+
+`BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
+無ければ `cargo run` にフォールバックする（開発用）。設定例:
 
 - systemd: `deploy/openillustration-backup.service` と
   `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`）
@@ -150,6 +160,8 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 バックアップを実 DB で作り、integrity_check エラーで拒否されることを確認済み。
 `verify_audit_log` は監査ハッシュ連鎖・`log_id` 連続性・Merkle root を検証する。
 両方成功しなければバックアップを本番バックアップとして認めない。
+`backup-rotate.sh` はこの2つを生成直後の平文 DB に対して自動実行し、失敗時は
+fail-closed となる（上記「バックアップ取得」を参照）。
 
 ### `verify_backup` の契約（トークン・サイドカー・出力）
 

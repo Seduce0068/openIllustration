@@ -261,7 +261,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。
   `OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
-- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 26件＋`expect_success` 9件、計35件の
+- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 27件＋`expect_success` 10件、計37件の
   `expect_*` 呼び出し）を外部サービスなしで検証する回帰テスト。上限 RETENTION_DAYS=20000 での
   prune 境界テストを含む。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。

@@ -238,8 +238,13 @@ P2（品質・保守・プロダクト拡張）:
   remove_favorite は DELETE だが許可メソッドは GET/POST のみ。2026-11-19 対応済み。
 - [ ] **doctor --strict をデプロイ前ゲートへ組み込み** — 根拠 `.github/workflows/ci.yml:37-46` / R4-DR01 / 重大度 high。
   現状 doctor は警告のみで呼び出し経路が無い。
-- [ ] **backup-rotate に verify_audit_log と暗号化後復号検証を追加** — 根拠 `scripts/backup-rotate.sh:142-143` / R4-DR01 / 重大度 high。
-  Runbook は両方成功を条件とするが自動取得は verify_backup のみ。
+- [x] **backup-rotate に audit log 検証の自動統合を追加** — 根拠 `scripts/backup-rotate.sh:190-194` / R4-DR01 / 重大度 high。
+  Runbook は両方成功を条件とするが自動取得は verify_backup のみだった。2026-11-20 対応済み:
+  `verify_backup` 直後に生成直後の平文 tmp_db へ `verify_audit_log --database-url file:${tmp_db}` を実行し、
+  失敗時は成果物を公開せず一時平文を清掃して `ALERT_CMD` で通知する（fail-closed）。
+- [ ] **暗号化後復号検証の自動化（GPG 秘密鍵の運用依存・外部判断）** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:97-104` / R4-DR01 / 重大度 high。
+  復号には GPG 秘密鍵が必要だが、バックアップ作成者が復号鍵を持たない運用が安全なため自動化は対象外。
+  鍵の保管場所・復号担当者・検証タイミングは外部運用側の判断待ち（未着手）。現状はリストア時の手動検証で担保。
 - [x] **backup-rotate の失敗時一時ディレクトリ・平文 DB を清掃** — 根拠 `scripts/backup-rotate.sh:91-105` / R4-DR01 / 重大度 high。
   EXIT trap は rotation_list のみ削除し、平文 tmp_db が残置される。2026-11-19 対応済み。
 - [x] **定足数を QUORUM_VOTES 定数へ集約** — 根拠 `server/src/lib.rs:2816,2834,3773` / R1-AR01 / 重大度 high。
@@ -440,7 +445,7 @@ P2（品質・保守・プロダクト拡張）:
 
 - 2026-11-20: 最終レビューで doc-numbers の照合漏れ（DETAILED_DESIGN の CLI 件数表・個別
   spec 実行例）を発見しゲートを拡張。doc numbers が green でもドキュメント間矛盾が残る問題を
-  根本解消。E2E 62件（build-gate 9件）・バックアップ35件・CLI 45/20/19 を実測値へ統一。
+  根本解消。E2E 62件（build-gate 9件）・バックアップ35件（当時、現在37件）・CLI 45/20/19 を実測値へ統一。
 
 - 2026-11-20: エラー本文スキーマ統一を却下クローズ（AppErrorは既に{"error":message}統一済み、
   code/message/status化はクライアントのbody.error依存を壊す破壊的変更で利益を上回らない）。
@@ -508,7 +513,7 @@ P2（品質・保守・プロダクト拡張）:
    設定した古い世代が実際に prune されるテストを追加。定数・テスト・
    `docs/BACKUP_RESTORE_RUNBOOK.md` の記載をすべて整合させた（上記の
    36500 は R5 当時の履歴）。`scripts/test-backup-rotate.sh` の実測は
-   `expect_failure` 26件＋`expect_success` 9件=35件で、
+   `expect_failure` 27件＋`expect_success` 10件=37件で、
    `docs/TASK_INVENTORY.md:481` / `docs/HANDOFF.md:262` の「5件・5件」を是正。
    `docs/OPERATIONAL_POLICY.md:265` の `PINATA_JWT` を本番必須・実トークン必須
    （未設定/空/空白/mock_jwt 前後空白含むは起動拒否、`doctor` の `production`
