@@ -48,17 +48,21 @@ fi
 exec {env_fd}<"$env_file"
 # KEY=VALUE のみを解釈する制限付きパーサ。source / eval は使わず、クォートや
 # コマンド置換、シェル記号はすべてリテラルな値として扱う。
+# 行番号は空行・コメント行も含めて採番する。エラーには番号のみを出し、
+# 行内容（キー名・値）は cron のメール等へ漏らさない。
+line_number=0
 while IFS= read -r line <&"$env_fd" || [[ -n "$line" ]]; do
+	line_number=$((line_number + 1))
 	# 空行・コメント行は無視する。
 	[[ -z "$line" || "$line" == \#* ]] && continue
 	if [[ "$line" != *=* ]]; then
-		echo "Invalid line in backup env file (expected KEY=VALUE): ${line}" >&2
+		echo "Invalid line #${line_number} in backup env file (expected KEY=VALUE)" >&2
 		exit 1
 	fi
 	key="${line%%=*}"
 	value="${line#*=}"
 	if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-		echo "Invalid key in backup env file: ${key}" >&2
+		echo "Invalid key #${line_number} in backup env file" >&2
 		exit 1
 	fi
 	export "$key=$value"

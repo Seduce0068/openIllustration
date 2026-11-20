@@ -90,6 +90,26 @@ assert_file_absent() {
 	fi
 }
 
+assert_log_contains() {
+	local name="$1" expected="$2" log="$3"
+	if grep -Fq -- "$expected" "$log"; then
+		echo "PASS ${name}: found '${expected}'"
+	else
+		echo "FAIL ${name}: missing '${expected}'"
+		failures=$((failures + 1))
+	fi
+}
+
+assert_log_absent() {
+	local name="$1" unexpected="$2" log="$3"
+	if grep -Fq -- "$unexpected" "$log"; then
+		echo "FAIL ${name}: unexpected '${unexpected}' leaked to log"
+		failures=$((failures + 1))
+	else
+		echo "PASS ${name}: '${unexpected}' absent"
+	fi
+}
+
 echo "=== ケース1: 環境ファイルが存在しない/読めない場合は fail-closed ==="
 rm -f "$env_file" "${WRAPPER_CAPTURE}"
 expect_failure "case1 missing env file" env -u BACKUP_ENV_FILE "$wrapper"
@@ -143,6 +163,50 @@ rm -f "${WRAPPER_CAPTURE}"
 expect_failure "case5 insecure mode" env -u BACKUP_ENV_FILE "$wrapper"
 assert_capture_absent "case5 insecure mode"
 chmod 600 "$env_file"
+
+echo "=== ケース6: 不正行エラーに行内容・値・キー名を含めない ==="
+# 先頭にコメント行と空行を置き、連番（行番号）が 3 になることも確認する。
+# 値はダミー文字列であり、実際の秘密情報は一切含めない。
+rm -f "$env_file" "${WRAPPER_CAPTURE}"
+{
+	printf '# leading comment\n'
+	printf '\n'
+	printf 'SECRET_TOKEN dummy-placeholder-value\n'
+} >"$env_file"
+chmod 600 "$env_file"
+if env -u BACKUP_ENV_FILE "$wrapper" >"${work}/case6.out" 2>"${work}/case6.err"; then
+	echo "FAIL case6 invalid line: expected failure but succeeded"
+	failures=$((failures + 1))
+else
+	echo "PASS case6 invalid line: rejected"
+fi
+assert_capture_absent "case6 invalid line"
+assert_log_contains "case6 line number and fixed message" \
+	'Invalid line #3 in backup env file (expected KEY=VALUE)' "${work}/case6.err"
+assert_log_absent "case6 line content absent" \
+	'SECRET_TOKEN dummy-placeholder-value' "${work}/case6.err"
+assert_log_absent "case6 key name absent" 'SECRET_TOKEN' "${work}/case6.err"
+assert_log_absent "case6 value absent" 'dummy-placeholder-value' "${work}/case6.err"
+
+echo "=== ケース7: 不正キー行も行番号のみでキー名を漏らさない ==="
+rm -f "$env_file" "${WRAPPER_CAPTURE}"
+{
+	printf '# leading comment\n'
+	printf '\n'
+	printf 'BAD-KEY=placeholder-value\n'
+} >"$env_file"
+chmod 600 "$env_file"
+if env -u BACKUP_ENV_FILE "$wrapper" >"${work}/case7.out" 2>"${work}/case7.err"; then
+	echo "FAIL case7 invalid key: expected failure but succeeded"
+	failures=$((failures + 1))
+else
+	echo "PASS case7 invalid key: rejected"
+fi
+assert_capture_absent "case7 invalid key"
+assert_log_contains "case7 line number and fixed message" \
+	'Invalid key #3 in backup env file' "${work}/case7.err"
+assert_log_absent "case7 key name absent" 'BAD-KEY' "${work}/case7.err"
+assert_log_absent "case7 value absent" 'placeholder-value' "${work}/case7.err"
 
 if ((failures > 0)); then
 	echo "backup-cron-wrapper tests FAILED (${failures})" >&2

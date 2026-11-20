@@ -286,10 +286,10 @@ else
 	assert_numbers_match "doctor group breakdown sum" "$doctor_test_total" "$doctor_group_sum"
 fi
 
-# 群テーブルのテスト名列（バッククォート `name` トークン）に載っている各名前が
-# doctor.rs に `fn <name>` として実在するかを照合する（CLI bin 用の独立ゲート）。
+# 群テーブルのテスト名列（バッククォート `name` トークン）と doctor.rs の
+# #[test] / #[tokio::test] 付き fn 名を双方向に照合する（CLI bin 用の独立ゲート）。
 # セクション4の `fn test_` 走査・除外ロジックは変更せず、ここでは doctor.rs のみを対象にする。
-# 抽出失敗・typo・存在しない名前は fail-closed で FAIL。
+# 重複・欠落・typo・属性の無い同名 fn は fail-closed で FAIL。
 cli01_group_name_cells="$(
 	awk -F'|' '
 		/^#### CLI-01:/ { in_cli = 1 }
@@ -305,33 +305,75 @@ cli01_group_name_cells="$(
 	' "$spec" || true
 )"
 
-declare -A cli01_doc_test_names=()
-while IFS= read -r name; do
-	[[ -z "$name" ]] && continue
-	cli01_doc_test_names["$name"]=1
-done < <(
+# 抽出した全名（重複を含む）を配列へ保持し、一意名との比較で重複を検出する。
+mapfile -t cli01_all_names < <(
 	printf '%s\n' "$cli01_group_name_cells" |
 		# バッククォートは 16 進エスケープ (\x60) で表現し shellcheck のトークン解釈を避ける。
 		grep -oE $'\x60[A-Za-z0-9_]+\x60' |
-		tr -d '`' |
-		sort -u || true
+		tr -d '`' || true
 )
 
-# 実在関数名集合（`fn ` を除去）。doctor.rs の全 fn を採取するため、テスト関数以外も
-# 集合に残して誤検知を避ける（存在照合はドキュメント側 -> 実コード側の一方向）。
-declare -A doctor_fn_names=()
-while IFS= read -r fn; do
-	[[ -z "$fn" ]] && continue
-	doctor_fn_names["$fn"]=1
-done < <(grep -oE 'fn [A-Za-z0-9_]+' server/src/bin/doctor.rs | awk '{print $2}' | sort -u || true)
+declare -A cli01_doc_test_names=()
+for name in "${cli01_all_names[@]}"; do
+	[[ -z "$name" ]] && continue
+	cli01_doc_test_names["$name"]=1
+done
+
+# 同名が 2 回以上載ると一意名が減るため、抽出件数と一意件数を比較して FAIL とする。
+if ((${#cli01_all_names[@]} != ${#cli01_doc_test_names[@]})); then
+	echo "FAIL doctor group test names: duplicates (extracted ${#cli01_all_names[@]}, unique ${#cli01_doc_test_names[@]})" >&2
+	failures=$((failures + 1))
+fi
+
+# 一意名の数は群「件数」列の合計（doctor_group_sum）と一致しなければならない（欠落検出）。
+if [[ "$doctor_group_sum" =~ ^[0-9]+$ ]] && ((${#cli01_doc_test_names[@]} != doctor_group_sum)); then
+	echo "FAIL doctor group test names: ${#cli01_doc_test_names[@]} unique vs sum ${doctor_group_sum} in ${spec}" >&2
+	failures=$((failures + 1))
+fi
+
+# 実コード側は #[test] / #[tokio::test] が付いた fn 名のみを集合にする。
+# 属性行・空行・コメントを飛ばし、直後の fn を awk で拾う（ヘルパー fn は除外）。
+declare -A doctor_test_fn_names=()
+while IFS= read -r name; do
+	[[ -z "$name" ]] && continue
+	doctor_test_fn_names["$name"]=1
+done < <(
+	awk '
+		/^[[:space:]]*#\[(tokio::)?test\]/ { pending = 1; next }
+		pending && /^[[:space:]]*$/ { next }
+		pending && /^[[:space:]]*#\[/ { next }
+		pending && /^[[:space:]]*\/\// { next }
+		pending && /^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]/ {
+			line = $0
+			sub(/^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+/, "", line)
+			sub(/[^A-Za-z0-9_].*$/, "", line)
+			if (line != "") { print line; pending = 0 }
+			next
+		}
+		{ pending = 0 }
+	' server/src/bin/doctor.rs | sort -u || true
+)
 
 if ((${#cli01_doc_test_names[@]} == 0)); then
 	echo "FAIL doctor group test names: no backtick test name found in CLI-01 '| 群 | 件数 | テスト名 |' table in ${spec}" >&2
 	failures=$((failures + 1))
-else
+fi
+if ((${#doctor_test_fn_names[@]} == 0)); then
+	echo "FAIL doctor #[test] names: no #[test]/#[tokio::test] fn found in server/src/bin/doctor.rs" >&2
+	failures=$((failures + 1))
+fi
+
+# 双方向の集合差を検証する（ドキュメント側のみ・実コード側のみの名前は共に FAIL）。
+if ((${#cli01_doc_test_names[@]} > 0 && ${#doctor_test_fn_names[@]} > 0)); then
 	for name in "${!cli01_doc_test_names[@]}"; do
-		if [[ -z "${doctor_fn_names[$name]:-}" ]]; then
-			echo "FAIL doctor group test name: '${name}' is listed in CLI-01 group table but 'fn ${name}' not found in server/src/bin/doctor.rs" >&2
+		if [[ -z "${doctor_test_fn_names[$name]:-}" ]]; then
+			echo "FAIL doctor group test name: '${name}' in CLI-01 table but no #[test] fn in doctor.rs" >&2
+			failures=$((failures + 1))
+		fi
+	done
+	for name in "${!doctor_test_fn_names[@]}"; do
+		if [[ -z "${cli01_doc_test_names[$name]:-}" ]]; then
+			echo "FAIL doctor #[test] name: '${name}' in doctor.rs but not in CLI-01 table in ${spec}" >&2
 			failures=$((failures + 1))
 		fi
 	done
