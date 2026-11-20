@@ -188,6 +188,10 @@ tmp_encrypted="${tmp_dir}/${prefix}.db.gpg"
 echo "==> backup: ${output}"
 run_bin backup_db --output "$tmp_db"
 run_bin verify_backup --input "$tmp_db"
+# Runbook と同じく verify_backup / verify_audit_log の両方が成功しなければ
+# バックアップとして認めない（fail-closed）。検証対象は生成直後の平文 tmp_db。
+# ローカルファイルなのでトークンは不要で、--database-url のみを渡す。
+run_bin verify_audit_log --database-url "file:${tmp_db}"
 assert_publishable "$output" || exit 1
 mv -T -- "$tmp_db" "$output"
 

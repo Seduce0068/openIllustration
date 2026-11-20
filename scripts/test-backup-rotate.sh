@@ -31,6 +31,15 @@ cat >"${work}/bin/verify_backup" <<'EOF'
 #!/usr/bin/env bash
 echo "dummy verify"
 EOF
+# verify_audit_log は呼び出し引数をログへ残す（自動統合のオラクル用）。
+# ローカル DB のみを検証するためトークンは渡さない。
+cat >"${work}/bin/verify_audit_log" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${AUDIT_VERIFY_LOG:-}" ]]; then
+  printf '%s\n' "$*" >> "$AUDIT_VERIFY_LOG"
+fi
+echo "dummy audit verify"
+EOF
 # 実際の gpg の代わりにダミー成果物を作る（外部サービス不要）。
 cat >"${work}/bin/gpg" <<'EOF'
 #!/usr/bin/env bash
@@ -46,7 +55,7 @@ done
 echo "missing --output" >&2
 exit 1
 EOF
-chmod +x "${work}/bin/backup_db" "${work}/bin/verify_backup" "${work}/bin/gpg"
+chmod +x "${work}/bin/backup_db" "${work}/bin/verify_backup" "${work}/bin/verify_audit_log" "${work}/bin/gpg"
 
 export BIN_DIR="${work}/bin"
 export GPG_BIN="${work}/bin/gpg"
@@ -54,6 +63,7 @@ export BACKUP_DIR="${work}/backups"
 export DATABASE_URL="file:${work}/unused.db"
 export JWT_SECRET="test_secret_for_backup_rotate_script_123"
 export ALLOW_MOCK_AUTH=1
+export AUDIT_VERIFY_LOG="${work}/audit-verify.log"
 
 failures=0
 expect_failure() {
@@ -306,6 +316,61 @@ cleanup_dir="${work}/cleanup-verify"
 new_backup_dir "$cleanup_dir"
 expect_failure "cleanup on verify_backup failure" env BACKUP_DIR="$cleanup_dir" BIN_DIR="${work}/fail-verify-bin" BACKUP_GPG_RECIPIENT=test "$script"
 cleanup_no_leftovers "verify_backup failure" "$cleanup_dir"
+
+# === verify_audit_log の自動統合 ===
+# (a) 正常系: 生成直後の平文 tmp_db に対して verify_audit_log が呼ばれること。
+#     公開先ではなく mktemp の作業ディレクトリ配下の .db であることを引数で確認する。
+: >"$AUDIT_VERIFY_LOG"
+audit_ok_dir="${work}/audit-verify-ok"
+new_backup_dir "$audit_ok_dir"
+expect_success "verify_audit_log invoked on success" env BACKUP_DIR="$audit_ok_dir" BACKUP_GPG_RECIPIENT=test "$script"
+if grep -Fq -- "--database-url file:${audit_ok_dir}" "$AUDIT_VERIFY_LOG" &&
+	grep -Eq -- '--database-url file:.*/\.openillustration-[^ ]+/openillustration\.db$' "$AUDIT_VERIFY_LOG"; then
+	echo "PASS verify_audit_log invoked on plaintext tmp_db before publish"
+else
+	echo "FAIL verify_audit_log not invoked on plaintext tmp_db"
+	cat "$AUDIT_VERIFY_LOG" >&2
+	failures=$((failures + 1))
+fi
+
+# (b) verify_audit_log 失敗: Runbook の「両方成功しなければ認めない」に従い、
+#     公開前に失敗して成果物を出さず、一時平文を清掃し、ALERT_CMD が通知する。
+mkdir -p "${work}/fail-audit-bin"
+cp "${work}/bin/backup_db" "${work}/fail-audit-bin/backup_db"
+cp "${work}/bin/verify_backup" "${work}/fail-audit-bin/verify_backup"
+cat >"${work}/fail-audit-bin/verify_audit_log" <<'EOF'
+#!/usr/bin/env bash
+if [[ -n "${AUDIT_VERIFY_LOG:-}" ]]; then
+  printf 'FAILED_AUDIT %s\n' "$*" >> "$AUDIT_VERIFY_LOG"
+fi
+echo "simulated audit verify failure" >&2
+exit 10
+EOF
+chmod +x "${work}/fail-audit-bin/verify_audit_log"
+cleanup_dir="${work}/cleanup-audit"
+new_backup_dir "$cleanup_dir"
+: >"${ALERT_LOG}"
+expect_failure "verify_audit_log failure is fail-closed" env BACKUP_DIR="$cleanup_dir" BIN_DIR="${work}/fail-audit-bin" BACKUP_GPG_RECIPIENT=test ALERT_CMD="${work}/alert.sh" AUDIT_VERIFY_LOG="${work}/audit-fail.log" "$script"
+cleanup_no_leftovers "verify_audit_log failure" "$cleanup_dir"
+if grep -q '^FAILED_AUDIT ' "${work}/audit-fail.log" 2>/dev/null; then
+	echo "PASS verify_audit_log failure was the cause (marker recorded)"
+else
+	echo "FAIL verify_audit_log failure marker missing"
+	failures=$((failures + 1))
+fi
+if compgen -G "${cleanup_dir}/openillustration-*.db" >/dev/null ||
+	compgen -G "${cleanup_dir}/openillustration-*.db.gpg" >/dev/null; then
+	echo "FAIL verify_audit_log failure: backup artifact was published"
+	failures=$((failures + 1))
+else
+	echo "PASS verify_audit_log failure: no backup artifact published"
+fi
+if [[ -s "${ALERT_LOG}" ]]; then
+	echo "PASS alert invoked on verify_audit_log failure"
+else
+	echo "FAIL alert not invoked on verify_audit_log failure"
+	failures=$((failures + 1))
+fi
 
 assert_plaintext_retained() {
 	local name="$1" dir="$2"
