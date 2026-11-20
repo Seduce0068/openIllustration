@@ -2614,8 +2614,10 @@ pub async fn logout(
     Ok(response)
 }
 
-/// ログへ出す URL から userinfo と query を除去する。
+/// ログへ出す URL から userinfo と query / fragment を除去する。
 /// ゲートウェイ URL に認証情報やトークンが含まれても記録しない。
+/// パース失敗時のフォールバックは `scheme://` 形のみ authority を走査し、
+/// スキームレス URL（`//` 始まりを含む）は authority 対象外で userinfo を除去しない。
 pub fn redact_url(url: &str) -> String {
     match reqwest::Url::parse(url) {
         Ok(mut parsed) => {
@@ -2626,7 +2628,36 @@ pub fn redact_url(url: &str) -> String {
             parsed.set_fragment(None);
             parsed.to_string()
         }
-        Err(_) => url.split(['?', '#']).next().unwrap_or(url).to_string(),
+        Err(_) => {
+            // パース失敗時も userinfo とクエリ/フラグメントを除去する。
+            // reqwest::Url に頼らず std の文字列操作だけで扱うため、
+            // シェル/URL の特殊文字・小数点・パーセントエンコードに影響されない。
+            // 先に authority（scheme:// 直後から最初の '/' まで）だけを切り出して userinfo を
+            // 除去し、その後にクエリ/フラグメントを除去する。順序を逆にすると userinfo 内の
+            // '?' / '#' がクエリ開始と誤判定され、userinfo の一部が残存する。
+            let redacted = if let Some(scheme_end) = url.find("://") {
+                let authority_start = scheme_end + 3;
+                let rest = &url[authority_start..];
+                // authority 内に '@' が無ければ URL 全体をそのまま残す。
+                let authority_end = rest.find('/').unwrap_or(rest.len());
+                let authority = &rest[..authority_end];
+                if let Some(at) = authority.rfind('@') {
+                    let mut s = String::with_capacity(url.len());
+                    s.push_str(&url[..authority_start]);
+                    s.push_str(&rest[at + 1..]);
+                    s
+                } else {
+                    url.to_string()
+                }
+            } else {
+                url.to_string()
+            };
+            redacted
+                .split(['?', '#'])
+                .next()
+                .unwrap_or(&redacted)
+                .to_string()
+        }
     }
 }
 

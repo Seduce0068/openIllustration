@@ -2303,6 +2303,27 @@ fn test_redact_url_removes_credentials_and_query() {
         "https://example.com/path"
     );
     assert_eq!(crate::redact_url("not a url#token=secret"), "not a url");
+    // パース失敗する userinfo 付き URL でも認証情報とクエリを除去する。
+    let redacted = crate::redact_url("https://user:pass@exa mple.com/path?token=x");
+    assert!(!redacted.contains("user:pass"));
+    assert!(!redacted.contains("token=x"));
+    assert_eq!(redacted, "https://exa mple.com/path");
+    // userinfo 内に '?' / '#' を含むパース失敗 URL でも authority を先に切り出すため、
+    // userinfo の一部がクエリ/フラグメントとして残存しない。
+    assert_eq!(
+        crate::redact_url("https://user:pa?ss@exa mple.com/path"),
+        "https://exa mple.com/path"
+    );
+    assert_eq!(
+        crate::redact_url("https://user:p#ss@exa mple.com/path?token=x"),
+        "https://exa mple.com/path"
+    );
+    // パース失敗時も authority 内に '@' が無ければ userinfo 除去を行わず、
+    // パス内の '@' は残す。
+    assert_eq!(
+        crate::redact_url("https://exa mple.com/path@item?token=x"),
+        "https://exa mple.com/path@item"
+    );
 }
 
 /// ALLOWED_ORIGINS の警告用マスクはオリジン値そのものを漏らさない。
