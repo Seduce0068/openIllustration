@@ -189,6 +189,56 @@ assert_license_text() {
 	fi
 }
 
+# 配布物が非機微な公開物として適切な権限（dir 755 / file 644）で配置されたことを検証する。
+# backup-rotate の秘密データ（0600）とは権限契約が異なる点に注意。
+assert_public_permissions() {
+	local dir="$1" name="$2"
+	local mode path txt_count=0
+
+	mode="$(stat -c '%a' "$dir")"
+	if [[ "$mode" == "755" ]]; then
+		echo "PASS ${name}: out_dir mode 755"
+	else
+		echo "FAIL ${name}: out_dir mode ${mode} (expected 755)"
+		failures=$((failures + 1))
+	fi
+
+	for path in "$dir/LICENSE" "$dir/NOTICE" "$dir/DEPENDENCIES.tsv"; do
+		mode="$(stat -c '%a' "$path")"
+		if [[ "$mode" == "644" ]]; then
+			echo "PASS ${name}: ${path##*/} mode 644"
+		else
+			echo "FAIL ${name}: ${path##*/} mode ${mode} (expected 644)"
+			failures=$((failures + 1))
+		fi
+	done
+
+	mode="$(stat -c '%a' "${dir}/THIRD_PARTY_LICENSES")"
+	if [[ "$mode" == "755" ]]; then
+		echo "PASS ${name}: THIRD_PARTY_LICENSES dir mode 755"
+	else
+		echo "FAIL ${name}: THIRD_PARTY_LICENSES dir mode ${mode} (expected 755)"
+		failures=$((failures + 1))
+	fi
+
+	while IFS= read -r -d '' path; do
+		txt_count=$((txt_count + 1))
+		mode="$(stat -c '%a' "$path")"
+		if [[ "$mode" == "644" ]]; then
+			echo "PASS ${name}: ${path##*/} mode 644"
+		else
+			echo "FAIL ${name}: ${path##*/} mode ${mode} (expected 644)"
+			failures=$((failures + 1))
+		fi
+	done < <(find "${dir}/THIRD_PARTY_LICENSES" -maxdepth 1 -type f -name '*.txt' -print0)
+	if ((txt_count > 0)); then
+		echo "PASS ${name}: checked ${txt_count} third-party license text(s)"
+	else
+		echo "FAIL ${name}: no third-party license text generated"
+		failures=$((failures + 1))
+	fi
+}
+
 echo "=== ケース1: 通常生成と4成果物の存在 ==="
 expect_success "case1 generate" bash "$script" "$normal_out"
 assert_present "$normal_out" "case1 artifacts"
@@ -311,6 +361,25 @@ if [[ -z "$tmp_leftovers" ]]; then
 	echo "PASS case6: no .tmp.* directories left"
 else
 	echo "FAIL case6: leftover .tmp.* directories: ${tmp_leftovers}"
+	failures=$((failures + 1))
+fi
+
+echo "=== ケース7: 配布物の公開権限（dir 755 / file 644、非機微） ==="
+perm_out="${work}/out-perms"
+# 実行ビット付きのライセンス本文をソースにすると、chmod -R a+rX の大文字 X が
+# 実行ビットを残して 755 になる。find -exec chmod 644 で必ず 644 へ正規化されることを検証する。
+exec_source="${fixture_dir}/crate-a/LICENSE"
+chmod 755 "$exec_source"
+expect_success "case7 generate" bash "$script" "$perm_out"
+assert_public_permissions "$perm_out" "case7 permissions"
+
+# 実行ビット付き fixture 由来の .txt が 644 に正規化されたことを stat -c %a で明示検証する。
+perm_txt="${perm_out}/THIRD_PARTY_LICENSES/fixture-crate-a-1.2.3.txt"
+perm_mode="$(stat -c '%a' "$perm_txt")"
+if [[ "$perm_mode" == "644" ]]; then
+	echo "PASS case7: executable-source license normalized to 644"
+else
+	echo "FAIL case7: executable-source license mode ${perm_mode} (expected 644)"
 	failures=$((failures + 1))
 fi
 

@@ -194,6 +194,15 @@ if [[ -e "$out_dir" ]]; then
 	mv "$out_dir" "$old_dir"
 	phase="stashed"
 fi
+# 生成中は umask 077 で私有 (0700/0600) に保つが、配布物そのものは
+# LICENSE / NOTICE / DEPENDENCIES.tsv / THIRD_PARTY_LICENSES/*.txt の
+# ライセンス本文と帰属表示だけで非機微な公開物である。公開直前にのみ
+# 他者読取を付与する（backup-rotate の秘密データ 0600 とは別契約）。
+chmod -R a+rX "$work_dir"
+# 大文字 X は実行ビット付きファイルに実行ビットを残すため、全ファイルを 644 に正規化する。
+# ディレクトリは上の a+rX で 755 を維持したまま、ファイルのみ明示的に 644 へ落とす。
+find "$work_dir" -type f -exec chmod 644 {} +
+chmod 755 "$work_dir"
 mv "$work_dir" "$out_dir"
 phase="published"
 

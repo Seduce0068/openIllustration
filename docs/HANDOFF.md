@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-20T15:22:58+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -110,7 +110,9 @@ CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジ�
 wasm build / E2E(9件) がすべて成功した。
 
 配布物のライセンス同梱は `bash scripts/prepare-distribution.sh <出力先>` で生成（LICENSE / NOTICE / DEPENDENCIES.tsv /
-THIRD_PARTY_LICENSES/）。
+THIRD_PARTY_LICENSES/）。出力先は 0755、LICENSE / NOTICE / DEPENDENCIES.tsv / THIRD_PARTY_LICENSES/*.txt は 0644 で配置
+（ライセンス本文と帰属表示のみの非機微な公開物。`backup-rotate` の秘密データ 0600 とは別契約。生成途中の
+作業ディレクトリは umask 077 で 0700 を維持し、公開直前に読取権限を付与）。
 
 `server` クレートは `verify_audit_log` bin も auto-discover されるため、
 `cargo run` が曖昧にならないよう Cargo.toml に `default-run = "server"` を設定済み。
