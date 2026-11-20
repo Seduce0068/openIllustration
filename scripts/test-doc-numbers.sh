@@ -168,6 +168,26 @@ doc_bin_counts() {
 		true
 }
 
+# DETAILED_DESIGN.md の CLI 表から「テスト数」列（3列目）の総数を取り出す。
+# 行形式: | `doctor` | ... | 45（既存29＋...） | ... |
+# 括弧内の内訳数（既存29 等）は総数ではないため、セルの先頭数値だけを採る。
+doc_cli_table_count() {
+	local bin="$1"
+	awk -F'|' -v target="$bin" '
+		{
+			name = $2
+			gsub(/^[[:space:]`,]+|[[:space:]`,]+$/, "", name)
+			if (name != target) next
+			cell = $4
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+			if (match(cell, /^[0-9]+/)) {
+				print substr(cell, 1, RLENGTH)
+				exit
+			}
+		}
+	' "$design" || true
+}
+
 for bin_name in doctor verify_audit_export verify_backup; do
 	case "$bin_name" in
 	doctor) bin_file="server/src/bin/doctor.rs" ;;
@@ -175,17 +195,69 @@ for bin_name in doctor verify_audit_export verify_backup; do
 	verify_backup) bin_file="server/src/bin/verify_backup.rs" ;;
 	esac
 	actual_tests="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$bin_file" || true)"
+
+	# 既存どおり TEST_SPECIFICATION の記載件数（<bin> <N>件 / <bin> <N>テスト）を照合。
 	documented_tests="$(doc_bin_counts "$bin_name")"
 	if [[ -z "$documented_tests" ]]; then
 		echo "FAIL ${bin_name} test count: no documented '<${bin_name}> <N>件' line found in ${spec}" >&2
 		failures=$((failures + 1))
+	else
+		while IFS= read -r documented_n; do
+			[[ -z "$documented_n" ]] && continue
+			assert_numbers_match "${bin_name} test count" "$actual_tests" "$documented_n"
+		done <<<"$documented_tests"
+	fi
+
+	# 追加: DETAILED_DESIGN.md の CLI テスト数表も実コードの #[test] 実数と照合する。
+	design_n="$(doc_cli_table_count "$bin_name")"
+	if [[ -z "$design_n" ]]; then
+		echo "FAIL ${bin_name} test count: no CLI table count found in ${design}" >&2
+		failures=$((failures + 1))
+	else
+		assert_numbers_match "${bin_name} test count @ ${design}" "$actual_tests" "$design_n"
+	fi
+done
+
+# --- 6. E2E 個別 spec 実行例の件数照合 -------------------------------------
+# TEST_SPECIFICATION の `npm test -- <spec>.spec.ts # ...（N件...）` 実行例から
+# 記載件数 N を取り出し、e2e/tests/<spec>.spec.ts の `test(` 定義数と照合する。
+# 実行例はあるが件数表記がない spec（search / favorites / export 等）は対象外。
+# 件数表記があるのに抽出できない場合は fail-closed で FAIL とする。
+spec_example_lines="$(grep -E 'npm test -- [A-Za-z0-9_-]+\.spec\.ts[^#]*#' "$spec" || true)"
+if [[ -z "$spec_example_lines" ]]; then
+	echo "FAIL e2e spec example count: no 'npm test -- <spec>.spec.ts # ...' line found in ${spec}" >&2
+	failures=$((failures + 1))
+fi
+while IFS= read -r example_line; do
+	[[ -z "$example_line" ]] && continue
+	spec_name="$(grep -oE 'npm test -- [A-Za-z0-9_-]+\.spec\.ts' <<<"$example_line" | head -n1 | awk '{print $NF}' || true)"
+	spec_name="${spec_name%.spec.ts}"
+	[[ -n "$spec_name" ]] || continue
+	comment="${example_line#*#}"
+	# 件数表記がなければ対象外（実行例はあるが件数を書いていない spec）。
+	if ! grep -qE '[0-9]+件' <<<"$comment"; then
 		continue
 	fi
-	while IFS= read -r documented_n; do
-		[[ -z "$documented_n" ]] && continue
-		assert_numbers_match "${bin_name} test count" "$actual_tests" "$documented_n"
-	done <<<"$documented_tests"
-done
+	# 総数を抽出する。複数内訳が並ぶ形（「...3件 + ...3件の計6件」）では
+	# 「の計N件」を総数として優先し、それ以外は「（N件」を採る。
+	documented_n="$(grep -oE 'の計[0-9]+件' <<<"$comment" | grep -oE '[0-9]+' | head -n1 || true)"
+	if [[ -z "$documented_n" ]]; then
+		documented_n="$(grep -oE '（[0-9]+件' <<<"$comment" | grep -oE '[0-9]+' | head -n1 || true)"
+	fi
+	if [[ -z "$documented_n" ]]; then
+		echo "FAIL e2e spec example count @ ${spec_name}: count annotation found but no number extracted from '${comment}'" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	spec_file="e2e/tests/${spec_name}.spec.ts"
+	if [[ ! -f "$spec_file" ]]; then
+		echo "FAIL e2e spec example count @ ${spec_name}: no such file ${spec_file}" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	actual_n="$(grep -c '^  test(' "$spec_file" || true)"
+	assert_numbers_match "e2e spec example ${spec_name}" "$actual_n" "$documented_n"
+done <<<"$spec_example_lines"
 
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then

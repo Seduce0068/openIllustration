@@ -207,4 +207,37 @@ test.describe('Version gate (VG-01)', () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe('');
   });
+
+  test('empty value with allow_empty is accepted', () => {
+    // (d) 空文字は allow_empty=1 のとき「未設定」として受理される。
+    // (c) が MAX_* のケースを覆うのに対し、ここは script 内で allow_empty=1 が
+    // 渡される MIN_* と同じラベルで分岐を直接確認する（ラベル非依存の確認）。
+    const result = runAssertMajorNumeric('MIN_NODE_MAJOR', '', '1');
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
+  test('empty value without allow_empty exits 1', () => {
+    // (e) allow_empty 無しの空文字は必須の抽出値として扱われ即座に失敗する。
+    // これで (a)〜(c) と合わせ assert_major_numeric の 5 分岐をすべて覆う。
+    const result = runAssertMajorNumeric('Node major version', '');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      'Node major version is empty: expected a numeric major version.',
+    );
+  });
+
+  test('E2E_LIB_ONLY=1 direct execution of ci-e2e.sh is refused', () => {
+    // E2E_LIB_ONLY=1 は source 専用。直接実行された場合はダウンロード/ビルド等
+    // の副作用へ進まず、ゲート回避を防ぐため exit 1 で明示拒否される。
+    const result = spawnSync('bash', [scriptPath], {
+      encoding: 'utf8',
+      env: { ...process.env, E2E_LIB_ONLY: '1' },
+    });
+    if (result.error) throw result.error;
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('direct execution is refused');
+    // 拒否より前にアーカイブ導入・ビルド等の副作用出力が出ていないこと。
+    expect(result.stdout).toBe('');
+  });
 });
