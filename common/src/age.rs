@@ -108,7 +108,7 @@ impl AgePolicy {
         }
 
         if let Some(value) = getter("AGE_TARGET_REGIONS") {
-            policy.target_regions = parse_csv_list(&value);
+            policy.target_regions = parse_target_regions(&value)?;
         }
 
         if let Some(value) = getter("AGE_ENFORCEMENT_MODE") {
@@ -208,6 +208,24 @@ fn parse_csv_list(value: &str) -> Vec<String> {
 
 fn normalize_country_code(code: &str) -> String {
     code.trim().to_ascii_uppercase()
+}
+
+/// `AGE_TARGET_REGIONS` を大文字化・検証する。
+///
+/// `AGE_COUNTRY_OVERRIDES` と同じく英字2文字（ASCII alphabet のみ）のみ受理し、
+/// 不正値は fail closed で起動拒否する。エラー文言には入力値をエコーしない。
+fn parse_target_regions(value: &str) -> Result<Vec<String>, String> {
+    let mut regions = parse_csv_list(value);
+    for region in &mut regions {
+        *region = normalize_country_code(region);
+        if region.len() != 2 || !region.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(
+                "AGE_TARGET_REGIONS must be comma-separated two-letter region codes (ASCII letters only)"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(regions)
 }
 
 fn parse_country_minimums(value: &str) -> Result<BTreeMap<String, u32>, String> {
@@ -656,5 +674,38 @@ mod tests {
         )]))
         .unwrap();
         assert_eq!(policy.target_regions, vec!["DE", "JP", "US"]);
+    }
+
+    #[test]
+    fn from_env_with_uppercases_lowercase_target_regions() {
+        // 既存の小文字 jp/us は大文字化して受理し、重複も除去する（互換維持）。
+        let entries = [("AGE_TARGET_REGIONS", "jp,us,jp")];
+        let policy = AgePolicy::from_env_with(getter_from(&entries)).unwrap();
+        assert_eq!(policy.target_regions, vec!["JP", "US"]);
+    }
+
+    #[test]
+    fn from_env_with_rejects_non_two_letter_target_regions() {
+        // 英字2文字（ASCII alphabet のみ）でない値は fail closed で起動拒否。
+        for raw in ["jpn", "12", "j-P", "J1", "日本"] {
+            let entries = [("AGE_TARGET_REGIONS", raw)];
+            let err = AgePolicy::from_env_with(getter_from(&entries))
+                .expect_err("invalid region code must be rejected");
+            assert!(
+                err.contains("AGE_TARGET_REGIONS"),
+                "error must name the variable: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn target_regions_error_does_not_echo_input() {
+        // エラー文言には設定名のみを含め、入力値はエコーしない。
+        for raw in ["jpn", "12", "j-P", "J1", "日本"] {
+            let entries = [("AGE_TARGET_REGIONS", raw)];
+            let err = AgePolicy::from_env_with(getter_from(&entries))
+                .expect_err("invalid region code must be rejected");
+            assert!(!err.contains(raw), "error must not echo input: {err}");
+        }
     }
 }

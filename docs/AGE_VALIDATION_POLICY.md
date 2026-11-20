@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-20T12:06:40+09:00"
+  at: "2026-11-20T14:41:22+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -57,7 +57,7 @@ generated:
 | --- | --- | --- |
 | `AGE_DEFAULT_MINIMUM` | `21` | 一律の既定最少年齢（1以上、0 は年齢ゲート無効化のため拒否）。保守的な安全余裕ベースライン。 |
 | `AGE_COUNTRY_OVERRIDES` | 空 | 国別上書き。形式: `CC=NN,CC=NN`（例: `JP=18,US=21`）。国コードは英字2文字を大文字化、年齢は1以上（0 は拒否）。 |
-| `AGE_TARGET_REGIONS` | 空 | 対象地域コードのカンマ区切り（例: `JP,US,DE`）。英字2文字を大文字化し重複除去・ソート。 |
+| `AGE_TARGET_REGIONS` | 空 | 対象地域コードのカンマ区切り（例: `JP,US,DE`）。英字2文字を大文字化し重複除去・ソート。英字2文字以外（例: `jpn`, `12`, `j-P`）は起動拒否（fail-closed）。 |
 | `AGE_ENFORCEMENT_MODE` | `self_reported` | `self_reported` / `self_reported_dob_country`: 申告された生年月日・国コードで判定（信頼属性ではない）。`trusted_attribute_required` / `trusted_attribute`: 検証済み属性入力が未実装のため現時点では常に拒否（フェイルクローズ）。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。明示設定を要求。 |
 | `AGE_POLICY_CONFIGURED` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。設定確認/確定フラグ（前項目と併用）。 |
