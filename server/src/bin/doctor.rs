@@ -23,6 +23,57 @@ fn env(name: &str) -> Option<String> {
     std::env::var(name).ok()
 }
 
+// --- 新規診断の固定文言（値は一切エコーしない） ------------------------------
+
+/// 本番のバックアップ必須設定が欠落している場合の固定警告。
+const BACKUP_RECIPIENT_UNSET_WARNING: &str =
+    "BACKUP_GPG_RECIPIENT is not set; encrypted backups are required in production";
+const BACKUP_OFFSITE_PAIR_WARNING: &str = "OFFSITE_COPY_CMD and OFFSITE_DEST must be set together";
+const BACKUP_ALERT_CMD_WARNING: &str = "ALERT_CMD is set but not executable";
+
+/// 年齢判定の基準日（TZ）に関する固定警告。
+const TZ_UNSET_WARNING: &str =
+    "TZ is not set; age baseline date falls back to UTC (set it to match AGE_TARGET_REGIONS)";
+const TZ_REGION_MISMATCH_WARNING: &str =
+    "AGE_TARGET_REGIONS is configured but TZ does not provide a matching local baseline date";
+
+/// パスが実行可能なファイルかを判定する（`backup-rotate.sh` の `-x` と同趣旨）。
+/// 判定結果だけを返し、入力パスは結果へ含めない。
+fn is_executable_file(path: &str) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+/// TZ の実効 UTC オフセット（時間）。未設定・未対応名は UTC（0）へフォールバックする。
+/// `server::today_for_policy` の `policy_fixed_offset` と同じ判定を診断専用に再現し、
+/// 設定値そのものは返さない。
+fn tz_utc_offset_hours(tz: Option<&str>) -> i32 {
+    let Some(value) = tz.map(str::trim).filter(|part| !part.is_empty()) else {
+        return 0;
+    };
+    if value.eq_ignore_ascii_case("Asia/Tokyo") {
+        return 9;
+    }
+    value
+        .strip_prefix("Etc/GMT")
+        .and_then(|hours| hours.parse::<i32>().ok())
+        .map(|hours| -hours) // POSIX 規約: Etc/GMT-9 = UTC+9
+        .unwrap_or(0)
+}
+
 /// 手動フラグのみで年齢ゲートを通過できる設定への固定警告（値はエコーしない）。
 const AGE_POLICY_FLAG_ONLY_WARNING: &str =
     "AGE_POLICY_CONFIGURED is set but required age policy values are at defaults";
@@ -94,7 +145,7 @@ where
             .map(|value| !value.trim().is_empty())
             .unwrap_or(false)
     };
-    let production = production_config_errors(
+    let mut production: Vec<String> = production_config_errors(
         allow_mock_auth,
         oidc_value_present("OIDC_ISSUER")
             && oidc_value_present("OIDC_CLIENT_ID")
@@ -104,11 +155,40 @@ where
             && oidc_value_present("OIDC_TOKEN_ENDPOINT")
             && oidc_value_present("OIDC_JWKS_URI"),
         lookup("PINATA_JWT").as_deref(),
-    );
-    results.push((
-        "production",
-        production.into_iter().map(str::to_string).collect(),
-    ));
+    )
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+
+    // バックアップ設定の整合を production カテゴリ内へ追加する（check 数は据え置き）。
+    // 本番相当（mock 無効）のみを診断し、backup-rotate.sh の fail-closed と同じ条件を
+    // 警告化する。4 変数とも AUDIT_EXPECT_ROOT と同じく生値の非空判定（trim しない）で
+    // `[[ -n "$var" ]]` と一致させる。ALERT_CMD は実行ファイルのパスなので生値のまま
+    // `-x "$alert_cmd"` 相当を調べ、値は出力しない。
+    if !allow_mock_auth {
+        let recipient_set = lookup("BACKUP_GPG_RECIPIENT")
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        let copy_set = lookup("OFFSITE_COPY_CMD")
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        let dest_set = lookup("OFFSITE_DEST")
+            .map(|value| !value.is_empty())
+            .unwrap_or(false);
+        if !recipient_set {
+            production.push(BACKUP_RECIPIENT_UNSET_WARNING.to_string());
+        }
+        if copy_set != dest_set {
+            production.push(BACKUP_OFFSITE_PAIR_WARNING.to_string());
+        }
+        if let Some(alert) = lookup("ALERT_CMD")
+            && !alert.is_empty()
+            && !is_executable_file(alert.as_str())
+        {
+            production.push(BACKUP_ALERT_CMD_WARNING.to_string());
+        }
+    }
+    results.push(("production", production));
 
     // モック認証と本番相当の設定の併用は危険（モック認証で本番データが触れる）。
     // ALLOW_MOCK_AUTH が真で実質的な本番設定が一つでもあれば警告する。秘密値は出力しない。
@@ -376,6 +456,36 @@ where
             }
         }
         Err(error) => age_errors.push(error),
+    }
+
+    // 年齢判定の基準日（TZ）診断を age_policy カテゴリ内へ追加する（check 数は据え置き）。
+    // 未設定は UTC フォールバックとなり、対象地域のローカル日付と境界がずれ得る。
+    // いずれも固定文言の警告のみで、既定は終了コードへ影響しない（--strict 時のみ失敗）。
+    let tz_raw = lookup("TZ");
+    let tz_present = tz_raw
+        .as_deref()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
+    if !tz_present {
+        age_errors.push(TZ_UNSET_WARNING.to_string());
+    }
+    let regions_raw = lookup("AGE_TARGET_REGIONS");
+    let regions: Vec<&str> = regions_raw
+        .as_deref()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default();
+    let offset_hours = tz_utc_offset_hours(tz_raw.as_deref());
+    let jp_targeted = regions
+        .iter()
+        .any(|region| region.eq_ignore_ascii_case("JP"));
+    if !regions.is_empty() && (offset_hours == 0 || (jp_targeted && offset_hours != 9)) {
+        age_errors.push(TZ_REGION_MISMATCH_WARNING.to_string());
     }
     results.push(("age_policy", age_errors));
 
@@ -1129,8 +1239,10 @@ mod tests {
                 let mut pairs = oidc_complete_pairs("https://issuer.example.jp");
                 pairs.retain(|(name, _)| *name != key);
                 pairs.push((key, raw));
-                // PINATA_JWT を揃え、production の警告を OIDC 未設定だけに孤立させる。
+                // PINATA_JWT とバックアップ必須設定を揃え、production の警告を
+                // OIDC 未設定だけに孤立させる（新規バックアップ警告の混入を防ぐ）。
                 pairs.push(("PINATA_JWT", "real-production-jwt"));
+                pairs.push(("BACKUP_GPG_RECIPIENT", "backup@example.jp"));
                 let results = check_all_with(lookup_from(&pairs));
                 let errors = errors_for(&results, "production");
                 assert_eq!(errors.len(), 1, "key={key}, raw={raw:?}, errors={errors:?}");
@@ -1427,8 +1539,12 @@ mod tests {
 
     #[test]
     fn age_policy_flag_only_warns_without_disclosing_values() {
+        // TZ を明示して新規の基準日警告を除き、既存のフラグ警告だけを検証する。
         for value in ["1", "true", "TRUE"] {
-            let results = check_all_with(lookup_from(&[("AGE_POLICY_CONFIGURED", value)]));
+            let results = check_all_with(lookup_from(&[
+                ("AGE_POLICY_CONFIGURED", value),
+                ("TZ", "Asia/Tokyo"),
+            ]));
             let errors = errors_for(&results, "age_policy");
             assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
             assert_eq!(errors[0], AGE_POLICY_FLAG_ONLY_WARNING, "value={value}");
@@ -1437,6 +1553,7 @@ mod tests {
         let results = check_all_with(lookup_from(&[
             ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
             ("AGE_POLICY_CONFIGURED", "1"),
+            ("TZ", "Asia/Tokyo"),
         ]));
         assert_eq!(errors_for(&results, "age_policy").len(), 1);
     }
@@ -1444,15 +1561,22 @@ mod tests {
     #[test]
     fn age_policy_flag_with_explicit_values_has_no_warning() {
         // 必須設定値が 1 つでも既定と異なれば「既定のまま」ではない。
+        // TZ は対象地域 JP に合わせて明示し、新規の基準日警告を混入させない。
         let scenarios: [&[(&str, &str)]; 3] = [
             &[
                 ("AGE_POLICY_CONFIGURED", "1"),
                 ("AGE_DEFAULT_MINIMUM", "20"),
+                ("TZ", "Asia/Tokyo"),
             ],
-            &[("AGE_POLICY_CONFIGURED", "1"), ("AGE_TARGET_REGIONS", "JP")],
+            &[
+                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_TARGET_REGIONS", "JP"),
+                ("TZ", "Asia/Tokyo"),
+            ],
             &[
                 ("AGE_POLICY_CONFIGURED", "1"),
                 ("AGE_COUNTRY_OVERRIDES", "JP=20"),
+                ("TZ", "Asia/Tokyo"),
             ],
         ];
         for pairs in scenarios {
@@ -1466,15 +1590,135 @@ mod tests {
 
     #[test]
     fn age_policy_flag_unset_keeps_existing_behavior() {
+        // TZ を明示して新規の基準日警告を除き、従来のフラグ挙動だけを検証する。
         // フラグ未設定なら必須設定値が既定でも警告しない（従来どおり）。
-        let results = check_all_with(lookup_from(&[]));
+        let results = check_all_with(lookup_from(&[("TZ", "Asia/Tokyo")]));
         assert!(errors_for(&results, "age_policy").is_empty());
         // 設定値だけ明示されていても警告しない。
-        let results = check_all_with(lookup_from(&[("AGE_TARGET_REGIONS", "JP")]));
+        let results = check_all_with(lookup_from(&[
+            ("AGE_TARGET_REGIONS", "JP"),
+            ("TZ", "Asia/Tokyo"),
+        ]));
         assert!(errors_for(&results, "age_policy").is_empty());
         // require=1 のみなら年齢判定側が 403 を返し、doctor は警告しない（従来どおり）。
-        let results = check_all_with(lookup_from(&[("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1")]));
+        let results = check_all_with(lookup_from(&[
+            ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
+            ("TZ", "Asia/Tokyo"),
+        ]));
         assert!(errors_for(&results, "age_policy").is_empty());
+    }
+
+    // --- 2i. バックアップ設定と基準日（TZ）の診断 ---------------------------
+
+    #[test]
+    fn production_backup_misconfiguration_warns_without_disclosing_values() {
+        // 本番相当（mock 無効）で、BACKUP_GPG_RECIPIENT 未設定・OFFSITE 片方設定・
+        // ALERT_CMD 実行不可を固定文言で警告する。設定値はエコーしない。
+        const ALERT: &str = "/no/such/alert-command-for-doctor-test";
+        let results = check_all_with(lookup_from(&[
+            ("OFFSITE_COPY_CMD", "/usr/bin/true"),
+            ("ALERT_CMD", ALERT),
+        ]));
+        let errors = errors_for(&results, "production");
+        for expected in [
+            BACKUP_RECIPIENT_UNSET_WARNING,
+            BACKUP_OFFSITE_PAIR_WARNING,
+            BACKUP_ALERT_CMD_WARNING,
+        ] {
+            assert!(
+                errors.iter().any(|error| error.as_str() == expected),
+                "missing: {expected}, errors={errors:?}"
+            );
+        }
+        for error in errors {
+            assert!(!error.contains(ALERT), "設定値が漏洩: {error}");
+            assert!(!error.contains("/usr/bin/true"), "設定値が漏洩: {error}");
+        }
+    }
+
+    #[test]
+    fn production_backup_whitespace_only_values_warn_without_disclosing_values() {
+        // backup-rotate.sh は `[[ -n "$var" ]]` / `-x "$alert_cmd"` で生値を判定するため、
+        // 空白のみの値も「設定あり」として扱われ、実行不可なら警告になる（trim しない）。
+        // 旧 trim 判定では警告されなかったケースの回帰防止。値はエコーしない。
+        const WHITESPACE: &str = "   ";
+        let results = check_all_with(lookup_from(&[
+            ("OFFSITE_COPY_CMD", WHITESPACE),
+            ("ALERT_CMD", WHITESPACE),
+        ]));
+        let errors = errors_for(&results, "production");
+        // 空白のみの OFFSITE_COPY_CMD は設定あり、OFFSITE_DEST 未設定との不整合で警告。
+        let pair = errors
+            .iter()
+            .find(|error| error.as_str() == BACKUP_OFFSITE_PAIR_WARNING)
+            .unwrap_or_else(|| panic!("OFFSITE 不整合の警告が必要: {errors:?}"));
+        assert!(!pair.contains(WHITESPACE), "設定値が漏洩: {pair}");
+        // 空白のみの ALERT_CMD は生値のまま -x 判定され、実行不可で警告。
+        let alert = errors
+            .iter()
+            .find(|error| error.as_str() == BACKUP_ALERT_CMD_WARNING)
+            .unwrap_or_else(|| panic!("ALERT_CMD 実行不可の警告が必要: {errors:?}"));
+        assert!(!alert.contains(WHITESPACE), "設定値が漏洩: {alert}");
+    }
+
+    #[test]
+    fn age_policy_tz_unset_warns_without_disclosing_values() {
+        // TZ 未設定は UTC フォールバックとなるため固定文言で警告する。
+        let results = check_all_with(lookup_from(&[]));
+        let errors = errors_for(&results, "age_policy");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], TZ_UNSET_WARNING);
+
+        // 対象地域を設定したまま TZ が UTC なら不整合も警告する（値はエコーしない）。
+        let results = check_all_with(lookup_from(&[
+            ("AGE_TARGET_REGIONS", "JP"),
+            ("TZ", "Etc/UTC"),
+        ]));
+        let errors = errors_for(&results, "age_policy");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.as_str() == TZ_REGION_MISMATCH_WARNING),
+            "errors={errors:?}"
+        );
+        for error in errors {
+            assert!(!error.contains("JP"), "設定値が漏洩: {error}");
+            assert!(!error.contains("Etc/UTC"), "設定値が漏洩: {error}");
+        }
+    }
+
+    #[test]
+    fn complete_backup_and_tz_configuration_adds_no_new_warnings() {
+        // 実行可能なパスはテストバイナリ自身を使い、ファイル生成なしで -x 判定を通す。
+        let executable = std::env::current_exe()
+            .expect("test binary path")
+            .to_string_lossy()
+            .into_owned();
+        let mut pairs: Vec<(&str, &str)> = oidc_complete_pairs("https://issuer.example.jp");
+        pairs.extend([
+            ("PINATA_JWT", "real-production-jwt"),
+            ("AUDIT_EXPECT_ROOT", "deadbeefcafebabe"),
+            ("ALLOWED_ORIGINS", "https://example.jp"),
+            ("OIDC_REQUIRED_ACR", "urn:example:acr"),
+            ("OIDC_REQUIRED_AMR", "pwd,mfa"),
+            ("BACKUP_GPG_RECIPIENT", "backup@example.jp"),
+            ("OFFSITE_COPY_CMD", executable.as_str()),
+            ("OFFSITE_DEST", "/var/backups/offsite"),
+            ("ALERT_CMD", executable.as_str()),
+            ("TZ", "Asia/Tokyo"),
+            ("AGE_TARGET_REGIONS", "JP"),
+        ]);
+        let results = check_all_with(lookup_from(&pairs));
+        assert!(
+            errors_for(&results, "production").is_empty(),
+            "production={:?}",
+            errors_for(&results, "production")
+        );
+        assert!(
+            errors_for(&results, "age_policy").is_empty(),
+            "age_policy={:?}",
+            errors_for(&results, "age_policy")
+        );
     }
 
     // --- 3. strict 判定 ----------------------------------------------------

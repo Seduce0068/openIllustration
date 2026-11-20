@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-21T06:50:20+09:00"
+  at: "2026-11-21T07:23:27+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -198,6 +198,14 @@ generated:
    `doctor --strict` の警告対象には `ALLOW_IPV4_LOCALHOST`（有効時）と `TRUSTED_PROXY_CIDRS`
    （設定時）も含まれる。いずれも設定値は出力せず有無のみを警告する。前者は本番で無効化し、
    後者は信頼済みプロキシ範囲のみを設定して意図を確認する（意図的な利用なら警告は許容）。
+- `production` カテゴリはバックアップ設定の整合も診断する（本番相当・`ALLOW_MOCK_AUTH` 無効時のみ）。
+   `BACKUP_GPG_RECIPIENT` 未設定、`OFFSITE_COPY_CMD` / `OFFSITE_DEST` の片方だけ設定、
+   `ALERT_CMD` に実行不可のパスを指定した場合に固定文言で警告し、設定値は出力しない。
+- `age_policy` カテゴリは年齢判定の基準日（`TZ`）も診断する。`TZ` 未設定で UTC へ
+   フォールバックする場合、`AGE_TARGET_REGIONS` に対して基準日のオフセットが不整合な場合に
+   固定文言で警告し、設定値は出力しない。
+- 上記2カテゴリの追加項目は既存の23カテゴリ内に含まれ、カテゴリ数は変わらない。
+   既定は警告のみで終了コード0、`--strict` のときだけ問題として終了コード1とする。
 - **Runbook（本番起動前ローカルゲート）**: 秘密管理基盤から本番相当の環境変数を注入し、
   `cargo run -p server --bin doctor -- --strict` を実行して終了コード0を確認してからデプロイする。
   診断は既存の23カテゴリ固定（`check23`）と `audit_expect_root` / `production` /

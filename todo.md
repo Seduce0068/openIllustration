@@ -119,8 +119,10 @@ P1（本番運用の健全性）:
 - [x] **BIP44 derivation_index の non-hardened 上限を明示エラーへ** — 根拠 `server/src/payments.rs:200-211` / R2-BV07 / 中。
   2026-11-21 対応: `derivation_index_to_u32` を `0..2^31` 範囲チェックへ変更。上限到達前に Internal で
   拒否し、注文がすべて 500 になる問題を解消。境界回帰テストを追加。
-- [ ] **doctor へバックアップ必須設定と TZ の診断を追加** — 根拠 `server/src/bin/doctor.rs:66,356` / R1-CF02,CF07 / 中。
-  BACKUP_GPG_RECIPIENT 未設定・OFFSITE 片方設定・ALERT_CMD 実行不可・TZ 未設定が strict を通過する。
+- [x] **doctor へバックアップ必須設定と TZ の診断を追加** — 根拠 `server/src/bin/doctor.rs:163-189,459-486` / R1-CF02,CF07 / 中。
+  2026-11-21 対応: production カテゴリへバックアップ3条件（recipient/OFFSITE片方/ALERT_CMD実行不可）、
+  age_policy へ TZ 未設定と地域オフセット不整合の固定文言警告を追加（check23不変）。
+  4変数は backup-rotate.sh と同じ生値判定（空白のみも設定あり）に統一。回帰4テストを追加。
 - [x] **--include-reasons へ本番ガードと break-glass を追加** — 根拠 `server/src/bin/sign_audit_export.rs:139-170` / R1-CF08 / 中。
   2026-11-21 対応: 本番相当では `AUDIT_EXPORT_INCLUDE_REASONS=1` の明示オプトインが無ければ拒否。
   `ALLOW_MOCK_AUTH=1` は認証を無効化するため逃げ道に使わない設計。回帰2テストを追加。
