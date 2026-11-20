@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-20T09:34:17+09:00"
+  at: "2026-11-20T09:47:30+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T09:34:17+09:00"
+  at: "2026-11-20T09:47:30+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -22,7 +22,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 - **Integration**: Axumルーター、JWT認可、DB状態遷移、制約の検証。
 - **E2E**: PlaywrightによるUIフロー確認。APIをモックするテストは実バックエンド統合を証明しない。
   実サーバー結合は `e2e/tests/real-api.spec.ts`（4件: JXL アップロード / 検索 `q` /
-  お気に入り追加削除 / `me/export`）でカバーする。実測は全62件（auth 2 / build-gate 9 / economy 3 /
+  お気に入り追加削除 / `me/export`）でカバーする。実測は全65件（auth 2 / build-gate 12 / economy 3 /
   error-paths 6 / export 3 / favorites 5 / integrity 6 / metrics 3 / moderation 14 /
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   favorites の5件はトグル基本フローに加え、二重クリック防止・401の再ログイン案内・
@@ -705,7 +705,7 @@ cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_stat
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 cd e2e && npm test
 cd e2e && npm test -- auth.spec.ts   # 認証 E2E（2件: モックJPKIログイン / 年齢ゲート拒否）のみ
-cd e2e && npm test -- build-gate.spec.ts   # ビルドゲート E2E（trunk archive 検証 3件 + version gate 6件の計9件）のみ
+cd e2e && npm test -- build-gate.spec.ts   # ビルドゲート E2E（trunk archive 検証 3件 + version gate 9件の計12件）のみ
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
 cd e2e && npm test -- economy.spec.ts   # Support & Ledger E2E（3件: 取得失敗 HTTP 500 / route.abort の2件含む）のみ
