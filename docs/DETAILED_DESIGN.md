@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-20T09:34:17+09:00"
+  at: "2026-11-20T10:50:12+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -580,13 +580,13 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 3つの CLI はいずれも `server/src/bin/` に置き、I/O・環境変数読み取り・終了処理を薄い `main` に
 閉じ込め、判定を純粋関数（または入力を引数で受け取る境界関数）としてテストする。
-テストは全てサーバー側 bin テストであり、E2E 定義数（59件）は変更しない。
+テストは全てサーバー側 bin テストであり、E2E 定義数（当時59件、現在65件）は変更しない。
 ゲート ID とテスト名は
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-01〜03 を参照。
 
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート |
 | --- | --- | --- | --- |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 45（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2） | CLI-01 / CFG-01 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 46（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1） | CLI-01 / CFG-01 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |
 
@@ -595,13 +595,13 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `parse_args_from<I>(items) -> ParseOutcome` は先頭要素をプログラム名として読み飛ばし、
   `Run { strict }` / `Help` / `UnknownArgument(String)` / `TooManyArguments` を返す。
   `--strict` は完全一致のみ有効で、`-h` / `--help` はヘルプ表示（exit 0）へ変換する。
-- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、22カテゴリの検査結果を
+- `check_all_with<F>(lookup)` は環境変数を `lookup` 経由でのみ読み、23カテゴリの検査結果を
   返す。`production` / `mock_auth_with_production_config` / `mock_auth_enabled` / `jwt` /
   `jwt_secret` / `ipfs_gateways` / `ipfs_timeout` / `ipfs_max_attempts` /
   `oidc_http_timeout` / `oidc_clock_skew` / `oidc_endpoint_urls` / `age_policy` / `rate_limit` / `ipv4_localhost` /
   `trusted_proxy` / `oidc_max_auth_age` / `oidc_cookie_secure` / `oidc_required_assurance` /
   `expose_internal_errors` / `allowed_origins` / `graceful_drain_timeout` /
-  `moderation_finalize_interval`。秘密情報の値は結果へ含めない。実環境用の `check_all()` は `env` を渡す
+  `moderation_finalize_interval` / `audit_expect_root`。秘密情報の値は結果へ含めない。実環境用の `check_all()` は `env` を渡す
   ラッパーに留める。
   `oidc_endpoint_urls` は OIDC 7 変数がすべて揃ったときに `OIDC_ISSUER` / `OIDC_REDIRECT_URI` /
   `OIDC_AUTHORIZATION_ENDPOINT` / `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI` の5エンドポイントURLを
@@ -610,15 +610,23 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - `ipfs_timeout` / `ipfs_max_attempts` / `oidc_http_timeout` は各パーサが不正値・範囲外を
   既定へフォールバックするため、`rate_limit` と同じ方式で「生のパース値」と「正規化後の値」を
   比較し、フォールバック時に当該カテゴリへ警告1件を計上する（設定値自体は出力しない）。
-  旧3件＋新規2件（graceful drain / moderation finalize）の計5件を検出し、検査数は旧19→22へ拡張（途中21を経由）。境界テスト7件（非数値 / `0` / 範囲外 / 有効値）
-  でフォールバック検出と値非出力を検証する。
+  フォールバック検出は5変数（旧3件＋新規カテゴリ2件＝`graceful_drain_timeout` /
+  `moderation_finalize_interval`）。検査カテゴリ数は新規2件で19→21、`oidc_endpoint_urls` 追加で
+  21→22、`audit_expect_root` 追加で22→23へ拡張（これらはカテゴリ数でテスト数ではない）。
+  境界テスト7件（非数値 / `0` / 範囲外 / 有効値）でフォールバック検出と値非出力を検証する。
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。
 - `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
-  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（22 check(s) 実測）。
+  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（23 check(s) 実測）。
 - `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`、大小文字不問）のときと `TRUSTED_PROXY_CIDRS`
   が設定されているときは、それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する
   （`doctor --strict` の警告対象）。いずれも設定値は出力せず有無のみを警告する。
+- `audit_expect_root` は本番相当（`ALLOW_MOCK_AUTH` 無効）の `AUDIT_EXPECT_ROOT` を診断する。
+  `backup-rotate.sh` と同じく `lookup` の生値へ `[0-9a-fA-F]+`（hex Merkle root）を適用し
+  （trim しない）、非空で全文字が hex なら警告なし、未設定・空白のみ・前後空白付き・不正 hex
+  なら固定文言の警告1件を計上する。値はエコーしない。
+  共有の `production_config_errors` は変更せず、`backup-rotate.sh` が未設定時に内部整合性
+  チェックのみで動作する既存契約も維持する。既定は警告のみで exit 0、`--strict` のときだけ失敗する。
 
 ### verify_audit_export（`server/src/bin/verify_audit_export.rs`）
 

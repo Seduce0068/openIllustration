@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-20T10:20:56+09:00"
+  at: "2026-11-20T10:50:12+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -104,6 +104,9 @@ generated:
   `verify_audit_log --expect-root` へ自動で渡し、取得直後の検証で空化・末尾切詰めを検出する。
   本番では `AUDIT_EXPECT_ROOT` の設定を必須とする。未設定時は内部整合性チェックのみを行い
   （既存運用を壊さない）、root 値はエラー文言へエコーしない。
+   `doctor` は本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら
+   `audit_expect_root` カテゴリに固定文言の警告を出し、値はエコーしない（既定は警告のみ、
+   `--strict` のときだけ失敗）。共有の起動判定 `production_config_errors` は変更しない。
 - 監査スナップショットは `sign_audit_export` で署名し、`verify_audit_export` で公開鍵検証する（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)
   ）。秘密鍵はファイルで厳重管理し、CLI 引数や環境変数へ内容を渡さない。
   `sign_audit_export` は起動時に署名鍵 PEM を `canonicalize` して権限を検査し、owner-only
@@ -273,7 +276,7 @@ generated:
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | `1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。 |
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
-| `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。root 値はエラー文言へエコーしない。 |
+| `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。root 値はエラー文言へエコーしない。本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら `doctor` の `audit_expect_root` カテゴリで固定文言の警告（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。 |
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | バックアップ運用スクリプトが読む環境ファイル。所有者を固定し権限600で管理する。秘密情報を含むため配布物へ含めない。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。`firefox` / `webkit` はオプトインで、バイナリ導入と共有ライブラリに依存するためホスト環境次第。 |
 
