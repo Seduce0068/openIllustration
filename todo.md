@@ -439,6 +439,12 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-20: AGE真偽値を1/true/0/falseのみへ絞りfail-open防止（yes/on/no/off拒否）、
+  AGE_ENFORCEMENT_MODEの全受理値をエラー文言へ明記。cronラッパーの不正行/不正キーを
+  行番号のみの固定文言へ（cronメールへの値漏洩防止）。
+- 2026-11-20: doc-numbersのCLI-01群名照合を双方向化（重複・欠落・非テストfn誤受理を検出）、
+  HANDOFFのゲート件数を実測679件（common66/server536/client57/restore20）・E2E65件へ更新。
+
 - 2026-11-20: restore_db の一時ファイル削除結果を伝播し残置を通知。safety_copy=None /
   置換成功 / 削除失敗の3分岐をオラクル化。doc-numbers へ CLI-01 群テスト名の実在照合を追加
   （46名すべて doctor.rs の fn と一致、typo で fail-closed）。

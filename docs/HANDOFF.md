@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-20T09:34:17+09:00"
+  at: "2026-11-20T12:06:40+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -323,8 +323,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - **運用自動化**: backup-rotate の設定分岐テスト、監査/鍵ローテーション Runbook、
   固定版 trunk のローカルキャッシュ、アラート/オフサイト保存フックの回帰テスト。
 - 依存は `uuid` 1.29.2 / `coins-bip32` 0.17.2 へパッチ更新。`sha3` 0.12 は破壊的変更のため保留。
-- 現行のローカルゲート: `cargo test --workspace` 214 件（common 21 / server 183 / client 6 / restore_db 4）、
-  E2E 9 件。いずれも 0 失敗。
+- 現行のローカルゲート: `cargo test --workspace` 679 件（common 66 / server 536 / client 57 / restore_db 20）、
+  E2E 65 件。いずれも 0 失敗。件数はコード上の `#[test]` / `#[tokio::test]` 属性数（2026-11-20 時点）。
 - 残る項目は外部サービス接続・HSM・法務判断・外部アンカー・共通 CI ワークフロー変更であり、
    ローカルで完結するタスクはほぼ解消している。
 
