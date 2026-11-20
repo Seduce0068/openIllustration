@@ -20,8 +20,24 @@ assert_major_numeric() {
 		echo "${label} is empty: expected a numeric major version." >&2
 		exit 1
 	fi
-	if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+	# 先頭ゼロは算術解釈を 8 進数化して fail-open を招くため拒否する。
+	if [[ ! "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then
 		echo "${label} is not numeric: '${value}'." >&2
+		exit 1
+	fi
+	# 巨大整数は算術で 2^64+1 → 1 のようにラップし得るため、backup-rotate.sh と
+	# 同じ「桁数＋辞書順」方式で上限を拒否する（算術は使わない）。先頭ゼロは
+	# 上の正規表現で拒否済みなので、同桁の辞書順は数値順と一致する。
+	# major version は実用上 3 桁程度であり、9 桁 (999999999) を上限とする。
+	local max_major="999999999"
+	if ((${#value} > ${#max_major})); then
+		echo "${label} exceeds the supported major version range." >&2
+		exit 1
+	fi
+	if ((${#value} == ${#max_major})) &&
+		[[ "$value" != "$max_major" ]] &&
+		printf '%s\n%s\n' "$max_major" "$value" | sort -C; then
+		echo "${label} exceeds the supported major version range." >&2
 		exit 1
 	fi
 }
@@ -98,14 +114,14 @@ min_node_major="${MIN_NODE_MAJOR:-22}"
 assert_major_numeric "MIN_NODE_MAJOR" "$min_node_major" 1
 node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
 assert_major_numeric "Node major version" "$node_major"
-if ((node_major < min_node_major)); then
+if ((10#$node_major < 10#$min_node_major)); then
 	echo "Node ${node_major} is older than the required major ${min_node_major}." >&2
 	exit 1
 fi
 # 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_node_major="${MAX_NODE_MAJOR:-}"
 assert_major_numeric "MAX_NODE_MAJOR" "$max_node_major" 1
-if [[ -n "$max_node_major" ]] && ((node_major > max_node_major)); then
+if [[ -n "$max_node_major" ]] && ((10#$node_major > 10#$max_node_major)); then
 	echo "warning: Node ${node_major} is newer than the validated major ${max_node_major}." >&2
 fi
 
@@ -127,14 +143,14 @@ min_chrome_major="${MIN_CHROME_MAJOR:-120}"
 assert_major_numeric "MIN_CHROME_MAJOR" "$min_chrome_major" 1
 chrome_major="$(echo "$chrome_version" | grep -oE '[0-9]+' | head -1)"
 assert_major_numeric "Chrome major version" "$chrome_major"
-if ((chrome_major < min_chrome_major)); then
+if ((10#$chrome_major < 10#$min_chrome_major)); then
 	echo "Chrome ${chrome_major} is older than the required major ${min_chrome_major}." >&2
 	exit 1
 fi
 # 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_chrome_major="${MAX_CHROME_MAJOR:-}"
 assert_major_numeric "MAX_CHROME_MAJOR" "$max_chrome_major" 1
-if [[ -n "$max_chrome_major" ]] && ((chrome_major > max_chrome_major)); then
+if [[ -n "$max_chrome_major" ]] && ((10#$chrome_major > 10#$max_chrome_major)); then
 	echo "warning: Chrome ${chrome_major} is newer than the validated major ${max_chrome_major}." >&2
 fi
 

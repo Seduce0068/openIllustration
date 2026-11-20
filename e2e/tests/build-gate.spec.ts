@@ -227,6 +227,31 @@ test.describe('Version gate (VG-01)', () => {
     );
   });
 
+  test('leading-zero major exits 1', () => {
+    // (f) 先頭ゼロは 8 進数解釈による fail-open を防ぐため拒否する。
+    // 既存の "is not numeric" 文言（値を含む）をそのまま利用する。
+    const result = runAssertMajorNumeric('Node major version', '08');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Node major version is not numeric: '08'.");
+  });
+
+  test('2^64+1 major exits 1 without arithmetic wrap', () => {
+    // (g) 18446744073709551617 (2^64+1) は算術すると 1 にラップし得るため、
+    // 桁数＋辞書順の上限チェックで拒否される必要がある。
+    const result = runAssertMajorNumeric('Node major version', '18446744073709551617');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Node major version exceeds the supported major version range.');
+    // 固定エラーであり、拒否した値がエコーされないこと。
+    expect(result.stderr).not.toContain('18446744073709551617');
+  });
+
+  test('ordinary major is accepted', () => {
+    // (h) 通常の 22 は従来どおり受理される（Node 下限 22 と整合）。
+    const result = runAssertMajorNumeric('Node major version', '22');
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+  });
+
   test('E2E_LIB_ONLY=1 direct execution of ci-e2e.sh is refused', () => {
     // E2E_LIB_ONLY=1 は source 専用。直接実行された場合はダウンロード/ビルド等
     // の副作用へ進まず、ゲート回避を防ぐため exit 1 で明示拒否される。
