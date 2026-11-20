@@ -5,7 +5,7 @@ description: 設計文書とコード変更のセキュリティ、構成、運�
 tags: [review, security, architecture, operations]
 generated:
   by: dsh
-  at: "2026-11-20T08:57:45+09:00"
+  at: "2026-11-20T09:15:36+09:00"
 ---
 
 ## クロスレビューレポート
@@ -219,7 +219,7 @@ generated:
 - **指摘:** Playwright は lock で固定される一方、`channel: chrome` の
   Chrome と Node はランナーイメージ依存で、差分が追えない。
 - **対応:** `e2e/ci-e2e.sh` で trunk / node / npm / Google Chrome の版を
-  ログ出力し、`engines.node >= 18` を宣言。Chromium への切替はローカル
+  ログ出力し、`engines.node >= 22` を宣言（当時 >=18、現在 >=22）。Chromium への切替はローカル
   開発（実 Chrome）との乖離が大きいため見送り、記録で追跡する。
 - **残課題:** Chrome バージョンの固定方針の決定。
 

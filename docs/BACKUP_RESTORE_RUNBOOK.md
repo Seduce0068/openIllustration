@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-20T07:27:11+09:00"
+  at: "2026-11-20T09:15:36+09:00"
 ---
 
 ## 目的
@@ -88,10 +88,10 @@ UTC タイムスタンプ順に新しいものから判定し、作成したば�
 ローカル開発のみ `ALLOW_UNENCRYPTED_BACKUP=1` の明示オプトアウトで許可する
 （オフサイト保存が設定されている場合はオプトアウトも拒否）。
 設定時に `gpg`（または `GPG_BIN`）が無ければ失敗する（fail-closed）。平文は
-`verify_backup` 成功後かつ暗号化成功後にのみ削除し、暗号化失敗時は平文を残す。
+暗号文の公開（`assert_publishable` と `mv`）成功後にのみ削除し、暗号化・公開のいずれが失敗しても平文を残す。
 成果物は `<timestamp>.db.gpg` となる。ローテーション対象は `.db` と `.db.gpg` の両方。
 復元時は `gpg --decrypt` で平文に戻してから `restore_db` を使う。
-実 DB で暗号化→平文削除→復号→`verify_backup` 成功を確認済み。
+実 DB で暗号化→暗号文公開→平文削除→復号→`verify_backup` 成功を確認済み。
 
 オフサイト保存は `OFFSITE_COPY_CMD`（実行ファイルのパス）と `OFFSITE_DEST`（宛先）
 の両方を設定した場合のみ行う。`eval` は使わず、コピーコマンドは
