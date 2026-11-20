@@ -107,8 +107,9 @@ P1（本番運用の健全性）:
   `server/src/lib.rs:1424-1428` / `server/src/bin/doctor.rs:157` / R1-AR03+R1-CF05 / 中。
   AGE_* は未定義値を起動拒否する一方 JWT_REQUIRE_KID / OIDC_COOKIE_SECURE / ALLOW_IPV4_LOCALHOST は「0/false 以外」を真とし、
   doctor は pub ヘルパを使わず再実装。不正値は fail-closed、doctor とランタイムで同一関数を呼ぶ。
-- [ ] **get_content の chunk() エラーでもゲートウェイフェイルオーバー** — 根拠 `server/src/lib.rs:2783-2787` / R2-ER05 / 中。
-  ストリーム途中切断で即 Internal になり後続の正常ゲートウェイを試さない。接続エラーと同様に次ゲートウェイへ進む。
+- [x] **get_content の chunk() エラーでもゲートウェイフェイルオーバー** — 根拠 `server/src/lib.rs:2783-2806` / R2-ER05 / 中。
+  2026-11-21 対応: chunk() エラーを `describe_reqwest_error` で分類記録し次のゲートウェイへ進む。
+  全失敗時 fail-closed・checksum/サイズ契約は不変。回帰2テストを追加。
 - [x] **refresh/logout の refresh_token Cookie 重複を拒否** — 根拠 `server/src/oidc.rs:212-242` / R2-IV06 / 中。
   2026-11-21 対応: `refresh_cookie_from_headers` を state Cookie と同じ基準で追加し refresh/logout の双方で利用。
   複数出現時は 401／ファミリ失効スキップ。回帰2テストを追加。
