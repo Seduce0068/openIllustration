@@ -234,12 +234,85 @@ fi
 assert_notice_matches_tsv "$existing_out" "case4 consistency"
 assert_license_text "$existing_out" "case4 license text" "fixture-crate-a-1.2.3.txt" "${fixture_dir}/crate-a/LICENSE"
 assert_license_text "$existing_out" "case4 license text" "fixture-crate-b-4.5.6.txt" "${fixture_dir}/crate-b/LICENSE-MIT"
+# 上書き時に旧成果物の古いライセンス本文が残っていないことを検証する。
+if [[ ! -e "${existing_out}/THIRD_PARTY_LICENSES/stale.txt" ]]; then
+	echo "PASS case4: stale.txt removed"
+else
+	echo "FAIL case4: stale.txt still present"
+	failures=$((failures + 1))
+fi
 
 echo "=== ケース5: ライセンス本文コピー失敗時の fail-closed ==="
 # license_file が存在せずフォールバック候補もない場合、prepare-distribution.sh は
 # 非 0 で終了する必要がある（黙ってスキップして成功してはいけない）。
 missing_license_out="${work}/out-missing-license"
 expect_failure "case5 missing license file" env DUMMY_METADATA_MISSING_LICENSE=1 bash "$script" "$missing_license_out"
+assert_absent "$missing_license_out" "case5 artifacts"
+
+echo "=== ケース6: ライセンス本文コピー失敗時に既存の完全な成果物が不変であること ==="
+# オラクル: 完全な成果物を用意した出力先へライセンス本文コピー失敗の実行を
+# 重ねても、既存の成果物がバイト単位で不変で、中途半端な上書きや空の
+# ディレクトリ、.tmp.* の一時ディレクトリが残らないことを検証する。
+preserved_out="${work}/out-preserved"
+preserved_snapshot="${work}/out-preserved-snapshot"
+
+# 事前に完全な成果物を用意し、実行前のスナップショットを取る。
+expect_success "case6 prepare baseline" bash "$script" "$preserved_out"
+cp -a "$preserved_out" "$preserved_snapshot"
+
+# license_file もフォールバック候補も存在しないケースを発生させる。
+expect_failure "case6 missing license preserves existing" env DUMMY_METADATA_MISSING_LICENSE=1 bash "$script" "$preserved_out"
+
+# ディレクトリツリー全体が実行前と同一であることを検証する（新規/削除ファイル
+# や空ディレクトリもここで検出する）。
+if diff -r -q "$preserved_snapshot" "$preserved_out" >"${work}/case6.diff" 2>&1; then
+	echo "PASS case6: existing artifact tree unchanged"
+else
+	echo "FAIL case6: existing artifact tree changed"
+	cat "${work}/case6.diff" >&2
+	failures=$((failures + 1))
+fi
+
+# 個別の成果物も cmp で明示的に完全一致を検証する（md5/cmp による確認）。
+for artifact in LICENSE DEPENDENCIES.tsv NOTICE; do
+	if cmp -s "${preserved_snapshot}/${artifact}" "${preserved_out}/${artifact}"; then
+		echo "PASS case6: ${artifact} unchanged"
+	else
+		echo "FAIL case6: ${artifact} missing or changed"
+		failures=$((failures + 1))
+	fi
+done
+
+# THIRD_PARTY_LICENSES/*.txt が実行前と同一であることを検証する。
+while IFS= read -r -d '' snapshot_file; do
+	rel="${snapshot_file#"${preserved_snapshot}/"}"
+	if [[ -f "${preserved_out}/${rel}" ]] && cmp -s "$snapshot_file" "${preserved_out}/${rel}"; then
+		echo "PASS case6: ${rel} unchanged"
+	else
+		echo "FAIL case6: ${rel} missing or changed"
+		failures=$((failures + 1))
+	fi
+done < <(find "${preserved_snapshot}/THIRD_PARTY_LICENSES" -maxdepth 1 -type f -name '*.txt' -print0 2>/dev/null || true)
+
+# 実行前後でエントリ数が同じこと（空ディレクトリやゴミが残っていないこと）を確認する。
+snapshot_count="$(find "$preserved_snapshot" -mindepth 1 | wc -l | tr -d '[:space:]')"
+current_count="$(find "$preserved_out" -mindepth 1 | wc -l | tr -d '[:space:]')"
+if [[ "$snapshot_count" == "$current_count" ]]; then
+	echo "PASS case6: no extra entries (snapshot=${snapshot_count}, current=${current_count})"
+else
+	echo "FAIL case6: entry count changed (snapshot=${snapshot_count}, current=${current_count})"
+	failures=$((failures + 1))
+fi
+
+# .tmp.* の一時ディレクトリが残っていないことを検証する。
+# ステージング先は出力先直下またはその親に作られる想定で両方を走査する。
+tmp_leftovers="$(find "$work" -type d \( -name '.tmp.*' -o -name '*.tmp.*' \) -print 2>/dev/null || true)"
+if [[ -z "$tmp_leftovers" ]]; then
+	echo "PASS case6: no .tmp.* directories left"
+else
+	echo "FAIL case6: leftover .tmp.* directories: ${tmp_leftovers}"
+	failures=$((failures + 1))
+fi
 
 if ((failures > 0)); then
 	echo "prepare-distribution tests FAILED (${failures})" >&2
