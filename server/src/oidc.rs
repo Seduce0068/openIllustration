@@ -130,6 +130,19 @@ fn refresh_cookie(token: &str, secure: bool) -> Result<HeaderValue, AppError> {
         .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))
 }
 
+/// HttpOnly のリフレッシュトークン Cookie を削除する（Max-Age=0）。
+///
+/// 属性は発行側 `refresh_cookie` と同じ Path/SameSite を使い、`secure` にも
+/// 同じ `oidc.config.cookie_secure` を渡す。発行と削除で単一ソースを共有する。
+pub fn delete_refresh_cookie(secure: bool) -> Result<HeaderValue, AppError> {
+    let value = format!(
+        "refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0{}",
+        if secure { "; Secure" } else { "" }
+    );
+    HeaderValue::from_str(&value)
+        .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))
+}
+
 /// state Cookie の名前を `cookie_secure` から選ぶ。
 ///
 /// `__Host-` プレフィックスは Secure 属性・Path=/・Domain なしを要求する。
@@ -468,6 +481,11 @@ impl OidcState {
     #[cfg(test)]
     pub(crate) fn config(&self) -> &OidcConfig {
         &self.config
+    }
+
+    /// Cookie 発行・削除で共有する `cookie_secure` の単一ソース。
+    pub(crate) fn cookie_secure(&self) -> bool {
+        self.config.cookie_secure
     }
 
     /// 期限切れ pending を回収し、削除件数を返す。

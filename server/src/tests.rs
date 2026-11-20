@@ -8537,27 +8537,18 @@ async fn test_logout_clears_refresh_cookie() {
     assert_eq!(body.as_ref(), b"true", "既存の Json(true) 本文を維持する");
 }
 
-/// R1-18: 削除 Cookie の Secure 属性は OIDC_COOKIE_SECURE に追随し、
-/// 未設定なら refresh_cookie と同じく Secure を付与する。
+/// R2: OIDC 構成の `cookie_secure` が削除 Cookie の Secure 属性を決める。
+/// 発行側 refresh_cookie と同じ設定を単一ソースとして共有することを検証する。
 #[tokio::test]
-async fn test_logout_deletion_cookie_follows_cookie_secure_setting() {
-    // 読み手も ENV_LOCK を取得してから値を読み、ガードを最後まで保持する。
-    let (_env_guard, previous) = lock_env_and_read("OIDC_COOKIE_SECURE").await;
-    let app = setup_app().await;
-    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
-
-    for (env_value, expect_secure) in [
-        (Some("0"), false),
-        (Some("false"), false),
-        (Some("1"), true),
-        (None, true),
-    ] {
-        match env_value {
-            Some(value) => test_set_env("OIDC_COOKIE_SECURE", value),
-            None => test_remove_env("OIDC_COOKIE_SECURE"),
-        }
+async fn test_logout_deletion_cookie_follows_oidc_cookie_secure() {
+    for cookie_secure in [false, true] {
+        let (app, _oidc, _mock, _db) = setup_app_with_oidc_age_policy_and_cookie_secure(
+            common::age::AgePolicy::default(),
+            cookie_secure,
+        )
+        .await;
+        let token = generate_token(TEST_JWT_SECRET, "test_user").await;
         let response = app
-            .clone()
             .oneshot(with_peer(
                 Request::post("/auth/logout")
                     .header("authorization", format!("Bearer {token}"))
@@ -8574,14 +8565,48 @@ async fn test_logout_deletion_cookie_follows_cookie_secure_setting() {
             .iter()
             .filter_map(|value| value.to_str().ok())
             .find(|value| value.starts_with("refresh_token="))
-            .expect("deletion cookie")
+            .expect("logout must set a refresh_token deletion cookie")
             .to_owned();
         assert_eq!(
             cookie.contains("; Secure"),
-            expect_secure,
-            "OIDC_COOKIE_SECURE={env_value:?}: {cookie}"
+            cookie_secure,
+            "cookie_secure={cookie_secure}: {cookie}"
         );
     }
+}
+
+/// R2: OIDC 未構成（mock 認証）では env に関わらず cookie_secure 既定 true を使い、
+/// 削除 Cookie に Secure を付与する（fail-closed / 直接 env 再読込の廃止）。
+#[tokio::test]
+async fn test_logout_deletion_cookie_secure_by_default_without_oidc() {
+    // 旧実装はこの env を直接読んでいたが、OIDC 未構成では無視される。
+    let (_env_guard, previous) = lock_env_and_read("OIDC_COOKIE_SECURE").await;
+    test_set_env("OIDC_COOKIE_SECURE", "0");
+    let app = setup_app().await;
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let cookie = response
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find(|value| value.starts_with("refresh_token="))
+        .expect("logout must set a refresh_token deletion cookie")
+        .to_owned();
+    assert!(
+        cookie.contains("; Secure"),
+        "default must be fail-closed: {cookie}"
+    );
 
     match previous {
         Some(value) => test_set_env("OIDC_COOKIE_SECURE", &value),

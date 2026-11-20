@@ -100,9 +100,9 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 P1（本番運用の健全性）:
 
-- [ ] **logout の refresh Cookie 削除を OidcConfig.cookie_secure に統一** — 根拠 `server/src/lib.rs:2607-2622` / R1-AP06 / 中。
-  発行側は `OidcConfig.cookie_secure` を単一ソースにしているのに削除側は環境変数を再読込。
-  注入構成で Secure 属性が不一致になり Cookie が消えず logout 後も refresh が可能になり得る。
+- [x] **logout の refresh Cookie 削除を OidcConfig.cookie_secure に統一** — 根拠 `server/src/oidc.rs:133-144` / R1-AP06 / 中。
+  2026-11-21 対応: `delete_refresh_cookie(secure)` を追加し、発行側と同じ `config.cookie_secure`
+  （OIDC 未構成時は fail-closed で true）を共有。env 直接再読込を削除、回帰2テストを追加。
 - [ ] **全フラグの真偽値解釈を共通 parse_bool_env へ統一** — 根拠 `common/src/age.rs:212-221` /
   `server/src/lib.rs:1424-1428` / `server/src/bin/doctor.rs:157` / R1-AR03+R1-CF05 / 中。
   AGE_* は未定義値を起動拒否する一方 JWT_REQUIRE_KID / OIDC_COOKIE_SECURE / ALLOW_IPV4_LOCALHOST は「0/false 以外」を真とし、

@@ -2606,18 +2606,14 @@ pub async fn logout(
     }
     // DB 側のファミリ失効だけではブラウザの Cookie が 30 日残るため、
     // 同じ Path/SameSite 属性の空 Cookie で即時削除する。
-    // Secure 属性は refresh_cookie と同じ OIDC 設定（OIDC_COOKIE_SECURE）に合わせる。
-    // 本番の OidcState は from_env でこの値を読み込むため、同一の判定を使う。
-    // 未設定なら Secure を付与する（cookie_secure の既定と同じ fail-closed）。
-    let secure = std::env::var("OIDC_COOKIE_SECURE")
-        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
+    // Secure 属性は発行側 refresh_cookie と同じ OIDC 設定を単一ソースとして共有する。
+    // OIDC 未構成（mock 認証等）では Secure を付与する（fail-closed）。
+    let secure = state
+        .oidc
+        .as_ref()
+        .map(|oidc| oidc.cookie_secure())
         .unwrap_or(true);
-    let delete_cookie = format!(
-        "refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0{}",
-        if secure { "; Secure" } else { "" }
-    );
-    let cookie = HeaderValue::from_str(&delete_cookie)
-        .map_err(|_| AppError::Internal("invalid refresh cookie".to_string()))?;
+    let cookie = oidc::delete_refresh_cookie(secure)?;
     let mut response = Json(true).into_response();
     response.headers_mut().append(header::SET_COOKIE, cookie);
     Ok(response)
