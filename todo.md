@@ -578,3 +578,10 @@ P2（品質・保守・プロダクト拡張）:
   `scripts/test-doc-numbers.sh` は E2E 総数ゲートの修飾語上限（`{0,40}`）を撤廃し、
   bin 照合を `server/src/bin/*.rs` の実ファイル列挙へ変更（未知 bin は既存分岐で fail-closed）。
   check23 / E2E65件 / migration13 / doctor46 は不変。
+
+- 2026-11-20 (impl-bincounts-final): doc_bin_counts の bin 名⇔数値間修飾語上限
+  （`[^0-9]{0,8}`）を撤廃し `[^0-9]*` へ変更（E2E 総数側 total_count_pattern と方針統一、
+  TEST_SPECIFICATION:84 の10文字空きを走査対象化）。TASK_INVENTORY の現行記述2箇所
+  （:36 / :338）の「bin 内に9テスト」を実測10テストへ是正。check23 / E2E65件 /
+  migration13 / doctor46 / sign_audit_export10 は不変。除外ロジック・全7bin照合・
+  DETAILED_DESIGN CLI表照合・E2E/doctor check/migration/群名双方向/総数未注記ゲートは維持。

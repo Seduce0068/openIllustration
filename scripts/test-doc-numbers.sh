@@ -199,7 +199,7 @@ done
 doc_bin_counts() {
 	local bin="$1"
 	grep -vE '(当初|旧|追加)[^0-9]{0,4}[0-9]+(件|テスト)' "$spec" |
-		grep -oE "${bin}[^0-9]{0,8}[0-9]+(件|テスト)" |
+		grep -oE "${bin}[^0-9]*[0-9]+(件|テスト)" |
 		grep -oE '[0-9]+' |
 		sort -u ||
 		true

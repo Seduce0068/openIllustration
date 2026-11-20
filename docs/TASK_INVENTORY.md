@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-20T13:37:19+09:00"
 verified:
   by: dsh
-  at: "2026-11-20T13:21:31+09:00"
+  at: "2026-11-20T13:37:19+09:00"
 status: current
 ---
 
@@ -33,7 +33,7 @@ status: current
   - [対応済み] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
     （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
     `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
-    上書き拒否を実装。bin 内に9テストを追加済み（AUDIT-02、
+    上書き拒否を実装。bin 内に10テストを追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、23カテゴリ固定・秘密値非出力・`--strict` 判定を
@@ -335,7 +335,7 @@ status: current
   権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
   （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
   `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
-  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に9テストを追加済みで、手動確認手順を
+  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に10テストを追加済みで、手動確認手順を
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
 - [対応済み] **`verify_audit_export` の `--expect-root` と純粋関数化**:
   `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
