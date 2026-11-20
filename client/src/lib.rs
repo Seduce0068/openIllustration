@@ -1540,6 +1540,44 @@ where
         });
     };
 
+    // 監査ログは本文取得とは独立に、show_audit が true へ遷移した初回だけ取得する。
+    // cid ごとの取得済みフラグで二重取得を防ぐ（閉じて再オープンしても再取得しない）。
+    let audit_cid = cid.clone();
+    let audit_fetched_cid: StoredValue<Option<String>> = StoredValue::new(None);
+    Effect::new(move |_| {
+        if !show_audit.get() {
+            return;
+        }
+        let cid = audit_cid.clone();
+        let fetched = audit_fetched_cid.get_value();
+        if fetched.as_deref() == Some(cid.as_str()) {
+            return;
+        }
+        // 取得開始時にフラグを立て、完了待ちの間の再トグルでも二重取得しないようにする。
+        audit_fetched_cid.set_value(Some(cid.clone()));
+        let token = token_stored.get_value();
+        spawn_local(async move {
+            match Request::get(&format!("{}/content/{}/audit", API_BASE, url_encode(&cid)))
+                .header("Authorization", &format!("Bearer {}", token))
+                .send()
+                .await
+            {
+                Ok(response) if response.ok() => match response.json::<Vec<AuditLog>>().await {
+                    Ok(logs) => {
+                        set_audit_error.set(String::new());
+                        set_audit_logs.set(logs);
+                    }
+                    Err(_) => set_audit_error.set("監査ログの解析に失敗しました。".to_string()),
+                },
+                Ok(response) => set_audit_error.set(format!(
+                    "監査ログの取得に失敗しました (HTTP {}).",
+                    response.status()
+                )),
+                Err(_) => set_audit_error.set("Network error loading audit log.".to_string()),
+            }
+        });
+    });
+
     let ct_ef = content_type.clone();
     Effect::new(move |_| {
         let cid = cid.clone();
@@ -1613,25 +1651,6 @@ where
                     set_verified.set(Some(false));
                     set_content_load_error.set(content_load_error_message(None));
                 }
-            }
-
-            match Request::get(&format!("{}/content/{}/audit", API_BASE, url_encode(&cid)))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
-            {
-                Ok(response) if response.ok() => match response.json::<Vec<AuditLog>>().await {
-                    Ok(logs) => {
-                        set_audit_error.set(String::new());
-                        set_audit_logs.set(logs);
-                    }
-                    Err(_) => set_audit_error.set("監査ログの解析に失敗しました。".to_string()),
-                },
-                Ok(response) => set_audit_error.set(format!(
-                    "監査ログの取得に失敗しました (HTTP {}).",
-                    response.status()
-                )),
-                Err(_) => set_audit_error.set("Network error loading audit log.".to_string()),
             }
         });
     });
