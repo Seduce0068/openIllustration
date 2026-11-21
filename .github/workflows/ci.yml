@@ -40,6 +40,7 @@ jobs:
         cargo install cargo-deny --version 0.20.2 --locked
         cargo deny check licenses
         cargo deny check advisories
+        cargo deny check bans sources
         bash scripts/test-backup-rotate.sh
         bash scripts/test-backup-cron-wrapper.sh
         bash scripts/test-prepare-distribution.sh

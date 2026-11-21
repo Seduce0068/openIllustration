@@ -144,7 +144,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [ ] **Runbook のテスト数と export E2E 記述を実測へ**
   — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md`, `docs/AUDIT_EXPORT_RUNBOOK.md`, `docs/TEST_SPECIFICATION.md` / review R5-DC / 中。
   verify_backup 17→19、verify_audit_export 17→20、export E2E「2/2 pass」→3件。doc-numbers 照合対象外。
-- [ ] **CI の deny ゲートへ bans/sources を追加**
+- [x] **CI の deny ゲートへ bans/sources を追加**
   — 根拠 `.github/workflows/ci.yml:40-42`, `deny.toml` / review R3-DE + discovery R4-DP / 中。
   licenses/advisories のみで重複バージョン・未知レジストリを検出できていない。
 - [ ] **E2E ブラウザフォールバックを可視化** — 根拠 `e2e/ci-e2e.sh` 選択ロジック / discovery R4-OPS / 中。

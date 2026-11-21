@@ -60,3 +60,61 @@ ignore = [
   # common/age・server・libsql 経由で使用。jiff/time への移行を別途計画する。
   { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 は unmaintained 情報勧告。修正版なし。jiff/time 移行を計画中" },
 ]
+
+# 依存の重複と取得元の検査（licenses / advisories に加えて CI で実行）。
+# 既知の複数バージョンは上流依存（libsql が axum 0.6 / tonic 0.11 系を
+# 推移的に要求する等）に起因するため、理由付きで明示的に許容する。
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"  # workspace の path 依存を wildcard と誤検知しないため
+# 新規の重複が出たときは理由を添えて skip を追加すること。
+skip = [
+  { name = "axum", version = "*" },
+  { name = "axum-core", version = "*" },
+  { name = "base64", version = "*" },
+  { name = "bitflags", version = "*" },
+  { name = "block-buffer", version = "*" },
+  { name = "convert_case", version = "*" },
+  { name = "cpufeatures", version = "*" },
+  { name = "crypto-common", version = "*" },
+  { name = "digest", version = "*" },
+  { name = "fallible-iterator", version = "*" },
+  { name = "getrandom", version = "*" },
+  { name = "gloo-net", version = "*" },
+  { name = "gloo-utils", version = "*" },
+  { name = "h2", version = "*" },
+  { name = "hashbrown", version = "*" },
+  { name = "http", version = "*" },
+  { name = "http-body", version = "*" },
+  { name = "hyper", version = "*" },
+  { name = "hyper-rustls", version = "*" },
+  { name = "indexmap", version = "*" },
+  { name = "itertools", version = "*" },
+  { name = "matchit", version = "*" },
+  { name = "openssl-probe", version = "*" },
+  { name = "prettyplease", version = "*" },
+  { name = "rand", version = "*" },
+  { name = "rand_chacha", version = "*" },
+  { name = "rand_core", version = "*" },
+  { name = "rustc-hash", version = "*" },
+  { name = "rustls", version = "*" },
+  { name = "rustls-native-certs", version = "*" },
+  { name = "rustls-webpki", version = "*" },
+  { name = "sha2", version = "*" },
+  { name = "shlex", version = "*" },
+  { name = "socket2", version = "*" },
+  { name = "syn", version = "*" },
+  { name = "sync_wrapper", version = "*" },
+  { name = "synstructure", version = "*" },
+  { name = "thiserror", version = "*" },
+  { name = "thiserror-impl", version = "*" },
+  { name = "tokio-rustls", version = "*" },
+  { name = "tower", version = "*" },
+  { name = "tower-http", version = "*" },
+  { name = "zerocopy", version = "*" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
