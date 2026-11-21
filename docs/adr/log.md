@@ -2,6 +2,11 @@
 
 ## 2026-11-22
 
+- [ADR-0010](ADR-0010-foreign-key-startup-fail-closed.md): 新規作成。本番相当では
+  `PRAGMA foreign_key_check` の孤立行・検査失敗で起動を拒否（fail-closed）、
+  開発（mock 有効）では warn のみ、`doctor` は production カテゴリ内へ同じ判定の
+  警告をマージ（check23 維持）。是正 CLI は設けず、孤立行検出時はバックアップからの
+  作り直し前提とする。Status: Accepted。
 - [ADR-0007](ADR-0007-verified-age-adapter.md): verified_claims 経路の `user_hash` を
   `issuer` + `signed_subject` 由来
   （`sha256("verified-age:v1:{issuer}:{signed_subject}")`）へ変更する契約を

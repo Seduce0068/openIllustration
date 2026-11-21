@@ -1030,7 +1030,8 @@ pub(crate) async fn enable_foreign_keys(db: &Connection) -> anyhow::Result<()> {
 
 /// 参照先が存在しない外部キー（孤立行）を検出し、可読な文字列で返す。
 ///
-/// 既存 DB に孤立行があっても起動は止めず、呼び出し側で warn のために使う。
+/// 検出結果の扱い（本番 fail-closed / 開発 warn）は呼び出し側の
+/// `foreign_key_startup_error` が決める。ここでは検出と文字列化だけを行う。
 pub(crate) async fn find_foreign_key_violations(db: &Connection) -> anyhow::Result<Vec<String>> {
     let mut rows = db
         .query("PRAGMA foreign_key_check", ())
@@ -1044,6 +1045,85 @@ pub(crate) async fn find_foreign_key_violations(db: &Connection) -> anyhow::Resu
         violations.push(format!("{table}(rowid={rowid:?}) -> {parent}"));
     }
     Ok(violations)
+}
+
+/// FK 孤立行検査の結果から、本番起動を拒否する固定文言を導く純粋関数。
+///
+/// `allow_mock_auth` が真（開発相当）なら常に `None` とし、起動は止めず warn のみとする。
+/// 本番相当では、孤立行が1件以上あるか検査自身が失敗した場合に起動拒否文言を返す。
+/// 文言に含めるのは件数と `table(rowid=...) -> parent` のみで、環境変数値や秘密値は
+/// 一切含めない（`find_foreign_key_violations` が組み立てた文字列だけを利用する）。
+pub fn foreign_key_startup_error(
+    allow_mock_auth: bool,
+    violations: &[String],
+    check_failed: bool,
+) -> Option<String> {
+    if allow_mock_auth {
+        return None;
+    }
+    if !violations.is_empty() {
+        return Some(format!(
+            "foreign key check found {} orphaned row(s); startup refused: {}",
+            violations.len(),
+            violations.join("; ")
+        ));
+    }
+    if check_failed {
+        return Some(
+            "foreign key check could not be completed; startup refused (fail-closed)".to_string(),
+        );
+    }
+    None
+}
+
+/// doctor CLI が `production` カテゴリへマージする FK 警告を返す。
+///
+/// 本番相当（`ALLOW_MOCK_AUTH` 無効）のみ設定済み DB へ `PRAGMA foreign_key_check` を
+/// 実行し、上記 `foreign_key_startup_error` と同じ判定で固定文言の警告を返す。
+/// リモート DB も対象（`PRAGMA foreign_keys` はコネクション設定だが、
+/// `foreign_key_check` は別に動作する）。接続エラーの本文や `DATABASE_TOKEN` は
+/// 一切返さず、`check_failed` フラグへ倒す。
+pub async fn foreign_key_doctor_warnings() -> Vec<String> {
+    let allow_mock_auth = matches!(
+        common::env::bool_env_state(common::env::read_env("ALLOW_MOCK_AUTH")),
+        common::env::BoolEnvState::Valid(true)
+    );
+    if allow_mock_auth {
+        // 開発相当では起動時も warn のみなので doctor の production カテゴリへは加えない。
+        return Vec::new();
+    }
+    let checked = match open_db_for_foreign_key_check().await {
+        Ok(db) => find_foreign_key_violations(&db).await,
+        Err(e) => Err(e),
+    };
+    let (violations, check_failed) = match checked {
+        Ok(violations) => (violations, false),
+        // エラー本文には設定値が混じり得るため保持せず、失敗フラグだけを渡す。
+        Err(_) => (Vec::new(), true),
+    };
+    foreign_key_startup_error(allow_mock_auth, &violations, check_failed)
+        .into_iter()
+        .collect()
+}
+
+/// doctor の FK 検査用に `run()` と同じ DSN 解決で DB を開く（接続先はエコーしない）。
+async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
+    let db_url = match common::env::read_env("DATABASE_URL") {
+        common::env::EnvValue::Utf8(value) => value.trim().to_string(),
+        // 本番相当なら doctor の production カテゴリで未設定を既に警告済み。
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
+            "file:local.db".to_string()
+        }
+    };
+    let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
+    if db_url.starts_with("file:") || !db_url.contains("://") {
+        let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
+        let db = Builder::new_local(path).build().await?;
+        Ok(db.connect()?)
+    } else {
+        let db = Builder::new_remote(db_url, db_token).build().await?;
+        Ok(db.connect()?)
+    }
 }
 
 /// 起動時に読む真偽値フラグの受理値を検証する。
@@ -1168,10 +1248,15 @@ pub async fn run() -> anyhow::Result<()> {
     // Detect checksum drift in already-applied migrations
     migration::verify_migrations(&db).await?;
 
-    // FK 有効化後に孤立行が残っていないか検査する。既存 DB に孤立行があっても
-    // 起動は止めず、明示的な warn で是正を促す（fail-closed は将来フェーズで検討）。
+    // FK 有効化後に孤立行が残っていないか検査する。本番相当（mock 無効）では孤立行の
+    // 検出・検査失敗を fail-closed で起動拒否とし、是正 CLI は設けない（ADR-0010）。
+    // 開発（mock 有効）では起動を止めず warn のみとする。`PRAGMA foreign_key_check` は
+    // `PRAGMA foreign_keys`（コネクション設定）とは別に動作するためリモート DB も対象。
     match find_foreign_key_violations(&db).await {
         Ok(violations) if !violations.is_empty() => {
+            if let Some(message) = foreign_key_startup_error(allow_mock_auth, &violations, false) {
+                return Err(anyhow::anyhow!(message));
+            }
             warn!(
                 "foreign key check found {} orphaned row(s): {}",
                 violations.len(),
@@ -1180,6 +1265,9 @@ pub async fn run() -> anyhow::Result<()> {
         }
         Ok(_) => {}
         Err(e) => {
+            if let Some(message) = foreign_key_startup_error(allow_mock_auth, &[], true) {
+                return Err(anyhow::anyhow!(message));
+            }
             warn!("foreign key check could not be completed: {e}");
         }
     }

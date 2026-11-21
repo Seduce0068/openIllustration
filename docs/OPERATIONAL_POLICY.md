@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T03:37:12+09:00"
+  at: "2026-11-22T06:20:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -155,6 +155,15 @@ generated:
   のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。リモート DB ではこの排他が使えないため警告のみとし、
   単一ライター運用を契約とする。バックアップは `backup_db`（`VACUUM INTO`・上書き拒否）で取得し、`verify_backup` と `verify_audit_log` で検証する。手順は
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
+- 起動時の外部キー検査（`PRAGMA foreign_key_check`）で孤立行を検出した場合、本番相当
+  （`ALLOW_MOCK_AUTH` 無効）は検査失敗時と同様に起動を拒否する（fail-closed）。
+  開発（`ALLOW_MOCK_AUTH=1`）では起動を止めず warn のみとする。`PRAGMA foreign_keys` は
+  コネクション設定だが `foreign_key_check` は別に動作するため、リモート DB も対象に含める。
+  起動拒否文言には件数と `table(rowid=...) -> parent` のみを含め、秘密値はエコーしない。
+  `doctor` は本番相当で同じ判定を `production` カテゴリ内へ警告としてマージし、
+  カテゴリ数（check23）は変更しない。是正 CLI や自動修復は提供しないため、
+  孤立行の検出時はバックアップからの作り直しで対応する
+  （[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)、[ADR-0010](adr/ADR-0010-foreign-key-startup-fail-closed.md)）。
 - バックアップ運用では、サーバー稼働中は `backup_db` が拒否される。ソース DB（ローカルの場合）と
   出力先 DB の `<db>.instance.lock` を検査し、生存サーバーが保持していれば `refusing backup`
   で失敗する（判定不能時も拒否、stale ロックのみ許可、fail-closed）。cron / systemd の定期実行は

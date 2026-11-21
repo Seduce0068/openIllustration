@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T03:40:00+09:00"
+  at: "2026-11-22T06:20:00+09:00"
 ---
 
 ## 目的
@@ -258,6 +258,14 @@ cargo run -p server --bin restore_db -- \
 バックアップの `PRAGMA integrity_check` と `_migrations` の存在を検証し、
 置換後にも再検証する。`-journal` サイドカーの拒否も実確認済み。
 
+1. 復元 DB の外部キー孤立行を確認する。本番相当の環境変数（`DATABASE_URL` に復元先を指定し、
+   `ALLOW_MOCK_AUTH` は無効）で `cargo run -p server --bin doctor -- --strict` を実行し、
+   `production` カテゴリに孤立行警告が出ないことを確認する。孤立行がある構成ではサーバーが
+   起動を拒否するため（fail-closed）、その DB で運用を再開しない。
+1. 孤立行が検出された場合は作り直しを判断する。是正 CLI や自動修復は提供しないため、
+   孤立行の無い別のバックアップを選んで再リストアするか、参照先データを作り直して
+   整合する状態を再構築する。失われるデータ範囲と利用者への通知は各デプロイの運用者が
+   判断する（[ADR-0010](adr/ADR-0010-foreign-key-startup-fail-closed.md)）。
 1. サーバーを起動し、マイグレーション検証（`_migrations` チェックサム）が通ることを確認する。
 1. `/health` 200、`/ready` 200 を確認する。
 1. `verify_audit_log` を本番 DB に対して実行し、監査連鎖が健全であることを確認する。

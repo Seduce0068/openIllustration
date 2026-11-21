@@ -9,3 +9,4 @@
 * [ADR-0007](ADR-0007-verified-age-adapter.md) - 署名付き年齢属性 adapter の境界と発行者許可リスト（Accepted）。
 * [ADR-0008](ADR-0008-moderation-stats-publication.md) - モデレーション集計の第三者公開範囲（Accepted）。
 * [ADR-0009](ADR-0009-payment-order-partial-unique-rejected.md) - payment_orders 部分 UNIQUE の却下（Rejected）。
+* [ADR-0010](ADR-0010-foreign-key-startup-fail-closed.md) - 起動時 FK 孤立行の fail-closed 化（Accepted）。

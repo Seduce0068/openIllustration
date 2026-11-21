@@ -14780,8 +14780,9 @@ async fn test_foreign_keys_enabled_and_enforced_on_local_db() {
     );
 }
 
-/// 起動時の warn 契約を固定する。FK 無効な既存 DB に孤立行がある場合、
-/// `foreign_key_check` が検出できることを検証する（fail-closed は採用しない）。
+/// FK 無効な既存 DB に孤立行がある場合に `foreign_key_check` が検出できることを検証する。
+/// 本番相当（mock 無効）では検出結果を fail-closed で起動拒否へ使い、
+/// 開発（mock 有効）では起動を止めず warn のみとする（ADR-0010）。
 #[tokio::test]
 async fn test_foreign_key_check_detects_orphan_rows() {
     let db = Builder::new_local(":memory:")
@@ -14808,6 +14809,59 @@ async fn test_foreign_key_check_detects_orphan_rows() {
         violations.iter().any(|value| value.contains("favorites")),
         "orphan favorites row must be reported: {violations:?}"
     );
+}
+
+// --- 起動時 FK fail-closed の純粋判定（ADR-0010） --------------------------
+
+#[test]
+fn test_foreign_key_startup_error_mock_always_none() {
+    let violations = vec!["favorites(rowid=Some(1)) -> users".to_string()];
+    // mock 有効なら孤立行・検査失敗にかかわらず常に None（warn のみ、起動は止めない）。
+    assert!(crate::foreign_key_startup_error(true, &violations, false).is_none());
+    assert!(crate::foreign_key_startup_error(true, &violations, true).is_none());
+    assert!(crate::foreign_key_startup_error(true, &[], true).is_none());
+    assert!(crate::foreign_key_startup_error(true, &[], false).is_none());
+}
+
+#[test]
+fn test_foreign_key_startup_error_production_violations_are_fatal() {
+    let violations = vec![
+        "favorites(rowid=Some(7)) -> users".to_string(),
+        "contents(rowid=Some(9)) -> users".to_string(),
+    ];
+    let message = crate::foreign_key_startup_error(false, &violations, false)
+        .expect("本番相当では孤立行で起動を拒否する");
+    assert!(message.contains('2'), "件数を含むこと: {message}");
+    assert!(message.contains("favorites"), "table を含むこと: {message}");
+    assert!(
+        message.contains("rowid=Some(7)"),
+        "rowid を含むこと: {message}"
+    );
+    assert!(message.contains("users"), "parent を含むこと: {message}");
+    // 構造体のデバッグ表現や設定値は含めない（件数と table/rowid/parent のみ）。
+    assert!(
+        !message.contains("violations="),
+        "内部表現を出さない: {message}"
+    );
+}
+
+#[test]
+fn test_foreign_key_startup_error_check_failure_is_fatal_in_production() {
+    let message = crate::foreign_key_startup_error(false, &[], true)
+        .expect("本番相当では検査失敗でも起動を拒否する");
+    assert!(
+        message.contains("foreign key check"),
+        "固定文言であること: {message}"
+    );
+    assert!(
+        !message.contains("failed to run"),
+        "検査エラーの本文（設定値を含む可能性）はエコーしない: {message}"
+    );
+}
+
+#[test]
+fn test_foreign_key_startup_error_clean_production_is_none() {
+    assert!(crate::foreign_key_startup_error(false, &[], false).is_none());
 }
 
 /// 既存ヘルパが組み立てるアプリの users / contents が参照整合性を保ち、

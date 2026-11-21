@@ -611,7 +611,8 @@ fn check_all() -> Vec<(&'static str, Vec<String>)> {
     check_all_with(env)
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let strict = match parse_args_from(std::env::args()) {
         ParseOutcome::Run { strict } => strict,
         ParseOutcome::Help => {
@@ -630,7 +631,16 @@ fn main() {
         }
     };
 
-    let results = check_all();
+    let mut results = check_all();
+
+    // FK 孤立行は起動時 fail-closed と同じ判定（server::foreign_key_doctor_warnings）
+    // で production カテゴリへ警告としてマージする。results.push を増やさず check23 を維持。
+    // 本番相当のみ警告し、開発（mock 有効）は起動時と同じく warn のみ（ここでは加えない）。
+    let fk_warnings = server::foreign_key_doctor_warnings().await;
+    if let Some((_, errors)) = results.iter_mut().find(|(name, _)| *name == "production") {
+        errors.extend(fk_warnings);
+    }
+
     let mut problems = 0usize;
     for (name, errors) in &results {
         if errors.is_empty() {
