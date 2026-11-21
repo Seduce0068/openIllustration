@@ -2,7 +2,9 @@
 # /etc/cron.d/openillustration-backup に配置する（末尾に改行が必要）。
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-MAILTO=admin@example.com
+# 配置前に実際の通知先へ差し替えること（未差し替え場合は失敗通知が届かない）。
+# ALERT_CMD を backup.env で設定する場合は、そちらを通知経路として統一してもよい。
+MAILTO=__SET_ME__
 
 # BACKUP_GPG_RECIPIENT（必須）と AUDIT_EXPECT_ROOT（本番必須）を含む
 # /etc/openillustration/backup.env をラッパー経由で読み込む。

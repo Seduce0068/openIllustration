@@ -50,7 +50,7 @@ status: current
   — 根拠 `server/src/lib.rs` run() / `server/src/bin/doctor.rs` production / review R1-CF / 重大度 high。
   CLI3本は未設定起動拒否なのにサーバーは `file:local.db` へ暗黙フォールバックし、doctor も診断しない。
   本番相当では未設定起動拒否、または既定値使用を production カテゴリへ警告追加。
-- [ ] **cron 配布テンプレートの MAILTO をプレースホルダ化** — 根拠 `deploy/openillustration-backup.cron:5` / review R4-DR / 重大度 high。
+- [x] **cron 配布テンプレートの MAILTO をプレースホルダ化** — 根拠 `deploy/openillustration-backup.cron:5` / review R4-DR / 重大度 high。
   `admin@example.com` が残っており、そのまま導入するとバックアップ失敗通知が届かない。
   `__SET_ME__` 等へ変更し、Runbook に差し替え手順と ALERT_CMD 必須化を追記。
 - [ ] **JWT 期限切れ (401) の refresh／再ログイン導線を追加**

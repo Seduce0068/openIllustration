@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T03:37:12+09:00"
+  at: "2026-11-22T03:40:00+09:00"
 ---
 
 ## 目的
@@ -93,6 +93,10 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
 
 アラートの通知先は `ALERT_CMD`（失敗通知コマンド）または cron の `MAILTO` で設定する。
 `SyslogIdentifier` は journald の検索タグであり通知先ではない（変更しても通知は飛ばない）。
+cron テンプレートの `MAILTO=__SET_ME__` は配置前に実際の宛先へ差し替えること。
+未差し替えのまま配置すると失敗通知が届かず、ローテーション失敗や
+`AUDIT_EXPECT_ROOT` 不一致を検知できない。`ALERT_CMD` を `backup.env` で設定する場合は
+cron / systemd 共通の通知経路として統一し、`MAILTO` は空にして二重通知を避ける。
 パス・ユーザー・グループは導入環境に合わせて修正する。
 
 `RETENTION_DAYS`（既定30、上限20000＝約55年）を超えた世代数を削除するが、直近
