@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-21T06:50:20+09:00"
+  at: "2026-11-22T03:21:48+09:00"
 ---
 
 ## 目的
@@ -82,6 +82,13 @@ cargo run -p server --bin sign_audit_export -- \
 | 親ディレクトリ権限 | group/other 書き込み可能（`mode & 0o022 != 0`）なら拒否。`0700` でない（`mode & 0o055 != 0`）場合は警告を出力 | 鍵ファイルのすり替え・追加を防ぐ |
 | リモート DB トークン | `DATABASE_TOKEN` 環境変数からのみ読む。`--database-token` は渡された時点でエラー | argv はプロセス一覧へ公開されるため |
 | 出力の上書き | `OpenOptions::create_new(true)` で存在チェックと生成を原子的に行い、既存ファイルを拒否 | 存在チェックと生成の TOCTOU を防ぐ |
+
+環境変数の読取は `common::env::read_env` に統一し、非 UTF-8 のバイト列は「未設定」や空文字と
+区別して不正値として扱い、起動を拒否する。`AUDIT_EXPORT_INCLUDE_REASONS` と `ALLOW_MOCK_AUTH` は
+`bool_env_state` の `Invalid` として fail-closed になり、受理値 `1` / `true` / `0` / `false`
+（trim・小文字化は不変）以外と同様にエラーとなる。`DATABASE_URL` は固定文言の
+`DATABASE_URL_REQUIRED`、`DATABASE_TOKEN` はトークン値を含まない固定文言で拒否し、
+いずれも生バイトをエコーしない。
 
 ### 手動確認手順（Kubuntu / リポジトリルート）
 

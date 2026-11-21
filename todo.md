@@ -42,7 +42,7 @@ status: current
   verified_claims 受理時に `sha256(birthdate:country)` を user_hash としており、同一生年月日・居住国の
   ユーザーが subject 衝突する。実証明書接続時に本番の主体分離が崩れるため、署名済み subject を
   主体識別子とし、birthdate/country は年齢判定専用に留める。
-- [ ] **非 UTF-8 環境変数を fail-closed 起動拒否へ**
+- [x] **非 UTF-8 環境変数を fail-closed 起動拒否へ**
   — 根拠 `server/src/lib.rs` bool_env_at_startup / `server/src/oidc.rs` validate_oidc_config_with / review R2-ER / 重大度 high。
   `std::env::var` の Err を全て「未設定」として飲み込み、NotUnicode が起動拒否をすり抜ける。
   `var_os` で None と非 UTF-8 を区別し、doctor/per-request 読込も同じ lookup 契約へ統一する（値は非エコー）。
@@ -614,6 +614,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding: common::env に EnvValue/BoolEnvState 分類器を新設し、起動時・
+  per-request・OIDC validation・CLI の全経路で非UTF-8を「未設定」ではなく不正値として
+  fail-closed に統一。OIDC_MAX_AUTH_AGE_SECS の非UTF-8がauth_time検証を黙って無効化する
+  fail-open も R4 で発見・是正。check23/doctor53/E2E69件は不変、全ゲート green。
 
 - 2026-11-22 coding: 検証済み年齢の user_hash を issuer+signed_subject 由来の sha256(64-hex)へ
   是正。nonce/birthdate/country は除外、空 subject は二段目403。OIDC callback は sub 生値の

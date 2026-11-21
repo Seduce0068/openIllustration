@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T03:21:48+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -322,6 +322,9 @@ generated:
   設定値は出力しない。
 - OIDC 設定の判定は `validate_oidc_config_with` に集約し、`from_env_with` と `doctor` が同じ結果を共有する。
   ハードエラーは起動拒否と `oidc_*` 警告に、本番必須設定の不足は `required_present` 経由で `production` 警告に使い分ける。
+  必須値が非 UTF-8 の場合は「未設定」ではなく不正値として扱い、`enabled=true` のまま固定文言
+  `OIDC configuration values must be valid UTF-8` をハードエラーとして起動拒否し、`doctor` の
+  `oidc_endpoint_urls` カテゴリで同じ固定文言の警告を出す（生バイトはエコーしない）。
 - `PINATA_JWT` は本番相当では実トークン必須。未設定・空・空白のみ・開発用 `mock_jwt`
   （前後空白を含む）は起動拒否（fail-closed）。`doctor` の `production` カテゴリでも
   同じ判定で警告し、設定値は出力しない（[DETAILED_DESIGN.md](DETAILED_DESIGN.md) と整合）。
@@ -330,5 +333,12 @@ generated:
   拒否し、ランタイムは起動拒否、起動後に read するフラグは安全側（`false` または
   Secure 付与）へ倒す。`doctor` は既存カテゴリ内で固定文言の警告を出し、不正値そのものは
   エコーしない。`common::age::parse_bool_env` が共通基準である。
+- 非 UTF-8 の環境変数値は「未設定」ではなく不正値として扱う。`common::env::read_env` が
+  `EnvValue::NonUtf8` を返し、`bool_env_state` は `BoolEnvState::Invalid` に分類する
+  （受理値の基準は既存 `parse_bool_env` に委譲）。必須設定（`PINATA_JWT` 等）は
+  `production_config_errors` 経由で起動拒否、per-request で読むフラグ
+  （`EXPOSE_INTERNAL_ERRORS` / `ALLOW_IPV4_LOCALHOST`）は `Valid(true)` 以外を
+  安全側 `false` として fail-closed とし、`doctor` は既存カテゴリ内で固定文言の警告を
+  出す。いずれも生バイトはログ・エラー文言へエコーしない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।
