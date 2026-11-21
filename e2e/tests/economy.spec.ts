@@ -89,18 +89,38 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     });
 
     await page.goto('/');
+
+    // R2 a11y: 先頭のスキップリンクは 1 回目の Tab で可視化され、
+    // Enter で main へ直接フォーカスする（hash は view 同期と衝突するため書き換えない）。
+    const skipLink = page.getByRole('link', { name: '本文へスキップ' });
+    await expect(skipLink).toBeAttached();
+    await page.keyboard.press('Tab');
+    await expect(skipLink).toBeFocused();
+    // sr-only（1px）ではなく focus:not-sr-only で実サイズへ広がったことを検証する。
+    const skipBox = await skipLink.boundingBox();
+    expect(skipBox).not.toBeNull();
+    expect(skipBox!.width).toBeGreaterThan(20);
+    expect(skipBox!.height).toBeGreaterThan(10);
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#main-content')).toBeFocused();
+
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'BROWSE' }).click();
-    
-    // Hover over content to see the disabled support affordance
+
+    // 支援オーバーレイは group-focus-within:opacity-100 でも表示される。
     // Tailwind の .group に依存せず、クライアント側の testid で特定する。
     const contentArea = page.getByTestId('content-card').first();
     await expect(contentArea).toBeVisible({ timeout: 20000 });
-    await contentArea.hover();
+    const supportOverlay = page.getByTestId('support-overlay');
+    await supportOverlay.focus();
+    // フォーカスがオーバーレイへ実際に当たったことを activeElement で確認する。
+    expect(
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-testid'))
+    ).toBe('support-overlay');
 
     const pendingButton = page.getByRole('button', { name: 'Settlement Pending' });
-    // オーバーレイは opacity-0 → group-hover:opacity-100 の遷移がある。
+    // オーバーレイは opacity-0 → group-hover / group-focus-within:opacity-100 の遷移がある。
     // toBeVisible() は opacity:0 でも通るため、親のオーバーレイが完全に
     // 表示される（opacity:1）まで待ってからボタンを検証する。
     await expect(pendingButton.locator('xpath=..')).toHaveCSS('opacity', '1');
@@ -116,6 +136,15 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.locator('text=Record_Hash')).toBeVisible();
     await expect(page.locator('text=500 JPYC')).toBeVisible();
     await expect(page.locator('text=mock_tx_hash_789012345678')).toBeVisible();
+
+    // R2-URL: タブ切替は pushState なので、戻るで直前の BROWSE が復元される。
+    expect(new URL(page.url()).hash).toBe('#ledger');
+    await page.goBack();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    await expect(page.getByTestId('export-section')).toBeVisible();
   });
 
   type TransactionsHandler = (route: Route) => Promise<void>;

@@ -100,5 +100,17 @@ test.describe('Content search and filtering (R5-01)', () => {
     await expect.poll(() => seenQueries).toEqual([null, 'Neon']);
     await expect(page.getByText('Neon Alley')).toBeVisible();
     await expect(page.getByText('Moonlit Harbor')).toHaveCount(0);
+
+    // R2-URL: 検索条件が URL クエリへ同期される（view は hash に残る）。
+    await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('Neon');
+    expect(new URL(page.url()).hash).toBe('#dashboard');
+
+    // 再読込 -> 未認証なのでログインへ戻る -> 再ログインで URL から条件が復元される。
+    await page.reload();
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByLabel('Search')).toHaveValue('Neon');
+    // 復元時の二重 GET が無く、末尾 2 件が [Neon, Neon] になること。
+    await expect.poll(() => seenQueries.slice(-2)).toEqual(['Neon', 'Neon']);
   });
 });

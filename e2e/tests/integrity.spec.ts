@@ -341,6 +341,22 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       'Reason: middle log 2',
       'Reason: oldest log 1',
     ]);
+
+    // R2: 監査日時は Intl.DateTimeFormat で整形表示され、生 ISO の区切り 'T' を含まない。
+    // ロケール依存の完全一致は期待せず、書式と生 ISO 属性の保持のみを確認する。
+    const createdAtCells = card.getByTestId('audit-created-at');
+    const displayedDates = await createdAtCells.allTextContents();
+    expect(displayedDates).toHaveLength(3);
+    for (const displayed of displayedDates) {
+      expect(displayed).not.toContain('T');
+      expect(displayed.trim()).not.toBe('');
+    }
+    const rawDates = await createdAtCells.evaluateAll((els) =>
+      els.map((el) => el.getAttribute('title'))
+    );
+    for (const raw of rawDates) {
+      expect(raw).toContain('T');
+    }
   });
 
   test('R2: Audit toggle exposes ARIA state and dialog closes on Escape', async ({ page }) => {
