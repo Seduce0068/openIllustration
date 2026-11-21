@@ -37,13 +37,33 @@ status: current
 
 ### 優先度: 高
 
+- [ ] **リモートDBでJWT失効がメモリに閉じ込められる問題を是正** — 根拠 `server/src/lib.rs` AuthClaims抽出器 / review R1-AR / 重大度 high。
+  revoked_sessions/revoked_subs_before がプロセス内のみで、複数インスタンス構成では logout/BAN が他インスタンスへ波及しない。
+  DB照会または単一インスタンス強制でfail-closedにする。
+- [ ] **instance lock読取失敗のfail-closed化** — 根拠 `server/src/lib.rs` acquire_instance_lock / review R2-DI / 重大度 high。
+  read_to_stringのErrを空内容として扱い有効ロックを奪取し得る。最初の読取を?伝播し再読込も失敗時bailする。
+- [ ] **deny のRUSTSEC ignoreを本番リモートDB構成ですり抜けないように** — 根拠 `deny.toml:48` / review R3-DE / 重大度 high。
+  h2/rustls系ignoreの理由が「リモートDB接続時のみ」なのに本番推奨構成そのものが到達経路を持つ。
+  構成別denyプロファイルまたはリモートDB検出ゲート、あるいは依存更新。
+- [ ] **アップロード/通報失敗をrole=alertで告知**
+  — 根拠 `client/src/lib.rs` upload-status / `docs/OPERATIONAL_POLICY.md:190` / discovery R5-VU / 重大度 high。
+  成功はrole=statusのまま、失敗時のみrole=alert専用領域へ。E2E既存2件内へアサーション、69件維持。
+- [ ] **maxlengthをUTF-8バイト基準へ**
+  — 根拠 `client/src/lib.rs` REPORT_REASON_MAX_LEN 等 / `server/src/lib.rs` validate_content_metadata / discovery R5-VU
+    重大度 high。
+  ブラウザmaxlengthはUTF-16 code unitsでサーバはUTF-8バイト。日本語67文字超で400になる。
+  TextEncoderでバイト数ゲートするかサーバをUnicode文字数へ。E2E既存2件内へ日本語ケース、69件維持。
+- [ ] **定期バックアップとinstance.lockの衝突を解消**
+  — 根拠 `deploy/openillustration-backup.timer` / `scripts/backup-rotate.sh` / review R5-DR / 重大度 high。
+  常時稼働環境では03:17の実行が必ず失敗する。停止→backup→起動のオーケストレーションまたはオンライン快照方式へ。
 - [x] **検証済み年齢属性の user_hash を signed_subject 由来へ変更**
   — 根拠 `server/src/lib.rs` auth_verify (verified_age 分岐) / review R3-AU / 重大度 high。
   verified_claims 受理時に `sha256(birthdate:country)` を user_hash としており、同一生年月日・居住国の
   ユーザーが subject 衝突する。実証明書接続時に本番の主体分離が崩れるため、署名済み subject を
   主体識別子とし、birthdate/country は年齢判定専用に留める。
 - [x] **非 UTF-8 環境変数を fail-closed 起動拒否へ**
-  — 根拠 `server/src/lib.rs` bool_env_at_startup / `server/src/oidc.rs` validate_oidc_config_with / review R2-ER / 重大度 high。
+  — 根拠 `server/src/lib.rs` bool_env_at_startup / `server/src/oidc.rs` validate_oidc_config_with / review R2-ER
+    重大度 high。
   `std::env::var` の Err を全て「未設定」として飲み込み、NotUnicode が起動拒否をすり抜ける。
   `var_os` で None と非 UTF-8 を区別し、doctor/per-request 読込も同じ lookup 契約へ統一する（値は非エコー）。
 - [x] **DATABASE_URL のサーバー既定をfail-closed化しdoctor診断を追加**
@@ -128,6 +148,30 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 ### 優先度: 中
 
+- [ ] **AUDIT_EXPECT_ROOTをサーバ起動ゲートへ**
+  — 根拠 `server/src/bin/doctor.rs` / `server/src/lib.rs` production_config_errors / review R1-CF / 中。
+  doctor --strict独自必須で起動は未設定のまま通る。hex検証をproduction_config_errorsへ追加するか「推奨」へ格下げ。
+- [ ] **全bool_env検証をDB接触前に集約** — 根拠 `server/src/lib.rs:1277` JWT_REQUIRE_KID / review R2-ER / 中。
+  JWT_REQUIRE_KIDだけがmigrate/lock/FK検査後に検証され、不正値で部分適用状態を残す。
+- [ ] **公開集計のSELECTを読み取りトランザクション化** — 根拠 `server/src/lib.rs` public_mod_stats / review R2-DI / 中。
+  3クエリが別トランザクションで並行書き込みとスナップショット不一貫。me_exportと境界を統一。
+- [ ] **TZ判定・PINATA_JWT分類の単一情報源化**
+  — 根拠 `server/src/bin/doctor.rs` policy_fixed_offset再実装 / `server/src/lib.rs` production_config_errors / review R1-CF
+    中。
+- [ ] **/auth/refreshのOrigin検証とnullオリジン拒否**
+  — 根拠 `server/src/oidc.rs` refresh / `server/src/lib.rs` is_origin_shape / review R3-AU / 中。
+  credentialed CORSと組み合わせ別オリジンからJWT再発行の余地。Sec-Fetch-Site/Origin照合、null明示拒否。
+- [ ] **XFFデコード不能ヘッダのfail-closed化とsafety copy権限**
+  — 根拠 `server/src/network.rs` forwarded_client_ip / `server/src/bin/restore_db.rs` / review R2-ER + R5-VU / 中。
+- [ ] **systemd/cronバックアップの排他と通知経路**
+  — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md` / `deploy/openillustration-backup.service` / review R5-VU + R5-DR / 中。
+- [ ] **sha256便宜crate削除とwasm-bindgen-test整理** — 根拠 `server/Cargo.toml:29` / `client/Cargo.toml` / discovery R4-DP / 中。
+  sha2+hexへ置換し重複バージョンskipを外す。未使用のwasm-bindgen-testは削除または実ゲート追加。
+- [ ] **doc-numbersへクライアント単体テスト名とJPKI件数照合を追加** — 根拠 `scripts/test-doc-numbers.sh` / discovery R4-DP / 中。
+- [ ] **CIへシェル静的ゲート(bash -n/shellcheck/shfmt)を追加** — 根拠 `.github/workflows/ci.yml:47` / review R5-CI / 中。
+- [ ] **脆弱性受容件数11/12不一致とADR状態記述を是正**
+  — 根拠 `docs/SECURITY_ADVISORIES.md:22` / `docs/DOCUMENT_STATUS.md:39` / `README.md:26` / review R5-DC + discovery R5
+    中。
 - [x] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
   任意の認証済みユーザーが通報キュー閲覧と確定を実行でき、運用判断を代行できる。
   `require_moderation_operator` を ban_user と同じ位置で呼ぶ（スケジューラ専用なら別トークン分離）。
@@ -142,7 +186,8 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **外部キー孤立行の fail-closed 方針を決定** — 根拠 `server/src/lib.rs` find_foreign_key_violations / discovery R1-OPS / 中。
   warn のみで起動継続。本番相当でエラー化するか現状維持を裁定し、コードコメントと運用方針へ明記。
 - [x] **Runbook のテスト数と export E2E 記述を実測へ**
-  — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md`, `docs/AUDIT_EXPORT_RUNBOOK.md`, `docs/TEST_SPECIFICATION.md` / review R5-DC / 中。
+  — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md`, `docs/AUDIT_EXPORT_RUNBOOK.md`, `docs/TEST_SPECIFICATION.md` / review R5-DC
+    中。
   verify_backup 17→19、verify_audit_export 17→20、export E2E「2/2 pass」→3件。doc-numbers 照合対象外。
 - [x] **CI の deny ゲートへ bans/sources を追加**
   — 根拠 `.github/workflows/ci.yml:40-42`, `deny.toml` / review R3-DE + discovery R4-DP / 中。
@@ -233,6 +278,13 @@ P1（本番運用の健全性）:
 
 ### 優先度: 低
 
+- [ ] **E2E解析失敗フェーズを既存2件へ統合** — 根拠 `e2e/tests/export.spec.ts` / `e2e/tests/moderation.spec.ts` / discovery R4 / 低。
+  EXPORT-11(不正JSON)とREPORTS-ERR(型壊れJSON)を既存test内へ。69件維持。
+- [ ] **ADR-0011の3層計測と実装の差分を解消** — 根拠 `docs/adr/ADR-0011` / `e2e/tests/metrics.spec.ts` / discovery R5 / 低。
+  層3(転送量/wasmサイズ)と3回中央値を追加するか、Level 0は部分計測と明記。
+- [ ] **ADR-0012の互換マトリクス実体を作成** — 根拠 `docs/adr/ADR-0012` / discovery R5 / 低。
+- [ ] **監査Reasonの「全文は署名付きエクスポート」案内を到達可能な表現へ** — 根拠 `client/src/lib.rs:2708` / discovery R5 / 低。
+- [ ] **doc-numbersのコメント「実害なし」根拠を実態へ** — 根拠 `scripts/test-doc-numbers.sh:36` / review R5 / 低。
 - [x] **UI 文言を日本語へ統一（日英混在解消）** — 根拠 `client/src/lib.rs` alert/status/sr-only 文言 / discovery R5-VU / 中。
   `<html lang="ja">` と Intl ja-JP なのにナビ・エラーが英語固定。読み上げ部分を優先して辞書化。
 - [x] **通報フォームの必須入力と dedicated エラーを追加** — 根拠 `client/src/lib.rs` submit_report / discovery R5-VU / 中。
@@ -620,6 +672,12 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 コンボ第3ラウンド（review 4担当 + discovery 3担当）: 全7担当完了。
+  R6 で重複排除・Runtime Proof 確認のうえ新規25件（高7/中11/低5）を追記。
+  高優先はリモートDBのJWT失効メモリ閉じんめ・ロック読取失敗の奪取・deny ignoreすり抜け・
+  role=status/alert矛盾・UTF-16/UTF-8 maxlength・定期バックアップのinstance.lock衝突・
+  脆弱性受容件数不一致。speculativeのk-匿名性は候補として保留。次は高優先から coding。
 
 - 2026-11-22 coding: 手動 finalize_report へ require_moderation_operator を追加
   （未設定/未登録/BAN済み403、入力検証前）。スケジューラ経路は認可対象外で自動確定継続。
