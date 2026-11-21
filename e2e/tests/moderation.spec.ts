@@ -42,6 +42,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   // 固定文言。serde の生エラー（フィールド名・解析位置・型情報・レスポンス本文）は
   // 画面へ出さない契約を検証する。
   const statsParseErrorText = '集計の解析に失敗しました。';
+  // client/src/lib.rs の 403 固定文言。一般画面へ漏れないことの否定オラクルとして使う。
+  const statsForbiddenText = '運用者権限が必要です';
 
   // 投票フィードバック用の共通セットアップ。モック認証でログインし、
   // 投票キューに1件（report_id=42）を表示した状態まで進める。
@@ -265,7 +267,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.locator('text=User report: suspicious content')).toBeVisible();
   });
 
-  test('R5-09: should display moderation stats for operators and permission error on 403', async ({ page }) => {
+  test('R5-09: should mount operator stats panel only on opt-in and stay silent for general users', async ({ page }) => {
     const statsFixture = {
       generated_at: '2026-11-18T00:00:00Z',
       totals: {
@@ -292,11 +294,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       ],
     };
 
-    // 同じテスト内で 200 → 403 を切り替える（画面遷移で再フェッチさせる）。
+    // 同じテスト内で 200 → 403 を切り替える（ボタン押下でプローブさせる）。
     let forbidStats = false;
-    let statsRequestCount = 0;
-    let statsAuthHeader: string | undefined;
-    // 再フェッチ回数とリクエスト内容を完全一致で検証し、過剰リクエストを検出する。
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
 
     await page.route('**/auth/login', async route => {
@@ -313,12 +312,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
     });
     await page.route('**/mod/stats', async route => {
-      statsRequestCount += 1;
-      statsAuthHeader = route.request().headers()['authorization'];
       statsRequests.push({
         method: route.request().method(),
         path: new URL(route.request().url()).pathname,
-        authorization: statsAuthHeader,
+        authorization: route.request().headers()['authorization'],
       });
       if (forbidStats) {
         await route.fulfill({
@@ -340,7 +337,17 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'MODERATION' }).click();
 
-    // 認証トークン付きで集計が取得され、集計カード / 月次表が表示されること。
+    // フェーズ1: 初期表示は一般画面として描画し、/mod/stats を一切送らない。
+    await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('moderation-stats-toggle')).toBeVisible();
+    await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0);
+    await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('TRANSPARENCY DASHBOARD');
+    await expect(page.locator('body')).not.toContainText(statsForbiddenText);
+    expect(statsRequests).toEqual([]);
+
+    // フェーズ2: 中立ボタンの押下で1本だけ送信し、200 応答を根拠にパネルをマウントする。
+    await page.getByTestId('moderation-stats-toggle').click();
     await expect(page.getByTestId('moderation-stats')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('moderation-stats-section')).toContainText('TRANSPARENCY DASHBOARD');
     await expect(page.getByTestId('moderation-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
@@ -348,22 +355,27 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('moderation-stats-totals')).toContainText('Quorum Not Met');
     await expect(page.getByTestId('moderation-stats-monthly')).toContainText('2026-11');
     await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
-    expect(statsAuthHeader).toBe('Bearer mock_jwt_token');
+    expect(statsRequests).toEqual([
+      { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
+    ]);
 
-    // 403 では権限エラーを表示し、集計カードを出さないこと。
+    // フェーズ3: 403 では権限エラーを一般画面へ出さず、パネルを黙って閉じる。
     forbidStats = true;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
-    await expect(page.getByTestId('moderation-stats-error')).toHaveText('運用者権限が必要です', { timeout: 10000 });
-    await expect(page.getByTestId('moderation-stats')).toHaveCount(0);
-
-    // 集計は初期表示と画面遷移後の2回だけ。メソッド・パス・Authorization も
-    // 完全一致で検証し、余計な再フェッチや未認証リクエストを検出する。
-    expect(statsRequestCount).toBe(2);
+    await page.getByTestId('moderation-stats-toggle').click();
+    await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0, { timeout: 10000 });
+    await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText(statsForbiddenText);
     expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
     ]);
+
+    // 再マウントしても初期表示は 0 本のまま（画面遷移による勝手な再フェッチがないこと）。
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByTestId('moderation-stats-toggle')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0);
+    expect(statsRequests).toHaveLength(2);
   });
 
   test('R5-09 (parse error): /mod/stats が不正 JSON のとき moderation-stats-error に固定文言のみを表示し serde の生エラーを出さない', async ({ page }) => {
@@ -392,6 +404,9 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
     });
     await openModeration(page);
+    // 初期表示では 0 本なので、固定文言の検証はオプイン押下後にパネルを開いて行う。
+    expect(statsRequests).toEqual([]);
+    await page.getByTestId('moderation-stats-toggle').click();
 
     const statsError = page.getByTestId('moderation-stats-error');
     await expect(statsError).toBeVisible({ timeout: 10000 });

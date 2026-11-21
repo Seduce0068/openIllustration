@@ -6,3 +6,6 @@
 * [ADR-0004](ADR-0004-moderation-procedure.md) - モデレーション手続（Accepted）。
 * [ADR-0005](ADR-0005-audit-export.md) - 監査エクスポートと署名検証（Accepted）。
 * [ADR-0006](ADR-0006-jxl-decoding.md) - JPEG XL デコード検証の技術選定（Accepted）。
+* [ADR-0007](ADR-0007-verified-age-adapter.md) - 署名付き年齢属性 adapter の境界と発行者許可リスト（Accepted）。
+* [ADR-0008](ADR-0008-moderation-stats-publication.md) - モデレーション集計の第三者公開範囲（Accepted）。
+* [ADR-0009](ADR-0009-payment-order-partial-unique-rejected.md) - payment_orders 部分 UNIQUE の却下（Rejected）。

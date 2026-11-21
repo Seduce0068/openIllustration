@@ -73,8 +73,10 @@ status: current
 | R1-16 | ファイル選択 input が `display:none` でキーボード操作不能 | 中 | `client/src/lib.rs:561-564` | 0.90 |
 
 **未確認（r1-client）**: 1件目は静的推論で実 multipart バイト列は未実行。見送り候補として
-「セッション期限切れ時の自動 refresh/logout 欠如」「price 入力の `min`/`max` 未指定」
-「バイト単位のハッシュ接頭辞スライス」を挙げている。
+「セッション期限切れ時の自動 refresh/logout 欠如」「バイト単位のハッシュ接頭辞スライス」を
+挙げている。price 入力の `min`/`max` 未指定は**対応済み 2026-11-21**: `min="0"` /
+`max="1000000"` を指定し、送信前ゲート（`client/src/lib.rs` の `price_range_error`）を
+サーバー契約 0..=1_000_000 へ揃えた（E2E は `e2e/tests/upload.spec.ts` の価格境界シナリオ）。
 
 ### r1-auth: 認証・セッション・年齢ゲート
 

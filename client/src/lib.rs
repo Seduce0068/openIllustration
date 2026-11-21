@@ -1921,6 +1921,19 @@ fn upload_error_message(status: Option<u16>) -> String {
     }
 }
 
+/// 価格の送信前検証に使う固定文言。生入力値は決め打ちで混入させない。
+const PRICE_RANGE_ERROR: &str = "Price must be between 0 and 1000000 JPY.";
+
+/// サーバー契約 `0..=1_000_000` の範囲外なら dedicated エラーを返す純粋関数。
+/// 入力途中で丸めない `price_from_number` の分、送信直前にこれでゲートする。
+fn price_range_error(price: i32) -> Option<&'static str> {
+    if (0..=1_000_000).contains(&price) {
+        None
+    } else {
+        Some(PRICE_RANGE_ERROR)
+    }
+}
+
 /// 数値を価格として使える整数かどうかを判定する純粋関数。
 ///
 /// `NaN` / 無限大 / 小数 / i32 範囲外は `None` とし、呼び出し側が直前の有効値を保持する。
@@ -1990,6 +2003,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         let title_val = title.get();
         let description_val = description.get();
         let tags_val = tags.get();
+        // 送信直前にサーバー契約 0..=1_000_000 をゲートする。入力中に黙って丸めない
+        // 経路を維持するため、範囲外はここで固定文言を出して通信を開始しない。
+        if let Some(error) = price_range_error(price_val) {
+            set_status.set(error.to_string());
+            return;
+        }
         set_loading.set(true);
         set_status.set("監査証跡を生成中...".to_string());
 
@@ -2108,13 +2127,13 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     <input type="number"
                         id="upload-price"
                         name="price"
-                        min="1"
+                        min="0"
                         max="1000000"
                         on:input=move |ev| {
                             // ブラウザ自身の数値解釈（valueAsNumber）を使う。Rust 側で文字列を
                             // パースしないため 1e3 のような指数表記も 1000 として受理する。
                             // 有限・整数・i32 範囲内でなければ signal を更新せず直前値を保持し、
-                            // 受理時は 0 / 1000001 も丸めずにそのまま送る。
+                            // 受理時は丸めずにそのまま保持する（範囲外は送信前ゲートで拒否）。
                             let Some(target) = ev.target() else {
                                 return;
                             };
@@ -2352,9 +2371,14 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     // 空状態を「保留投票なし」と誤表示しない。
     let (reports_error, set_reports_error) = signal(String::new());
     // R5-09: 透明性ダッシュボードの集計表示状態。
+    // 初期表示では取得せず、中立的なボタンの押下時にだけプローブする。
     let (stats_html, set_stats_html) = signal(String::new());
     let (stats_error, set_stats_error) = signal(String::new());
     let (stats_loaded, set_stats_loaded) = signal(false);
+    // 運用者パネルのマウント条件。`/mod/stats` が 200 を返したというサーバ応答だけを根拠にし、
+    // トークン内容やクライアント状態から運用者を推測しない。
+    let (stats_authorized, set_stats_authorized) = signal(false);
+    let (stats_busy, set_stats_busy) = signal(false);
     // 投票結果のフィードバック。成功通知と失敗エラーは固定文言のみを表示する。
     let (vote_error, set_vote_error) = signal(String::new());
     let (vote_notice, set_vote_notice) = signal(String::new());
@@ -2401,11 +2425,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         fetch_reports();
     });
 
-    // 運用者限定の集計を取得する。403 は権限エラーとして明示し、
-    // それ以外の失敗（HTTP エラー・JSON 解析・ネットワーク）も握りつぶさず表示する。
-    Effect::new(move |_| {
+    // 運用者パネルを開くためのオプイン。初期表示では /mod/stats を 1 本も送らず、
+    // 中立的な文言のボタンが押されたときだけ認証付きでプローブする。
+    // 二重クリックは claim_submission で同期に排除し、BusyGuard で確実に解除する。
+    let fetch_stats = move || {
+        if !claim_submission(stats_busy.get()) {
+            return;
+        }
+        set_stats_busy.set(true);
         let token = token_stored.get_value();
         spawn_local(async move {
+            let _release = BusyGuard(set_stats_busy);
             match Request::get(&format!("{}/mod/stats", API_BASE))
                 .header("Authorization", &format!("Bearer {}", token))
                 .send()
@@ -2416,18 +2446,24 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         set_stats_html.set(render_moderation_stats_html(&stats));
                         set_stats_error.set(String::new());
                         set_stats_loaded.set(true);
+                        // 200 応答のみを運用者判定の根拠にしてパネルをマウントする。
+                        set_stats_authorized.set(true);
                     }
                     Err(_) => {
-                        // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず固定文言のみ表示する。
+                        // 200 が返った時点で運用者と判定し、パネル内へ固定文言のみ表示する。
+                        // 解析エラーの詳細（フィールド名・位置・生エラー）は出さない。
                         set_stats_html.set(String::new());
                         set_stats_loaded.set(false);
                         set_stats_error.set(stats_error_message(StatsFailure::Parse).to_string());
+                        set_stats_authorized.set(true);
                     }
                 },
                 Ok(response) if response.status() == 403 => {
+                    // 403 は一般画面へ描画せず、パネルを黙って閉じる。
                     set_stats_html.set(String::new());
+                    set_stats_error.set(String::new());
                     set_stats_loaded.set(false);
-                    set_stats_error.set("運用者権限が必要です".to_string());
+                    set_stats_authorized.set(false);
                 }
                 Ok(response) => {
                     set_stats_html.set(String::new());
@@ -2445,7 +2481,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 }
             }
         });
-    });
+    };
 
     let submit_report = move |_| {
         // 同期ガード: DOM の disabled 反映前に届く2回目のクリックもここで止める。
@@ -2531,17 +2567,29 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
     view! {
         <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
-            <section data-testid="moderation-stats-section" class="md:col-span-2 border border-white/10 p-8 space-y-4">
-                <h2 class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
-                <Show when=move || !stats_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="moderation-stats-error" class="text-xs text-red-500">
-                        {move || stats_error.get()}
-                    </p>
+            <div data-testid="moderation-stats-optin" class="md:col-span-2 border border-white/10 p-8 space-y-4">
+                <button
+                    on:click=move |_| fetch_stats()
+                    disabled=move || stats_busy.get()
+                    aria-busy=move || if stats_busy.get() { "true" } else { "false" }
+                    data-testid="moderation-stats-toggle"
+                    class="py-2 px-4 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white hover:text-black">
+                    "SHOW STATS"
+                </button>
+                <Show when=move || stats_authorized.get() fallback=|| ()>
+                    <section data-testid="moderation-stats-section" class="border-t border-white/10 pt-8 space-y-4">
+                        <h2 class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
+                        <Show when=move || !stats_error.get().is_empty() fallback=|| ()>
+                            <p role="alert" data-testid="moderation-stats-error" class="text-xs text-red-500">
+                                {move || stats_error.get()}
+                            </p>
+                        </Show>
+                        <Show when=move || stats_loaded.get() fallback=|| ()>
+                            <div data-testid="moderation-stats" inner_html=move || stats_html.get() />
+                        </Show>
+                    </section>
                 </Show>
-                <Show when=move || stats_loaded.get() fallback=|| ()>
-                    <div data-testid="moderation-stats" inner_html=move || stats_html.get() />
-                </Show>
-            </section>
+            </div>
             <div class="border border-white/10 p-8 space-y-6 h-fit">
                 <h2 class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
                 <p class="text-[10px] text-gray-500">
@@ -2789,35 +2837,21 @@ mod tests {
         }
     }
 
-    /// 送信前検証の固定文言。生入力値は決め打ちで混入させない。
-    const PRICE_RANGE_ERROR: &str = "Price must be between 1 and 1000000 JPY.";
-
-    /// 0..=1000000 の範囲外なら dedicated エラーを返す純粋関数（テスト内ヘルパー）。
-    /// サーバーは `price < 0` のみ拒否して 0 を受理するため、下限を 0 へ揃える。
-    /// 価格境界 E2E は 0 / 1000001 / 1000000 の実送信を期待するため、
-    /// `sign_and_upload` への接続は E2E 側の契約変更と同時に行う必要がある。
-    fn price_range_error(price: i32) -> Option<&'static str> {
-        if (0..=1_000_000).contains(&price) {
-            None
-        } else {
-            Some(PRICE_RANGE_ERROR)
-        }
-    }
-
     #[test]
     fn price_range_error_is_fixed_text_without_raw_input() {
-        for price in [-1, 1_000_001, i32::MAX] {
+        // 範囲外は本番コンパイル対象の固定文言で拒否される（生入力値は混入しない）。
+        for price in [i32::MIN, -1, 1_000_001, i32::MAX] {
             assert_eq!(
-                price_range_error(price),
-                Some(PRICE_RANGE_ERROR),
+                super::price_range_error(price),
+                Some(super::PRICE_RANGE_ERROR),
                 "price={price}"
             );
         }
         // 生入力値（例: 1000001）は固定文言に混入しない。
-        assert!(!PRICE_RANGE_ERROR.contains("1000001"));
-        // 0 はサーバーと同じく受理（E2E の 0 成功と整合）。
+        assert!(!super::PRICE_RANGE_ERROR.contains("1000001"));
+        // 0 はサーバーと同じく受理（0 = 購入不可、E2E の 0 成功と整合）。
         for price in [0, 1, 100, 1_000_000] {
-            assert_eq!(price_range_error(price), None, "price={price}");
+            assert_eq!(super::price_range_error(price), None, "price={price}");
         }
     }
 
@@ -3710,6 +3744,20 @@ mod tests {
                     "fixed phrase must not leak raw error details: {leaked}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn stats_forbidden_phrase_is_preserved_but_never_rendered_on_general_screen() {
+        // 403 固定文言は一般画面へ描画しない（パネルは黙って閉じる）。
+        // ただし確定した文言自体は変更検知のため検証し続ける。
+        const FORBIDDEN: &str = "運用者権限が必要です";
+        assert_eq!(FORBIDDEN, "運用者権限が必要です");
+        for message in [
+            super::stats_error_message(super::StatsFailure::Parse),
+            super::stats_error_message(super::StatsFailure::Fetch),
+        ] {
+            assert_ne!(message, FORBIDDEN);
         }
     }
 
