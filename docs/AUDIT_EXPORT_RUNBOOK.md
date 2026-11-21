@@ -51,7 +51,8 @@ cargo run -p server --bin sign_audit_export -- \
 
 `--database-token` は受け付けない（指定すると
 `--database-token is not accepted; set DATABASE_TOKEN in the environment instead` で終了）。
-既定値は `DATABASE_URL`（`file:local.db`）と `DATABASE_TOKEN`（空）。トークンはプロセス一覧へ
+`DATABASE_URL` は必須（`--database-url` または環境変数で明示、暗黙既定値なし・未設定時起動拒否）。
+`DATABASE_TOKEN` の既定値は空。トークンはプロセス一覧へ
 露出しないよう、必ず環境変数で渡すこと（`--database-token` は argv に載るため廃止）。
 
 出力には `version`, `entries`（全コンテンツ監査エントリ）, `governance_entries`（BAN/UNBAN/ピン解除の運用判断）, `merkle_root`, `signature`
@@ -112,7 +113,7 @@ cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされてい
 正常系（鍵 0600・親 0700・新規出力・`DATABASE_TOKEN` 環境変数）は
 「スナップショット作成」の手順に従って実行する。上記はコード上の契約から導いた確認手順であり、
 本ドキュメント更新時点でこの手順の実行は行っていない。
-`server/src/bin/sign_audit_export.rs` には鍵権限・トークン・上書き拒否の12テスト（include_reasons本番ガード2件含む）を追加済みであり、
+`server/src/bin/sign_audit_export.rs` には鍵権限・トークン・上書き拒否の12テスト（include_reasons本番ガード2件含む）と DB 接続先必須化の5テスト（計17テスト）を追加済みであり、
 継続的な検証は Runbook の本手順と
 [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の AUDIT-02 ゲートで扱う。
 
@@ -237,5 +238,5 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名鍵の HSM 管理、ローテーション、旧公開鍵の配布方針。
 - 公開範囲と個人情報（理由_TEXT 等）のマスキング方針。
 - スナップショットの自動生成頻度と公開手順。
-- AUDIT-02 の自動テストは `sign_audit_export.rs` の12件で充足済み。残るは外部アンカー運用と
+- AUDIT-02 の自動テストは `sign_audit_export.rs` の17件で充足済み。残るは外部アンカー運用と
   HSM 鍵管理の実試験（上記項目と重複）。

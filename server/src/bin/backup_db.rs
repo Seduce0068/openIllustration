@@ -16,7 +16,8 @@ const HELP: &str = "Usage: backup_db --output PATH [--database-url URL]\n\
      The output file must not already exist (no overwrite).\n\
      The remote libSQL token is read only from the DATABASE_TOKEN environment\n\
      variable (argv is public, so secrets are never accepted there).\n\
-     Defaults: DATABASE_URL (or file:local.db), DATABASE_TOKEN (or empty).\n\
+     DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used.\n\
+     DATABASE_TOKEN is read only from the environment (or left empty).\n\
      Exit code: 0 on success, 1 on error.";
 
 fn print_help() {
@@ -70,6 +71,20 @@ fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
 
 fn parse_args() -> anyhow::Result<Args> {
     parse_args_from(std::env::args())
+}
+
+/// 未設定時に返す固定文言。値を一切エコーしない。
+const DATABASE_URL_REQUIRED: &str =
+    "DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used";
+
+/// DB 接続先を解決する純粋関数。CLI 引数を環境変数より優先し、空・空白のみは
+/// 未設定として扱う。両方が未設定なら固定文言で拒否し、暗黙既定値は使わない。
+fn resolve_database_url(cli: Option<String>, env: Option<String>) -> anyhow::Result<String> {
+    let cli = cli.filter(|value| !value.trim().is_empty());
+    let env = env.filter(|value| !value.trim().is_empty());
+    cli.map(|value| value.trim().to_string())
+        .or_else(|| env.map(|value| value.trim().to_string()))
+        .ok_or_else(|| anyhow!(DATABASE_URL_REQUIRED))
 }
 
 async fn open_db(
@@ -199,13 +214,9 @@ async fn main() -> anyhow::Result<()> {
         ));
     }
 
-    // 既定値 file:local.db は後方互換のため残す。deploy 設定例の
-    // /var/lib/openillustration/local.db とは別 DB を指すため、手動 CLI 実行時は
-    // --database-url または DATABASE_URL で接続先を明示する。
-    let database_url = args
-        .database_url
-        .or_else(|| std::env::var("DATABASE_URL").ok())
-        .unwrap_or_else(|| "file:local.db".to_string());
+    // 暗黙の file:local.db 既定は撤廃。--database-url または DATABASE_URL の
+    // 明示設定がなければ起動しない（deploy 設定例は既に明示済み）。
+    let database_url = resolve_database_url(args.database_url, std::env::var("DATABASE_URL").ok())?;
     // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
     let database_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
 
@@ -270,8 +281,8 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        HELP, ensure_no_live_instance, local_db_path, parse_args_from, parse_instance_lock,
-        read_proc_starttime,
+        DATABASE_URL_REQUIRED, HELP, ensure_no_live_instance, local_db_path, parse_args_from,
+        parse_instance_lock, read_proc_starttime, resolve_database_url,
     };
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -453,5 +464,64 @@ mod tests {
         let db = dir.db("app.db");
         write_lock(&db, "not-a-pid\n");
         assert!(ensure_no_live_instance(&db).is_ok());
+    }
+
+    // --- resolve_database_url: 暗黙既定値の撤廃 ---
+
+    #[test]
+    fn database_url_is_required_when_no_source_is_set() {
+        let error =
+            resolve_database_url(None, None).expect_err("no implicit database URL may be used");
+        assert_eq!(error.to_string(), DATABASE_URL_REQUIRED);
+    }
+
+    #[test]
+    fn database_url_from_cli_takes_priority_over_environment() {
+        let url = resolve_database_url(
+            Some("libsql://cli.example.invalid/app.db".to_string()),
+            Some("libsql://env.example.invalid/app.db".to_string()),
+        )
+        .expect("CLI value must take priority over the environment");
+        assert_eq!(url, "libsql://cli.example.invalid/app.db");
+    }
+
+    #[test]
+    fn database_url_from_environment_is_accepted_without_cli() {
+        let url = resolve_database_url(
+            None,
+            Some("libsql://env.example.invalid/app.db".to_string()),
+        )
+        .expect("environment value must be accepted");
+        assert_eq!(url, "libsql://env.example.invalid/app.db");
+    }
+
+    #[test]
+    fn blank_database_url_is_rejected() {
+        for (cli, env) in [
+            (Some(String::new()), Some("  \t\n ".to_string())),
+            (Some("  \t\n ".to_string()), None),
+            (None, Some(String::new())),
+        ] {
+            let error =
+                resolve_database_url(cli, env).expect_err("blank database URL must be rejected");
+            assert_eq!(error.to_string(), DATABASE_URL_REQUIRED);
+        }
+    }
+
+    #[test]
+    fn database_url_error_does_not_echo_values() {
+        const CLI_BLANK: &str = "  \t ";
+        const ENV_BLANK: &str = "\n  ";
+        let from_none = resolve_database_url(None, None)
+            .expect_err("missing URL must be rejected")
+            .to_string();
+        let from_blank = resolve_database_url(Some(CLI_BLANK.into()), Some(ENV_BLANK.into()))
+            .expect_err("blank URLs must be rejected")
+            .to_string();
+        // 入力値の有無にかかわらず同じ固定文言で、値や旧既定値をエコーしない。
+        assert_eq!(from_blank, from_none);
+        assert_eq!(from_none, DATABASE_URL_REQUIRED);
+        assert!(!from_none.contains("file:local.db"), "{from_none}");
+        assert!(!from_none.contains("libsql://"), "{from_none}");
     }
 }

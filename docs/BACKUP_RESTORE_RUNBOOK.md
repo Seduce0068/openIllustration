@@ -17,7 +17,9 @@ generated:
 ## 前提
 
 - サーバーバイナリと同じリポジトリでビルドされた `backup_db` / `verify_backup` / `verify_audit_log` を使う。
-- `DATABASE_URL` はローカル DB のパス（`file:` プレフィックス）を指す。
+- `DATABASE_URL` は必須。ローカル DB のパス（`file:` プレフィックス）を指し、
+  `backup_db` / `verify_audit_log` は `--database-url` または環境変数での明示設定がなければ
+  起動を拒否する（暗黙の `file:local.db` 既定は撤廃済み、値はエコーしない）。
 - リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ渡す。`verify_backup` は
   `--database-token` を argv で受け付けず、`sign_audit_export` と同じ契約で拒否する
   （下記「バックアップ検証」を参照）。
