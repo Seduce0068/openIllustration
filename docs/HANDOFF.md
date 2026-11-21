@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:08:19+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -332,8 +332,14 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - **運用自動化**: backup-rotate の設定分岐テスト、監査/鍵ローテーション Runbook、
   固定版 trunk のローカルキャッシュ、アラート/オフサイト保存フックの回帰テスト。
 - 依存は `uuid` 1.29.2 / `coins-bip32` 0.17.2 へパッチ更新。`sha3` 0.12 は破壊的変更のため保留。
-- 現行のローカルゲート: `cargo test --workspace` 679 件（common 66 / server 536 / client 57 / restore_db 20）、
-  E2E 65 件。いずれも 0 失敗。件数はコード上の `#[test]` / `#[tokio::test]` 属性数（2026-11-20 時点）。
+- 2026-11-20 時点のローカルゲート（スナップショット・履歴）: `cargo test --workspace` 679 件
+  （common 66 / server 536 / client 57 / restore_db 20）、E2E 65 件。いずれも 0 失敗。
+  件数はコード上の `#[test]` / `#[tokio::test]` 属性数。
+- 現行値（2026-11-22 実コード照合）: 単体テスト属性数は common 76 / server 622（bin 160 含む）/
+  client 58 の計 756 件、E2E は 69 件（12 spec）。他ゲート実測は doctor 53 テスト /
+  doctor check 23 / migration 14 / `backup_db` 17 / `sign_audit_export` 17 /
+  `verify_audit_log` 14。E2E 推移は 2026-11-20 時点 65 件 → 2026-11-21 時点 66 件 →
+  現在 69 件（内訳は [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) を正とする）。
 - 残る項目は外部サービス接続・HSM・法務判断・外部アンカー・共通 CI ワークフロー変更であり、
    ローカルで完結するタスクはほぼ解消している。
 

@@ -106,7 +106,7 @@ P1（本番運用の健全性）:
 - [x] **logout の refresh Cookie 削除を OidcConfig.cookie_secure に統一** — 根拠 `server/src/oidc.rs:133-144` / R1-AP06 / 中。
   2026-11-21 対応: `delete_refresh_cookie(secure)` を追加し、発行側と同じ `config.cookie_secure`
   （OIDC 未構成時は fail-closed で true）を共有。env 直接再読込を削除、回帰2テストを追加。
-- [ ] **全フラグの真偽値解釈を共通 parse_bool_env へ統一** — 根拠 `common/src/age.rs:212-221` /
+- [x] **全フラグの真偽値解釈を共通 parse_bool_env へ統一** — 根拠 `common/src/age.rs:212-221` /
   `server/src/lib.rs:1424-1428` / `server/src/bin/doctor.rs:157` / R1-AR03+R1-CF05 / 中。
   AGE_* は未定義値を起動拒否する一方 JWT_REQUIRE_KID / OIDC_COOKIE_SECURE / ALLOW_IPV4_LOCALHOST は「0/false 以外」を真とし、
   doctor は pub ヘルパを使わず再実装。不正値は fail-closed、doctor とランタイムで同一関数を呼ぶ。
@@ -129,10 +129,10 @@ P1（本番運用の健全性）:
 - [x] **--include-reasons へ本番ガードと break-glass を追加** — 根拠 `server/src/bin/sign_audit_export.rs:139-170` / R1-CF08 / 中。
   2026-11-21 対応: 本番相当では `AUDIT_EXPORT_INCLUDE_REASONS=1` の明示オプトインが無ければ拒否。
   `ALLOW_MOCK_AUTH=1` は認証を無効化するため逃げ道に使わない設計。回帰2テストを追加。
-- [ ] **OIDC 設定バリデータを doctor と run() の共通 API へ** — 根拠 `server/src/oidc.rs:287-340` /
+- [x] **OIDC 設定バリデータを doctor と run() の共通 API へ** — 根拠 `server/src/oidc.rs:287-340` /
   `server/src/bin/doctor.rs:84-94` / R1-AR07 / 中。
   from_env_with が pub(crate) のため doctor が必須変数・URL・cookie_secure を再実装し、ルール追加時にドリフトする。
-- [ ] **検索条件と SPA ビューを URL / history へ同期** — 根拠 `client/src/lib.rs:116-138,895-1002` / R1-UX03,UX04 / 中。
+- [x] **検索条件と SPA ビューを URL / history へ同期** — 根拠 `client/src/lib.rs:116-138,895-1002` / R1-UX03,UX04 / 中。
   リロード・共有で条件が消え、ブラウザ「戻る」が画面遷移と連動しない。hash ベースでも双方向同期＋popstate。
 - [x] **マイグレーション SQL 分割器を quote 対応へ** — 根拠 `server/src/migration.rs:204-271` / R1-ST04 / 中。
   2026-11-21 対応: `split_statements` を新設し single/double quote と行コメントを認識。
@@ -180,13 +180,13 @@ P1（本番運用の健全性）:
 
 P2（品質・保守・プロダクト拡張）:
 
-- [ ] **ドキュメントの数値・記述を現行実装へ同期** — 根拠 `docs/DETAILED_DESIGN.md:584`（E2E 65件→69件）/
-  `docs/TEST_SPECIFICATION.md:25`（同）/ `docs/OPERATIONAL_POLICY.md:243,263`（全CLIトークン・TZ）/
-  `README.md:19,111`（LOG_FORMAT / 全CLI）/ `AGENTS.md:22`（共通正本は ~/.agents/AGENTS.md）/
-  `docs/UNKNOWN_TASKS_INVESTIGATION.md:16`（status: historical 候補）/ R3-FG01〜11 / 低。
-- [ ] **finalizer/purge メトリクス5種と POST /metrics/client-events を設計・運用仕様へ追記** — 根拠
+- [x] **ドキュメントの数値・記述を現行実装へ同期** — 根拠 `docs/DETAILED_DESIGN.md:602`（E2E 当時59件→現在69件）/
+  `docs/TEST_SPECIFICATION.md:25`（実測は全69件）/ `docs/OPERATIONAL_POLICY.md:255,274`（全CLIの`--database-token`拒否・TZ）/
+  `README.md:19,114-116`（RUST_LOG / 全CLIの`--database-token`拒否）/ `~/.agents/AGENTS.md:1`（共通正本）/
+  `docs/UNKNOWN_TASKS_INVESTIGATION.md:4,16,175,181`（status: historical 済み、当時9/35件→現在69件/12 spec）/ R3-FG01〜11 / 低。
+- [x] **finalizer/purge メトリクス5種と POST /metrics/client-events を設計・運用仕様へ追記** — 根拠
   `server/src/lib.rs:361-375,2169` / R3-FG01,FG02 / 低。実装済みだと仕様から見えない。
-- [ ] **支援オーバーレイをタッチ到達可能へ / UTC 日時をローカライズ / スキップリンク追加** — 根拠
+- [x] **支援オーバーレイをタッチ到達可能へ / UTC 日時をローカライズ / スキップリンク追加** — 根拠
   `client/src/lib.rs:1800-1808,1859,949-987` / R1-UX05,UX06,UX10 / 低。WCAG 2.1.1 / 2.4.1 観点。
 
 - [x] 現行状態を謳う設計・状態ドキュメントを更新（C4 / R2-17〜R2-21、2026-11-18 対応済み）
@@ -221,12 +221,12 @@ P2（品質・保守・プロダクト拡張）:
 - [x] E2E セレクタ堅牢化（2026-11-18）: alert を testid で特定、.group 依存を content-card へ変更。
   expect.poll の配列完全一致は過剰再フェッチ検出のため維持。
 - [x] 投票フィードバック（2026-11-18）: 投票の成功通知・失敗エラーを表示（vote-error / vote-notice）、
-  E2E 3件追加（現在の定義数は37件）。
+  E2E 3件追加（当時37件、2026-11-20 時点65件 → 11-21 時点66件 → 現在69件）。
 - [x] クライアント堅牢化（2026-11-18）: TOC スラッグ O(N²) を O(1) 化（8千件で約257倍）、
   検索の250msデバウンス＋世代チェック、投票一覧のエラー表示（NO_PENDING_VOTES誤表示解消）。
-  E2E 定義数は37件（現行）。
+  E2E 定義数は当時37件（2026-11-18）、11-20 時点65件 → 11-21 時点66件 → 現在69件。
 - [x] クライアント操作の堅牢化（2026-11-18）: お気に入りの二重送信防止・401案内、
-  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 56件。
+  ダウンロード開始失敗のエラー表示とrevoke遅延延長。E2E 当時56件（2026-11-18）→ 現在69件。
 - [x] テスト強化（2026-11-18）: JPKI 証明書のエラーパス5件（mutation 3パターン検出）、
   proptest を dev-dependencies 化して long-standing unused 警告を解消＋property test 4件。
 - [x] セキュリティヘッダ/同時実行の強化（2026-11-18）: CORS プリフライト含む全応答へ nosniff/DENY、
@@ -554,6 +554,14 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-22 swarm コンボ（無制限・R1 5担当＋R2 5担当＋R4 2担当＋R5 3担当）:
+  parse_bool_env を6フラグ13箇所へ統一（fail-closed・check23/doctor53不変）、OIDC設定判定を
+  非秘密の validate_oidc_config_with へ集約、検索条件とSPA viewをURL/historyへ同期、
+  ドキュメント旧値を履歴化、finalizerメトリクス/client-events仕様を追記、
+  支援オーバーレイのフォーカス到達・UTC日時整形・スキップリンクを実装。
+  全ゲート green（E2E69/check23/migrations14/tests117）。E2E69件・数値は不変。
+  残1件 DEC-01実入力経路は外部OP/JPKIのクレーム仕様確定待ち（adapter土台は完了済み）。
+
 - 2026-11-21 swarm-unlimited（hy4-flash-free 無制限キャンペーン・並列8/深度1・R1 8担当＋R2 8担当
   ＋R4 2担当＋R5 2担当）: 「後方互換」と誤称されていた判断を撤回し、設定契約を是正。
   AGE_POLICY_CONFIGURED 廃止→configuration_satisfied 導出、DB接続3CLI未設定時起動拒否、
@@ -740,7 +748,7 @@ P2（品質・保守・プロダクト拡張）:
   `backup-rotate.sh` と統一し、`lookup` の生値へ `^[0-9a-fA-F]+$` を適用（trim 廃止）。
   前後空白付き hex は警告対象（値は非エコー）。境界テストの有効 hex 配列から
   `"  ABCDEF0123456789  "` を除外し警告ケースへ移動（doctor テスト数は46のまま）。
-  TEST_SPECIFICATION の E2E 59件表記6箇所へ「当時59件、現在65件」を注記し、
+  TEST_SPECIFICATION の E2E 59件表記6箇所へ「当時59件、現在65件」を注記（当時の"現在"=2026-11-20時点、以降 11-21時点66件→現在69件）し、
   `23 check(s)` 実測の出所を 2026-11-20 再確認へ更新。DETAILED_DESIGN の
   フォールバック5変数（新規カテゴリ2件）と 19→21→22→23（カテゴリ数）の内訳を分離。
 

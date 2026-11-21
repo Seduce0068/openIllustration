@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:08:19+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -29,7 +29,8 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
-| GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ（全リクエスト数・4xx/5xx 応答数）。外部クレートなし。 |
+| GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ8種（全リクエスト数・4xx/5xx 応答数・中立化URL件数・finalizer/purge の ticks/processed/lock_busy/failures/last_success_timestamp）。外部クレートなし。 |
+| POST | `/metrics/client-events` | 不要 | 中立化URL件数を受信。`{"event":"neutralized_url","count":N}`（`event` は固定値、`count` 既定1・範囲1〜1000、`deny_unknown_fields`、本文1 KiB 境界）。成功204・不正400（いずれも本文なし）。IP/User-Agent/URL は送らず記録もせず、レート制限の対象。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`）、`favorite_only` で本人のお気に入りへ絞り込み |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | POST | `/content/:cid/favorite` | Bearer JWT | お気に入り追加。`Claims.sub` のみで識別し、本人の行にだけ作用。重複追加は冪等で200 |
@@ -555,7 +556,14 @@ INSERT を同じトランザクションでコミットする。この原子的�
 - Rust優先方針に沿う技術例外記録と、性能・軽量性・費用の計測値。
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu等の必要性・方式。
 - メタデータ検索は `LIKE` による部分一致・前方一致の簡易実装。正規化したタグテーブル、
-  全文検索、あいまい一致、スコアリング、およびブラウザ URL との検索条件同期は未実装。
+  全文検索、あいまい一致、スコアリングは未実装。
+- ブラウザ URL との同期は実装済み（R2-URL）。view は hash（`#dashboard` /
+  `#upload` / `#moderation` / `#ledger`）、検索条件は query（`q` / `tag` / `type` /
+  `favorite_only`）に載せる。タブ切替のみ `pushState`、ログイン成功・ログアウト・
+  初期化と検索条件の書き出しは `replaceState`。`popstate` では view と 4 条件を
+  同期し、条件は `batch()` で同時反映して二重 GET を防ぐ。未認証の直接リンクは
+  ログイン画面から始め、認証成功後に保留した hash を適用する。許可リスト外の
+  hash は dashboard に固定する。HTTP API 契約は変更しない。
 
 ## 9. データ主体の権利（エクスポート / 削除権）
 
@@ -644,11 +652,17 @@ CLI 引数を環境変数より優先し、空・空白のみを未設定とし�
   境界テスト7件（非数値 / `0` / 範囲外 / 有効値）でフォールバック検出と値非出力を検証する。
 - `should_fail(strict, problems)` は `strict && problems > 0`。既定は警告のみで exit 0、
   `--strict` で問題があれば exit 1 とする。
-- `ALLOW_MOCK_AUTH` の真値は `1` / `true`（大文字小文字不問）のみ。`1` 単独でも
-  `mock_auth_enabled` に1件計上され、`--strict` では exit 1 となる（23 check(s) 実測）。
-- `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`、大小文字不問）のときと `TRUSTED_PROXY_CIDRS`
-  が設定されているときは、それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する
-  （`doctor --strict` の警告対象）。いずれも設定値は出力せず有無のみを警告する。
+- 真偽値フラグの解釈は `common::age::parse_bool_env` に統一する。受理値は `1` / `true`（真）と
+  `0` / `false`（偽）のみで、trim・小文字化は維持する。`yes` / `no` / 空文字を含む受理値外は
+  fail-closed（ランタイムは起動拒否、doctor は既存カテゴリ内で固定文言の警告）とし、値はエコーしない。
+  6 フラグ（`ALLOW_MOCK_AUTH` / `AUDIT_EXPORT_INCLUDE_REASONS` / `EXPOSE_INTERNAL_ERRORS` /
+  `JWT_REQUIRE_KID` / `OIDC_COOKIE_SECURE` / `ALLOW_IPV4_LOCALHOST`）の全 call site がこの関数を呼ぶ。
+- `ALLOW_MOCK_AUTH` の真値は `1` / `true` のみ。`1` 単独でも `mock_auth_enabled` に1件計上され、
+  `--strict` では exit 1 となる（23 check(s) 実測）。受理値外は同カテゴリに不正値警告を1件計上する。
+- `ALLOW_IPV4_LOCALHOST` が真（`1` / `true`）のときと `TRUSTED_PROXY_CIDRS` が設定されているときは、
+  それぞれ `ipv4_localhost` / `trusted_proxy` に警告を1件計上する（`doctor --strict` の警告対象）。
+  `network::ipv4_permitted` は per-request 読込のため、受理値外は `None`→`false`（IPv4 不許可）とし、
+  起動時警告と doctor 警告の二段構えとする。いずれも設定値は出力せず有無のみを警告する。
 - `audit_expect_root` は本番相当（`ALLOW_MOCK_AUTH` 無効）の `AUDIT_EXPECT_ROOT` を診断する。
   `backup-rotate.sh` と同じく `lookup` の生値へ `[0-9a-fA-F]+`（hex Merkle root）を適用し
   （trim しない）、非空で全文字が hex なら警告なし、未設定・空白のみ・前後空白付き・不正 hex

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:08:19+09:00"
 verified:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:08:19+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -67,7 +67,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
-| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
+| 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証。migration 014 は `test_migration_014_declares_expires_at_as_text` / `test_migration_014_preserves_rfc3339_expires_at` / `test_migration_014_rewrite_detects_checksum_mismatch` の3件で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
@@ -370,8 +370,11 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 | 設定判定 | 42 | `production_backup_misconfiguration_warns_without_disclosing_values` / `production_backup_whitespace_only_values_warn_without_disclosing_values` / `age_policy_tz_unset_warns_without_disclosing_values` / `complete_backup_and_tz_configuration_adds_no_new_warnings` / `check_always_reports_twenty_three_categories` / `audit_expect_root_warns_in_production_without_disclosing_value` / `mock_auth_alone_adds_a_warning` / `mock_auth_truthy_values_are_recognized_and_falsy_are_not` / `unset_mock_auth_is_disabled` / `mock_auth_combined_with_production_config_is_reported` / `mock_auth_with_mock_pinata_value_is_not_a_combination` / `invalid_ipfs_gateway_entries_increase_problem_count` / `all_invalid_ipfs_gateways_report_both_warnings` / `unset_ipfs_gateways_uses_default_without_warning` / `valid_ipfs_gateways_add_no_invalid_entry_warning` / `secret_values_are_never_printed_in_problems` / `ipv4_localhost_truthy_values_add_a_warning` / `ipv4_localhost_falsy_and_unset_add_no_warning` / `trusted_proxy_when_configured_warns_without_disclosing_value` / `trusted_proxy_unset_adds_no_warning` / `oidc_clock_skew_in_range_and_unset_add_no_warning` / `oidc_clock_skew_out_of_range_warns_without_disclosing_value` / `ipfs_timeout_fallback_is_warned_without_disclosing_value` / `ipfs_max_attempts_fallback_is_warned_without_disclosing_value` / `oidc_http_timeout_fallback_is_warned_without_disclosing_value` / `graceful_drain_timeout_fallback_is_warned_without_disclosing_value` / `moderation_finalize_interval_fallback_is_warned_without_disclosing_value` / `oidc_endpoint_urls_https_adds_no_warning` / `oidc_endpoint_urls_http_in_production_warns_without_disclosing_value` / `oidc_endpoint_urls_mock_allows_only_localhost_http` / `oidc_max_auth_age_mock_with_incomplete_oidc_adds_no_warning` / `oidc_max_auth_age_mock_with_complete_oidc_warns_without_disclosing_value` / `production_warns_when_required_oidc_value_is_empty_without_disclosing_value` / `expose_internal_errors_truthy_warns_without_disclosing_value` / `allowed_origins_missing_or_empty_warns_without_disclosing_value` / `allowed_origins_uses_real_parser_result_without_disclosing_value` / `oidc_cookie_secure_falsy_warns_without_disclosing_value` / `oidc_required_assurance_unset_warns_without_disclosing_value` / `oidc_max_auth_age_invalid_warns_without_disclosing_value` / `age_policy_flag_only_warns_without_disclosing_values` / `age_policy_flag_with_explicit_values_has_no_warning` / `age_policy_flag_unset_keeps_existing_behavior` |
 | strict判定 | 3 | `non_strict_never_fails` / `strict_fails_only_when_problems_exist` / `end_to_end_exit_decision_for_mock_only_configuration` |
 
-真値は `1` と `true`（大文字小文字不問）のみで、`0` / `false` / `no` / 空文字は偽である。
-`ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に1件計上され、`--strict` で exit 1 になる。
+受理値は `1` / `true`（真）と `0` / `false`（偽）のみで、trim・小文字化は維持する。
+`yes` / `no` / 空文字を含む受理値外は拒否し、fail-closed とする。ランタイムは起動拒否となり、
+起動前診断では既存カテゴリ内へ固定文言の警告が追加され、値はエコーしない。
+判定は全フラグ共通の `common::age::parse_bool_env` に統一する。
+`ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に警告が計上され、`--strict` で exit 1 になる。
 
 ##### doctor のネットワーク設定警告（追加4件）
 
@@ -386,7 +389,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 | テスト | 条件 | 期待結果 |
 | --- | --- | --- |
 | `ipv4_localhost_truthy_values_add_a_warning` | `ALLOW_IPV4_LOCALHOST` が `1` / `true` / `TRUE` / `TrUe` | `ipv4_localhost` に警告1件。文言は固定で値をエコーしない |
-| `ipv4_localhost_falsy_and_unset_add_no_warning` | `0` / `false` / `no` / 空 / 未設定 | 警告なし |
+| `ipv4_localhost_falsy_and_unset_add_no_warning` | 偽値 `0` / `false`、未設定は警告なし。`no` / 空は受理値外 | 後者は `ipv4_localhost` に不正値警告1件（fail-closed で IPv4 不許可、値はエコーしない） |
 | `trusted_proxy_when_configured_warns_without_disclosing_value` | `TRUSTED_PROXY_CIDRS` 設定 | `trusted_proxy` に警告1件。`X-Forwarded-For` / `XFF` を含むが CIDR 値は漏えいしない |
 | `trusted_proxy_unset_adds_no_warning` | 未設定 | 警告なし |
 
@@ -1220,6 +1223,29 @@ HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータ
 - `test_client_events_is_rate_limited`: レート制限の対象であり、超過時に 429 を返すことを確認する。
 - URL 本文・IP・User-Agent は送らず、サーバーも受信・記録・ログ出力しない。ペイロードのキーは
   `event` と `count` のみで、成功レスポンスにも本文を返さない。
+
+#### finalizer／purge カウンタの検証（既存ゲート MET-01 を再利用）
+
+`GET /metrics` の finalizer/purge 5種（ticks / processed / lock_busy / failures /
+last_success_timestamp）について、公開形式と実際の進捗を下記の実在テストで検証する。
+新規ゲート ID は設けず、既存の MET-01 に含める。
+
+- `test_metrics_expose_finalizer_counters`: `GET /metrics` の本文に5種の `# HELP` / `# TYPE` 行が
+  あり、4種が `counter`、`openillustration_finalizer_last_success_timestamp_seconds` が `gauge`
+  であることと、各数値行が読み取れることをオラクルとする。
+- `test_finalizer_metrics_increment`: 期限切れリフレッシュトークンを1件置いて finalizer を起動し、
+  `finalizer_ticks` と `finalizer_processed` が 1 以上、`finalizer_last_success_secs` が 0 より
+  大きくなることをオラクルとする。
+- `test_client_events_neutralized_url_increments_counter`: `count` 指定7・省略時1・上限1000で
+  204（本文なし）を返し、カウンタの差分が +7 / +1 / +1000 になることをオラクルとする。
+- `test_client_events_rejects_invalid_payloads`: 不正 event（固定値以外）・`count` の 0 / 1001 /
+  負 / 小数 / 文字列 / null・未知キー（`url` / `ip` / `user_agent`）・不正 JSON を本文なしの400で
+  拒否し、カウンタが増えないことをオラクルとする（`deny_unknown_fields`）。
+- `test_client_events_rejects_oversized_body`: 1 KiB（1024 バイト）は受理し、1025 バイトと
+  10 MiB 超の `Content-Length` 宣言は本文なしの400で拒否し、カウンタが +1 のままであることを
+  オラクルとする。
+- `test_client_events_is_rate_limited`: レート制限 quota 2 の状態で3回目の POST が 429 になる。
+  `/metrics` と異なり、このエンドポイントはレート制限対象から除外されていない。
 
 #### クライアント側単体テスト
 

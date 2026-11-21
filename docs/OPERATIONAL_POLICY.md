@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:08:19+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -235,6 +235,13 @@ generated:
   エンドポイントは認証不要のため `count=1000` の連投で指標を容易に汚染でき、
   累積値は実際の被害や不正の規模を保証しない。判断には認証済みデータや
   サーバー側の独立した記録を突き合わせる。
+- finalizer／purge の観測: `GET /metrics` は `openillustration_finalizer_ticks_total`（周期 tick の実行回数）、
+  `openillustration_finalizer_processed_total`（finalizer と周期 purge の処理件数）、
+  `openillustration_finalizer_lock_busy_total`（書き込みロック取得失敗でスキップした回数）、
+  `openillustration_finalizer_failures_total`（失敗回数）、
+  `openillustration_finalizer_last_success_timestamp_seconds`（最後の成功時刻、gauge）の5種を公開する。
+  値は `AtomicU64` のプロセス内カウンタで、再起動時にゼロ（最終成功時刻は 0）へ戻る。
+  これらは参考値であり、中立化URL件数と同様に単独のアラート判定・請求判断へ使わない。
 
 ## 6. 本番移行ゲート
 
@@ -249,7 +256,7 @@ generated:
 | ---- | ---- | ---- | ---- |
 | `JWT_SECRET` | 必須 | なし | HS256署名鍵。未設定・32バイト未満は起動を拒否する。秘密管理基盤から注入する。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない。 |
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
-| `JWT_REQUIRE_KID` | 本番推奨 | 0 | `1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。 |
+| `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | DB 接続3 CLI では必須（サーバーは任意） | なし（CLI）/ `file:local.db`（サーバー） | libSQL 接続先。DB 接続3 CLI は未設定時に起動拒否（下記注記を参照）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
@@ -283,13 +290,13 @@ generated:
 | `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
 | `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
-| `OIDC_COOKIE_SECURE` | 任意 | 有効 | `0`/`false` で session / refresh / OIDC state Cookie の `Secure` を外す。開発時のみ。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
+| `OIDC_COOKIE_SECURE` | 任意 | 有効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`0`/`false` で session / refresh / OIDC state Cookie の `Secure` を外す（開発時のみ）。受理値外は起動拒否、`doctor` の `oidc_cookie_secure` カテゴリで警告し、Secure は外さない。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
 | `PINATA_JWT` | 本番では必須 | `mock_jwt`（模擬、開発用） | IPFSピン用トークン。本番相当（`ALLOW_MOCK_AUTH` 無効）では実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。`doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |
-| `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | `1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。 |
-| `ALLOW_MOCK_AUTH` | 開発専用 | 無効 | `1`/`true` で模擬JPKI・ゼロ署名を受理する。本番では設定しない。 |
-| `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | `1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。 |
+| `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。受理値外は起動拒否、`doctor` の `expose_internal_errors` カテゴリで警告。 |
+| `ALLOW_MOCK_AUTH` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で模擬JPKI・ゼロ署名を受理する。本番では設定しない。受理値外は起動拒否、`doctor` の `mock_auth_enabled` カテゴリで警告。 |
+| `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。受理値外は起動時に警告のうえ per-request 判定で `false`（IPv4 不許可、fail-closed）とし、`doctor` の `ipv4_localhost` カテゴリでも警告。 |
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
 | `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら `doctor` の `audit_expect_root` カテゴリで固定文言の警告（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。 |
@@ -313,9 +320,15 @@ generated:
   `localhost` / `127.0.0.1` / `[::1]` / `::1` の http を許容し、それ以外の http や不正 URL は
   起動拒否（fail-closed）。`doctor` の `oidc_endpoint_urls` カテゴリでも同じ判定で警告し、
   設定値は出力しない。
+- OIDC 設定の判定は `validate_oidc_config_with` に集約し、`from_env_with` と `doctor` が同じ結果を共有する。
+  ハードエラーは起動拒否と `oidc_*` 警告に、本番必須設定の不足は `required_present` 経由で `production` 警告に使い分ける。
 - `PINATA_JWT` は本番相当では実トークン必須。未設定・空・空白のみ・開発用 `mock_jwt`
   （前後空白を含む）は起動拒否（fail-closed）。`doctor` の `production` カテゴリでも
   同じ判定で警告し、設定値は出力しない（[DETAILED_DESIGN.md](DETAILED_DESIGN.md) と整合）。
-- 真偽値はいずれも `1` または `true`（大文字小文字を問わない）で有効になる。
+- 真偽値は全フラグ共通で `1` / `true`（真）と `0` / `false`（偽）のみ受理する
+  （trim・小文字化は維持）。`yes` / `no` / 空文字を含むそれ以外の値は
+  拒否し、ランタイムは起動拒否、起動後に read するフラグは安全側（`false` または
+  Secure 付与）へ倒す。`doctor` は既存カテゴリ内で固定文言の警告を出し、不正値そのものは
+  エコーしない。`common::age::parse_bool_env` が共通基準である。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।
