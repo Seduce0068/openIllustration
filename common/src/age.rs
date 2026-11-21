@@ -400,6 +400,7 @@ pub fn legal_age_threshold(_country_code: &str) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::env::{BoolEnvState, EnvValue, bool_env_state, classify};
     use chrono::NaiveDate;
 
     #[test]
@@ -913,5 +914,67 @@ mod tests {
             AgeEnforcementMode::SelfReportedDobCountry
         );
         assert_eq!(policy.trusted_issuers, vec!["jpki-test"]);
+    }
+
+    // ---- 環境変数分類器（非 UTF-8 を「未設定」と区別する） ----
+
+    #[test]
+    fn classify_distinguishes_missing_non_utf8_and_utf8() {
+        // 3 分岐: Ok → Utf8、NotPresent → Missing、NotUnicode → NonUtf8。
+        assert_eq!(
+            classify(Ok("1".to_string())),
+            EnvValue::Utf8("1".to_string())
+        );
+        assert_eq!(
+            classify(Err(std::env::VarError::NotPresent)),
+            EnvValue::Missing
+        );
+
+        // NotUnicode が保持する OsString の中身は分類に影響しない。
+        // 生バイトである必要はなく、値が破棄されて NonUtf8 フラグだけが残ることを確認する。
+        const SENSITIVE_RAW_BYTES: &str = "SENSITIVE_RAW_BYTES_SHOULD_NOT_LEAK";
+        let non_utf8 = classify(Err(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from(SENSITIVE_RAW_BYTES),
+        )));
+        assert_eq!(non_utf8, EnvValue::NonUtf8);
+        // 生バイトは戻り値にもデバッグ出力にも現れない（非エコー契約）。
+        assert!(!format!("{non_utf8:?}").contains(SENSITIVE_RAW_BYTES));
+    }
+
+    #[test]
+    fn bool_env_state_maps_missing_and_non_utf8() {
+        assert_eq!(bool_env_state(EnvValue::Missing), BoolEnvState::Unset);
+        assert_eq!(bool_env_state(EnvValue::NonUtf8), BoolEnvState::Invalid);
+    }
+
+    #[test]
+    fn bool_env_state_preserves_documented_boolean_values() {
+        // 既存受理値 1/true/0/false（trim・小文字化も維持）が不変であること。
+        for (raw, expected) in [
+            ("1", true),
+            ("true", true),
+            (" TRUE ", true),
+            ("0", false),
+            ("false", false),
+            (" FALSE ", false),
+        ] {
+            assert_eq!(
+                bool_env_state(EnvValue::Utf8(raw.to_string())),
+                BoolEnvState::Valid(expected),
+                "raw={raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bool_env_state_rejects_undocumented_boolean_aliases() {
+        // yes/on/no/off などの別名・空文字は不正として拒否（不変）。
+        for raw in ["yes", "on", "no", "off", "YES", " On ", "maybe", ""] {
+            assert_eq!(
+                bool_env_state(EnvValue::Utf8(raw.to_string())),
+                BoolEnvState::Invalid,
+                "raw={raw:?}"
+            );
+        }
     }
 }
