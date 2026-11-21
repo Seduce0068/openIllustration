@@ -10,6 +10,10 @@ use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement};
 
+/// `popstate` 等のイベントリスナーを `StoredValue` に保持する際の型。
+/// `Closure<dyn FnMut(web_sys::Event)>` を直接書くと型が complex になるため集約する。
+type EventClosure = Closure<dyn FnMut(web_sys::Event)>;
+
 /// サーバーが受理する MIME を、ブラウザの判定とファイル名拡張子から決める。
 /// ブラウザが `image/jxl` を認識しない環境でもアップロードできるようにする。
 fn upload_media_type(browser_type: &str, filename: &str) -> &'static str {
@@ -41,6 +45,42 @@ struct ApiOrigin;
 /// 設定値の表記ゆれを吸収するため、末尾の `/` だけを除去する。
 fn normalize_api_origin(origin: &str) -> &str {
     origin.trim_end_matches('/')
+}
+
+/// ISO 8601 文字列を表示用の日時へ整形する。
+///
+/// 既存依存の js-sys 経由で `Intl.DateTimeFormat` を呼び、locale は `ja-JP`、
+/// timeZone は `UTC` を明示する。ホストのロケール・タイムゾーンに結果を依存させない。
+/// パースできない文字列は丸めずに元の文字列へフォールバックする（情報の消失を避ける）。
+fn format_local_datetime(iso: &str) -> String {
+    let date = js_sys::Date::new(&JsValue::from_str(iso));
+    if date.get_time().is_nan() {
+        return iso.to_string();
+    }
+
+    let options = js_sys::Object::new();
+    let set = |key: &str, value: &str| {
+        let _ = js_sys::Reflect::set(&options, &JsValue::from_str(key), &JsValue::from_str(value));
+    };
+    set("timeZone", "UTC");
+    set("year", "numeric");
+    set("month", "2-digit");
+    set("day", "2-digit");
+    set("hour", "2-digit");
+    set("minute", "2-digit");
+    set("second", "2-digit");
+    let _ = js_sys::Reflect::set(
+        &options,
+        &JsValue::from_str("hour12"),
+        &JsValue::from_bool(false),
+    );
+
+    let locales = js_sys::Array::of1(&JsValue::from_str("ja-JP"));
+    let formatter = js_sys::Intl::DateTimeFormat::new(&locales, &options);
+    match formatter.format().call1(&JsValue::NULL, date.as_ref()) {
+        Ok(value) => value.as_string().unwrap_or_else(|| iso.to_string()),
+        Err(_) => iso.to_string(),
+    }
 }
 
 impl std::fmt::Display for ApiOrigin {
@@ -94,7 +134,8 @@ fn escape_html_text(input: &str) -> String {
 }
 
 /// URL コンポーネント（クエリ値・パス Segment）を percent-encode する。
-/// `web-sys` に `UrlSearchParams` を追加せず依存を増やさないため的最小実装。
+/// API のクエリ契約とブラウザ URL の両方で同じ符号化を使うための純粋実装。
+/// 読み出し側は `parse_content_query`（同じく純粋関数）で往復を検証する。
 fn url_encode(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     for byte in input.bytes() {
@@ -134,6 +175,116 @@ fn build_content_query(q: &str, tag: &str, content_type: &str, favorite_only: bo
         String::new()
     } else {
         format!("?{}", params.join("&"))
+    }
+}
+
+/// `url_encode` の逆変換。`+` を空白として扱い、妥当な percent escape だけを
+/// バイト列へ戻す（不正な列はそのまま残す）。UTF-8 として読めない列は
+/// lossy にするが、パニックは起こさない。
+fn url_decode(input: &str) -> String {
+    fn hex_value(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            b'A'..=b'F' => Some(byte - b'A' + 10),
+            _ => None,
+        }
+    }
+
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                out.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                if let (Some(high), Some(low)) =
+                    (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+                {
+                    out.push((high << 4) | low);
+                    index += 3;
+                } else {
+                    out.push(b'%');
+                    index += 1;
+                }
+            }
+            byte => {
+                out.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// URL クエリから復元する検索条件。`build_content_query` の純粋な逆変換。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ContentQuery {
+    q: String,
+    tag: String,
+    content_type: String,
+    favorite_only: bool,
+}
+
+/// クエリ文字列（先頭の `?` は任意）から既知の 4 条件だけを読み出す。
+/// 未知のキー・空の値は無視する。UI 側の `refresh_counter` / `search_submit`
+/// は操作トリガーなので URL には含めず、ここでも復元しない。
+fn parse_content_query(query: &str) -> ContentQuery {
+    let mut parsed = ContentQuery::default();
+    let body = query.strip_prefix('?').unwrap_or(query);
+    for pair in body.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        match key {
+            "q" => parsed.q = url_decode(value),
+            "tag" => parsed.tag = url_decode(value),
+            "type" => parsed.content_type = url_decode(value),
+            // build_content_query は `favorite_only=1` を書き出す。値なしの
+            // `favorite_only` もフラグとして受け取る（旧リンクの許容）。
+            "favorite_only" => parsed.favorite_only = matches!(value, "" | "1"),
+            _ => {}
+        }
+    }
+    parsed
+}
+
+/// ブラウザの `location.search` を一度だけ読み、`build_content_query` と同じ
+/// 形式へ正規化してから純粋な `parse_content_query` へ渡す。
+/// `UrlSearchParams` にブラウザのデコード規則（`+` や percent escape）を
+/// 吸収させ、既知キーだけを取り出してから再エンコードする。
+/// non-wasm の単体テストでは検索条件を読まない（空文字を返す）。
+fn current_content_query() -> String {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let Some(window) = web_sys::window() else {
+            return String::new();
+        };
+        let Ok(search) = window.location().search() else {
+            return String::new();
+        };
+        let Ok(params) = web_sys::UrlSearchParams::new_with_str(&search) else {
+            return search;
+        };
+        let mut parts = Vec::new();
+        for key in ["q", "tag", "type", "favorite_only"] {
+            if let Some(value) = params.get(key) {
+                parts.push(format!("{key}={}", url_encode(&value)));
+            }
+        }
+        if parts.is_empty() {
+            String::new()
+        } else {
+            format!("?{}", parts.join("&"))
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        String::new()
     }
 }
 
@@ -892,11 +1043,101 @@ fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(),
     Ok(())
 }
 
+/// 履歴更新の種別。ユーザーのタブ切替だけ `pushState` を使う。
+#[derive(Clone, Copy)]
+enum NavigateMode {
+    Push,
+    Replace,
+}
+
+/// `#` 付き hash から許可された view を取り出す。許可リスト外は dashboard 固定。
+/// `login` は認証画面であってナビの view ではないため、ここでは dashboard へ
+/// 正規化する（ログアウト後の直接リンクも認証画面から始まる）。
+fn view_from_hash(hash: &str) -> &'static str {
+    match hash.strip_prefix('#').unwrap_or(hash) {
+        "upload" => "upload",
+        "moderation" => "moderation",
+        "ledger" => "ledger",
+        _ => "dashboard",
+    }
+}
+
 #[component]
 pub fn App() -> impl IntoView {
     let (view, set_view) = signal("login".to_string());
     let (user_hash, set_user_hash) = signal(None::<String>);
     let (token, set_token) = signal(None::<String>);
+
+    // 直接リンクの hash は「保留値」としてだけ保持する。未認証では従来どおり
+    // login を表示し、認証成功後にこの値を適用する。
+    let pending_view: StoredValue<&'static str> = StoredValue::new(
+        web_sys::window()
+            .and_then(|window| window.location().hash().ok())
+            .map(|hash| view_from_hash(&hash))
+            .unwrap_or("dashboard"),
+    );
+
+    // 全 view 遷移をここへ集約する。タブ切替だけ pushState、ログイン成功・
+    // ログアウト・初期化は replaceState。検索条件（query）は書き換えず保持する。
+    let navigate = move |next: &str, mode: NavigateMode| {
+        set_view.set(next.to_string());
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(pathname) = window.location().pathname() else {
+            return;
+        };
+        let Ok(search) = window.location().search() else {
+            return;
+        };
+        let url = format!("{pathname}{search}#{next}");
+        let result = match mode {
+            NavigateMode::Push => window
+                .history()
+                .and_then(|history| history.push_state_with_url(&JsValue::NULL, "", Some(&url))),
+            NavigateMode::Replace => window
+                .history()
+                .and_then(|history| history.replace_state_with_url(&JsValue::NULL, "", Some(&url))),
+        };
+        // 履歴 API が使えない環境でも view の切替自体は成功させる。
+        let _ = result;
+    };
+
+    // popstate では view だけを同期し、履歴をさらに操作しない。
+    // Closure は Send + Sync でないため LocalStorage の StoredValue で保持し、
+    // 既存タイマーと同じく on_cleanup で remove する。
+    let popstate_listener: StoredValue<Option<EventClosure>, LocalStorage> =
+        StoredValue::new_local(None);
+    let popstate: EventClosure = Closure::new(move |_: web_sys::Event| {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(hash) = window.location().hash() else {
+            return;
+        };
+        let next = if token.get_untracked().is_some() {
+            view_from_hash(&hash)
+        } else {
+            "login"
+        };
+        set_view.set(next.to_string());
+    });
+    if let Some(window) = web_sys::window() {
+        let _ =
+            window.add_event_listener_with_callback("popstate", popstate.as_ref().unchecked_ref());
+        popstate_listener.set_value(Some(popstate));
+    }
+    on_cleanup(move || {
+        let mut taken = None;
+        popstate_listener.update_value(|slot| taken = slot.take());
+        if let (Some(listener), Some(window)) = (taken, web_sys::window()) {
+            let _ = window
+                .remove_event_listener_with_callback("popstate", listener.as_ref().unchecked_ref());
+        }
+    });
+
+    // 初期化も replaceState。保留値は既に読んでいるため直接リンクは失われない。
+    navigate("login", NavigateMode::Replace);
 
     // SPA のビュー切替に合わせてタブタイトルを更新する。文言はナビゲーションと同じ。
     // ログイン等ナビに無いビューは共通タイトルのみにする。window が取れない
@@ -922,7 +1163,9 @@ pub fn App() -> impl IntoView {
     let handle_login_success = move |hash: String, jwt: String| {
         set_user_hash.set(Some(hash));
         set_token.set(Some(jwt));
-        set_view.set("dashboard".to_string());
+        // 保留しておいた直接リンクの hash を適用する（未認証では login のまま）。
+        let target = pending_view.get_value();
+        navigate(target, NavigateMode::Replace);
     };
 
     // ナビゲーションの LOG OUT から呼ぶ。トークン／ユーザー状態を破棄して
@@ -932,7 +1175,8 @@ pub fn App() -> impl IntoView {
         let token = token.get_untracked();
         set_token.set(None);
         set_user_hash.set(None);
-        set_view.set("login".to_string());
+        // hash を #login へ replaceState（navigate 経由で履歴を汚さない）。
+        navigate("login", NavigateMode::Replace);
         // トークンが無い場合は API を呼ばない。あっても 401／ネットワーク
         // エラーは握りつぶし、再ログイン導線を妨げない。
         if let Some(jwt) = token {
@@ -948,26 +1192,42 @@ pub fn App() -> impl IntoView {
 
     view! {
         <div class="min-h-screen bg-black text-white font-mono">
+            <a href="#main-content"
+                on:click=move |ev| {
+                    // hash ベースの view 同期と衝突しないよう、hash は書き換えず
+                    // main へ直接フォーカスする（WCAG 2.4.1）。
+                    ev.prevent_default();
+                    if let Some(el) = web_sys::window()
+                        .and_then(|window| window.document())
+                        .and_then(|doc| doc.get_element_by_id("main-content"))
+                        .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+                    {
+                        let _ = el.focus();
+                    }
+                }
+                class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-white focus:px-4 focus:py-2 focus:text-black focus:font-bold">
+                "本文へスキップ"
+            </a>
             <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
                 <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
-                        <button on:click=move |_| set_view.set("dashboard".to_string())
+                        <button on:click=move |_| navigate("dashboard", NavigateMode::Push)
                             aria-current=move || if view.get() == "dashboard" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-500" })>
                             "BROWSE"
                         </button>
-                        <button on:click=move |_| set_view.set("upload".to_string())
+                        <button on:click=move |_| navigate("upload", NavigateMode::Push)
                             aria-current=move || if view.get() == "upload" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-500" })>
                             "UPLOAD"
                         </button>
-                        <button on:click=move |_| set_view.set("moderation".to_string())
+                        <button on:click=move |_| navigate("moderation", NavigateMode::Push)
                             aria-current=move || if view.get() == "moderation" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-500" })>
                             "MODERATION"
                         </button>
-                        <button on:click=move |_| set_view.set("ledger".to_string())
+                        <button on:click=move |_| navigate("ledger", NavigateMode::Push)
                             aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
                             "LEDGER"
@@ -984,7 +1244,7 @@ pub fn App() -> impl IntoView {
                 </Show>
             </nav>
 
-            <main class="container mx-auto p-4">
+            <main id="main-content" tabindex="-1" class="container mx-auto p-4">
                 {move || match view.get().as_str() {
                     "login" => view! { <Login on_success=handle_login_success /> }.into_any(),
                     "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_any(),
@@ -1096,10 +1356,13 @@ where
 fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     let (items, set_items) = signal(Vec::<ContentMeta>::new());
     let (error, set_error) = signal(String::new());
-    let (q, set_q) = signal(String::new());
-    let (tag, set_tag) = signal(String::new());
-    let (content_type, set_content_type) = signal(String::new());
-    let (favorite_only, set_favorite_only) = signal(false);
+    // URL は signal 定義位置で一度だけ同期読みする。Effect 内で set すると
+    // 初期値の通知が fetch Effect を再加熱し、二重 GET になるため避ける。
+    let initial_query = parse_content_query(&current_content_query());
+    let (q, set_q) = signal(initial_query.q);
+    let (tag, set_tag) = signal(initial_query.tag);
+    let (content_type, set_content_type) = signal(initial_query.content_type);
+    let (favorite_only, set_favorite_only) = signal(initial_query.favorite_only);
     // トグル成功後に一覧を再取得するためのトリガー。
     let (refresh_counter, set_refresh_counter) = signal(0u32);
     let on_favorite_changed = move || set_refresh_counter.update(|n| *n += 1);
@@ -1125,6 +1388,62 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
     // on_cleanup は Send+Sync を要求するため、Rc を含む PendingFetch ではなく
     // タイマーハンドル（i32）だけを StoredValue に持つ。
     let timer_handle = StoredValue::new(None::<i32>);
+
+    // popstate（戻る／進む）では検索条件を 4 signal へ batch で同時反映する。
+    // batch にすることで fetch Effect は 1 回だけ再実行され、二重 GET にならない。
+    // refresh_counter / search_submit は操作トリガーなので URL から復元しない。
+    let query_listener: StoredValue<Option<EventClosure>, LocalStorage> =
+        StoredValue::new_local(None);
+    let query_popstate: EventClosure = Closure::new(move |_: web_sys::Event| {
+        let restored = parse_content_query(&current_content_query());
+        batch(move || {
+            set_q.set(restored.q);
+            set_tag.set(restored.tag);
+            set_content_type.set(restored.content_type);
+            set_favorite_only.set(restored.favorite_only);
+        });
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window
+            .add_event_listener_with_callback("popstate", query_popstate.as_ref().unchecked_ref());
+        query_listener.set_value(Some(query_popstate));
+    }
+    on_cleanup(move || {
+        let mut taken = None;
+        query_listener.update_value(|slot| taken = slot.take());
+        if let (Some(listener), Some(window)) = (taken, web_sys::window()) {
+            let _ = window
+                .remove_event_listener_with_callback("popstate", listener.as_ref().unchecked_ref());
+        }
+    });
+
+    // 検索条件 -> URL。build_content_query の戻り値を pathname + query + hash へ
+    // replaceState する（pushState は view のみ）。hash を残すのは view を壊さない
+    // ため。差分が無いときは履歴を書かず、ここでは signal を読むだけ（set/fetch しない）。
+    Effect::new(move |_| {
+        let Some(window) = web_sys::window() else {
+            return;
+        };
+        let Ok(pathname) = window.location().pathname() else {
+            return;
+        };
+        let Ok(hash) = window.location().hash() else {
+            return;
+        };
+        let query = build_content_query(
+            &q.get(),
+            &tag.get(),
+            &content_type.get(),
+            favorite_only.get(),
+        );
+        if current_content_query() == query {
+            return;
+        }
+        let url = format!("{pathname}{query}{hash}");
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
+        }
+    });
 
     Effect::new(move |_| {
         let Some(window) = web_sys::window() else {
@@ -1797,7 +2116,8 @@ where
 
                 {move || match verified.get() {
                     Some(true) => view! {
-                        <div class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
+                        <div data-testid="support-overlay" tabindex="0"
+                            class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
                             <p class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
                             <p class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
                             <button disabled
@@ -1853,10 +2173,12 @@ where
                                 each=move || audit_logs.get()
                                 key=|log| log.log_id
                                 children=move |log| {
+                                    // 表示は整形済み日時、生 ISO は title 属性へ保持する。
+                                    let created_at = log.created_at.clone();
                                     view! {
                                         <div class="text-[8px] space-y-1">
                                             <div class="flex justify-between text-gray-500">
-                                                <span>{log.created_at.clone()}</span>
+                                                <span data-testid="audit-created-at" title=created_at>{format_local_datetime(&log.created_at)}</span>
                                                 <span class="text-green-500">{log.new_status.clone()}</span>
                                             </div>
                                             <p class="text-gray-300">"By: " {log.changed_by.clone()}</p>
@@ -2276,9 +2598,11 @@ fn Ledger(token: String) -> impl IntoView {
                             children=move |tx| {
                                 let sender_prefix = tx.sender_hash[0..12.min(tx.sender_hash.len())].to_string();
                                 let receiver_prefix = tx.receiver_hash[0..12.min(tx.receiver_hash.len())].to_string();
+                                // 表示は整形済み日時、生 ISO は title 属性へ保持する。
+                                let created_at = tx.created_at.clone();
                                 view! {
                                     <tr class="hover:bg-white/5 transition-colors">
-                                        <td class="p-4 text-gray-500">{tx.created_at}</td>
+                                        <td class="p-4 text-gray-500" title=created_at>{format_local_datetime(&tx.created_at)}</td>
                                         <td class="p-4 text-blue-400">{sender_prefix} "..."</td>
                                         <td class="p-4 text-green-400">{receiver_prefix} "..."</td>
                                         <td class="p-4 text-right font-bold">{tx.amount} " JPYC"</td>
@@ -3526,6 +3850,49 @@ mod tests {
             super::build_content_query("", "", "", true),
             "?favorite_only=1"
         );
+    }
+
+    /// R2-URL: 書き出したクエリを読み側が正しく復元できること。
+    /// 日本語・`&`・`favorite_only=1` を往復のカナリとして固定する。
+    #[test]
+    fn content_query_roundtrip_preserves_japanese_ampersand_and_favorite_only() {
+        let expected = super::ContentQuery {
+            q: "日本語 & 物語".to_string(),
+            tag: "夏&祭".to_string(),
+            content_type: "Novel".to_string(),
+            favorite_only: true,
+        };
+        let query = super::build_content_query(
+            &expected.q,
+            &expected.tag,
+            &expected.content_type,
+            expected.favorite_only,
+        );
+        assert_eq!(
+            query,
+            "?q=%E6%97%A5%E6%9C%AC%E8%AA%9E%20%26%20%E7%89%A9%E8%AA%9E&tag=%E5%A4%8F%26%E7%A5%AD&type=Novel&favorite_only=1"
+        );
+        assert_eq!(super::parse_content_query(&query), expected);
+        // UrlSearchParams で正規化した先頭 '?' 無しの形でも同じに読めること。
+        assert_eq!(
+            super::parse_content_query(query.trim_start_matches('?')),
+            expected
+        );
+    }
+
+    #[test]
+    fn content_query_parse_ignores_unknown_keys_and_accepts_valueless_flag() {
+        assert_eq!(
+            super::parse_content_query(""),
+            super::ContentQuery::default()
+        );
+        let parsed = super::parse_content_query("?unknown=x&q=Neon&favorite_only&tag=urban");
+        assert_eq!(parsed.q, "Neon");
+        assert_eq!(parsed.tag, "urban");
+        assert!(parsed.content_type.is_empty());
+        // 値なしの favorite_only もフラグとして扱う（空値も同様）。
+        assert!(parsed.favorite_only);
+        assert!(super::parse_content_query("?favorite_only=").favorite_only);
     }
 
     /// cid はパスSegment として使うため `/` や `?` 等を percent-encode する。
