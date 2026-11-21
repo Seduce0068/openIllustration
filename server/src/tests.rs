@@ -1329,7 +1329,6 @@ async fn test_trusted_age_mode_blocks_oidc_callback_and_refresh() {
 async fn test_require_explicit_configuration_blocks_oidc_callback_and_refresh() {
     let policy = common::age::AgePolicy {
         require_explicit_configuration: true,
-        operator_configured: false,
         ..common::age::AgePolicy::default()
     };
     let (app, oidc, mock, _db) = setup_app_with_oidc_and_age_policy(policy).await;
@@ -1359,6 +1358,17 @@ async fn test_require_explicit_configuration_blocks_oidc_callback_and_refresh() 
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // auth_verify も同じ共通ゲートに載る。require=1 未充足 + trusted_mode +
+    // 有効な verified_claims でも、クレーム検証 / nonce 消費より前に 403 になる。
+    let gated_policy = common::age::AgePolicy {
+        require_explicit_configuration: true,
+        ..trusted_age_policy()
+    };
+    let (gated_app, _gated_db) = setup_verified_age_app(gated_policy).await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let (status, _) = post_verify(&gated_app, verified_verify_body(&nonce, "jpki-test", "")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     let _ = (oidc, mock);
 }
@@ -1626,6 +1636,8 @@ fn verify_body(birth_date: &str, country: &str) -> String {
         public_key_der: None,
         birth_date: Some(birth_date.to_string()),
         country_code: Some(country.to_string()),
+        proof_of_possession: None,
+        verified_claims: None,
     })
     .unwrap()
 }
@@ -2735,6 +2747,8 @@ async fn test_mock_auth_nonce_is_single_use() {
         public_key_der: None,
         birth_date: Some("2000-01-01".to_string()),
         country_code: Some("JP".to_string()),
+        proof_of_possession: None,
+        verified_claims: None,
     })
     .unwrap();
     let send = |body: String| {
@@ -2946,13 +2960,14 @@ async fn test_invalid_jpki_signature_rejected() {
     );
 }
 
-// ---- JPKI 所有証明（PoP）の純粋関数テスト（未結線） ----
+// ---- JPKI 所有証明（PoP）のテスト ----
 //
 // 補足: jpki.rs の `mod tests` 内にある `rsa_signing_key()` / `named_params()` は
 // モジュール私的で sister module の `tests` から参照できない。そのため同じ
 // 決定的 RNG (`TestRng`) と rcgen による CA 署名 RSA 2048 リーフで
-// jpki.rs:179-188 / 226-242 のフィクスチャを再現する。
-// `verify_proof_of_possession` はいかなるハンドラからも呼ばれない（未結線）。
+// jpki.rs のフィクスチャを再現する。
+// 純粋関数4件に加え、auth_verify のモック分岐を通すハンドラ経由4件を下記に置く。
+// 結線はモック経路のみで、実証明書経路 (verify_presentation) は変更しない。
 
 /// CA 署名の RSA 2048 リーフ証明書を作り、`verify_presentation` 経由で
 /// リーフの SPKI 公開鍵 DER を取り出す。署名用の秘密鍵も一緒に返す。
@@ -3050,6 +3065,106 @@ fn test_proof_of_possession_envelope_denies_unknown_fields() {
         serde_json::from_str::<ProofOfPossession>(unknown).is_err(),
         "unknown fields must be denied"
     );
+}
+
+// ---- auth_verify のモック分岐を通す PoP 回帰テスト（4件・opt-in） ----
+
+/// PoP envelope を組み立てる。署名は base64(STANDARD) で符号化する。
+fn pop_envelope(nonce: &str, signature: &[u8]) -> crate::jpki::ProofOfPossession {
+    crate::jpki::ProofOfPossession {
+        nonce: nonce.to_string(),
+        signature: base64::engine::general_purpose::STANDARD.encode(signature),
+    }
+}
+
+/// ハンドラへ送る JSON を組み立てる。VerifyRequest の PoP フィールドは
+/// Serialize 対象外のため、envelope はここで明示的に挿入する。
+fn pop_verify_body(
+    nonce: &str,
+    public_key_der: Option<Vec<u8>>,
+    proof_of_possession: Option<crate::jpki::ProofOfPossession>,
+) -> String {
+    let mut body = json!({
+        "presentation_token": "mock_token",
+        "nonce": nonce,
+        "public_key_der": public_key_der,
+        "birth_date": "2000-01-01",
+        "country_code": "JP",
+    });
+    if let Some(pop) = proof_of_possession {
+        body["proof_of_possession"] = json!({
+            "nonce": pop.nonce,
+            "signature": pop.signature,
+        });
+    }
+    body.to_string()
+}
+
+/// 正しい nonce に対する署名を添えた PoP は 200。
+#[tokio::test]
+async fn test_auth_verify_pop_valid_signature_is_accepted() {
+    let app = setup_app().await;
+    let (public_der, private_key) = pop_test_ca_signed_leaf();
+    let nonce = crate::issue_mock_nonce_for_test();
+    let signature = pop_sign(&private_key, &nonce);
+    let body = pop_verify_body(
+        &nonce,
+        Some(public_der),
+        Some(pop_envelope(&nonce, &signature)),
+    );
+    assert_eq!(post_verify(&app, body).await.0, StatusCode::OK);
+}
+
+/// 署名対象 nonce の改ざん、および pop.nonce の改ざんは 401。
+#[tokio::test]
+async fn test_auth_verify_pop_tampered_nonce_is_rejected() {
+    let app = setup_app().await;
+    let (public_der, private_key) = pop_test_ca_signed_leaf();
+
+    // (1) 署名は別文字列に対して作られ、pop.nonce は発行 nonce のまま。
+    let nonce = crate::issue_mock_nonce_for_test();
+    let signature = pop_sign(&private_key, "tampered-nonce");
+    let body = pop_verify_body(
+        &nonce,
+        Some(public_der.clone()),
+        Some(pop_envelope(&nonce, &signature)),
+    );
+    assert_eq!(post_verify(&app, body).await.0, StatusCode::UNAUTHORIZED);
+
+    // (2) 署名は発行 nonce に対して正しいが、pop.nonce が改ざんされている。
+    let nonce = crate::issue_mock_nonce_for_test();
+    let signature = pop_sign(&private_key, &nonce);
+    let body = pop_verify_body(
+        &nonce,
+        Some(public_der),
+        Some(pop_envelope("tampered-nonce", &signature)),
+    );
+    assert_eq!(post_verify(&app, body).await.0, StatusCode::UNAUTHORIZED);
+}
+
+/// 別の秘密鍵で署名した PoP は 401。
+#[tokio::test]
+async fn test_auth_verify_pop_other_key_signature_is_rejected() {
+    let app = setup_app().await;
+    let (public_der, _leaf_private) = pop_test_ca_signed_leaf();
+    let (_other_public_der, other_private) = pop_test_ca_signed_leaf();
+    let nonce = crate::issue_mock_nonce_for_test();
+    let signature = pop_sign(&other_private, &nonce);
+    let body = pop_verify_body(
+        &nonce,
+        Some(public_der),
+        Some(pop_envelope(&nonce, &signature)),
+    );
+    assert_eq!(post_verify(&app, body).await.0, StatusCode::UNAUTHORIZED);
+}
+
+/// PoP 省略時は従来どおり受理する（opt-in・後方互換）。
+#[tokio::test]
+async fn test_auth_verify_pop_is_opt_in() {
+    let app = setup_app().await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let body = pop_verify_body(&nonce, None, None);
+    assert_eq!(post_verify(&app, body).await.0, StatusCode::OK);
 }
 
 /// GOV-03: BAN ユーザーは再認証不可
@@ -10516,14 +10631,15 @@ async fn test_age_policy_endpoint_exposes_only_non_secret_public_settings() {
     assert_eq!(
         keys,
         vec![
+            "configuration_satisfied",
             "country_minimums",
             "default_minimum_age",
             "enforcement_mode",
             "notes",
-            "operator_configured",
             "require_explicit_configuration",
             "settings_always_public",
             "target_regions",
+            "trusted_issuers",
         ],
         "public age policy endpoint must expose only non-secret policy settings"
     );
@@ -10559,7 +10675,6 @@ fn test_age_policy_fail_closed_modes() {
 
     let require_config = common::age::AgePolicy {
         require_explicit_configuration: true,
-        operator_configured: false,
         ..common::age::AgePolicy::default()
     };
     let err = validate_age(&require_config, &adult_birth, "JP").unwrap_err();
@@ -10571,6 +10686,207 @@ fn test_age_policy_fail_closed_modes() {
     };
     let err = validate_age(&trusted_only, &adult_birth, "JP").unwrap_err();
     assert!(matches!(err, AppError::Forbidden(_)));
+}
+
+/// DEC-01: 署名付き年齢属性の adapter を mock 経路で検証するためのアプリ。
+async fn setup_verified_age_app(
+    age_policy: common::age::AgePolicy,
+) -> (Router, Arc<libsql::Connection>) {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        // OIDC 未設定のため audience のフォールバックは空文字列。
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy,
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    (build_router(state), db)
+}
+
+fn trusted_age_policy() -> common::age::AgePolicy {
+    common::age::AgePolicy {
+        enforcement_mode: common::age::AgeEnforcementMode::TrustedAttributeRequired,
+        trusted_issuers: vec!["jpki-test".to_string()],
+        ..common::age::AgePolicy::default()
+    }
+}
+
+/// 検証済み属性クレームを含む `/auth/verify` の本文。
+fn verified_verify_body(nonce: &str, issuer: &str, audience: &str) -> String {
+    serde_json::json!({
+        "presentation_token": "mock_token",
+        "nonce": nonce,
+        "public_key_der": null,
+        // 自己申告は成人として不十分な値。信頼属性経路では使われないことを検証する。
+        "birth_date": "2010-01-01",
+        "country_code": "JP",
+        "verified_claims": {
+            "birthdate": "2000-01-01",
+            "country": "JP",
+            "audience": audience,
+            "attribute": {
+                "issuer": issuer,
+                "signed_subject": "age-over-20",
+                "nonce": nonce
+            }
+        }
+    })
+    .to_string()
+}
+
+async fn post_verify(app: &Router, body: String) -> (StatusCode, String) {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).to_string())
+}
+
+/// DEC-01-01: 正常系。検証済み属性は自己申告の生年月日より優先され、成人として受理される。
+#[tokio::test]
+async fn test_verified_age_accepts_valid_signed_attribute_in_mock_path() {
+    let (app, _db) = setup_verified_age_app(trusted_age_policy()).await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let (status, body) = post_verify(&app, verified_verify_body(&nonce, "jpki-test", "")).await;
+    assert_eq!(status, StatusCode::OK, "unexpected response: {body}");
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(json["authorized"], true);
+}
+
+/// DEC-01-02: 自己申告の混入拒否。自己申告フィールドは検証済み属性へ昇格しない。
+#[tokio::test]
+async fn test_verified_age_rejects_self_reported_fields_and_missing_claims() {
+    let (app, _db) = setup_verified_age_app(trusted_age_policy()).await;
+
+    // 信頼属性必須モードで verified_claims が無ければ、成人の自己申告でも 403。
+    let (status, _) = post_verify(&app, verify_body("1990-01-01", "JP")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // verified_claims へ自己申告の birth_date / country_code を混ぜた JSON は
+    // deny_unknown_fields の serde エラーとして axum が 422 を返す。
+    let nonce = crate::issue_mock_nonce_for_test();
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&verified_verify_body(&nonce, "jpki-test", "")).unwrap();
+    payload["verified_claims"]["birth_date"] = serde_json::json!("2000-01-01");
+    payload["verified_claims"]["country_code"] = serde_json::json!("JP");
+    let (status, _) = post_verify(&app, payload.to_string()).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// DEC-01-03: nonce 再利用拒否。既存 `MOCK_NONCES.remove()` の単回消費を再利用する。
+#[tokio::test]
+async fn test_verified_age_rejects_reused_nonce() {
+    let (app, _db) = setup_verified_age_app(trusted_age_policy()).await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let body = verified_verify_body(&nonce, "jpki-test", "");
+    let (status, _) = post_verify(&app, body.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = post_verify(&app, body).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a consumed nonce must not be reusable"
+    );
+}
+
+/// DEC-01-04: 未許可 issuer 拒否。
+#[tokio::test]
+async fn test_verified_age_rejects_untrusted_issuer() {
+    let (app, _db) = setup_verified_age_app(trusted_age_policy()).await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let (status, _) = post_verify(&app, verified_verify_body(&nonce, "attacker.example", "")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// DEC-01-05: audience 不一致拒否。OIDC 未設定時のフォールバックは空文字列。
+#[tokio::test]
+async fn test_verified_age_rejects_audience_mismatch() {
+    let (app, _db) = setup_verified_age_app(trusted_age_policy()).await;
+    let nonce = crate::issue_mock_nonce_for_test();
+    let (status, _) = post_verify(
+        &app,
+        verified_verify_body(&nonce, "jpki-test", "other-client"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// DEC-01-06: allow_mock_auth 無効では verified_claims を受理しない。
+#[tokio::test]
+async fn test_verified_age_claims_rejected_when_mock_auth_disabled() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    let state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: trusted_age_policy(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let app = build_router(state);
+    let nonce = crate::issue_mock_nonce_for_test();
+    let (status, _) = post_verify(&app, verified_verify_body(&nonce, "jpki-test", "")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// DEC-01-07: R1 item9。既定モードは自己申告のままで、信頼属性必須へ自動昇格しない。
+#[tokio::test]
+async fn test_verified_age_default_mode_keeps_self_reported() {
+    let (app, _db) = setup_verified_age_app(common::age::AgePolicy::default()).await;
+    let (status, body) = post_verify(&app, verify_body("1990-01-01", "JP")).await;
+    assert_eq!(status, StatusCode::OK, "unexpected response: {body}");
 }
 
 /// TZ 解決の純粋関数テスト。UTC 16:00 は JST では翌日 01:00 になる。
@@ -13936,7 +14252,7 @@ fn test_like_escaping_keeps_wildcards_literal() {
     assert_eq!(escape_like("100%_cat\\x"), "100\\%\\_cat\\\\x");
 }
 
-/// 実リポジトリの migration セット（001〜013）が新しい厳密検証を通過し、
+/// 実リポジトリの migration セット（001〜014）が新しい厳密検証を通過し、
 /// 適用と検証の双方が成功することの回帰テスト。
 #[tokio::test]
 async fn test_migration_set_applies_and_verifies_cleanly() {
@@ -14015,6 +14331,176 @@ fn test_migration_splitter_ignores_semicolons_in_line_comments() {
         statements[1].as_str(),
         "INSERT INTO comment_t (id) VALUES (1)"
     );
+}
+
+/// migration 014 の実ファイルを読み込む（006 はチェックサム保護のため変更しない）。
+fn migration_014_sql() -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("migrations")
+        .join("014_refresh_tokens_expires_at_text.sql");
+    std::fs::read_to_string(path).expect("migration 014 must exist in server/migrations")
+}
+
+/// 006 相当の旧 refresh_tokens DDL。実 migration 006 は checksum 保護のため編集しない。
+const MIGRATION_014_OLD_REFRESH_TOKENS_DDL: &str = "CREATE TABLE IF NOT EXISTS refresh_tokens (\
+     token_hash TEXT PRIMARY KEY, \
+     sub TEXT NOT NULL, \
+     family_id TEXT NOT NULL, \
+     expires_at DATETIME NOT NULL, \
+     used_at DATETIME, \
+     created_at DATETIME DEFAULT CURRENT_TIMESTAMP\
+     );";
+
+/// 001〜013 を合成（006 は旧 refresh_tokens）+ 実 014 の一時 migration セットを作る。
+fn migration_014_temp_dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("openillustration_migration_014_{tag}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for version in 1..=13 {
+        let sql = if version == 6 {
+            MIGRATION_014_OLD_REFRESH_TOKENS_DDL.to_owned()
+        } else {
+            format!("CREATE TABLE synthetic_{version} (id INTEGER PRIMARY KEY);")
+        };
+        std::fs::write(dir.join(format!("{version:03}_migration.sql")), sql).unwrap();
+    }
+    std::fs::write(
+        dir.join("014_refresh_tokens_expires_at_text.sql"),
+        migration_014_sql(),
+    )
+    .unwrap();
+    dir
+}
+
+/// 実 migration セット適用後に expires_at が TEXT と宣言されること（014 の型修正）。
+#[tokio::test]
+async fn test_migration_014_declares_expires_at_as_text() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    crate::migration::run_migrations(&db).await.unwrap();
+
+    for (column, expected) in [
+        ("expires_at", "TEXT"),
+        ("used_at", "DATETIME"),
+        ("created_at", "DATETIME"),
+    ] {
+        let mut rows = db
+            .query(
+                "SELECT type FROM pragma_table_info('refresh_tokens') WHERE name = ?",
+                [column],
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let declared: String = row.get(0).unwrap();
+        assert_eq!(declared, expected, "unexpected declared type for {column}");
+    }
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM _migrations WHERE version = '014'", ())
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let applied: i64 = row.get(0).unwrap();
+    assert_eq!(applied, 1, "migration 014 must be recorded as applied");
+}
+
+/// 006 相当の DB に保存した小数秒付き RFC3339 が 014 の再作成後も保持されること。
+#[tokio::test]
+async fn test_migration_014_preserves_rfc3339_expires_at() {
+    let dir = migration_014_temp_dir("preserve");
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+
+    let original = "2026-12-01T00:00:00.123456789+00:00";
+    db.execute(MIGRATION_014_OLD_REFRESH_TOKENS_DDL, ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at) \
+         VALUES ('hash', 'sub', 'family', ?)",
+        [original],
+    )
+    .await
+    .unwrap();
+
+    crate::migration::run_migrations_from(&db, &dir)
+        .await
+        .unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT expires_at FROM refresh_tokens WHERE token_hash = 'hash'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let stored: String = row.get(0).unwrap();
+    assert_eq!(
+        stored, original,
+        "RFC3339 value must survive the table rebuild"
+    );
+    chrono::DateTime::parse_from_rfc3339(&stored)
+        .unwrap_or_else(|e| panic!("preserved expires_at must be RFC3339: {stored}: {e}"));
+
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' \
+             AND name IN ('idx_refresh_tokens_family', 'idx_refresh_tokens_sub')",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    let indexes: i64 = row.get(0).unwrap();
+    assert_eq!(indexes, 2, "both refresh_tokens indexes must be recreated");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 014 を書き換えると checksum mismatch で検出されること（実ファイルは変更しない）。
+#[tokio::test]
+async fn test_migration_014_rewrite_detects_checksum_mismatch() {
+    let dir = migration_014_temp_dir("checksum");
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    crate::migration::run_migrations_from(&db, &dir)
+        .await
+        .unwrap();
+    crate::migration::verify_migrations_from(&db, &dir)
+        .await
+        .unwrap();
+
+    let mut rewritten = migration_014_sql();
+    rewritten.push_str("\n-- rewritten for checksum drift test\n");
+    std::fs::write(
+        dir.join("014_refresh_tokens_expires_at_text.sql"),
+        rewritten,
+    )
+    .unwrap();
+
+    let err = crate::migration::verify_migrations_from(&db, &dir)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("Migration 014 checksum mismatch"),
+        "rewritten 014 must be detected: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// 本番起動と同じ順序（FK 有効化 → migration）でローカル DB を組み立て、
@@ -17776,6 +18262,8 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
         public_key_der: None,
         birth_date: Some(birth_date.to_string()),
         country_code: Some(country_code.to_string()),
+        proof_of_possession: None,
+        verified_claims: None,
     };
     let verified = crate::auth_verify(State(Arc::clone(&state)), Json(request))
         .await

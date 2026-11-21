@@ -74,18 +74,9 @@ fn tz_utc_offset_hours(tz: Option<&str>) -> i32 {
         .unwrap_or(0)
 }
 
-/// 手動フラグのみで年齢ゲートを通過できる設定への固定警告（値はエコーしない）。
-const AGE_POLICY_FLAG_ONLY_WARNING: &str =
-    "AGE_POLICY_CONFIGURED is set but required age policy values are at defaults";
-
-/// `AGE_POLICY_CONFIGURED` が真でも必須設定値が既定のままかを判定する。
-/// 既定値との比較のみ行い、設定値を結果に含めない（医師的閾値は変更しない）。
-fn age_policy_values_at_defaults(policy: &common::age::AgePolicy) -> bool {
-    let defaults = common::age::AgePolicy::default();
-    policy.default_minimum_age == defaults.default_minimum_age
-        && policy.country_minimums.is_empty()
-        && policy.target_regions.is_empty()
-}
+/// 明示設定必須なのに必須設定値が未充足で年齢検証が拒否される設定への固定警告（値はエコーしない）。
+const AGE_POLICY_UNSATISFIED_WARNING: &str =
+    "AGE_REQUIRE_EXPLICIT_CONFIGURATION is set but required age policy values are unsatisfied";
 
 /// 引数解析の結果。副作用（ヘルプ表示・exit）は含めず、main 側で実行する。
 #[derive(Debug, PartialEq, Eq)]
@@ -449,10 +440,10 @@ where
     let mut age_errors = Vec::new();
     match common::age::AgePolicy::from_env_with(&lookup) {
         Ok(policy) => {
-            // 手動フラグ 1 だけで必須設定値が既定のままなら年齢ゲートを通過できてしまう。
-            // 後方互換を保つため判定ロジックは変えず、警告のみとする。
-            if policy.operator_configured && age_policy_values_at_defaults(&policy) {
-                age_errors.push(AGE_POLICY_FLAG_ONLY_WARNING.to_string());
+            // 手動フラグは廃止され、必須設定値の充足結果からゲートを判定する。
+            // 明示設定必須なのに未充足なら年齢検証は fail closed（403）となるため警告する。
+            if policy.require_explicit_configuration && !policy.configuration_satisfied() {
+                age_errors.push(AGE_POLICY_UNSATISFIED_WARNING.to_string());
             }
         }
         Err(error) => age_errors.push(error),
@@ -1535,46 +1526,45 @@ mod tests {
         assert!(errors_for(&results, "audit_expect_root").is_empty());
     }
 
-    // --- 2h. AGE_POLICY_CONFIGURED と必須設定値の整合 ----------------------
+    // --- 2h. 明示設定必須と必須設定値の充足結果の整合 ----------------------
 
     #[test]
     fn age_policy_flag_only_warns_without_disclosing_values() {
-        // TZ を明示して新規の基準日警告を除き、既存のフラグ警告だけを検証する。
+        // TZ を明示して基準日警告を除き、未充足警告だけを検証する。
         for value in ["1", "true", "TRUE"] {
             let results = check_all_with(lookup_from(&[
-                ("AGE_POLICY_CONFIGURED", value),
+                ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", value),
                 ("TZ", "Asia/Tokyo"),
             ]));
             let errors = errors_for(&results, "age_policy");
             assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
-            assert_eq!(errors[0], AGE_POLICY_FLAG_ONLY_WARNING, "value={value}");
+            assert_eq!(errors[0], AGE_POLICY_UNSATISFIED_WARNING, "value={value}");
         }
-        // require=1 を併用しても警告は同じ。fail-closed 契約を緩めていない。
+        // 廃止した手動フラグは単独では警告を生じない（充足判定に使わない）。
         let results = check_all_with(lookup_from(&[
-            ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
             ("AGE_POLICY_CONFIGURED", "1"),
             ("TZ", "Asia/Tokyo"),
         ]));
-        assert_eq!(errors_for(&results, "age_policy").len(), 1);
+        assert!(errors_for(&results, "age_policy").is_empty());
     }
 
     #[test]
     fn age_policy_flag_with_explicit_values_has_no_warning() {
-        // 必須設定値が 1 つでも既定と異なれば「既定のまま」ではない。
-        // TZ は対象地域 JP に合わせて明示し、新規の基準日警告を混入させない。
+        // 必須設定値が 1 つでも充足していれば未充足警告は出ない。
+        // TZ は対象地域 JP に合わせて明示し、基準日警告を混入させない。
         let scenarios: [&[(&str, &str)]; 3] = [
             &[
-                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
                 ("AGE_DEFAULT_MINIMUM", "20"),
                 ("TZ", "Asia/Tokyo"),
             ],
             &[
-                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
                 ("AGE_TARGET_REGIONS", "JP"),
                 ("TZ", "Asia/Tokyo"),
             ],
             &[
-                ("AGE_POLICY_CONFIGURED", "1"),
+                ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
                 ("AGE_COUNTRY_OVERRIDES", "JP=20"),
                 ("TZ", "Asia/Tokyo"),
             ],
@@ -1590,8 +1580,8 @@ mod tests {
 
     #[test]
     fn age_policy_flag_unset_keeps_existing_behavior() {
-        // TZ を明示して新規の基準日警告を除き、従来のフラグ挙動だけを検証する。
-        // フラグ未設定なら必須設定値が既定でも警告しない（従来どおり）。
+        // TZ を明示して基準日警告を除き、明示設定必須が無効な場合の挙動を検証する。
+        // require 未設定なら必須設定値が既定でも警告しない。
         let results = check_all_with(lookup_from(&[("TZ", "Asia/Tokyo")]));
         assert!(errors_for(&results, "age_policy").is_empty());
         // 設定値だけ明示されていても警告しない。
@@ -1600,12 +1590,15 @@ mod tests {
             ("TZ", "Asia/Tokyo"),
         ]));
         assert!(errors_for(&results, "age_policy").is_empty());
-        // require=1 のみなら年齢判定側が 403 を返し、doctor は警告しない（従来どおり）。
+        // require=1 のみなら必須設定値が未充足で、年齢判定は 403・doctor は警告する。
         let results = check_all_with(lookup_from(&[
             ("AGE_REQUIRE_EXPLICIT_CONFIGURATION", "1"),
             ("TZ", "Asia/Tokyo"),
         ]));
-        assert!(errors_for(&results, "age_policy").is_empty());
+        assert_eq!(
+            errors_for(&results, "age_policy"),
+            vec![AGE_POLICY_UNSATISFIED_WARNING.to_string()]
+        );
     }
 
     // --- 2i. バックアップ設定と基準日（TZ）の診断 ---------------------------

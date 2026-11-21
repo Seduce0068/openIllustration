@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 verified:
   by: dsh
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 status: current
 ---
 
@@ -33,8 +33,14 @@ status: current
   - [対応済み] 監査CLI硬化: `sign_audit_export` が鍵 PEM の権限
     （owner-only 0600/0400、親ディレクトリ group/other 書き込み拒否・0700 推奨）、
     `DATABASE_TOKEN` 環境変数限定（`--database-token` は拒否）、出力 `create_new` による
-    上書き拒否を実装。bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済み（AUDIT-02、
+    上書き拒否を実装。bin 内に17テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み（AUDIT-02、
     [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md), [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)）。
+  - [対応済み] DB 接続3 CLI の接続先必須化（R2-DBURL）: `backup_db` / `sign_audit_export` /
+    `verify_audit_log` から暗黙の `file:local.db` 既定を撤廃し、純粋関数
+    `resolve_database_url(cli, env)` が `--database-url` と `DATABASE_URL` を解決する。
+    両方が未設定または空・空白のみなら固定文言で起動拒否し、値はエコーしない。
+    各 CLI に5テスト（計15件）を追加し、bin テスト数は17 / 17 / 14 へ追随させた。
+    E2E69・check23・doctor53・migration14 は不変。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、23カテゴリ固定・秘密値非出力・`--strict` 判定を
     `server/src/bin/doctor.rs` の53テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋
@@ -83,7 +89,9 @@ status: current
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] 年齢ゲートの共通化: `ensure_age_policy_configured` を
     `/auth/oidc/callback` と `/auth/refresh` の state / Cookie 消費前に適用。`ConfigurationRequired`
-    （`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/0）と
+    （`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ実効値から導出した
+    `configuration_satisfied()` が false。`AGE_DEFAULT_MINIMUM` /
+    `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` のいずれも既定値のまま）と
     `TrustedAttributeRequired` を 403 に変換し、数値判定は `/auth/verify` に委ねる。
     サーバー側テスト1件（AGE-03、
     [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
@@ -336,7 +344,7 @@ status: current
   権限を検査し、owner-only（0600/0400）を要求、親ディレクトリの group/other 書き込みを拒否
   （0700 以外は警告）。リモート libSQL トークンは `DATABASE_TOKEN` 環境変数からのみ読み、
   `--database-token` はエラー。出力は `OpenOptions::create_new(true)` で原子的に生成し
-  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済みで、手動確認手順を
+  既存ファイルの上書きを拒否（TOCTOU 対策）。bin 内に17テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済みで、手動確認手順を
   [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md) に記載（AUDIT-02）。
 - [対応済み] **`verify_audit_export` の `--expect-root` と純粋関数化**:
   `verify_audit_export --snapshot PATH --public-key PATH [--expect-root HEX]` で記録済み
@@ -412,8 +420,9 @@ status: current
 - [対応済み] C2 / R1-21: `/auth/login` を `ALLOW_MOCK_AUTH` でゲートし、無効時は 501 を返すよう修正。設計書の「開発用モック経路は `ALLOW_MOCK_AUTH=1` の場合のみ有効」と整合。mutation（ゲート削除）でテスト失敗を確認。
 - [対応済み] R1-17（fail-closed 側）: OIDC callback / refresh を共通ゲート
   `ensure_age_policy_configured` で保護。`TrustedAttributeRequired` と
-  `ConfigurationRequired`（`AGE_POLICY_CONFIGURED` 未設定）の両方を 403 で拒否し年齢ゲートの
-  バイパスを遮断。mutation（ゲート削除）でテスト失敗を確認。
+  `ConfigurationRequired`（`AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` /
+  `AGE_TARGET_REGIONS` の実効値から `configuration_satisfied()` が false）の両方を 403 で
+  拒否し年齢ゲートのバイパスを遮断。mutation（ゲート削除）でテスト失敗を確認。
   信頼属性の実入力経路は外部 OP のクレーム仕様待ち（DEC-01）。
 - [対応済み] R1-10: Tailwind をビルド時 CSS 化（`@tailwindcss/cli` 4.3.5、MIT、一次情報確認済み）。実行時 CDN と外部フォントを除去し、E2E ビルドで外部参照の残存をゲート。
 - [対応済み] R1-24: ウォレット所有証明（bind）を `wallet_bound` 列へ永続化（migration 010）。未バインド注文は verify を 400 で拒否。既存注文は既定 0 で fail-closed。mutation（必須条件削除）でテスト失敗を確認。
@@ -622,6 +631,9 @@ status: current
 
 - [対応済み・本変更で反映] [HANDOFF.md](HANDOFF.md) の「6. 主要ファイル」に `server/src/jwt.rs` を追記。
 - [対応済み・本変更で反映] [DETAILED_DESIGN.md](DETAILED_DESIGN.md) のマイグレーション現行記載に `003_payment_order_index.sql` を追記。
+- [対応済み・本変更で反映] マイグレーション現行値を14件（`001_initial_schema.sql` 〜 `014_refresh_tokens_expires_at_text.sql`）へ更新。
+  006 はチェックサム保護のためバイト単位で据え置き。`payment_orders` の部分 UNIQUE は
+  [ADR-0009](adr/ADR-0009-payment-order-partial-unique-rejected.md) で却下を記録（スキーマ変更なし）。
 - [対応済み・本変更で反映] DEC-02採用方針（有効設定値の常時公開・`GET /policy/age`・年齢ポリシー設定項目・制約）を
   [AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md), [DOCUMENT_STATUS.md](DOCUMENT_STATUS.md),
   [DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md),

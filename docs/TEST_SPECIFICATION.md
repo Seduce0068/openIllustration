@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 verified:
   by: dsh
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -42,8 +42,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   upload の6件は送信成功・10 MiB 拒否・INT-02 に加え、4件目が R1-14
   （`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）、
   5件目がファイル選択 label のキーボード操作と価格入力の上下限（a11y）、
-  6件目が R2 価格境界テスト（0 / 1000001 / 1000000 をモック応答で送信し、丸めずに送って
-  上限超過のみ拒否されること）を検証する。
+  6件目が R2 価格境界テスト（-1 / 1000001 がクライアントの送信前ゲートで固定文言により
+  拒否されて route 0回、0 / 1000000 が丸めずに送信されること）を検証する。
   メトリクス最外側化・bind 署名 v2・監査CLI硬化の反映では E2E 定義は増えていないため、上記の内訳を反映（当時59件、現在69件）。
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
   今回の3CLIへのテスト追加（doctor 53件（既存29件＋境界テスト7件＋OIDC URL検証3件＋
@@ -64,12 +64,12 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
-| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
+| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
-| DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
+| DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証。migration 014 は `test_migration_014_declares_expires_at_as_text` / `test_migration_014_preserves_rfc3339_expires_at` / `test_migration_014_rewrite_detects_checksum_mismatch` の3件で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
 | Markdown表示 | raw HTMLのエスケープ、インライン・参照リンク・自動リンク・画像URLの危険スキーム拒否（実体参照による難読化、Unicode 空白/制御文字（ZWSP・NBSP）によるスキーム隠しを含む）と安全スキーム維持をユニットテスト。危険 URL が `render_markdown` を通した後も `href="#"` / `src="#"` に置換される統合検証も実施 | ブラウザ別URL解釈のE2Eは未実施 |
 | 投稿入力 | 許可MIME、JPEG XLシグネチャ、Markdown UTF-8、重複CIDの再投稿拒否、未知フィールド拒否、全フィールド（`price` / `file` / `owner_hash` / `signature`）の重複 400 拒否、WASM 側 JXL デコードの寸法上限（8000px / 64M ピクセル）とチャンネル数別（1/2/3/4以上）RGBA 変換、クライアント選択時の 10 MiB 超過即時拒否（E2E・送信ボタン無効化と未送信も検証）を検証 | 実 JXL デコードの WASM 実行試験は未実施 |
@@ -79,10 +79,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | お気に入り | 追加/削除の冪等（重複追加・未登録削除）、未認証401・不正CID400・非Approved404、他人subからの操作拒否、`favorite_only` の本人分のみ返却（真理値パース・既存条件とのAND・ページング・Approved限定）、旧JSONの `is_favorite` 欠落互換、migration 012 の UNIQUE + FK CASCADE を API・ユニットテストで検証 | `user_hash` をログ・監査・レスポンスへ出さないことは設計方針で担保。実運用ログの確認は未実施 |
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証。`wallet_bind_message_v2` が注文ID・chain_id・wallet_address・recipient_address・amount_jpy を署名対象とし、注文IDのみの旧形式署名を401で拒否する下記 PAY-05 を追加 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
-| 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 認証内集計であり第三者公開ではない（DEC-04 未決定）。`quorum_not_met` は `totals` のみで月次表には含めない |
-| 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲（DEC-04）は未決定 |
+| 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 運用者限定の認証内集計。公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み（認証済み利用者向け公開・未認証は401）だが、段階2の公開ルートは未実装。クライアントは初期表示で `/mod/stats` を0本とし、オプイン押下時のみプローブする。403 は一般画面へ描画しない。`quorum_not_met` は `totals` のみで月次表には含めない |
+| 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み（要約は集計レスポンスへ含めない） |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
-| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に12テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）、`doctor` 53件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件） / `verify_audit_export` 20件 / `verify_backup` 19件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
+| 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に17テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件＋DB接続先必須化5件）、`doctor` 53件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件） / `verify_audit_export` 20件 / `verify_backup` 19件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 | 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は当時59件のまま（現在69件）。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
@@ -106,7 +106,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
 | CONTENT-09 | チェックサム一致だが JXL として不正なバイト列（例: `not a jxl codestream`）を HTTP 200 で返すゲートウェイ | チェックサム検証は成功しても VERIFIED にせず、`× DECODE FAILED` と固定エラー文言を表示する | 実装済み。クライアントの `decode_error` 分岐で `set_verified = Some(false)` に切り替え、デコーダのエラー値は画面へ出さない。E2E は `e2e/tests/integrity.spec.ts` の `should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)` で検証。補助する単体テストは `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` |
 | INT-01 | フォレンジック完全性検証 E2E（正規／改ざん／デコード失敗／監査順序／Audit トグルの a11y） | 正規は `● VERIFIED`、改ざんは `× COMPROMISED`、デコード失敗は `× DECODE FAILED` を表示し、失敗時に VERIFIED を出さない。Audit トグルは `aria-expanded=false→true→false`、`aria-controls` が CID 由来の `forensic-timeline-<token>` で dialog の `id` と厳密一致し、`role="dialog"`（名前 `Forensic Timeline`）を満たし、Escape でトグルへフォーカスが復帰する | 実装済み。`integrity.spec.ts` の6件（R1-13 のデコード失敗、AUDIT-04 の FORENSIC_TIMELINE 順序、R2 の Audit トグル a11y と CLOSE ボタンのフォーカス復帰を追加）で検証。既存の genuine / tampered のセレクタ・文言は変更なし |
-| A11Y-01 | Upload フォームのキーボード操作と価格入力の境界（R2） | ファイル選択 `label[for="file-upload"]` が `tabindex="0"` を持ち、フォーカス＋Enter で `filechooser` が発火する。`#upload-price` は `min="1"` / `max="1000000"` を満たす | 実装済み・検証済み: `e2e/tests/upload.spec.ts` の `R2: file-upload label is keyboard operable and price input has bounds`。upload.spec.ts 定義6件 |
+| A11Y-01 | Upload フォームのキーボード操作と価格入力の境界（R2） | ファイル選択 `label[for="file-upload"]` が `tabindex="0"` を持ち、フォーカス＋Enter で `filechooser` が発火する。`#upload-price` は `min="0"` / `max="1000000"` を満たし、範囲外は送信前ゲートで拒否される | 実装済み・検証済み: `e2e/tests/upload.spec.ts` の `R2: file-upload label is keyboard operable and price input has bounds` と価格境界シナリオ。upload.spec.ts 定義6件 |
 | FAV-01 | お気に入りの追加/削除を繰り返す | 重複追加も未登録削除も200で成功し、行数は0または1のまま。削除後の再追加も可 | 実装済み（`test_favorite_add_and_remove_are_idempotent`） |
 | FAV-02 | 未認証・不正CID・非Approvedコンテンツへの操作 | それぞれ401 / 400 / 404で拒否し、お気に入りを登録しない | 実装済み（`test_favorite_requires_auth_and_valid_approved_cid`） |
 | FAV-03 | 他人のsubを本文に指定した操作 | 増減するのは操作者本人の行のみ。他人の行は変化しない | 実装済み（`test_favorite_uses_claims_sub_only`） |
@@ -119,9 +119,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
 | MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
-| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 運用者では集計が表示され、403では `運用者権限が必要です`、不正 JSON では `集計の解析に失敗しました。` が表示される | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should display moderation stats for operators and permission error on 403`。chromium で pass（投票フィードバック3件・投票一覧エラー2件・集計解析エラー1件を追加した現在は moderation.spec.ts 全14件 pass、フルスイートの定義数は当時59件のまま（現在69件）。webkit はホスト側 ICU/libxml2 欠落で未検証） |
+| MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 初期表示は `/mod/stats` を0本とし、中立文言のボタン押下時にのみ1本送信する。200 応答のみを根拠に運用者パネルをマウントし、403 では一般画面へ権限エラーを描画せず黙って閉じる。不正 JSON ではパネル内へ `集計の解析に失敗しました。` を表示し、センチネル `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` を出さない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should mount operator stats panel only on opt-in and stay silent for general users`。初期0本→オプイン200→403パネル内（否定オラクル）の3フェーズを既存1件で検証。testid: `moderation-stats-toggle` / `moderation-stats-optin`。chromium で pass（moderation.spec.ts 全14件、フルスイート定義数69件を維持。webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」） |
-| MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開は DEC-04 未決定）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
+| MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
@@ -141,14 +141,21 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
-| AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。`AGE_POLICY_CONFIGURED` 未設定時の全経路拒否は AGE-03 で検証 |
-| AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/`0` のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
+| AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。必須設定値が未充足（`configuration_satisfied() == false`）のときの全経路拒否は AGE-03 で検証 |
+| AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（`default_minimum_age=21` ・`country_minimums` 空・`target_regions` 空）のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
 | AGE-04 | 年齢基準日の TZ ローカル化 | `TZ` の `Asia/Tokyo`（UTC+9）/ `Etc/GMT±N`（POSIX 符号反転）/ 未設定・未対応名（UTC フォールバック）で「今日」が変わり、年齢境界が1日ずれる。UTC 2024-01-01T16:00Z の JST は翌日 | 実装済み。`test_today_for_policy_uses_configured_local_timezone` と `test_validate_age_at_uses_local_today_for_age_boundary` の2件。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
+| AGE-05 | 署名付き年齢属性 adapter の正常系（DEC-01 / ADR-0007） | `verify(issuer, claims, nonce, audience)` が許可リスト完全一致・発行者束縛・audience 束縛・nonce 束縛を通した場合のみ `VerifiedAge` を返す。mock 経路では自己申告の成人判定を上書きして検証済み生年月日で判定 | 実装済み。`verified_age.rs` の `verify_accepts_valid_claims` と `test_verified_age_accepts_valid_signed_attribute_in_mock_path` |
+| AGE-06 | 自己申告混入拒否 | `birth_date` / `country_code` を `verified_claims` へ混ぜた JSON は `deny_unknown_fields` で拒否。信頼属性必須モードで `verified_claims` 欠落時は自己申告が成人でも 403 | 実装済み。`self_reported_fields_cannot_be_injected_into_claims` と `test_verified_age_rejects_self_reported_fields_and_missing_claims` |
+| AGE-07 | nonce 再利用拒否 | 既存 `MOCK_NONCES.remove()` の単回消費を再利用し、2回目の提示は 400 | 実装済み。`test_verified_age_rejects_reused_nonce`、`verify_rejects_nonce_mismatch` |
+| AGE-08 | 未許可 issuer 拒否 | 許可リストに無い発行者、空リスト、発行者束縛不一致は 403 | 実装済み。`verify_rejects_untrusted_issuer`、`verify_rejects_issuer_mismatch_between_argument_and_attestation`、`test_verified_age_rejects_untrusted_issuer` |
+| AGE-09 | audience 不一致拒否 | `claims.audience` が引数 audience（OIDC client_id フォールバック）と不一致なら 403 | 実装済み。`verify_rejects_audience_mismatch`、`test_verified_age_rejects_audience_mismatch` |
+| AGE-10 | 発行者許可リスト設定（非秘密） | `AGE_TRUSTED_ISSUERS` は trim・空要素除去・完全一致。信頼属性必須モードで空なら起動拒否。既定モードは自動昇格しない | 実装済み（`common/src/age.rs`）。`from_env_with_trims_deduplicates_trusted_issuers`、`trusted_issuer_matching_is_exact`、`trusted_attribute_mode_without_trusted_issuers_fails_closed`、`self_reported_mode_does_not_require_trusted_issuers` |
+| AGE-11 | mock 無効時の verified_claims 拒否・OIDC callback の adapter 境界 | `allow_mock_auth` 無効では `verified_claims` を 403。callback は `ensure_age_policy_configured` 直後に adapter 境界を呼び、信頼属性必須モードでは fail closed（認可フローは変更しない） | 実装済み。`test_verified_age_claims_rejected_when_mock_auth_disabled`、`oidc_binding_keeps_self_reported_mode_and_fails_closed_on_trusted_mode` |
 | PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
 | AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
-| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に12テスト（既存10件＋include_reasons本番ガード2件）を追加済み。Runbookの手動確認手順も併用する |
+| AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に17テスト（既存10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み。Runbookの手動確認手順も併用する |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
 | COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
@@ -161,6 +168,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
+| ID-08 | 開発用モック経路の所有証明（PoP・opt-in、段階1-2） | `VerifyRequest.proof_of_possession` 省略時は従来どおり200。添付時は nonce に対する RSASSA-PKCS1-v1_5 + SHA-256 署名（base64 STANDARD）を `public_key_der`（SPKI）で検証し、正常署名は200、署名対象 nonce の改ざん・`pop.nonce` 不一致・別鍵署名は401。署名 decoded 512バイト超・公開鍵DER 16 KiB 超も401 | 実装済み。ハンドラ経由4件（`test_auth_verify_pop_valid_signature_is_accepted` / `test_auth_verify_pop_tampered_nonce_is_rejected` / `test_auth_verify_pop_other_key_signature_is_rejected` / `test_auth_verify_pop_is_opt_in`）を `server/src/tests.rs` に追加。純粋関数4件と mock nonce 単回消費テストは維持。E2E 定義数は69件のまま変更なし |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を全レスポンスへ付与する。HTML 配信の CSP は配信側担当。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
 | MET-02 | `observe_metrics` の最外側配置（サーバー側） | 内側で短絡する 429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 を取りこぼさず `openillustration_http_requests_total` と `openillustration_http_errors_total` へ計上する | 実装済み。`observe_metrics` を `Router` 最外側へ移動。下記4件の差分アサーションを追加（下記「observe_metrics の最外側配置の検証（MET-02）」を参照）。旧 E2E 名 MET-02 / MET-03 は下記 NEUT-URL-02 / NEUT-URL-03 へ改名済み |
@@ -187,7 +195,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 
 | テスト関数 | 入力・操作 | 期待結果（test oracle） |
 | --- | --- | --- |
-| `test_require_explicit_configuration_blocks_oidc_callback_and_refresh` | `require_explicit_configuration: true` / `operator_configured: false` で callback（任意 state）と refresh（任意 Cookie）を呼ぶ | 両方とも 403。state / Cookie の消費前に共通ゲートで拒否 |
+| `test_require_explicit_configuration_blocks_oidc_callback_and_refresh` | `require_explicit_configuration: true` / 必須設定値は既定のまま（`configuration_satisfied() == false`）で callback（任意 state）と refresh（任意 Cookie）を呼ぶ | 両方とも 403。state / Cookie の消費前に共通ゲートで拒否 |
 | `test_today_for_policy_uses_configured_local_timezone` | UTC `2024-01-01T16:00:00Z` に `None` / `UTC` / `Etc/GMT+5` / `Etc/GMT-9` / ` Asia/Tokyo ` / `Asia/Tokyo` / `America/New_York` を渡す | 最初の3件と未対応名は 2024-01-01、`Etc/GMT-9` と `Asia/Tokyo`（空白入り含む）は 2024-01-02 |
 | `test_validate_age_at_uses_local_today_for_age_boundary` | 2003-01-02 生まれ・JP・既定下限 21 歳、同じ現在時刻で TZ を変える | `Asia/Tokyo` / `Etc/GMT-9` は 21 歳で `Ok`、`UTC` は 20 歳で `Forbidden`（403） |
 
@@ -195,6 +203,33 @@ TZ の強制変更はプロセス環境を汚さないため、純粋関数 `tod
 基準時刻と TZ を明示して検証する。未知の TZ は UTC へフォールバックする分岐も含める。
 年齢数値の判定は `/auth/verify` の `validate_age` に委ね、callback / refresh では設定エラーのみを
 403 へ変換する。これらはサーバー側テストであり、E2E 定義数は当時59件のまま変わらず（現在69件）。
+
+充足判定は `AgePolicy::configuration_satisfied()` が実効値から導出する
+（`default_minimum_age != 21` / `country_minimums` 非空 / `target_regions` 非空のいずれか）。
+旧手動フラグ `AGE_POLICY_CONFIGURED` の env 読取は廃止し、`GET /policy/age` と起動ログの公開値は
+`configuration_satisfied`（計算結果）へ置換した。`doctor` の `age_policy` カテゴリは
+`require_explicit_configuration` 有効かつ未充足のときに固定文言で警告する（値はエコーしない）。
+
+### 署名付き年齢属性 adapter の検証（AGE-05〜11）
+
+R1 分析と ADR-0007 に基づき、`server/src/verified_age.rs` の adapter 境界と
+`auth_verify` の mock 分岐を検証する。実証明書は未接続のため、すべて
+`allow_mock_auth=1` の開発用経路での検証である。
+
+| テスト関数 | 入力・操作 | 期待結果（test oracle） |
+| --- | --- | --- |
+| `verify_accepts_valid_claims` | 許可済み `jpki-test`・audience `test-client`・`fixture-nonce-0001` | `VerifiedAge` を返し、issuer / signed_subject / birthdate / country がクレームどおり |
+| `self_reported_fields_cannot_be_injected_into_claims` | `verified_claims` に `birth_date` / `country_code`、attestation に `birth_date` を混入 | ともにデシリアライズ失敗（`deny_unknown_fields`） |
+| `verify_rejects_untrusted_issuer` | 未許可 issuer、空許可リスト | 403 |
+| `verify_rejects_audience_mismatch` | 引数 audience と `claims.audience` が不一致 | 403 |
+| `verify_rejects_nonce_mismatch` | 引数 nonce と attestation の nonce が不一致 | 403 |
+| `test_verified_age_accepts_valid_signed_attribute_in_mock_path` | 信頼属性必須モード・自己申告は未成年（2010年生）・検証済みは 2000年生 | 200。自己申告値が信頼属性として使われない |
+| `test_verified_age_rejects_reused_nonce` | 同一 nonce で `/auth/verify` を2回 | 1回目 200、2回目 400（`MOCK_NONCES.remove()` で消費済み） |
+| `test_verified_age_rejects_untrusted_issuer` / `test_verified_age_rejects_audience_mismatch` | 信頼属性必須モード・mock 経路で不正な issuer / audience | 403 |
+| `test_verified_age_claims_rejected_when_mock_auth_disabled` | `allow_mock_auth=false` で `verified_claims` を提示 | 403 |
+| `test_verified_age_default_mode_keeps_self_reported` | 既定ポリシーで自己申告のみ | 200（R1 item9: 自動昇格しない） |
+
+E2E 定義は追加していない（現在69件を維持）。
 
 ### エクスポートの読み取りトランザクション検証（EXPORT-09/10）
 
@@ -268,8 +303,9 @@ Reported 限定・新着順・運用者非限定）である。設計技法は�
 `123` → 保持。`>=4` を `>=5` にする mutation を弾く）である。いずれも `common` に実装済み。
 
 DB 全文（`reports.reason`）と監査エクスポートの本文は変更しない。エクスポートの
-マスクは EXPORT-04 の既存挙動を維持する。本テストは第三者公開（DEC-04 未決定）を
-証明するものではない。
+マスクは EXPORT-04 の既存挙動を維持する。本テストは第三者公開範囲
+（[ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み、段階2の
+公開ルートは未実装）を証明するものではない。
 
 ### 設定診断（`doctor`）の検証
 
@@ -455,13 +491,19 @@ CLI-01〜03 に加え、`server/src/bin/` 配下の全 bin について実装済
 
 | bin | テスト数 | 主な検証内容 |
 | --- | --- | --- |
-| `backup_db` | 12件 | `VACUUM INTO` の一貫スナップショット、上書き拒否、生存ロックの fail-closed |
+| `backup_db` | 17件 | `VACUUM INTO` の一貫スナップショット、上書き拒否、生存ロックの fail-closed、DB 接続先必須化 |
 | `doctor` | 53件 | 23カテゴリの設定診断、`--strict` 判定、秘密値非出力 |
 | `restore_db` | 20件 | 引数検証、サイドカー拒否、生存ロック両側検査、復元前検証とロールバック安全コピー |
-| `sign_audit_export` | 12件 | 署名鍵権限、親ディレクトリ権限、`DATABASE_TOKEN` 限定、出力上書き拒否、include_reasons 本番ガード |
+| `sign_audit_export` | 17件 | 署名鍵権限、親ディレクトリ権限、`DATABASE_TOKEN` 限定、出力上書き拒否、include_reasons 本番ガード、DB 接続先必須化 |
 | `verify_audit_export` | 20件 | v3 スナップショット検証、`--expect-root` 照合、改ざん拒否 |
-| `verify_audit_log` | 9件 | `expect-root` 照合、v1/v2 連鎖検証、root 不一致拒否 |
+| `verify_audit_log` | 14件 | `expect-root` 照合、v1/v2 連鎖検証、root 不一致拒否、DB 接続先必須化 |
 | `verify_backup` | 19件 | `--database-token` 拒否、サイドカー fail-closed、構造検証 |
+
+DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙の `file:local.db` 既定を撤廃した。
+`resolve_database_url(cli, env)` が `--database-url` と `DATABASE_URL` を解決し、
+両方が未設定または空・空白のみなら固定文言で起動を拒否する（値はエコーしない）。
+各 CLI へ追加した5テスト（計15件）が、両方未設定の拒否、CLI 優先、環境変数のみの受理、
+空/空白拒否、非エコーを検証する。
 
 ### レート制限キーの検証（NET-03）
 
@@ -585,6 +627,26 @@ CLI-01〜03 に加え、`server/src/bin/` 配下の全 bin について実装済
 正常系の対照として `mock_token_requires_allow_flag` / `mock_token_with_key_succeeds` /
 `accepts_ca_signed_rsa_2048_certificate`（CA 署名の RSA 2048bit リーフを受理）も維持する。
 実JPKI実機・失効確認は未検証。
+
+### モック経路の所有証明の検証（ID-08）
+
+`auth_verify` の開発用モック分岐に限り、`VerifyRequest.proof_of_possession`（省略可）
+をハンドラ経由で検証する。署名は base64(STANDARD)、公開鍵は `public_key_der`（SPKI DER）
+をそのまま流用し、証明書パースは通さない。検証対象は `/auth/login` が発行し
+5分間単回消費で保持する nonce である。署名デコード後512バイトと公開鍵DER16 KiB の
+上限超過はデコード前後の二段で拒否する（DoS 対策）。`ProofOfPossession` は
+`Deserialize` のみを derive するため、リクエスト側のフィールドは
+`skip_serializing` とし、ハンドラ tests では JSON を明示的に組み立てて送る。
+
+| テスト（`server/src/tests.rs`） | 入力 | 期待結果 |
+| --- | --- | --- |
+| `test_auth_verify_pop_valid_signature_is_accepted` | 発行 nonce を CA 署名 RSA 2048 鍵で署名し、base64 化して添付 | 200 |
+| `test_auth_verify_pop_tampered_nonce_is_rejected` | 署名対象を別文字列に差し替え／`pop.nonce` を差し替え | 401 |
+| `test_auth_verify_pop_other_key_signature_is_rejected` | 別の秘密鍵で発行 nonce に署名 | 401 |
+| `test_auth_verify_pop_is_opt_in` | PoP を省略（公開鍵も None） | 200（従来どおり受理） |
+
+実証明書経路の `verify_presentation` と PoP 必須化（段階4）は本段階の対象外で、
+E2E 定義数は69件のまま変更しない。
 
 ### ログアウト削除 Cookie の検証（ID-03）
 
@@ -715,6 +777,7 @@ LIMIT 追加の影響を受けず、署名付きエクスポートの改ざん�
 ```bash
 cargo test --workspace
 cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（9件）
+cargo test -p server auth_verify_pop   # ID-08 PoP opt-in ハンドラ回帰（4件）
 cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
 cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
 cargo test -p server metrics_count   # MET-02 最外側メトリクス4件（429 / IPv4 403 / 413 / OPTIONS）
@@ -860,26 +923,35 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 ### E2E 透明性ダッシュボードシナリオ（R5-09）
 
 `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` に含まれる
-`R5-09: should display moderation stats for operators and permission error on 403` が、
-モック認証（`ALLOW_MOCK_AUTH=1`）で `GET /mod/stats` の応答を差し替えて次を確認する。
+`R5-09: should mount operator stats panel only on opt-in and stay silent for general users` が、
+モック認証（`ALLOW_MOCK_AUTH=1`）で `GET /mod/stats` の応答を差し替えて3フェーズを確認する。
+既存の1 test() 内で完結させ、moderation.spec.ts 14件・フルスイート69件は変更しない。
 
-1. 運用者としてログインし、MODERATION 画面を開く。`TRANSPARENCY DASHBOARD`
-   （`data-testid="moderation-stats-section"`）と `GENERATED_AT: <generated_at>` が表示され、
-   `data-testid="moderation-stats-totals"` に Reports / Concluded / Approved / Rejected /
-   Quorum Not Met / Bans / Unbans / Unpins、`data-testid="moderation-stats-monthly"` に
-   Month / Reports / Concluded / Approved / Rejected / Bans / Unbans / Unpins の列が並ぶことを確認する。
-2. 同じ画面で `/mod/stats` の応答を403に差し替えると、`role="alert"` と
-   `data-testid="moderation-stats-error"` に `運用者権限が必要です` が表示されることを確認する。
-3. 動的文字列（`generated_at` / `month` / 数値）は既存の `escape_html_text` を通して描画される。
+1. **初期表示（一般画面）**: MODERATION 画面を開いても `/mod/stats` は0本である。
+   `data-testid="moderation-stats-toggle"`（中立文言 `SHOW STATS`）は表示されるが、
+   `data-testid="moderation-stats-section"` / `moderation-stats-error` は0件で、
+   `TRANSPARENCY DASHBOARD` と固定文言 `運用者権限が必要です` は `body` に現れない。
+2. **オプイン200（運用者パネル）**: トグル押下で1本だけ送信し、200 応答を根拠に
+   `TRANSPARENCY DASHBOARD`（`data-testid="moderation-stats-section"`）と
+   `GENERATED_AT: <generated_at>` をマウントする。`data-testid="moderation-stats-totals"` に
+   Reports / Concluded / Approved / Rejected / Quorum Not Met / Bans / Unbans / Unpins、
+   `data-testid="moderation-stats-monthly"` に Month / Reports / Concluded / Approved /
+   Rejected / Bans / Unbans / Unpins の列が並ぶことを確認する。
+3. **403（パネル内）**: 応答を403へ切り替えて再度トグルを押すと、パネルを黙って閉じ、
+   `moderation-stats-section` / `moderation-stats-error` は0件、固定文言も `body` に現れない。
+   さらに画面遷移で再マウントしても初期表示は0本のままである。
+   固定文言 `運用者権限が必要です` は一般画面への否定オラクルとして検証を維持する。
+4. 動的文字列（`generated_at` / `month` / 数値）は既存の `escape_html_text` を通して描画される。
    レスポンスに CID / reason / `user_hash` は無いため表示されず、サーバー側の
    `test_mod_stats_response_contains_no_sensitive_fields` と合わせて個人情報非含有を担保する。
-   本シナリオは認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
-4. `/mod/stats` へのリクエストは初期表示と画面遷移後のちょうど2回で、いずれも
-   メソッド `GET`、パス `/mod/stats`、`Authorization: Bearer mock_jwt_token` であることを
-   配列の完全一致で検証する（回数は `statsRequestCount === 2` も確認）。余計な再フェッチや
+   本シナリオは認証内集計の表示確認であり、第三者公開（ADR-0008 の範囲。
+   段階2の公開ルートは未実装）を証明するものではない。
+5. `/mod/stats` へのリクエストはトグル押下ごとに1本で、いずれもメソッド `GET`、パス
+   `/mod/stats`、`Authorization: Bearer mock_jwt_token` であることを配列の完全一致で検証する
+   （初期表示と再マウント後は0本、200→403の2押下で合計2本）。余計な再フェッチや
    未認証リクエストを検出する。
-5. `R5-09 (parse error)`: `/mod/stats` の `totals` に文字列を入れた不正 JSON を返すと、
-   `data-testid="moderation-stats-error"`（`role="alert"`）に固定文言
+6. `R5-09 (parse error)`: トグル押下後に `/mod/stats` の `totals` へ文字列を入れた不正 JSON
+   を返すと、`data-testid="moderation-stats-error"`（`role="alert"`）に固定文言
    `集計の解析に失敗しました。` が表示され、集計カード（`moderation-stats`）は出ない。
    注入したセンチネル `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` はページ全体で非表示で、
    serde の生エラー（フィールド名・型情報・解析位置）も出ないことを確認する。
@@ -947,7 +1019,8 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    URL `https://phish.example.com/login` の3値について、`Reason:` 行と `body` の両方で
    `not.toContainText` を検証する。サーバー本文・生の PII は画面へ出さない。
 4. 本シナリオは定義14件の moderation.spec.ts に含まれ、chromium で pass を確認済み。
-   認証内集計の表示確認であり、第三者公開（DEC-04 未決定）を証明するものではない。
+   認証内集計の表示確認であり、第三者公開（ADR-0008 の範囲。
+   段階2の公開ルートは未実装）を証明するものではない。
 
 ### 二重送信ガードの E2E（REPORT-GUARD-01 / VOTE-GUARD-01）
 
@@ -1088,19 +1161,18 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
 5. `R2: file-upload label is keyboard operable and price input has bounds`:
    `label[for="file-upload"]` が表示され、`tabindex="0"` を持つことを確認する。
    ラベルへフォーカスして Enter を押すと `filechooser` イベントが発火する。
-   価格入力 `#upload-price` は `min="1"` と `max="1000000"` の属性を持ち、
-   1〜1000000 の範囲が入力可能であることを検証する。
+   価格入力 `#upload-price` は `min="0"` と `max="1000000"` の属性を持ち、
+   0〜1000000 の範囲が入力可能であることを検証する（0 は購入不可を表す）。
 
-6. `R2 (price boundary): 境界値をモック応答で送信し、丸めずに送って上限超過のみ拒否される`:
-   UI から min/max 属性で丸めずに送信した値を、`e2e/tests/upload.spec.ts` の
-   `page.route('**/content/upload', ...)` が返すモック（`route.fulfill`）で受け取る。
-   実サーバーへの送信ではないため、このシナリオは実 API の検証を証明しない。
-   `#upload-price` へ 0 / 1000001 / 1000000 を順に入力して送信し、multipart の
-   `price` フィールドが `['0', '1000001', '1000000']` であることを確認する。
-   モックは実サーバーと同じ境界（<0 と >1000000 のみ拒否）を模し、0 と 1000000 は 200、
-   1000001 のみ 400 を返す。クライアントは 400 に対して固定文言
-   `Failed to upload content (HTTP 400).` を表示し、生エラー本文 `price must not exceed` は
-   画面へ出さない。
+6. `R2 (price boundary): 送信前ゲートで範囲外を拒否し、0/1000000 を丸めずに送信する`:
+   `#upload-price` へ -1 / 1000001 / 0 / 1000000 の順に入力して送信する。
+   -1 と 1000001 はクライアントの送信前ゲート（`sign_and_upload` の
+   `price_range_error`）で拒否され、固定文言 `Price must be between 0 and 1000000 JPY.` が
+   表示される。`page.route('**/content/upload', ...)` の呼び出し回数は0回で、
+   HTTP エラー文言や生エラー本文は表示されない。0（購入不可）と 1000000 は送信され、
+   multipart の `price` フィールドは `['0', '1000000']` であることを確認する
+   （`price_from_number` は丸めない）。モック応答はサーバー契約 0..=1_000_000 と同じ
+   境界を模すが、実サーバーへは送信しないため実 API の検証を証明しない。
 
 失敗時は生のエラー値・内部情報を画面へ出さず、固定文言のみを表示する。クライアント
 （`client/src/lib.rs`）は準備・通信・応答読取の各段を `Result` で伝播させ、
@@ -1231,7 +1303,7 @@ E2E の `test()` 名も NEUT-URL-02 / NEUT-URL-03 へ改名済みで、仕様 ID
 ### 監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）
 
 `server/src/bin/sign_audit_export.rs` の硬化項目に対するテスト設計。実装は完了しており、
-同ファイル内に鍵権限・トークン・上書き拒否の10テストと include_reasons 本番ガード2件の計12テスト（内訳: 鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件）を追加済み。下表はその契約の一覧であり、
+同ファイル内に鍵権限・トークン・上書き拒否の10テストと include_reasons 本番ガード2件、DB 接続先必須化5件の計17テスト（内訳: 鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み。下表はその契約の一覧であり、
 Runbookの手動確認手順を継続して併用する。同じトークン契約は `verify_backup` にも適用される
 （CLI-03 を参照）。
 

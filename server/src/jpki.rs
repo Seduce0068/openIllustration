@@ -131,10 +131,11 @@ struct PresentationEnvelope {
 ///
 /// 外部仕様（OID4VP の証明形式・nonce 発行契約）が確定する前の先行定義であり、
 /// 既存の `PresentationEnvelope` は一切変更しない（後方互換）。
-/// 現時点ではどの認証ハンドラもこの型をデコードしない（未結線）。
+/// 結線は開発用モック経路の `auth_verify` のみ。実証明書経路
+/// (`verify_presentation`) は従来どおりこの型をデコードしない。
 ///
 /// `deny_unknown_fields` により、仕様外のキーを含む JSON は受け付けない。
-#[allow(dead_code)] // 外部仕様確定後の結線まで本番コードから参照されない（未結線）。
+#[allow(dead_code)] // 参照はモック経路のみ（実証明書経路は adapter 境界で未結線）。
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProofOfPossession {
@@ -149,12 +150,13 @@ pub struct ProofOfPossession {
 /// 公開鍵 DER（SPKI）・nonce・署名だけを入力とし、RSASSA-PKCS1-v1_5 + SHA-256
 /// による検証の成否のみを返す。セッション／トークン等の認証状態は一切変更しない。
 ///
-/// 未結線: いかなる既存ハンドラ（`verify_presentation` / `auth_verify` /
-/// `VerifyRequest`）もこの関数を呼ばない。外部仕様の確定後に結線する。
+/// 結線状況: `auth_verify` の開発用モック分岐からのみ呼ぶ（opt-in の PoP）。
+/// 実証明書経路の `verify_presentation` は従来どおり呼ばない。
+/// 信頼アンカーが未配布のため、実証明書の所有証明は adapter 境界の未決事項。
 ///
 /// # Errors
 /// 公開鍵 DER のデコード失敗、または署名が無効な場合は `AppError::Unauthorized`。
-#[allow(dead_code)] // 外部仕様確定後の結線まで本番コードから呼ばれない（未結線）。
+#[allow(dead_code)] // 呼び出しはモック経路のみ（実証明書経路は未結線）。
 pub fn verify_proof_of_possession(
     public_key_der: &[u8],
     nonce: &str,

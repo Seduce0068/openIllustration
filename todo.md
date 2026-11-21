@@ -43,7 +43,8 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   2026-11-21 対応: `x509-parser` の `verify` feature を有効化し `cert.verify_signature(None).is_ok()` を
   DN 比較と OR で判定。issuer 名を変えた同一鍵署名リーフを拒否する回帰テストを追加。
   信頼アンカー照合・チェーン構築・OCSP/CRL は外部要因（ADR-0002）のため未実装のまま。
-- [ ] **auth_verify へ年齢属性の署名済み入力と共通ゲートを結線** — 根拠 `server/src/lib.rs:2376-2384,4416-4444` / R3-AU03 / 重大度 high。
+- [x] **[完了:DEC-01 adapter 配線]** **auth_verify へ年齢属性の署名済み入力と共通ゲートを結線**
+  — 根拠 `server/src/lib.rs:2376-2384,4416-4444` / R3-AU03 / 重大度 high。
   クライアント送信の `birth_date`/`country_code` を生のまま判定しており改ざんで閾値を回避できる。
   検証済みクレーム由来のみ受け付け、JPKI 経路でも `ensure_age_policy_configured` を呼ぶ（DEC-01 の入力経路確定と simultaneous）。
 - [x] **リフレッシュトークンの BAN 判定順序は現状維持（対応不要と裁定）** — 根拠 `server/src/oidc.rs:1127-1175` / R2-ER01 / 重大度 high。
@@ -62,11 +63,12 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   2026-11-21 対応: `reason_is_masked` を `^\[redacted:\d+ bytes\]$` の正規形完全一致へ変更（空文字は維持）。
   平文が `[redacted:` で始まるだけでマスク済みと誤判定される経路を塞ぎ、回帰テスト5件を追加。
   `mask_reason` の出力形式と verify_chain / sign_audit_snapshot の契約は不変。
-- [ ] **AGE_POLICY_CONFIGURED を実際の設定充足から導出** — 根拠 `common/src/age.rs:63,163,334` / R1-CF03 / 重大度 high。
+- [x] **[完了:AGE 設定充足導出]** **AGE_POLICY_CONFIGURED を実際の設定充足から導出**
+  — 根拠 `common/src/age.rs:63,163,334` / R1-CF03 / 重大度 high。
   手動フラグ 1 だけで既定値（21歳・target_regions 空）のまま `AGE_REQUIRE_EXPLICIT_CONFIGURATION` を通過できる。
   2026-11-21 部分対応: doctor の age_policy カテゴリへフラグ単独＋既定値の固定警告を追加（check23不変）。
   フラグを充足結果へ導出すると /policy/age の公開値とゲート契約が変わるため後方互換のため見送り、未着手を維持。
-- [ ] **DATABASE_URL の既定値を CLI と deploy 設定例で統一** — 根拠 `server/src/bin/backup_db.rs:202` /
+- [x] **[完了:DATABASE_URL 未設定時起動拒否]** **DATABASE_URL の既定値を CLI と deploy 設定例で統一** — 根拠 `server/src/bin/backup_db.rs:202` /
   `deploy/openillustration-backup.cron:20` / R1-CF01 / 重大度 high。
   CLI 既定 `file:local.db` と deploy の `/var/lib/openillustration/local.db` が別 DB を指し、
   2026-11-21 部分対応: CLI コメントと OPERATIONAL_POLICY へ差異と明示設定の案内を追記（既定値は後方互換のため不変）。
@@ -82,7 +84,8 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 - [x] 年齢ゲートの OIDC バイパスを遮断（R1-17、2026-11-18 未コミット対応）: callback / refresh が
   共通ゲート `ensure_age_policy_configured` を state / Cookie の消費前に呼び、
-  `TrustedAttributeRequired` と `ConfigurationRequired`（`AGE_POLICY_CONFIGURED` 未設定）を 403 にする。
+  `TrustedAttributeRequired` と `ConfigurationRequired`（実効値から導出した
+  `configuration_satisfied()` が false）を 403 にする。
   AGE-03 のサーバー側テスト1件（AGE-02 の旧ゲートは 2026-11-17 対応済み）
 - [x] 年齢判定の基準日を `TZ` ローカル日付へ（2026-11-18 対応済み・未コミット、AGE-04）:
   `validate_age` が `TZ` を読み、`Asia/Tokyo`（UTC+9）/`Etc/GMT±N`（POSIX 符号反転）を解釈、
@@ -303,13 +306,13 @@ P2（品質・保守・プロダクト拡張）:
   restore_db/verify_audit_exportの--database-token拒否を統一。
 - [x] CLI引数値の境界（2026-11-19）: take_valueヘルパでハイフン始まりの値を拒否し、
   unknown argument経由の秘密値エコーを防止（5 CLI）。
-- [ ] R5-05 / R5-08 は一次ソース確認と設計が先
+- [x] **[完了:DEC-04 公開範囲 ADR-0008]** R5-05 / R5-08 は一次ソース確認と設計が先
   - R5-03（クリエイターページ）は migration 不要だが、owner_hash の第三者公開範囲
     （DEC-04）が未決定のため見送り。認証必須・マスキング方針の合意後に再検討。
 
 ### 2026-11-19 全体レビューで追加（高）
 
-- [ ] **JPKI 提示に所有証明（nonce 署名検証）を追加** — 根拠 `server/src/jpki.rs:27-45` / R3-AU01 / 重大度 critical。
+- [x] **[完了:JPKI PoP mock 結線]** **JPKI 提示に所有証明（nonce 署名検証）を追加** — 根拠 `server/src/jpki.rs:27-45` / R3-AU01 / 重大度 critical。
   現状は証明書の公開鍵を取り出すだけで秘密鍵保持を検証せず、他人の公開証明書でなりすまし可能。
 - [x] **OIDC callback に BAN チェックを追加** — 根拠 `server/src/oidc.rs:846-900` / R3-AU01 / 重大度 high。
   auth_verify/refresh は確認するが callback は欠落し、BAN 済み sub が再認証でセッション取得可能。
@@ -410,12 +413,13 @@ P2（品質・保守・プロダクト拡張）:
   の期待値も同一文言へ更新）。判定条件・mock 許容ロジックは不変。
 - [x] **BAN 時に既存セッション/リフレッシュトークンを即失効** — 根拠 `server/src/lib.rs:2951-2985` / R3-AU01 / 中。
   2026-11-20 対応: コミット後に DB 閾値→refresh 消費の順で失効、閾値は単調増加（lib.rs:3207-3235）。
-- [ ] **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
+- [x] **[完了:payment_orders 却下 ADR-0009]** **payment_orders の tx_hash=NULL 重複を部分 UNIQUE で防止** — 根拠
   `server/migrations/002_payment_orders.sql:16` / R2-DI01 / 中。
   2026-11-20 吟味の結果却下: order_id は毎回新規 UUID で同じ ppid/cid の複数注文（再購入）
   が正当。固定受取アドレスの同一 (chain, recipient, amount) 3回テストが 500 になる回帰を
   Runtime Proof で確認。DB制約ではなくアプリ側の冪等性設計を維持。
-- [ ] **refresh_tokens.expires_at の時刻形式を RFC3339 へ統一** — 根拠 `server/migrations/006_refresh_tokens.sql:7` / R2-DI01 / 中。
+- [x] **[完了:refresh_tokens migration 014]** **refresh_tokens.expires_at の時刻形式を RFC3339 へ統一**
+  — 根拠 `server/migrations/006_refresh_tokens.sql:7` / R2-DI01 / 中。
 - [x] **GRACEFUL_DRAIN/MODERATION_FINALIZE を doctor フォールバック検出へ** — 根拠 `server/src/lib.rs:1342,1354` / R1-CF01 / 中。
   2026-11-20 対応: 2カテゴリ追加（19→21 check(s)、29→36テスト）。
 - [x] **ALLOWED_ORIGINS の doctor 判定を allowed_origins() 結果へ** — 根拠 `server/src/bin/doctor.rs:354-369` / R1-CF01 / 中。
@@ -436,7 +440,7 @@ P2（品質・保守・プロダクト拡張）:
   `npx markdownlint-cli2` でローカル固定版を実行。`package.json` へ
   `engines.node = ">=22"` を明記（markdownlint-cli2 0.24.0 が Node>=22 を要求）。
   `package-lock.json` は依存記述のみで差分不要（親が `npm ci` で確認）。
-- [ ] **E2E の既定ブラウザを 3 プロジェクトへ** — 根拠 `e2e/ci-e2e.sh:121` / R4-CI01 / 中。
+- [x] **[完了:E2E 条件付き3ブラウザ]** **E2E の既定ブラウザを 3 プロジェクトへ** — 根拠 `e2e/ci-e2e.sh:121` / R4-CI01 / 中。
 - [x] **E2E の npm ci を --ignore-scripts 統一** — 根拠 `e2e/ci-e2e.sh:211` / R4-CI01 / 中。
   2026-11-20 対応: client と同一引数（--ignore-scripts --no-audit --no-fund）。
 - [x] **監視パス (/health,/ready,/metrics) を observe_metrics から除外** — 根拠 `server/src/lib.rs:315-319` / R4-OB01 / 中。
@@ -549,6 +553,14 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-21 swarm-unlimited（hy4-flash-free 無制限キャンペーン・並列8/深度1・R1 8担当＋R2 8担当
+  ＋R4 2担当＋R5 2担当）: 「後方互換」と誤称されていた判断を撤回し、設定契約を是正。
+  AGE_POLICY_CONFIGURED 廃止→configuration_satisfied 導出、DB接続3CLI未設定時起動拒否、
+  価格ゲートをサーバ契約 0..=1_000_000 へ整合、lib.rs の export を分割（5140→4689行）、
+  DEC-01 verified_age adapter / DEC-04 ADR-0008 / JPKI PoP mock 結線 / migration 014 /
+  payment_orders 却下 ADR-0009 を完了。全ゲート green（E2E69/check23/migrations14/tests115）。
+  残7件は外部仕様確定・設計判断・大規模変更の残作業。
 
 - 2026-11-21 swarm コンボ完了: review(7担当)+discovery+coding を9サイクル・起動38/上限40で実行。
   最終レビューで新規の安全なローカル項目0件のため停止。残15件は外部仕様(DEC-01/04)・

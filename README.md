@@ -91,6 +91,9 @@ cd e2e && npm test
 サーバー起動前に `doctor --strict` で設定を診断し、バックアップ取得・検証・リストア・
 監査エクスポートの各CLIを Runbook の手順で実行します。トークン値や署名鍵の内容は
 argv に渡さず、`DATABASE_TOKEN` 環境変数または権限を制限したファイルで渡します。
+DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は
+`DATABASE_URL` の暗黙既定値（`file:local.db`）を使わず、`--database-url` または
+`DATABASE_URL` の明示設定が必須です（未設定・空・空白のみなら起動拒否、値はエコーしません）。
 
 ```bash
 # Kubuntu / リポジトリルート
@@ -122,7 +125,10 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/local
   （`settings_always_public=true`）。
 - 既定は保守的一律ベースライン `AGE_DEFAULT_MINIMUM=21`（法的事実/適合の確定主張ではない）。
   `AGE_COUNTRY_OVERRIDES`・`AGE_TARGET_REGIONS`・`AGE_ENFORCEMENT_MODE`・
-  `AGE_REQUIRE_EXPLICIT_CONFIGURATION`・`AGE_POLICY_CONFIGURED` で運用者が構成可能。
+  `AGE_REQUIRE_EXPLICIT_CONFIGURATION` で運用者が構成可能。旧手動フラグ
+  `AGE_POLICY_CONFIGURED` は読取を廃止し、`configuration_satisfied()` が
+  `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の
+  実効値から充足を導出する。
 - `trusted_attribute_required` は検証済み属性入力経路が未実装のため現時点でフェイルクローズ。
   現行入力は自己申告であり、本人確認済み属性ではない。詳細と制約は
   [docs/AGE_VALIDATION_POLICY.md](docs/AGE_VALIDATION_POLICY.md) を参照。
