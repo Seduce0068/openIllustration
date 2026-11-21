@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow};
 use common::{
     AuditSnapshotEntry, GovernanceAuditEntry, SignedAuditSnapshot, compute_audit_chain_digest,
+    env::{BoolEnvState, EnvValue, bool_env_state, read_env},
     mask_reason, sign_audit_snapshot,
 };
 use libsql::Builder;
@@ -85,14 +86,32 @@ fn parse_args() -> anyhow::Result<Args> {
 const DATABASE_URL_REQUIRED: &str =
     "DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used";
 
+/// DATABASE_TOKEN が非 UTF-8 の場合の固定文言。トークン値を一切エコーしない。
+const DATABASE_TOKEN_INVALID: &str = "DATABASE_TOKEN must be a valid UTF-8 string";
+
 /// DB 接続先を解決する純粋関数。CLI 引数を環境変数より優先し、空・空白のみは
-/// 未設定として扱う。両方が未設定なら固定文言で拒否し、暗黙既定値は使わない。
-fn resolve_database_url(cli: Option<String>, env: Option<String>) -> anyhow::Result<String> {
+/// 未設定として扱う。非 UTF-8 の環境変数は不正として固定文言で拒否する。
+/// 両方が未設定なら固定文言で拒否し、暗黙既定値は使わない。
+fn resolve_database_url(cli: Option<String>, env: EnvValue) -> anyhow::Result<String> {
     let cli = cli.filter(|value| !value.trim().is_empty());
-    let env = env.filter(|value| !value.trim().is_empty());
+    let env = match env {
+        EnvValue::Utf8(value) if !value.trim().is_empty() => Some(value),
+        EnvValue::Utf8(_) | EnvValue::Missing => None,
+        EnvValue::NonUtf8 => return Err(anyhow!(DATABASE_URL_REQUIRED)),
+    };
     cli.map(|value| value.trim().to_string())
         .or_else(|| env.map(|value| value.trim().to_string()))
         .ok_or_else(|| anyhow!(DATABASE_URL_REQUIRED))
+}
+
+/// `read_env` の結果から DB トークンを取り出す純粋版。
+/// 未設定は空文字、非 UTF-8 は不正として固定文言で拒否し、生バイトを保持しない。
+fn database_token_from_env_value(value: EnvValue) -> anyhow::Result<String> {
+    match value {
+        EnvValue::Utf8(token) => Ok(token),
+        EnvValue::Missing => Ok(String::new()),
+        EnvValue::NonUtf8 => Err(anyhow!(DATABASE_TOKEN_INVALID)),
+    }
 }
 
 /// 署名鍵の権限を検査する。PEM が 0644 等で露出していないことを保証する。
@@ -168,13 +187,19 @@ fn ensure_include_reasons_allowed(
     ))
 }
 
-/// 真偽値フラグを共通 `parse_bool_env` で読む。
-/// 未設定は `false`、不正値は入力値をエコーせず起動拒否（fail-closed）する。
+/// 真偽値フラグを共通 `read_env` / `bool_env_state` で読む。
+/// 未設定は `false`、非 UTF-8 と不正値は入力値をエコーせず起動拒否（fail-closed）する。
 fn bool_flag_from_env(name: &str) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) => common::age::parse_bool_env(&value)
-            .ok_or_else(|| anyhow!("{name} must be one of 1/true/0/false")),
-        Err(_) => Ok(false),
+    bool_flag_from_env_value(name, read_env(name))
+}
+
+/// `read_env` の結果を真偽値へ変換する純粋版（非 UTF-8 注入の検証にも使う）。
+/// 受理値 1/true/0/false と trim・小文字化は `bool_env_state` 経由で不変。
+fn bool_flag_from_env_value(name: &str, value: EnvValue) -> anyhow::Result<bool> {
+    match bool_env_state(value) {
+        BoolEnvState::Unset => Ok(false),
+        BoolEnvState::Valid(flag) => Ok(flag),
+        BoolEnvState::Invalid => Err(anyhow!("{name} must be one of 1/true/0/false")),
     }
 }
 
@@ -199,9 +224,9 @@ async fn main() -> anyhow::Result<()> {
         std::fs::read_to_string(&signing_key_path).context("failed to read signing key")?;
 
     // 暗黙の file:local.db 既定は撤廃。明示設定がなければ起動しない。
-    let database_url = resolve_database_url(args.database_url, std::env::var("DATABASE_URL").ok())?;
+    let database_url = resolve_database_url(args.database_url, read_env("DATABASE_URL"))?;
     // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
-    let database_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
+    let database_token = database_token_from_env_value(read_env("DATABASE_TOKEN"))?;
 
     let db = if database_url.starts_with("file:") || !database_url.contains("://") {
         let path = database_url.strip_prefix("file:").unwrap_or(&database_url);
@@ -297,10 +322,15 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DATABASE_URL_REQUIRED, check_signing_key_permissions, create_snapshot_output,
+        DATABASE_TOKEN_INVALID, DATABASE_URL_REQUIRED, bool_flag_from_env_value,
+        check_signing_key_permissions, create_snapshot_output, database_token_from_env_value,
         ensure_include_reasons_allowed, parse_args_from, resolve_database_url,
     };
+    use common::env::{EnvValue, classify};
+    use std::ffi::OsString;
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -344,6 +374,14 @@ mod tests {
 
     fn path_str(path: &Path) -> String {
         path.to_string_lossy().into_owned()
+    }
+
+    /// 非 UTF-8 の生バイトを含む OsString を共通分類器へ注入し、
+    /// 生バイトを保持しない `EnvValue::NonUtf8` を作る（非エコー契約の検証用）。
+    fn non_utf8_env_value() -> EnvValue {
+        classify(Err(std::env::VarError::NotUnicode(OsString::from_vec(
+            vec![0xff],
+        ))))
     }
 
     #[cfg(unix)]
@@ -508,6 +546,17 @@ mod tests {
         // 明示オプトインがあれば本番でも許可（break-glass）。
         ensure_include_reasons_allowed(true, false, true)
             .expect("explicit opt-in must allow --include-reasons in production");
+
+        // 非 UTF-8 は「未設定」ではなく Invalid として両フラグとも起動拒否する。
+        // 注入した生バイト (0xff) は固定文言へ一切エコーされない。
+        for name in ["AUDIT_EXPORT_INCLUDE_REASONS", "ALLOW_MOCK_AUTH"] {
+            let error = bool_flag_from_env_value(name, non_utf8_env_value())
+                .expect_err("non-UTF-8 boolean flag must be rejected")
+                .to_string();
+            assert!(error.contains(name), "{error}");
+            assert!(error.contains("must be one of 1/true/0/false"), "{error}");
+            assert!(!error.as_bytes().contains(&0xff), "{error:?}");
+        }
     }
 
     #[test]
@@ -547,8 +596,8 @@ mod tests {
 
     #[test]
     fn database_url_is_required_when_no_source_is_set() {
-        let error =
-            resolve_database_url(None, None).expect_err("no implicit database URL may be used");
+        let error = resolve_database_url(None, EnvValue::Missing)
+            .expect_err("no implicit database URL may be used");
         assert_eq!(error.to_string(), DATABASE_URL_REQUIRED);
     }
 
@@ -556,7 +605,7 @@ mod tests {
     fn database_url_from_cli_takes_priority_over_environment() {
         let url = resolve_database_url(
             Some("libsql://cli.example.invalid/app.db".to_string()),
-            Some("libsql://env.example.invalid/app.db".to_string()),
+            EnvValue::Utf8("libsql://env.example.invalid/app.db".to_string()),
         )
         .expect("CLI value must take priority over the environment");
         assert_eq!(url, "libsql://cli.example.invalid/app.db");
@@ -566,7 +615,7 @@ mod tests {
     fn database_url_from_environment_is_accepted_without_cli() {
         let url = resolve_database_url(
             None,
-            Some("libsql://env.example.invalid/app.db".to_string()),
+            EnvValue::Utf8("libsql://env.example.invalid/app.db".to_string()),
         )
         .expect("environment value must be accepted");
         assert_eq!(url, "libsql://env.example.invalid/app.db");
@@ -575,9 +624,9 @@ mod tests {
     #[test]
     fn blank_database_url_is_rejected() {
         for (cli, env) in [
-            (Some(String::new()), Some("  \t\n ".to_string())),
-            (Some("  \t\n ".to_string()), None),
-            (None, Some(String::new())),
+            (Some(String::new()), EnvValue::Utf8("  \t\n ".to_string())),
+            (Some("  \t\n ".to_string()), EnvValue::Missing),
+            (None, EnvValue::Utf8(String::new())),
         ] {
             let error =
                 resolve_database_url(cli, env).expect_err("blank database URL must be rejected");
@@ -589,16 +638,38 @@ mod tests {
     fn database_url_error_does_not_echo_values() {
         const CLI_BLANK: &str = "  \t ";
         const ENV_BLANK: &str = "\n  ";
-        let from_none = resolve_database_url(None, None)
+        let from_none = resolve_database_url(None, EnvValue::Missing)
             .expect_err("missing URL must be rejected")
             .to_string();
-        let from_blank = resolve_database_url(Some(CLI_BLANK.into()), Some(ENV_BLANK.into()))
-            .expect_err("blank URLs must be rejected")
-            .to_string();
+        let from_blank =
+            resolve_database_url(Some(CLI_BLANK.into()), EnvValue::Utf8(ENV_BLANK.into()))
+                .expect_err("blank URLs must be rejected")
+                .to_string();
         // 入力値の有無にかかわらず同じ固定文言で、値や旧既定値をエコーしない。
         assert_eq!(from_blank, from_none);
         assert_eq!(from_none, DATABASE_URL_REQUIRED);
         assert!(!from_none.contains("file:local.db"), "{from_none}");
         assert!(!from_none.contains("libsql://"), "{from_none}");
+
+        // 非 UTF-8 の生バイト (0xff) を注入しても固定文言は変わらず、バイトも現れない。
+        // 有効な CLI 引数があっても、非 UTF-8 の環境変数は「未設定」として
+        // 飲み込まず固定文言で拒否される（CLI 優先判定の将来の回帰も防ぐ）。
+        let from_non_utf8 =
+            resolve_database_url(Some("file:valid.db".into()), non_utf8_env_value())
+                .expect_err("non-UTF-8 DATABASE_URL must be rejected even with a valid CLI URL")
+                .to_string();
+        assert_eq!(from_non_utf8, DATABASE_URL_REQUIRED);
+        assert!(
+            !from_non_utf8.as_bytes().contains(&0xff),
+            "{from_non_utf8:?}"
+        );
+
+        // DATABASE_TOKEN も非 UTF-8 を「未設定」とせず不正として扱い、値をエコーしない。
+        let token_error = database_token_from_env_value(non_utf8_env_value())
+            .expect_err("non-UTF-8 DATABASE_TOKEN must be rejected")
+            .to_string();
+        assert_eq!(token_error, DATABASE_TOKEN_INVALID);
+        assert!(!token_error.as_bytes().contains(&0xff), "{token_error:?}");
+        assert!(!token_error.contains("DATABASE_TOKEN="), "{token_error}");
     }
 }

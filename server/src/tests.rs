@@ -26,6 +26,8 @@ use sha2::Digest as _;
 use sha2::Sha256 as Sha2Sha256;
 use sha3::{Digest, Keccak256};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStringExt;
 use std::time::Duration;
 
 /// テスト専用の決定的RNG。RSA 鍵生成のテストにだけ使う。
@@ -2228,6 +2230,21 @@ fn test_production_config_fail_closed() {
             "blank={blank:?} must be rejected without echoing the value"
         );
     }
+    // 非 UTF-8 は run() で Some("") へ変換され、固定文言の起動拒否へつながる。
+    let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+        std::ffi::OsString::from_vec(vec![0xff]),
+    )));
+    assert_eq!(non_utf8, common::env::EnvValue::NonUtf8);
+    let converted = match non_utf8 {
+        common::env::EnvValue::Utf8(value) => Some(value),
+        common::env::EnvValue::NonUtf8 => Some(String::new()),
+        common::env::EnvValue::Missing => None,
+    };
+    assert_eq!(
+        crate::production_config_errors(false, true, converted.as_deref()),
+        vec!["PINATA_JWT is empty"]
+    );
+
     // 実値は従来どおり警告なし（前後の空白があっても非空なら許可）。
     assert!(crate::production_config_errors(false, true, Some("  real-jwt  ")).is_empty());
 }
@@ -2510,6 +2527,18 @@ async fn test_internal_error_details_visibility() {
             "details must be visible for {value:?}: {text}"
         );
     }
+
+    // 非 UTF-8 は Invalid（生バイトは保持しない）→ Valid(true) ではないため fail-closed。
+    // expose_internal_errors と同じ判定で詳細を出さないことを検証する。
+    let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+        std::ffi::OsString::from_vec(vec![0xff]),
+    )));
+    assert_eq!(non_utf8, common::env::EnvValue::NonUtf8);
+    assert_eq!(
+        common::env::bool_env_state(non_utf8.clone()),
+        common::env::BoolEnvState::Invalid
+    );
+    assert_eq!(format!("{non_utf8:?}"), "NonUtf8");
 
     test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
@@ -10538,6 +10567,18 @@ fn test_jwt_require_kid_from_env_values() {
             "invalid value must fail closed: {invalid:?}"
         );
     }
+
+    // 非 UTF-8 は classify で NonUtf8 → bool_env_state が Invalid。
+    // 起動時は bool_env_at_startup が固定文言で拒否し、生バイトは文言へ出ない。
+    let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+        std::ffi::OsString::from_vec(vec![0xff]),
+    )));
+    assert_eq!(non_utf8, common::env::EnvValue::NonUtf8);
+    assert_eq!(
+        common::env::bool_env_state(non_utf8.clone()),
+        common::env::BoolEnvState::Invalid
+    );
+    assert_eq!(format!("{non_utf8:?}"), "NonUtf8");
 }
 
 /// RS256 選択時に短い JWT_SECRET が警告対象であること（警告条件を関数化して検証）。
@@ -17299,11 +17340,30 @@ fn oidc_required_env() -> std::collections::BTreeMap<String, String> {
     .collect()
 }
 
+/// 文字列マップを `std::env::var` と同じ Result 契約で読む共通ヘルパ。
+///
+/// `non_utf8` に変数名を入れると `Err(VarError::NotUnicode(...))` を注入する。
+/// 注入した生バイトは診断・エラー文言へ一切渡さず、固定文言のみを検証する。
+fn result_lookup<'a>(
+    env: &'a std::collections::BTreeMap<String, String>,
+    non_utf8: &'a [&'a str],
+) -> impl Fn(&str) -> Result<String, std::env::VarError> + 'a {
+    move |name| {
+        if non_utf8.contains(&name) {
+            Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(vec![0xff]),
+            ))
+        } else {
+            env.get(name).cloned().ok_or(std::env::VarError::NotPresent)
+        }
+    }
+}
+
 /// 必須 7 変数が揃えば OIDC が有効化され、値がそのまま設定へ反映される。
 #[test]
 fn test_oidc_from_env_with_all_required_present() {
     let env = oidc_required_env();
-    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+    let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
         .expect("valid optional OIDC values")
         .expect("all required OIDC variables present must enable the provider");
     let config = state.config();
@@ -17337,7 +17397,7 @@ fn test_oidc_from_env_with_missing_required_variable_fails_closed() {
         let mut env = oidc_required_env();
         env.remove(missing);
         assert!(
-            crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
                 .expect("no invalid optional values")
                 .is_none(),
             "missing {missing} must disable OIDC (fail-closed)"
@@ -17354,7 +17414,7 @@ fn test_oidc_from_env_with_empty_required_values_rejected() {
         for raw in ["", "   ", "\t\n"] {
             let mut env = oidc_required_env();
             env.insert(key.to_string(), raw.to_string());
-            let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
                 .err()
                 .unwrap_or_else(|| panic!("empty {key} (raw={raw:?}) must be rejected"));
             // 固定文言なので設定値（秘密情報を含む）は一切含まれない。
@@ -17364,7 +17424,7 @@ fn test_oidc_from_env_with_empty_required_values_rejected() {
 
     // 有値なら有効化される（空文字検証が正常値を誤って拒否しないこと）。
     let env = oidc_required_env();
-    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+    let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
         .expect("valid OIDC configuration")
         .expect("all required variables present");
     assert_eq!(state.config().client_id, "client-123");
@@ -17375,11 +17435,21 @@ fn test_oidc_from_env_with_empty_required_values_rejected() {
     env.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
     env.remove("OIDC_JWKS_URI");
     assert!(
-        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .expect("empty value with a missing required variable must not be an Err")
             .is_none(),
         "missing required variable must disable OIDC (Ok(None))"
     );
+
+    // 非 UTF-8 の必須値は「未設定」ではなく不正値として起動拒否する。
+    // 生バイトは固定文言へ変換され、エラーには一切現れない。
+    const NON_UTF8_ERROR: &str = "OIDC configuration values must be valid UTF-8";
+    let env = oidc_required_env();
+    let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &["OIDC_CLIENT_SECRET"]))
+        .err()
+        .expect("non-UTF-8 required value must be rejected");
+    assert_eq!(err, NON_UTF8_ERROR);
+    assert!(!err.contains('\u{fffd}'), "生バイトを文字列化しない: {err}");
 }
 
 /// ClockSkew: 既定 60、1..=300 のみ受け付け、範囲外・不正値は既定へ戻す。
@@ -17390,7 +17460,7 @@ fn test_oidc_from_env_with_clock_skew_boundaries() {
         if let Some(value) = value {
             env.insert("OIDC_CLOCK_SKEW_SECS".to_string(), value.to_string());
         }
-        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .expect("valid OIDC configuration")
             .expect("required variables are present");
         assert_eq!(
@@ -17424,7 +17494,7 @@ fn test_oidc_from_env_with_max_auth_age_boundaries() {
         if let Some(value) = value {
             env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), value.to_string());
         }
-        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
     };
 
     // 未設定は「検証しない」（後方互換）。
@@ -17461,6 +17531,22 @@ fn test_oidc_from_env_with_max_auth_age_boundaries() {
             "error must identify the invalid variable: {err}"
         );
     }
+
+    // 非 UTF-8 も「未設定」ではなく不正値として起動拒否し、auth_time/max_age 検証を
+    // 黙って無効化しない。生バイトや置換文字は固定文言へ一切含まれない。
+    let env = oidc_required_env();
+    let err =
+        crate::oidc::OidcState::from_env_with(result_lookup(&env, &["OIDC_MAX_AUTH_AGE_SECS"]))
+            .err()
+            .expect("non-UTF-8 OIDC_MAX_AUTH_AGE_SECS must be rejected");
+    assert!(
+        err.contains("must be valid UTF-8"),
+        "unexpected error: {err}"
+    );
+    assert!(
+        !err.contains('\u{fffd}'),
+        "replacement char must not leak: {err}"
+    );
 }
 
 /// required_acr / required_amr: カンマ区切りを trim し空要素を除く。
@@ -17475,7 +17561,7 @@ fn test_oidc_from_env_with_required_acr_amr_normalization() {
             if let Some(amr) = amr {
                 env.insert("OIDC_REQUIRED_AMR".to_string(), amr.to_string());
             }
-            let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
                 .expect("valid OIDC configuration")
                 .expect("required variables are present");
             let config = state.config();
@@ -17510,7 +17596,7 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
         if let Some(value) = value {
             env.insert("OIDC_COOKIE_SECURE".to_string(), value.to_string());
         }
-        let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .expect("valid OIDC configuration")
             .expect("required variables are present");
         assert_eq!(state.config().scopes, "openid profile");
@@ -17530,7 +17616,7 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
     for raw in ["", "yes", "no"] {
         let mut env = oidc_required_env();
         env.insert("OIDC_COOKIE_SECURE".to_string(), raw.to_string());
-        let error = match crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned()) {
+        let error = match crate::oidc::OidcState::from_env_with(result_lookup(&env, &[])) {
             Err(error) => error,
             Ok(_) => panic!("invalid OIDC_COOKIE_SECURE must be rejected: raw={raw:?}"),
         };
@@ -17555,7 +17641,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
     // 有効な https（4 エンドポイント + redirect_uri）は有効化される。
     let env = oidc_required_env();
     assert!(
-        crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .expect("all endpoints are https")
             .is_some(),
         "valid https endpoints must enable OIDC"
@@ -17568,7 +17654,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
             key.to_string(),
             "http://issuer.example.jp/endpoint".to_string(),
         );
-        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .err()
             .expect("http endpoint must be rejected in production mode");
         assert_eq!(err, INVALID_URL_ERROR);
@@ -17587,7 +17673,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
             }
             env.insert("ALLOW_MOCK_AUTH".to_string(), flag.to_string());
             assert!(
-                crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+                crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
                     .expect("localhost http is allowed in mock mode")
                     .is_some(),
                 "ALLOW_MOCK_AUTH={flag}, host={host} must be accepted"
@@ -17602,7 +17688,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
         "OIDC_ISSUER".to_string(),
         "http://remote.example.jp/issuer".to_string(),
     );
-    let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+    let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
         .err()
         .expect("remote http must be rejected even in mock mode");
     assert_eq!(err, INVALID_URL_ERROR);
@@ -17618,7 +17704,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
         for key in ENDPOINT_KEYS {
             env.insert(key.to_string(), "http://localhost/endpoint".to_string());
         }
-        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .err()
             .expect("ALLOW_MOCK_AUTH={flag} must not allow http");
         assert_eq!(err, INVALID_URL_ERROR);
@@ -17632,7 +17718,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
         for key in ENDPOINT_KEYS {
             env.insert(key.to_string(), "http://localhost/endpoint".to_string());
         }
-        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .err()
             .expect("invalid ALLOW_MOCK_AUTH must be rejected");
         assert_eq!(err, INVALID_BOOL, "flag={flag:?}");
@@ -17642,7 +17728,7 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
     for raw in ["not a url", "", "ftp://localhost/issuer", "https://"] {
         let mut env = oidc_required_env();
         env.insert("OIDC_ISSUER".to_string(), raw.to_string());
-        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        let err = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
             .err()
             .expect("invalid URL must be rejected");
         assert_eq!(err, INVALID_URL_ERROR);
@@ -17700,7 +17786,7 @@ fn test_is_valid_oidc_endpoint_host_boundaries() {
 fn test_validate_oidc_config_with_required_and_hard_errors() {
     let env = oidc_required_env();
     let result: crate::OidcConfigValidation =
-        crate::validate_oidc_config_with(|name| env.get(name).cloned());
+        crate::validate_oidc_config_with(result_lookup(&env, &[]));
     assert!(result.enabled);
     assert!(result.required_present);
     assert!(result.hard_errors.is_empty());
@@ -17712,7 +17798,7 @@ fn test_validate_oidc_config_with_required_and_hard_errors() {
     // 必須変数が欠けると enabled=false（from_env_with の Ok(None) と同じ条件）。
     let mut partial = oidc_required_env();
     partial.remove("OIDC_JWKS_URI");
-    let result = crate::validate_oidc_config_with(|name| partial.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&partial, &[]));
     assert!(!result.enabled);
     assert!(!result.required_present);
 
@@ -17720,7 +17806,7 @@ fn test_validate_oidc_config_with_required_and_hard_errors() {
     // 7 変数はすべて設定されているため enabled は真のまま。
     let mut empty = oidc_required_env();
     empty.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
-    let result = crate::validate_oidc_config_with(|name| empty.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&empty, &[]));
     assert!(result.enabled);
     assert!(!result.required_present);
     assert_eq!(
@@ -17732,10 +17818,18 @@ fn test_validate_oidc_config_with_required_and_hard_errors() {
     let mut empty_and_missing = oidc_required_env();
     empty_and_missing.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
     empty_and_missing.remove("OIDC_JWKS_URI");
-    let result = crate::validate_oidc_config_with(|name| empty_and_missing.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&empty_and_missing, &[]));
     assert!(!result.enabled);
     assert!(!result.required_present);
     assert!(result.hard_errors.is_empty());
+
+    // 非 UTF-8 の必須値は値が存在するため enabled=true の不正値として扱い、
+    // 固定文言をハードエラーへ積む（生バイトは保持・露出しない）。
+    const NON_UTF8_ERROR: &str = "OIDC configuration values must be valid UTF-8";
+    let result = crate::validate_oidc_config_with(result_lookup(&env, &["OIDC_CLIENT_SECRET"]));
+    assert!(result.enabled, "値が存在するため enabled は真");
+    assert!(!result.required_present, "不正値は充足扱いにしない");
+    assert_eq!(result.hard_errors, vec![NON_UTF8_ERROR]);
 }
 
 /// ハードエラーは固定文言のみで、秘密値も設定値も保持・露出しない。
@@ -17747,7 +17841,7 @@ fn test_validate_oidc_config_with_errors_are_fixed_and_secret_free() {
     env.insert("OIDC_CLIENT_SECRET".to_string(), OIDC_SECRET.to_string());
     env.insert("OIDC_ISSUER".to_string(), REMOTE_URL.to_string());
     env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), "0".to_string());
-    let result = crate::validate_oidc_config_with(|name| env.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&env, &[]));
 
     assert_eq!(
         result.hard_errors,
@@ -17778,14 +17872,14 @@ fn test_validate_oidc_config_with_optional_values_match_from_env_with() {
     );
     env.insert("OIDC_REQUIRED_AMR".to_string(), " pwd, otp ".to_string());
 
-    let result = crate::validate_oidc_config_with(|name| env.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&env, &[]));
     assert!(!result.cookie_secure);
     assert_eq!(result.clock_skew_secs, 120);
     assert_eq!(result.max_auth_age_secs, Some(900));
     assert_eq!(result.acr_amr_present, (true, true));
     assert!(result.hard_errors.is_empty());
 
-    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+    let state = crate::oidc::OidcState::from_env_with(result_lookup(&env, &[]))
         .expect("valid OIDC configuration")
         .expect("required variables are present");
     assert_eq!(state.config().cookie_secure, result.cookie_secure);
@@ -17800,7 +17894,7 @@ fn test_validate_oidc_config_with_optional_values_match_from_env_with() {
     // 範囲外の clock_skew は既定へフォールバックし、生値との差で doctor が警告する。
     let mut out_of_range = oidc_required_env();
     out_of_range.insert("OIDC_CLOCK_SKEW_SECS".to_string(), "301".to_string());
-    let result = crate::validate_oidc_config_with(|name| out_of_range.get(name).cloned());
+    let result = crate::validate_oidc_config_with(result_lookup(&out_of_range, &[]));
     assert_eq!(result.clock_skew_secs, crate::DEFAULT_CLOCK_SKEW_SECS);
     assert!(result.hard_errors.is_empty());
 }

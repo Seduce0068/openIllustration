@@ -589,14 +589,15 @@ impl IntoResponse for AppError {
 }
 
 /// 内部エラーの詳細をクライアントへ公開するか。未設定時は一般化メッセージを返す。
-/// 受理値は共通の `parse_bool_env`（`1`/`true` と `0`/`false` のみ、trim・小文字化）に統一する。
+/// 受理値は共通の `bool_env_state`（`1`/`true` と `0`/`false` のみ、trim・小文字化）に統一する。
 /// この関数はリクエストごとに呼ばれるため、ここでは起動拒否を返せない。
-/// 起動時に `run()` が受理値を検証して拒否し、ここでは `None` を安全側の `false` として扱う。
+/// `Valid(true)` のときだけ詳細を公開し、未設定・受理値外・非 UTF-8 は安全側の `false` とする。
+/// 不正値は起動時に `bool_env_at_startup` が固定文言で拒否する（値はエコーしない）。
 fn expose_internal_errors() -> bool {
-    std::env::var("EXPOSE_INTERNAL_ERRORS")
-        .ok()
-        .and_then(|value| common::age::parse_bool_env(&value))
-        .unwrap_or(false)
+    matches!(
+        common::env::bool_env_state(common::env::read_env("EXPOSE_INTERNAL_ERRORS")),
+        common::env::BoolEnvState::Valid(true)
+    )
 }
 
 /// 500系レスポンスのボディを決定する。詳細は常にログへ出し、公開はフラグに従う。
@@ -1015,13 +1016,16 @@ pub(crate) async fn find_foreign_key_violations(db: &Connection) -> anyhow::Resu
 }
 
 /// 起動時に読む真偽値フラグの受理値を検証する。
-/// 未設定は `false`、不正値は入力値をエコーせず起動拒否（fail-closed）する。
-/// per-request で読むフラグもここで検証し、読込側は `None`→`false` の二段構えにする。
+/// 未設定は `false`、不正値（受理値外・非 UTF-8）は固定文言で起動拒否（fail-closed）する。
+/// per-request で読むフラグもここで検証し、読込側は `Valid(true)` のみ真とする二段構えにする。
 fn bool_env_at_startup(name: &str) -> anyhow::Result<bool> {
-    match std::env::var(name) {
-        Ok(value) => common::age::parse_bool_env(&value)
-            .ok_or_else(|| anyhow::anyhow!("{name} must be one of 1/true/0/false")),
-        Err(_) => Ok(false),
+    match common::env::bool_env_state(common::env::read_env(name)) {
+        common::env::BoolEnvState::Unset => Ok(false),
+        common::env::BoolEnvState::Valid(flag) => Ok(flag),
+        // 受理値外と非 UTF-8 は同じ Invalid。生バイトを保持しないためエコーしない。
+        common::env::BoolEnvState::Invalid => {
+            anyhow::bail!("{name} must be one of 1/true/0/false")
+        }
     }
 }
 
@@ -1030,16 +1034,18 @@ pub async fn run() -> anyhow::Result<()> {
 
     let allow_mock_auth = bool_env_at_startup("ALLOW_MOCK_AUTH")?;
     // per-request で読む EXPOSE_INTERNAL_ERRORS も起動時に受理値を検証し、
-    // 不正値は fail-closed で起動拒否する（読込側は None→false）。
+    // 不正値は fail-closed で起動拒否する（読込側は Valid(true) のみ真）。
     bool_env_at_startup("EXPOSE_INTERNAL_ERRORS")?;
     // OIDC 未構成時も OidcState::from_env_with は cookie_secure を見ないため、
     // ここでも受理値を検証して不正値を起動拒否する（fail-closed）。
     bool_env_at_startup("OIDC_COOKIE_SECURE")?;
     // ALLOW_IPV4_LOCALHOST は per-request 読込のため起動拒否ではなく警告に留める。
-    // network::ipv4_permitted で None→false（fail-closed）とする二段構えの理由を参照。
-    if let Ok(value) = std::env::var("ALLOW_IPV4_LOCALHOST")
-        && common::age::parse_bool_env(&value).is_none()
-    {
+    // network::ipv4_permitted で Valid(true) 以外→false（fail-closed）とする二段構えの理由を参照。
+    // 非 UTF-8 も Invalid として同じ固定文言で警告し、生バイトはエコーしない。
+    if !matches!(
+        common::env::bool_env_state(common::env::read_env("ALLOW_IPV4_LOCALHOST")),
+        common::env::BoolEnvState::Unset | common::env::BoolEnvState::Valid(_)
+    ) {
         warn!(
             "ALLOW_IPV4_LOCALHOST must be one of 1/true/0/false; \
              ignoring invalid value (fail-closed)"
@@ -1048,10 +1054,16 @@ pub async fn run() -> anyhow::Result<()> {
     // `from_env()` は不正な OIDC 設定で panic するため、同じ環境変数読み取りを行う
     // `from_env_with()` を直接呼び、Err を anyhow エラーとして起動失敗を伝播させる。
     // 本番必須設定の判定は共通バリデータの `required_present` を渡す（doctor と同じ）。
-    let oidc_validation = validate_oidc_config_with(|name| std::env::var(name).ok());
-    let oidc = oidc::OidcState::from_env_with(|name| std::env::var(name).ok())
+    let oidc_validation = validate_oidc_config_with(|name: &str| std::env::var(name));
+    let oidc = oidc::OidcState::from_env_with(|name: &str| std::env::var(name))
         .map_err(|message| anyhow::anyhow!("invalid OIDC configuration: {message}"))?;
-    let pinata_jwt = std::env::var("PINATA_JWT").ok();
+    // 非 UTF-8 は「未設定」として飲まず、不正値として production_config_errors の
+    // 起動拒否へつなぐ（空文字を渡して固定文言のエラーを出し、値はエコーしない）。
+    let pinata_jwt = match common::env::read_env("PINATA_JWT") {
+        common::env::EnvValue::Utf8(value) => Some(value),
+        common::env::EnvValue::NonUtf8 => Some(String::new()),
+        common::env::EnvValue::Missing => None,
+    };
     let config_errors = production_config_errors(
         allow_mock_auth,
         oidc_validation.required_present,

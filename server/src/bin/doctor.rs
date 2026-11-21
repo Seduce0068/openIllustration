@@ -19,8 +19,8 @@ fn print_help() {
     );
 }
 
-fn env(name: &str) -> Option<String> {
-    std::env::var(name).ok()
+fn env(name: &str) -> Result<String, std::env::VarError> {
+    std::env::var(name)
 }
 
 // --- 新規診断の固定文言（値は一切エコーしない） ------------------------------
@@ -120,18 +120,20 @@ fn should_fail(strict: bool, problems: usize) -> bool {
 /// （doctor は診断専用なので起動拒否の代わりに既存カテゴリ内で警告する）。
 fn bool_flag_with_warning<F>(lookup: &F, name: &str, default: bool) -> (bool, Option<String>)
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Result<String, std::env::VarError>,
 {
+    let invalid = || {
+        Some(format!(
+            "{name} has an invalid boolean value; using {default} (fail-closed)"
+        ))
+    };
     match lookup(name) {
-        None => (default, None),
-        Some(value) => match common::age::parse_bool_env(&value) {
+        Err(std::env::VarError::NotPresent) => (default, None),
+        // 非 UTF-8 は生バイトを見ず、既存の不正値警告へマージする。
+        Err(std::env::VarError::NotUnicode(_)) => (default, invalid()),
+        Ok(value) => match common::age::parse_bool_env(&value) {
             Some(parsed) => (parsed, None),
-            None => (
-                default,
-                Some(format!(
-                    "{name} has an invalid boolean value; using {default} (fail-closed)"
-                )),
-            ),
+            None => (default, invalid()),
         },
     }
 }
@@ -141,7 +143,7 @@ where
 /// 秘密情報の値は結果に含めない。
 fn check_all_with<F>(lookup: F) -> Vec<(&'static str, Vec<String>)>
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Result<String, std::env::VarError>,
 {
     let mut results = Vec::new();
 
@@ -157,7 +159,7 @@ where
     let mut production: Vec<String> = production_config_errors(
         allow_mock_auth,
         validation.required_present,
-        lookup("PINATA_JWT").as_deref(),
+        lookup("PINATA_JWT").ok().as_deref(),
     )
     .into_iter()
     .map(str::to_string)
@@ -170,12 +172,15 @@ where
     // `-x "$alert_cmd"` 相当を調べ、値は出力しない。
     if !allow_mock_auth {
         let recipient_set = lookup("BACKUP_GPG_RECIPIENT")
+            .ok()
             .map(|value| !value.is_empty())
             .unwrap_or(false);
         let copy_set = lookup("OFFSITE_COPY_CMD")
+            .ok()
             .map(|value| !value.is_empty())
             .unwrap_or(false);
         let dest_set = lookup("OFFSITE_DEST")
+            .ok()
             .map(|value| !value.is_empty())
             .unwrap_or(false);
         if !recipient_set {
@@ -184,7 +189,7 @@ where
         if copy_set != dest_set {
             production.push(BACKUP_OFFSITE_PAIR_WARNING.to_string());
         }
-        if let Some(alert) = lookup("ALERT_CMD")
+        if let Ok(alert) = lookup("ALERT_CMD")
             && !alert.is_empty()
             && !is_executable_file(alert.as_str())
         {
@@ -204,8 +209,9 @@ where
         "OIDC_TOKEN_ENDPOINT",
         "OIDC_JWKS_URI",
     ];
-    let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_some());
+    let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_ok());
     let pinata_production = lookup("PINATA_JWT")
+        .ok()
         .map(|v| {
             let trimmed = v.trim();
             !trimmed.is_empty() && trimmed != "mock_jwt"
@@ -213,7 +219,7 @@ where
         .unwrap_or(false);
     let mut mock_auth_errors = Vec::new();
     if allow_mock_auth
-        && (pinata_production || oidc_any || lookup("JWT_RSA_PRIVATE_KEY_PEM").is_some())
+        && (pinata_production || oidc_any || lookup("JWT_RSA_PRIVATE_KEY_PEM").is_ok())
     {
         mock_auth_errors.push(
             "ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration".to_string(),
@@ -240,13 +246,13 @@ where
     results.push(("mock_auth_enabled", mock_auth_enabled_errors));
 
     // JWT: HS256 は 32 バイト以上、RS256 は PEM と検証キーの整合を検査する。
-    let jwt_pem = lookup("JWT_RSA_PRIVATE_KEY_PEM");
-    let jwt_secret = lookup("JWT_SECRET");
+    let jwt_pem = lookup("JWT_RSA_PRIVATE_KEY_PEM").ok();
+    let jwt_secret = lookup("JWT_SECRET").ok();
     let (require_kid, jwt_bool_warning) = bool_flag_with_warning(&lookup, "JWT_REQUIRE_KID", false);
     let mut jwt_errors = match jwt_keys_from_env(
         jwt_pem,
         jwt_secret,
-        lookup("JWT_RSA_VERIFICATION_KEYS").as_deref(),
+        lookup("JWT_RSA_VERIFICATION_KEYS").ok().as_deref(),
         require_kid,
     ) {
         Ok(_) => Vec::new(),
@@ -258,7 +264,7 @@ where
     results.push(("jwt", jwt_errors));
 
     let mut secret_errors = Vec::new();
-    if let Some(secret) = lookup("JWT_SECRET")
+    if let Ok(secret) = lookup("JWT_SECRET")
         && let Err(error) = validate_jwt_secret(&secret)
     {
         secret_errors.push(error);
@@ -269,7 +275,7 @@ where
     // ipfs_gateways() は不正値を除外して有効値だけ返すため、設定した非空エントリ数
     // との差を問題として計上する（値は出力しない）。未設定時は既定ゲートウェイを
     // 使うため加算しない。
-    let gateways_env = lookup("IPFS_GATEWAYS");
+    let gateways_env = lookup("IPFS_GATEWAYS").ok();
     let gateways = ipfs_gateways(gateways_env.as_deref());
     let mut ipfs_errors = Vec::new();
     if let Some(value) = &gateways_env {
@@ -294,7 +300,7 @@ where
     // rate_limit と同じ方式で「生のパース値」と「正規化後の値」を比較し、
     // フォールバックが発生した場合のみ警告する。設定値自体は出力しない。
     let mut timeout_errors = Vec::new();
-    if let Some(value) = lookup("IPFS_TIMEOUT_SECS")
+    if let Ok(value) = lookup("IPFS_TIMEOUT_SECS")
         && ipfs_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         timeout_errors
@@ -303,7 +309,7 @@ where
     results.push(("ipfs_timeout", timeout_errors));
 
     let mut attempts_errors = Vec::new();
-    if let Some(value) = lookup("IPFS_MAX_ATTEMPTS")
+    if let Ok(value) = lookup("IPFS_MAX_ATTEMPTS")
         && ipfs_max_attempts(Some(&value)) != value.parse::<usize>().unwrap_or(0)
     {
         attempts_errors
@@ -312,7 +318,7 @@ where
     results.push(("ipfs_max_attempts", attempts_errors));
 
     let mut oidc_timeout_errors = Vec::new();
-    if let Some(value) = lookup("OIDC_HTTP_TIMEOUT_SECS")
+    if let Ok(value) = lookup("OIDC_HTTP_TIMEOUT_SECS")
         && oidc_http_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         oidc_timeout_errors
@@ -326,7 +332,7 @@ where
     const DRAIN_WARNING: &str =
         "GRACEFUL_DRAIN_TIMEOUT_SECS is invalid or outside 1..=300; using default";
     let mut drain_timeout_errors = Vec::new();
-    if let Some(value) = lookup("GRACEFUL_DRAIN_TIMEOUT_SECS")
+    if let Ok(value) = lookup("GRACEFUL_DRAIN_TIMEOUT_SECS")
         && graceful_drain_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         drain_timeout_errors.push(DRAIN_WARNING.to_string());
@@ -339,7 +345,7 @@ where
     const FINALIZE_WARNING: &str =
         "MODERATION_FINALIZE_INTERVAL_SECS is invalid or outside 30..=3600; using default";
     let mut finalize_interval_errors = Vec::new();
-    if let Some(value) = lookup("MODERATION_FINALIZE_INTERVAL_SECS")
+    if let Ok(value) = lookup("MODERATION_FINALIZE_INTERVAL_SECS")
         && moderation_finalize_interval(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         finalize_interval_errors.push(FINALIZE_WARNING.to_string());
@@ -349,7 +355,7 @@ where
     // OIDC_CLOCK_SKEW_SECS: 共通バリデータが範囲外・不正値を既定 60 へ
     // フォールバックさせるため、実効値と生のパース値が異なれば警告する。
     // 値は出力せず、範囲内かどうかのみを診断する。
-    let oidc_clock_skew_errors = match lookup("OIDC_CLOCK_SKEW_SECS") {
+    let oidc_clock_skew_errors = match lookup("OIDC_CLOCK_SKEW_SECS").ok() {
         None => Vec::new(),
         Some(value) if value.parse::<u64>().ok() == Some(validation.clock_skew_secs) => Vec::new(),
         Some(_) => vec![format!(
@@ -363,11 +369,16 @@ where
     // 必須 7 変数が揃っているときに 5 エンドポイントを検証し、1 件でも不正なら
     // 固定文言で警告する。設定値は一切エコーしない。
     const OIDC_ENDPOINT_URL_WARNING: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
-    let oidc_endpoint_urls_errors = if validation.hard_errors.contains(&OIDC_ENDPOINT_URL_WARNING) {
-        vec![OIDC_ENDPOINT_URL_WARNING.to_string()]
-    } else {
-        Vec::new()
-    };
+    // 非 UTF-8 の必須値は共通バリデータが固定文言のハードエラーへ変換するため、
+    // 同じカテゴリ内へマージする（results.push の数は据え置き、生バイトは出さない）。
+    const OIDC_NON_UTF8_WARNING: &str = "OIDC configuration values must be valid UTF-8";
+    let mut oidc_endpoint_urls_errors = Vec::new();
+    if validation.hard_errors.contains(&OIDC_ENDPOINT_URL_WARNING) {
+        oidc_endpoint_urls_errors.push(OIDC_ENDPOINT_URL_WARNING.to_string());
+    }
+    if validation.hard_errors.contains(&OIDC_NON_UTF8_WARNING) {
+        oidc_endpoint_urls_errors.push(OIDC_NON_UTF8_WARNING.to_string());
+    }
     results.push(("oidc_endpoint_urls", oidc_endpoint_urls_errors));
 
     // OIDC_MAX_AUTH_AGE_SECS: 共通バリデータが 0 / 負 / 非数値 / オーバーフローを
@@ -428,7 +439,8 @@ where
     // 年齢ポリシー: 不正値は AgePolicy::from_env_with がエラーを返す。
     // プロセス環境を触らず lookup を渡すことで、CLI と同じ分岐をテストできる。
     let mut age_errors = Vec::new();
-    match common::age::AgePolicy::from_env_with(&lookup) {
+    // AgePolicy は Option 契約のため、Result 契約の lookup をここでだけ橋渡しする。
+    match common::age::AgePolicy::from_env_with(|name: &str| lookup(name).ok()) {
         Ok(policy) => {
             // 手動フラグは廃止され、必須設定値の充足結果からゲートを判定する。
             // 明示設定必須なのに未充足なら年齢検証は fail closed（403）となるため警告する。
@@ -442,7 +454,7 @@ where
     // 年齢判定の基準日（TZ）診断を age_policy カテゴリ内へ追加する（check 数は据え置き）。
     // 未設定は UTC フォールバックとなり、対象地域のローカル日付と境界がずれ得る。
     // いずれも固定文言の警告のみで、既定は終了コードへ影響しない（--strict 時のみ失敗）。
-    let tz_raw = lookup("TZ");
+    let tz_raw = lookup("TZ").ok();
     let tz_present = tz_raw
         .as_deref()
         .map(|value| !value.trim().is_empty())
@@ -450,7 +462,7 @@ where
     if !tz_present {
         age_errors.push(TZ_UNSET_WARNING.to_string());
     }
-    let regions_raw = lookup("AGE_TARGET_REGIONS");
+    let regions_raw = lookup("AGE_TARGET_REGIONS").ok();
     let regions: Vec<&str> = regions_raw
         .as_deref()
         .map(|value| {
@@ -472,12 +484,12 @@ where
 
     // レート制限: 既定値へフォールバックしていても警告する。
     let mut rate_errors = Vec::new();
-    if let Some(value) = lookup("RATE_LIMIT_PER_MIN")
+    if let Ok(value) = lookup("RATE_LIMIT_PER_MIN")
         && rate_limit_per_min(Some(&value)) != value.parse::<u32>().unwrap_or(0)
     {
         rate_errors.push("RATE_LIMIT_PER_MIN is outside 1..=600; using default".to_string());
     }
-    if let Some(value) = lookup("MAX_CONCURRENT_REQUESTS")
+    if let Ok(value) = lookup("MAX_CONCURRENT_REQUESTS")
         && max_concurrent_requests(Some(&value)) != value.parse::<usize>().unwrap_or(0)
     {
         rate_errors.push("MAX_CONCURRENT_REQUESTS is outside 1..=256; using default".to_string());
@@ -503,7 +515,7 @@ where
 
     // TRUSTED_PROXY_CIDRS は X-Forwarded-For（XFF）を信頼する設定。設定自体は
     // 正当だが本番では意図確認が必要。CIDR 等の設定値は出力せず有無のみ警告する。
-    let trusted_proxy_errors = if lookup("TRUSTED_PROXY_CIDRS").is_some() {
+    let trusted_proxy_errors = if lookup("TRUSTED_PROXY_CIDRS").is_ok() {
         vec![
             "TRUSTED_PROXY_CIDRS is configured; X-Forwarded-For (XFF) is trusted, confirm this is intentional in production"
                 .to_string(),
@@ -536,6 +548,7 @@ where
     // パーサが捨てるため「非空」判定では見逃していた。オリジン値は出力しない。
     let allowed_origins_errors = if !allow_mock_auth {
         let no_valid_origin = lookup("ALLOWED_ORIGINS")
+            .ok()
             .map(|value| allowed_origins(Some(&value), false).is_empty())
             .unwrap_or(true);
         if no_valid_origin {
@@ -563,6 +576,7 @@ where
     } else {
         // backup-rotate.sh と同じく生値へ [0-9a-fA-F]+ を適用する（trim しない）。
         let valid = lookup("AUDIT_EXPECT_ROOT")
+            .ok()
             .map(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
             .unwrap_or(false);
         if valid {
@@ -625,6 +639,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     // --- テストヘルパ ------------------------------------------------------
 
@@ -637,12 +653,15 @@ mod tests {
     }
 
     /// (名前, 値) の組から環境変数ルックアップを生成する。
-    fn lookup_from<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+    fn lookup_from<'a>(
+        pairs: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Result<String, std::env::VarError> + 'a {
         move |name| {
             pairs
                 .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| (*value).to_string())
+                .ok_or(std::env::VarError::NotPresent)
         }
     }
 
@@ -940,6 +959,39 @@ mod tests {
             for error in errors {
                 assert!(!error.contains(JWT), "JWT_SECRET が漏洩: {error}");
                 assert!(!error.contains(PINATA), "PINATA_JWT が漏洩: {error}");
+                assert!(!error.contains(OIDC), "OIDC_CLIENT_SECRET が漏洩: {error}");
+            }
+        }
+
+        // 非 UTF-8 の必須値は生バイトを一切警告へ出さず、固定文言だけを出す。
+        let pairs: [(&str, &str); 2] = [("OIDC_CLIENT_SECRET", OIDC), ("ALLOW_MOCK_AUTH", "1")];
+        let base = lookup_from(&pairs);
+        let results = check_all_with(|name: &str| {
+            if name == "OIDC_ISSUER" {
+                Err(std::env::VarError::NotUnicode(
+                    std::ffi::OsString::from_vec(vec![0xff]),
+                ))
+            } else {
+                base(name)
+            }
+        });
+        let errors = errors_for(&results, "oidc_endpoint_urls");
+        assert_eq!(
+            errors.len(),
+            1,
+            "非 UTF-8 は固定文言の警告になる: {errors:?}"
+        );
+        assert_eq!(
+            errors[0], "OIDC configuration values must be valid UTF-8",
+            "非 UTF-8 は固定文言の警告になる: {errors:?}"
+        );
+        for (_, errors) in &results {
+            for error in errors {
+                assert!(!error.contains('\u{fffd}'), "非 UTF-8 が漏洩: {error}");
+                assert!(
+                    !error.as_bytes().contains(&0xff),
+                    "非 UTF-8 バイトが漏洩: {error}"
+                );
                 assert!(!error.contains(OIDC), "OIDC_CLIENT_SECRET が漏洩: {error}");
             }
         }

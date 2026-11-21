@@ -75,6 +75,8 @@ pub fn is_valid_oidc_endpoint(value: &str, allow_mock_auth: bool) -> bool {
 // 起動拒否相当の固定文言。設定値は一切含めず、doctor の警告文と完全一致させる。
 const OIDC_ENDPOINT_URL_ERROR: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
 const OIDC_EMPTY_VALUE_ERROR: &str = "OIDC configuration values must not be empty";
+/// 必須値が非 UTF-8 のときの固定文言。生バイト（`OsString`）は保持・エコーしない。
+const OIDC_NON_UTF8_ERROR: &str = "OIDC configuration values must be valid UTF-8";
 const OIDC_MAX_AUTH_AGE_GREATER_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
 const OIDC_MAX_AUTH_AGE_POSITIVE_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
 /// 真偽値フラグは `common::age::parse_bool_env` の受理値のみ。不正値は値をエコーしない。
@@ -108,9 +110,13 @@ pub struct OidcConfigValidation {
 /// `from_env_with` と `doctor` の双方から呼ばれ、必須変数・URL・空値・cookie_secure・
 /// clock_skew・max_auth_age・acr/amr の判定を一箇所へ集約する。戻り値には秘密情報を
 /// 含めないため、doctor へ `OidcState` や `client_secret` を渡す必要はない。
+///
+/// `lookup` は `std::env::var` と同じ Result 契約で受け取る。`NotPresent`（未設定）と
+/// `NotUnicode`（値はあるが非 UTF-8）を区別し、後者は「未設定」ではなく不正値として
+/// 起動拒否・doctor 警告の対象にする（生バイトは一切保持・露出しない）。
 pub fn validate_oidc_config_with<F>(lookup: F) -> OidcConfigValidation
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Result<String, std::env::VarError>,
 {
     const REQUIRED: [&str; 7] = [
         "OIDC_ISSUER",
@@ -129,44 +135,54 @@ where
         "OIDC_JWKS_URI",
     ];
 
-    let required: Vec<Option<String>> = REQUIRED.iter().map(|name| lookup(name)).collect();
-    let enabled = required.iter().all(Option::is_some);
+    let required: Vec<Result<String, std::env::VarError>> =
+        REQUIRED.iter().map(|name| lookup(name)).collect();
+    // 未設定（NotPresent）だけが「存在しない」を意味する。非 UTF-8 は値が存在するので
+    // enabled を真にし、hard_errors 側で起動拒否へつなぐ（「未設定」扱いにしない）。
+    let enabled = required
+        .iter()
+        .all(|value| !matches!(value, Err(std::env::VarError::NotPresent)));
+    let non_utf8 = required
+        .iter()
+        .any(|value| matches!(value, Err(std::env::VarError::NotUnicode(_))));
     let required_present = enabled
-        && required.iter().all(|value| {
-            value
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty())
-        });
-    // 真偽値は共通 parse_bool_env（1/true と 0/false のみ）に統一する。
-    // 不正値は fail-closed で false とし、起動拒否理由を hard_errors へ積む。
+        && required
+            .iter()
+            .all(|value| value.as_ref().is_ok_and(|value| !value.trim().is_empty()));
     let mut hard_errors = Vec::new();
+    if non_utf8 {
+        hard_errors.push(OIDC_NON_UTF8_ERROR);
+    }
+    // 真偽値は共通 parse_bool_env（1/true と 0/false のみ）に統一する。
+    // 不正値・非 UTF-8 は fail-closed で false とし、起動拒否理由を hard_errors へ積む。
     let allow_mock_auth = match lookup("ALLOW_MOCK_AUTH") {
-        Some(value) => match common::age::parse_bool_env(&value) {
+        Ok(value) => match common::age::parse_bool_env(&value) {
             Some(parsed) => parsed,
             None => {
                 hard_errors.push(ALLOW_MOCK_AUTH_BOOL_ERROR);
                 false
             }
         },
-        None => false,
+        // 未設定・非 UTF-8 は共に mock 無効（fail-closed）。生バイトは見ない。
+        Err(_) => false,
     };
 
     if enabled {
         // SSRF 対策は is_valid_oidc_endpoint に集約する（必須変数が揃ったときだけ検証）。
+        // 非 UTF-8 は上でハードエラー化済みなので、ここではデコードできた値だけを検証する。
         if ENDPOINTS
             .iter()
-            .filter_map(|name| lookup(name))
+            .filter_map(|name| lookup(name).ok())
             .any(|value| !is_valid_oidc_endpoint(&value, allow_mock_auth))
         {
             hard_errors.push(OIDC_ENDPOINT_URL_ERROR);
         }
-        // 必須 7 変数は Some でも trim 後に空文字なら設定ミスとして起動を拒否する。
+        // 必須 7 変数は Ok でも trim 後に空文字なら設定ミスとして起動を拒否する。
         // URL 検証の空文字は上で先に拒否されるが、配列は全 7 変数を含む。
-        if required.iter().any(|value| {
-            value
-                .as_deref()
-                .is_some_and(|value| value.trim().is_empty())
-        }) {
+        if required
+            .iter()
+            .any(|value| value.as_ref().is_ok_and(|value| value.trim().is_empty()))
+        {
             hard_errors.push(OIDC_EMPTY_VALUE_ERROR);
         }
     }
@@ -174,21 +190,23 @@ where
     // 未設定は true（fail-closed）。不正値も Secure を外さず true とし、
     // 起動拒否理由を hard_errors へ積む（値はエコーしない）。
     let cookie_secure = match lookup("OIDC_COOKIE_SECURE") {
-        Some(value) => match common::age::parse_bool_env(&value) {
+        Ok(value) => match common::age::parse_bool_env(&value) {
             Some(parsed) => parsed,
             None => {
                 hard_errors.push(OIDC_COOKIE_SECURE_BOOL_ERROR);
                 true
             }
         },
-        None => true,
+        Err(_) => true,
     };
     let clock_skew_secs = lookup("OIDC_CLOCK_SKEW_SECS")
+        .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(seconds))
         .unwrap_or(DEFAULT_CLOCK_SKEW_SECS);
     let split_present = |name: &str| {
         lookup(name)
+            .ok()
             .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
             .unwrap_or(false)
     };
@@ -197,8 +215,14 @@ where
         split_present("OIDC_REQUIRED_AMR"),
     );
     let max_auth_age_secs = match lookup("OIDC_MAX_AUTH_AGE_SECS") {
-        None => None,
-        Some(value) => match value.parse::<u64>() {
+        // 非 UTF-8 は「未設定」ではなく不正値として起動拒否する（auth_time/max_age
+        // 検証が黙って無効化される fail-open を防ぐ）。
+        Err(std::env::VarError::NotUnicode(_)) => {
+            hard_errors.push(OIDC_NON_UTF8_ERROR);
+            None
+        }
+        Err(std::env::VarError::NotPresent) => None,
+        Ok(value) => match value.parse::<u64>() {
             Ok(0) => {
                 hard_errors.push(OIDC_MAX_AUTH_AGE_GREATER_ERROR);
                 None
@@ -515,7 +539,7 @@ impl OidcState {
     /// 不正な値が設定されていた場合は `from_env_with` が返す Err を伝播させ、
     /// 起動を拒否する（auth_time / max_age 検証の黙った無効化を防ぐ）。
     pub fn from_env() -> Option<Arc<Self>> {
-        match Self::from_env_with(|name| std::env::var(name).ok()) {
+        match Self::from_env_with(|name: &str| std::env::var(name)) {
             Ok(state) => state,
             Err(message) => panic!("invalid OIDC configuration: {message}"),
         }
@@ -523,26 +547,30 @@ impl OidcState {
 
     /// 環境変数の読み取りを注入した `from_env` の本体。
     ///
-    /// 本番は `from_env()` が `std::env::var` を渡す。テストは文字列マップを
-    /// 渡すことでプロセス環境を汚さずに、必須変数の欠落と各オプションの
-    /// 境界値を並列に検証できる。
+    /// 本番は `from_env()` が `std::env::var` をそのまま渡す。テストは文字列マップを
+    /// Result 契約で返すヘルパを渡すことでプロセス環境を汚さずに、必須変数の欠落と
+    /// 各オプションの境界値を並列に検証できる。
     ///
     /// 必須変数の欠落は `Ok(None)`（OIDC 無効）だが、値が存在するのに不正な
-    /// 場合は `Err` を返す。特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 /
+    /// 場合は `Err` を返す。非 UTF-8 は「未設定」ではなく不正値として扱い、
+    /// `enabled=true` のままハードエラーを優先して起動拒否する（防御的）。
+    /// 特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 /
     /// オーバーフローを捨てると max_age 検証が黙って無効化されるため、
     /// フォールバックせず起動拒否にする（fail-closed）。
     /// 判定は `validate_oidc_config_with` に集約し、ここでは秘密値の読み出しと
     /// `OidcState` の組み立てだけを行う（doctor へは渡さない）。
     pub(crate) fn from_env_with<F>(lookup: F) -> Result<Option<Arc<Self>>, String>
     where
-        F: Fn(&str) -> Option<String>,
+        F: Fn(&str) -> Result<String, std::env::VarError>,
     {
         let validation = validate_oidc_config_with(&lookup);
-        if !validation.enabled {
-            return Ok(None);
-        }
+        // 不正値（非 UTF-8 を含む）は enabled 判定より先に拒否する。
+        // ハードエラーを「未設定」扱いの Ok(None) へ流さないための防御的順序。
         if let Some(error) = validation.hard_errors.first() {
             return Err((*error).to_string());
+        }
+        if !validation.enabled {
+            return Ok(None);
         }
 
         let (
@@ -554,13 +582,13 @@ impl OidcState {
             token_endpoint,
             jwks_uri,
         ) = match (
-            lookup("OIDC_ISSUER"),
-            lookup("OIDC_CLIENT_ID"),
-            lookup("OIDC_CLIENT_SECRET"),
-            lookup("OIDC_REDIRECT_URI"),
-            lookup("OIDC_AUTHORIZATION_ENDPOINT"),
-            lookup("OIDC_TOKEN_ENDPOINT"),
-            lookup("OIDC_JWKS_URI"),
+            lookup("OIDC_ISSUER").ok(),
+            lookup("OIDC_CLIENT_ID").ok(),
+            lookup("OIDC_CLIENT_SECRET").ok(),
+            lookup("OIDC_REDIRECT_URI").ok(),
+            lookup("OIDC_AUTHORIZATION_ENDPOINT").ok(),
+            lookup("OIDC_TOKEN_ENDPOINT").ok(),
+            lookup("OIDC_JWKS_URI").ok(),
         ) {
             (
                 Some(issuer),
@@ -582,11 +610,15 @@ impl OidcState {
             // validation.enabled が真なら到達しない。fail-closed の保険として残す。
             _ => return Ok(None),
         };
-        let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
+        let scopes = lookup("OIDC_SCOPES")
+            .ok()
+            .unwrap_or_else(|| "openid".to_string());
         let required_acr = lookup("OIDC_REQUIRED_ACR")
+            .ok()
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
         let required_amr = lookup("OIDC_REQUIRED_AMR")
+            .ok()
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
 
