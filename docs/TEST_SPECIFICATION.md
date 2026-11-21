@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T05:00:00+09:00"
+  at: "2026-11-22T05:08:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T05:00:00+09:00"
+  at: "2026-11-22T05:08:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -380,6 +380,15 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
   `graceful_drain_timeout` / `moderation_finalize_interval` も `rate_limit` と同じく
   「生のパース値」と「正規化後の値」を比較し、既定へフォールバックした場合に当該カテゴリへ
   警告1件を計上する。後者2つは新規カテゴリとして追加し `check(s)` は19→21→22→23へ増えた（現行23）。
+- OIDC 必須 7 変数のいずれかが `Some` で trim 後空文字のとき、共通バリデータが
+  `OIDC configuration values must not be empty` をハードエラーとして起動を拒否する。
+  doctor は同じ固定文言を `oidc_endpoint_urls` カテゴリへ警告として流し、
+  `production` カテゴリも既存どおり
+  `OIDC is not configured (OIDC_* environment variables are required)` を警告する
+  （必須値の空文字は `oidc_endpoint_urls` と `production` の両方で固定文言警告、
+  設定値・生バイトは非エコー）。`oidc_endpoint_urls` への追加は `results.push` を
+  増やさず、23カテゴリ・53テストを維持する。未設定・未登録時は `hard_errors` が
+  積まれず、従来どおり警告なし。
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |

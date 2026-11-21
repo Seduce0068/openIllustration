@@ -381,12 +381,19 @@ where
     // 非 UTF-8 の必須値は共通バリデータが固定文言のハードエラーへ変換するため、
     // 同じカテゴリ内へマージする（results.push の数は据え置き、生バイトは出さない）。
     const OIDC_NON_UTF8_WARNING: &str = "OIDC configuration values must be valid UTF-8";
+    // 必須値の trim 後空文字は from_env_with が起動拒否するハードエラーなので、
+    // 共通バリデータと同じ固定文言をこのカテゴリへも警告化する（--strict の fail-open 解消）。
+    // 未登録・未設定時は hard_errors に積まれないため従来どおり警告なし。値はエコーしない。
+    const OIDC_EMPTY_VALUE_WARNING: &str = "OIDC configuration values must not be empty";
     let mut oidc_endpoint_urls_errors = Vec::new();
     if validation.hard_errors.contains(&OIDC_ENDPOINT_URL_WARNING) {
         oidc_endpoint_urls_errors.push(OIDC_ENDPOINT_URL_WARNING.to_string());
     }
     if validation.hard_errors.contains(&OIDC_NON_UTF8_WARNING) {
         oidc_endpoint_urls_errors.push(OIDC_NON_UTF8_WARNING.to_string());
+    }
+    if validation.hard_errors.contains(&OIDC_EMPTY_VALUE_WARNING) {
+        oidc_endpoint_urls_errors.push(OIDC_EMPTY_VALUE_WARNING.to_string());
     }
     results.push(("oidc_endpoint_urls", oidc_endpoint_urls_errors));
 
@@ -1313,6 +1320,33 @@ mod tests {
                 assert_eq!(errors.len(), 1, "key={key}, raw={raw:?}, errors={errors:?}");
                 // 固定文言なので空文字・空白の設定値は一切含まれない（値のエコーなし）。
                 assert_eq!(errors[0], EXPECTED, "key={key}, raw={raw:?}");
+
+                // 同じ空値ハードエラーは oidc_endpoint_urls にも固定文言で流れる。
+                // 起動拒否なのに --strict が exit 0 になる fail-open を防ぐ。
+                const EMPTY_WARNING: &str = "OIDC configuration values must not be empty";
+                let oidc_errors = errors_for(&results, "oidc_endpoint_urls");
+                assert_eq!(
+                    oidc_errors.len(),
+                    1,
+                    "key={key}, raw={raw:?}, oidc_errors={oidc_errors:?}"
+                );
+                assert_eq!(oidc_errors[0], EMPTY_WARNING, "key={key}, raw={raw:?}");
+                // 生値（空文字・空白・設定値）や 0xff は一切エコーしない。
+                for error in oidc_errors {
+                    assert!(!error.is_empty(), "空の警告文: key={key}, raw={raw:?}");
+                    assert!(
+                        !error.as_bytes().contains(&0xff),
+                        "0xff が漏洩: key={key}, raw={raw:?}, error={error}"
+                    );
+                    for (_, configured) in &pairs {
+                        if !configured.is_empty() {
+                            assert!(
+                                !error.contains(*configured),
+                                "設定値が漏洩: key={key}, raw={raw:?}, configured={configured:?}, error={error}"
+                            );
+                        }
+                    }
+                }
             }
         }
     }

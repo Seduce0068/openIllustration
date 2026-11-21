@@ -131,7 +131,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
   任意の認証済みユーザーが通報キュー閲覧と確定を実行でき、運用判断を代行できる。
   `require_moderation_operator` を ban_user と同じ位置で呼ぶ（スケジューラ専用なら別トークン分離）。
-- [ ] **doctor が OIDC 空値ハードエラーを警告へ流す** — 根拠 `server/src/bin/doctor.rs` oidc_* カテゴリ / review R2-ER / 中。
+- [x] **doctor が OIDC 空値ハードエラーを警告へ流す** — 根拠 `server/src/bin/doctor.rs` oidc_* カテゴリ / review R2-ER / 中。
   hard_errors のうち OIDC_EMPTY_VALUE_ERROR 等が警告化されず、起動は拒否されるのに --strict が exit 0 になる。
 - [ ] **URL 同期の履歴失敗・冪等性を堅牢化** — 根拠 `client/src/lib.rs` navigate() / current_content_query() / review R2-DI / 中。
   履歴 API の Result を破棄し set_view を先に行うため URL と画面が不整合になり得る。
