@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -15,7 +15,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 
 ## 1. API仕様
 
-実装ルート（`server/src/lib.rs`）:
+実装ルート（`server/src/lib.rs`、`/me/export` は `server/src/export.rs`）:
 
 | Method | Path | 認証 | 用途 |
 | --- | --- | --- | --- |
@@ -172,7 +172,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 年齢ゲートは fail-closed。セッションを発行する全経路が共通ゲート `ensure_age_policy_configured`
   （`server/src/lib.rs`）を通る。`AGE_ENFORCEMENT_MODE=trusted_attribute_required` では
   `/auth/oidc/callback` と `/auth/refresh` が `TrustedAttributeRequired` を 403 で拒否し（R1-17）、
-  `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED` 未設定/0 のときは
+  `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_DEFAULT_MINIMUM` /
+  `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の実効値から導出した
+  `configuration_satisfied()` が false のときは
   `ConfigurationRequired` を 403 で拒否する。両経路は state / Cookie の消費より前にゲートを適用し、
   数値年齢の判定は `/auth/verify` の `validate_age` に委ねる。
 
@@ -242,6 +244,11 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 同一バイト列を再投稿すると同一CIDとなるため、既存CIDとの衝突は400で拒否する（主キー衝突による500を返さない）。
 - Content-Typeは `image/jxl` または `text/markdown` のみ許可し、JPEG XLシグネチャまたはMarkdownのUTF-8を検査する。既知フィールドの重複と未知フィールドは拒否する。
 - 価格は `0..=MAX_ORDER_JPY` に制限し、注文上限と整合させる。IPFS 保存名はハンドラ側で `upload.jxl` / `upload.md` に固定し、利用者入力を使わない。
+- クライアント側の価格入力は `min="0"` / `max="1000000"` とし、送信直前に
+  `price_range_error` でサーバー契約 `0..=1_000_000` をゲートする。範囲外なら固定文言
+  `Price must be between 0 and 1000000 JPY.` を表示して送信しない。`price_from_number` は
+  入力途中の値を丸めず、範囲外の判定をこのゲートへ集約する。0 は購入不可を表すが、
+  サーバー契約上は受理する値（一覧の `COALESCE(price, 0)` と同じ意味）である。
 - `title` / `description` / `tags` は省略可で、UTF-8 バイト数（`str::len()`）で `title` は200 B、
   `description` は2000 B、`tags` は10個まで・各タグは50 B を上限とする。超過は400で拒否し、
   空文字は受理し、空ベクトル（保存時は空文字）として扱う。`tags` はカンマ区切りの1フィールドで、
@@ -391,9 +398,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 |`transactions`|CID、送受信者、amount、`tx_hash`、時刻|現行の模擬支援記録。実決済の証明ではない|
 |`payment_orders`|注文ID、PPID、CID、チェーン、ウォレット、受取先、金額、状態、tx、確認数、期限、派生index|JPYC決済の状態機械。`(chain_id, tx_hash, log_index)` 一意。`derivation_index` は migration 003 の部分 UNIQUE（`derivation_index IS NOT NULL`）|
 
-DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `013_ban_until.sql`）としてバージョン管理され、起動時に
-`server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは `_migrations` テーブルに記録され、
-適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだがファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
+DDLは `server/migrations/` の番号付きSQL（現行: `001_initial_schema.sql` 〜 `014_refresh_tokens_expires_at_text.sql`）を
+バージョン管理し、起動時に `server/src/migration.rs` のランナーが未適用分のみ適用する。適用済みバージョンとSHA-256チェックサムは
+`_migrations` テーブルに記録され、適用済みマイグレーションの改変は起動時の検証で検出し起動を失敗させる。起動時の検証は適用済みだが
+ファイルが無いバージョンも拒否する（古いデプロイイメージの誤用防止）。既存DBに新規マイグレーションを追加する段階的アップグレードはテスト済み。
 migration 011 は `contents` へ `title` / `description` / `tags`（いずれも `TEXT NOT NULL DEFAULT ''`）を追加し、
 `tags` に `idx_contents_tags` インデックスを作成する。既存行のメタデータは空文字として読み出され、
 適用済みマイグレーションの改変は従来どおり起動時に検出される。
@@ -403,6 +411,10 @@ migration 012 は `favorites` テーブルを作成する。`user_hash` は `use
 `idx_favorites_user_created`（`user_hash, created_at DESC`）を作成する。
 migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_until` インデックスを作成する。既存行は NULL（無期限）として
 読み出され、後方互換。期限切れ判定は判定側の時刻比較で行い、`is_banned` フラグ自体は履歴として保持する。
+migration 014 は `refresh_tokens` を再作成し、`expires_at` の型宣言を `DATETIME` から `TEXT` へ変更する。006 の `DATETIME` は
+SQLite の型 affinity に過ぎず、実際の格納値は RFC3339 文字列だったため、宣言と実データを整合させる。値は列明示の
+`INSERT ... SELECT` で保持し、`used_at` / `created_at` は `DATETIME` のまま、CHECK 制約は設けない。
+`idx_refresh_tokens_family` / `idx_refresh_tokens_sub` は再作成する。006 はチェックサム保護のため一切変更しない。
 ロールバック（downマイグレーション）は未実装。ローカル DB では migration 前に `PRAGMA foreign_keys = ON` を適用して強制・検証する。
 リモート DB では接続単位で効かないため書き込み側で担保する（起動時 warn）。投票の重複は `votes(report_id, voter_hash)` の一意インデックスでも拒否する。
 
@@ -423,7 +435,7 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   `refusing backup: a live server instance holds the instance lock`、`restore_db` は
   `refusing restore: a live server instance holds the <side> instance lock`（`<side>` は
   `backup` / `target`）で拒否する。`/proc` が読めない等で判定不能な場合も「生存」として
-  扱い拒否する（fail-closed）。`backup_db` は bin 全体で12テスト（うち生存ロック検査は7テスト）と
+  扱い拒否する（fail-closed）。`backup_db` は bin 全体で17テスト（うち生存ロック検査は7テスト、DB 接続先必須化5テスト）と
   実 CLI で拒否を実証済み。
   `restore_db` は `live_backup_lock_is_rejected` / `live_target_lock_is_rejected`
   で両側の拒否を確認済み。
@@ -452,8 +464,9 @@ migration 013 は `users` へ `ban_until TEXT` を追加し、`idx_users_ban_unt
   - 親ディレクトリが group/other 書き込み可能（`mode & 0o022 != 0`）なら拒否し、
     `0700` でない（`mode & 0o055 != 0`）場合は警告を出す。
   - リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ読む。`--database-token` は
-    渡された時点でエラーとなる（`argv` は `ps` 等で公開されるため）。既定値は
-    `DATABASE_URL`（`file:local.db`）と `DATABASE_TOKEN`（空）。
+    渡された時点でエラーとなる（`argv` は `ps` 等で公開されるため）。`DATABASE_URL` は
+    `--database-url` または環境変数で必須設定し、暗黙既定値は使わない（未設定時起動拒否）。
+    `DATABASE_TOKEN` の既定値は空。
   - 出力は `OpenOptions::create_new(true)` で存在チェックと生成を原子的に行い、既存ファイルの
     上書きを拒否する（TOCTOU 対策）。
 - マスク整合チェック: `sign_audit_snapshot` は `reasons_masked=true` のとき各 `entry.reason` が
@@ -592,13 +605,18 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート / 参照 |
 | --- | --- | --- | --- |
-| `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` | 12 | 詳細設計 §5 |
+| `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` / `resolve_database_url` | 17 | 詳細設計 §5 |
 | `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 53（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1＋AGE_POLICY_CONFIGURED3＋バックアップ/TZ診断3＋バックアップ生値判定1件） | CLI-01 / CFG-01 |
 | `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 20 | 詳細設計 §5 |
-| `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` / `ensure_include_reasons_allowed` | 12（鍵権限・トークン・上書き拒否10＋include_reasons本番ガード2） | AUDIT-02 |
+| `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` / `ensure_include_reasons_allowed` / `resolve_database_url` | 17（鍵権限・トークン・上書き拒否10＋include_reasons本番ガード2＋DB接続先必須化5） | AUDIT-02 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
-| `verify_audit_log` | `parse_args_from` / `check_expect_root` | 9 | AUDIT-01 |
+| `verify_audit_log` | `parse_args_from` / `check_expect_root` / `resolve_database_url` | 14 | AUDIT-01 |
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |
+
+上記3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）の `resolve_database_url(cli, env)` は
+CLI 引数を環境変数より優先し、空・空白のみを未設定として扱う。両方が未設定なら
+`DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used` で起動を拒否し、
+いかなる値もエコーしない。`file:local.db` の暗黙既定は撤廃済み（deploy 設定例は明示済みのため変更なし）。
 
 ### doctor（`server/src/bin/doctor.rs`）
 
