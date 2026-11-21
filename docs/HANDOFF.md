@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-20T15:22:58+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -206,7 +206,10 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `AGE_COUNTRY_OVERRIDES`: `CC=NN,...`（例: `JP=18,US=21`）。
 - `AGE_TARGET_REGIONS`: 対象地域コード（カンマ区切り）。
 - `AGE_ENFORCEMENT_MODE`: `self_reported`（既定）または `trusted_attribute_required`（現時点フェイルクローズ）。
-- `AGE_REQUIRE_EXPLICIT_CONFIGURATION`, `AGE_POLICY_CONFIGURED`: 明示設定フェイルクローズ用。
+- `AGE_REQUIRE_EXPLICIT_CONFIGURATION`: 明示設定フェイルクローズ用。
+  旧手動フラグ `AGE_POLICY_CONFIGURED` は読取を廃止し、`configuration_satisfied()` が
+  `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の
+  実効値から充足を導出する。
 - 有効設定値は認証不要 `GET /policy/age` で常時公開。秘密情報を含めない。
 
 ### 決済
@@ -258,6 +261,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `server/migrations/008_revoked_subs.sql`: sub 単位のセッション失効閾値の永続化。
 - `server/migrations/009_revoked_sessions.sql`: ログアウト済み sid の永続化（再起動後も失効維持）。セッション有効期限(24h)+60s より古いレコードは起動時/ワーカー周期で回収。
 - `server/migrations/010_wallet_bound.sql`: 注文ごとのウォレット所有証明を `wallet_bound` へ永続化（verify の必須条件）。
+- `server/migrations/014_refresh_tokens_expires_at_text.sql`: `expires_at` を `DATETIME` から
+  `TEXT`（RFC3339 値は保持）へ再定義。006 はチェックサム保護のため変更しない。
 - 起動時は `<DB path>.instance.lock` で単一ライターを強制（第二インスタンスは拒否、停止時に削除）。同じ DB を複数プロセスで起動しないこと。
 - `server/src/bin/backup_db.rs`: DB スナップショット作成（`VACUUM INTO`、上書き拒否）。
 - `server/src/bin/verify_backup.rs`: バックアップの構造検証。
