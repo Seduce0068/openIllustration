@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T07:30:00+09:00"
+  at: "2026-11-22T08:15:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T07:30:00+09:00"
+  at: "2026-11-22T08:15:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -34,6 +34,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   空 CID / 空 reason の検証フェーズを、`search.spec.ts` は既存1件内へ `q='Ghost'` の
   0件表示とクリア復帰フェーズを、`integrity.spec.ts` は既存2件内へ
   aria-label フォールバックと要約注記のアサーションを追加した（新規 `test()` なし）。
+   byte 契約（CONTENT-06 / MOD-08）の境界回帰もクライアント側の既存 `#[cfg(test)]`
+   モジュール内へ単体テストとして統合し、E2E の `test()` は追加していない（69件を維持）。
   新規に参照する testid は `clear-search-filters`（条件付き空状態のクリアボタン）と
   `report-validation-error`（通報入力検証の `role="alert"`）で、既存の `dashboard-error` /
   `upload-status` / `export-error` 等と併せて固定文言契約を検証する。
@@ -133,7 +135,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | CONTENT-03 | SHA-256不一致 | コンテンツ描画を拒否 | 実装済み。checksum 一致で 200、不一致で 401、Illustration/Novel の Content-Type をローカルモックで検証 |
 | CONTENT-05 | 通報中/却下コンテンツの直接 CID 取得 | 404 で配信しない | 実装済み。`status = 'Approved'` で絞り、Reported/Rejected が 404 になることを mutation テストで確認 |
 | CONTENT-04 | 小説に `<script>` 等のraw HTML、`javascript:` / `data:` リンク・画像URL | raw HTMLを実行せず、危険なURLスキームを無効化 | 実装済み、回帰テストあり |
-| CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存 |
+| CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存。具体的な byte 境界は `title` が日本語66文字（198 B）受理／67文字（201 B）拒否、`description` が666文字（1998 B）受理／667文字（2001 B）拒否、各タグが16文字（48 B）受理／17文字（51 B）拒否、タグ個数が10個受理／11個拒否。クライアントは送信前ゲート `metadata_byte_error` でこれらを通信前に拒否し、HTTP リクエストを1本も送らない（HTML の `maxlength` は UTF-16 コードユニット単位のため日本語では上限を守れない）。境界回帰はクライアント側の既存 `#[cfg(test)]` モジュール内の単体テストで検証（E2E `test()` 69件は不変） |
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
 | CONTENT-08 | `q` / `tag` に `%` `_` `\` を含む入力、メタデータに HTML タグを含む値 | ワイルドカードとして解釈されず、描画時もスクリプトが実行されない | 実装済み。サーバーは `ESCAPE '\'` とバインドパラメータでリテラル照合（`test_like_escaping_keeps_wildcards_literal`、E2E は `test_like_wildcards_are_literal`）、クライアントは `escape_html_text` で `&` `<` `>` `"` `'` を実体参照化。サーバーは生テキストを保存・返却し、消毒は描画側の責務 |
 | CONTENT-09 | チェックサム一致だが JXL として不正なバイト列（例: `not a jxl codestream`）を HTTP 200 で返すゲートウェイ | チェックサム検証は成功しても VERIFIED にせず、`× DECODE FAILED` と固定エラー文言を表示する | 実装済み。クライアントの `decode_error` 分岐で `set_verified = Some(false)` に切り替え、デコーダのエラー値は画面へ出さない。E2E は `e2e/tests/integrity.spec.ts` の `should not mark VERIFIED when checksum matches but JXL decoding fails (R1-13)` で検証。補助する単体テストは `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` |
@@ -152,7 +154,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-05 | `/mod/stats` と手動 finalize の認可 | `/mod/stats` は未認証401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200。手動 `POST /mod/reports/{report_id}/finalize`（HTTP ハンドラ）も `require_moderation_operator` で運用者限定とし、未登録 sub は403。スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は認可対象外で自動確定を継続 | 実装済み・検証済み（`/mod/stats` 対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned`。手動 finalize は `test_finalize_is_noop_before_deadline` の既存1件内で運用者200と未登録subの403を検証（新規テスト関数なし、件数不変） |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
 | MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 初期表示は `/mod/stats` を0本とし、中立文言のボタン押下時にのみ1本送信する。200 応答のみを根拠に運用者パネルをマウントし、403 では一般画面へ権限エラーを描画せず黙って閉じる。不正 JSON ではパネル内へ `集計の解析に失敗しました。` を表示し、センチネル `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` を出さない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should mount operator stats panel only on opt-in and stay silent for general users`。初期0本→オプイン200→403パネル内（否定オラクル）の3フェーズを既存1件で検証。testid: `moderation-stats-toggle` / `moderation-stats-optin`。chromium で pass（moderation.spec.ts 全14件、フルスイート定義数69件を維持。webkit はホスト側 ICU/libxml2 欠落で未検証） |
-| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」） |
+| MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」）。通報理由の送信時バイト契約（2000 B）も本ゲートで扱う: 日本語666文字（1998 B）は受理、667文字（2001 B）は拒否。クライアントは `submit_report` の `validate_report_input` 直後に `report_reason_byte_error` を検査し、固定文言を validationError（`role="alert"`）へ set して早期 return するため、超過入力は通信前に拒否され HTTP リクエストは0本。これは要約の120 Unicode 文字上限（文字数）とは別の UTF-8 バイト上限であり、`maxlength` は UTF-16 単位のため守れない。境界回帰はクライアント側の既存 `#[cfg(test)]` モジュール内の単体テストへ統合し、E2E `test()` 69件は不変 |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |

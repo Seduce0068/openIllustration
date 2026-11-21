@@ -9,6 +9,14 @@ use rsa::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// 任意メタデータ・通報理由の上限（文字数ではなく UTF-8 バイト数）。
+/// サーバー (`validate_content_metadata` / `mod_report`) とクライアントの送信前ゲートで共有する。
+pub const MAX_CONTENT_TITLE_BYTES: usize = 200;
+pub const MAX_CONTENT_DESCRIPTION_BYTES: usize = 2000;
+pub const MAX_CONTENT_TAG_BYTES: usize = 50;
+pub const MAX_CONTENT_TAGS: usize = 10;
+pub const MAX_REPORT_REASON_BYTES: usize = 2000;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Claims {
     pub sub: String,

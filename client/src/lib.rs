@@ -114,6 +114,15 @@ const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
+/// 投稿フォームの maxlength は `common` の UTF-8 バイト上限から導出する。
+/// HTML の maxlength は UTF-16 コードユニット単位のため、日本語等のマルチバイト文字では
+/// この値だけでは上限を守れない。実契約は送信前ゲート `metadata_byte_error` が担保する。
+const UPLOAD_TITLE_MAX_LEN: u32 = common::MAX_CONTENT_TITLE_BYTES as u32;
+const UPLOAD_DESCRIPTION_MAX_LEN: u32 = common::MAX_CONTENT_DESCRIPTION_BYTES as u32;
+/// 10 タグ × 50 B + 区切りカンマ 9 個 = 509（UTF-16 では守れない旨は上記を参照）。
+const UPLOAD_TAGS_MAX_LEN: u32 = (common::MAX_CONTENT_TAGS * common::MAX_CONTENT_TAG_BYTES
+    + (common::MAX_CONTENT_TAGS - 1)) as u32;
+
 /// エクスポートの保存ファイル名。ユーザー入力を一切使わない固定値（パス注入対策）。
 const EXPORT_FILENAME: &str = "openillustration-export.json";
 
@@ -2805,6 +2814,39 @@ fn parse_price_input(raw: &str) -> Option<i32> {
     price_from_number(raw.parse::<f64>().ok()?)
 }
 
+/// メタデータのバイト上限超過時に表示する固定文言。生入力値は一切混入させない。
+const METADATA_BYTE_ERROR: &str =
+    "入力が長すぎます。タイトル・説明・タグの上限を確認してください。";
+
+/// title / description / tags の UTF-8 バイト上限を検査する純粋関数。
+///
+/// `tags_csv` の分割規則はサーバーの `parse_tags_field` と同じ（カンマ分割・前後の空白除去・
+/// 空要素除外）。文字数ではなく [`str::len`] によるバイト数で判定するため、日本語では
+/// maxlength（UTF-16）をすり抜けた入力もここで拒否できる。
+fn metadata_byte_error(title: &str, description: &str, tags_csv: &str) -> Option<&'static str> {
+    if title.len() > common::MAX_CONTENT_TITLE_BYTES {
+        return Some(METADATA_BYTE_ERROR);
+    }
+    if description.len() > common::MAX_CONTENT_DESCRIPTION_BYTES {
+        return Some(METADATA_BYTE_ERROR);
+    }
+    let tags: Vec<&str> = tags_csv
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .collect();
+    if tags.len() > common::MAX_CONTENT_TAGS {
+        return Some(METADATA_BYTE_ERROR);
+    }
+    if tags
+        .iter()
+        .any(|tag| tag.len() > common::MAX_CONTENT_TAG_BYTES)
+    {
+        return Some(METADATA_BYTE_ERROR);
+    }
+    None
+}
+
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = signal(String::new());
@@ -2851,6 +2893,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         // 送信直前にサーバー契約 0..=1_000_000 をゲートする。入力中に黙って丸めない
         // 経路を維持するため、範囲外はここで固定文言を出して通信を開始しない。
         if let Some(error) = price_range_error(price_val) {
+            set_status.set(error.to_string());
+            return;
+        }
+        // メタデータも通信前に UTF-8 バイト契約でゲートする。HTML の maxlength は
+        // UTF-16 単位のため日本語では守れず、ここで拒否すれば HTTP は 0 本のまま。
+        if let Some(error) = metadata_byte_error(&title_val, &description_val, &tags_val) {
             set_status.set(error.to_string());
             return;
         }
@@ -3006,7 +3054,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         id="upload-title"
                         name="title"
                         type="text"
-                        maxlength=200
+                        maxlength=UPLOAD_TITLE_MAX_LEN
                         placeholder="TITLE"
                         on:input=move |ev| set_title.set(event_target_value(&ev))
                         prop:value=title
@@ -3021,7 +3069,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     <textarea
                         id="upload-description"
                         name="description"
-                        maxlength=2000
+                        maxlength=UPLOAD_DESCRIPTION_MAX_LEN
                         placeholder="DESCRIPTION"
                         on:input=move |ev| set_description.set(event_target_value(&ev))
                         prop:value=description
@@ -3037,7 +3085,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         id="upload-tags"
                         name="tags"
                         type="text"
-                        maxlength=509
+                        maxlength=UPLOAD_TAGS_MAX_LEN
                         placeholder="FANTASY, SCIFI"
                         on:input=move |ev| set_tags.set(event_target_value(&ev))
                         prop:value=tags
@@ -3218,9 +3266,23 @@ fn validate_report_input(cid: &str, reason: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// input/textarea の maxlength。サーバーの受理範囲（CID 128 文字・理由 2000 文字）に合わせる。
+/// 通報理由のバイト上限超過時に表示する固定文言。生入力値は一切混入させない。
+const REPORT_REASON_BYTE_ERROR: &str = "通報理由が長すぎます。上限を確認してください。";
+
+/// 通報理由が UTF-8 バイト上限を超える場合だけ固定文言を返す純粋関数。
+/// 空文字の判定は `validate_report_input` の責務（当関数は長さのみを扱う）。
+fn report_reason_byte_error(reason: &str) -> Option<&'static str> {
+    if reason.len() > common::MAX_REPORT_REASON_BYTES {
+        return Some(REPORT_REASON_BYTE_ERROR);
+    }
+    None
+}
+
+/// input/textarea の maxlength。CID は ASCII のみ。理由は `common` の UTF-8 バイト上限に合わせる。
+/// maxlength は UTF-16 コードユニット単位のためマルチバイト文字では守れず、
+/// 送信前ゲート `report_reason_byte_error` が実契約を担保する。
 const REPORT_CID_MAX_LEN: u32 = 128;
-const REPORT_REASON_MAX_LEN: u32 = 2000;
+const REPORT_REASON_MAX_LEN: u32 = common::MAX_REPORT_REASON_BYTES as u32;
 
 /// 送信中フラグを確実に解除する RAII ガード。
 /// `spawn_local` 内の `match` を成否いずれのアームで抜けても、スコープ離脱時に `Drop` が走って
@@ -3427,6 +3489,12 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         // 既存の "Report failed." 固定文言は成否の通知として変更しない。
         if let Err(message) = validate_report_input(&cid, &reason) {
             set_report_validation_error.set(message.to_string());
+            set_status.set(String::new());
+            return;
+        }
+        // 理由も UTF-8 バイト契約を通信前にゲートする（maxlength は UTF-16 では守れない）。
+        if let Some(error) = report_reason_byte_error(&reason) {
+            set_report_validation_error.set(error.to_string());
             set_status.set(String::new());
             return;
         }
@@ -5174,6 +5242,106 @@ mod tests {
     fn report_input_maxlength_matches_server_limits() {
         assert_eq!(super::REPORT_CID_MAX_LEN, 128);
         assert_eq!(super::REPORT_REASON_MAX_LEN, 2000);
+    }
+
+    /// 投稿フォームの maxlength は common の UTF-8 バイト上限から導出されていること。
+    #[test]
+    fn upload_maxlength_constants_match_common_byte_limits() {
+        assert_eq!(
+            super::UPLOAD_TITLE_MAX_LEN as usize,
+            common::MAX_CONTENT_TITLE_BYTES
+        );
+        assert_eq!(
+            super::UPLOAD_DESCRIPTION_MAX_LEN as usize,
+            common::MAX_CONTENT_DESCRIPTION_BYTES
+        );
+        // 10 タグ × 50 B + 区切りカンマ 9 個 = 509（既存の maxlength と同じ値）。
+        assert_eq!(
+            super::UPLOAD_TAGS_MAX_LEN as usize,
+            common::MAX_CONTENT_TAGS * common::MAX_CONTENT_TAG_BYTES
+                + (common::MAX_CONTENT_TAGS - 1)
+        );
+        assert_eq!(super::UPLOAD_TAGS_MAX_LEN, 509);
+    }
+
+    /// title は UTF-8 バイトで境界を判定する（日本語 66 文字 = 198 B / 67 文字 = 201 B）。
+    #[test]
+    fn metadata_byte_error_enforces_utf8_title_boundary() {
+        let jp = "あ";
+        assert_eq!(jp.len(), 3, "テスト前提: ひらがな1文字は UTF-8 3 バイト");
+        let within = jp.repeat(66); // 198 B
+        let over = jp.repeat(67); // 201 B
+        assert_eq!(within.len(), 198);
+        assert_eq!(over.len(), 201);
+        assert_eq!(super::metadata_byte_error(&within, "", ""), None);
+        assert_eq!(
+            super::metadata_byte_error(&over, "", ""),
+            Some(super::METADATA_BYTE_ERROR)
+        );
+        // バイト上限を超える入力値は固定文言へエコーされない。
+        assert!(!super::METADATA_BYTE_ERROR.contains(over.as_str()));
+    }
+
+    /// description は UTF-8 バイトで境界を判定する（666 文字 = 1998 B / 667 文字 = 2001 B）。
+    #[test]
+    fn metadata_byte_error_enforces_utf8_description_boundary() {
+        let within = "あ".repeat(666); // 1998 B
+        let over = "あ".repeat(667); // 2001 B
+        assert_eq!(within.len(), 1998);
+        assert_eq!(over.len(), 2001);
+        assert_eq!(super::metadata_byte_error("", &within, ""), None);
+        assert_eq!(
+            super::metadata_byte_error("", &over, ""),
+            Some(super::METADATA_BYTE_ERROR)
+        );
+    }
+
+    /// 各タグは UTF-8 バイトで境界を判定する（16 文字 = 48 B / 17 文字 = 51 B）。
+    #[test]
+    fn metadata_byte_error_enforces_utf8_tag_boundary() {
+        let within = "あ".repeat(16); // 48 B
+        let over = "あ".repeat(17); // 51 B
+        assert_eq!(within.len(), 48);
+        assert_eq!(over.len(), 51);
+        assert_eq!(super::metadata_byte_error("", "", &within), None);
+        assert_eq!(
+            super::metadata_byte_error("", "", &over),
+            Some(super::METADATA_BYTE_ERROR)
+        );
+    }
+
+    /// タグの分割規則はサーバーの parse_tags_field と同じ（分割・空白除去・空要素除外）。
+    #[test]
+    fn metadata_byte_error_counts_tags_like_server_parser() {
+        let ten = ["tag"; 10].join(",");
+        let eleven = ["tag"; 11].join(",");
+        assert_eq!(super::metadata_byte_error("", "", &ten), None);
+        assert_eq!(
+            super::metadata_byte_error("", "", &eleven),
+            Some(super::METADATA_BYTE_ERROR)
+        );
+        // 空要素は個数に数えない（",,," は 0 個）。
+        assert_eq!(super::metadata_byte_error("", "", " , , "), None);
+        // 前後の空白は除去してからバイト数を数える。
+        let padded = format!("  {}  ", "あ".repeat(16));
+        assert_eq!(super::metadata_byte_error("", "", &padded), None);
+    }
+
+    /// 通報理由は UTF-8 バイトで境界を判定する（666 文字 = 1998 B / 667 文字 = 2001 B）。
+    #[test]
+    fn report_reason_byte_error_enforces_utf8_boundary() {
+        let within = "あ".repeat(666); // 1998 B
+        let over = "あ".repeat(667); // 2001 B
+        assert_eq!(within.len(), 1998);
+        assert_eq!(over.len(), 2001);
+        assert_eq!(super::report_reason_byte_error(&within), None);
+        assert_eq!(
+            super::report_reason_byte_error(&over),
+            Some(super::REPORT_REASON_BYTE_ERROR)
+        );
+        // 空文字は長さ上限の対象外（空の判定は validate_report_input が行う）。
+        assert_eq!(super::report_reason_byte_error(""), None);
+        assert!(!super::REPORT_REASON_BYTE_ERROR.contains(over.as_str()));
     }
 
     /// 0 件時の文言は条件の有無で切り替わり、条件なしは既存文言を維持する。

@@ -37,10 +37,10 @@ status: current
 
 ### 優先度: 高
 
-- [ ] **リモートDBでJWT失効がメモリに閉じ込められる問題を是正** — 根拠 `server/src/lib.rs` AuthClaims抽出器 / review R1-AR / 重大度 high。
+- [x] **リモートDBでJWT失効がメモリに閉じ込められる問題を是正** — 根拠 `server/src/lib.rs` AuthClaims抽出器 / review R1-AR / 重大度 high。
   revoked_sessions/revoked_subs_before がプロセス内のみで、複数インスタンス構成では logout/BAN が他インスタンスへ波及しない。
   DB照会または単一インスタンス強制でfail-closedにする。
-- [ ] **instance lock読取失敗のfail-closed化** — 根拠 `server/src/lib.rs` acquire_instance_lock / review R2-DI / 重大度 high。
+- [x] **instance lock読取失敗のfail-closed化** — 根拠 `server/src/lib.rs` acquire_instance_lock / review R2-DI / 重大度 high。
   read_to_stringのErrを空内容として扱い有効ロックを奪取し得る。最初の読取を?伝播し再読込も失敗時bailする。
 - [ ] **deny のRUSTSEC ignoreを本番リモートDB構成ですり抜けないように** — 根拠 `deny.toml:48` / review R3-DE / 重大度 high。
   h2/rustls系ignoreの理由が「リモートDB接続時のみ」なのに本番推奨構成そのものが到達経路を持つ。
@@ -48,7 +48,7 @@ status: current
 - [ ] **アップロード/通報失敗をrole=alertで告知**
   — 根拠 `client/src/lib.rs` upload-status / `docs/OPERATIONAL_POLICY.md:190` / discovery R5-VU / 重大度 high。
   成功はrole=statusのまま、失敗時のみrole=alert専用領域へ。E2E既存2件内へアサーション、69件維持。
-- [ ] **maxlengthをUTF-8バイト基準へ**
+- [x] **maxlengthをUTF-8バイト基準へ**
   — 根拠 `client/src/lib.rs` REPORT_REASON_MAX_LEN 等 / `server/src/lib.rs` validate_content_metadata / discovery R5-VU
     重大度 high。
   ブラウザmaxlengthはUTF-16 code unitsでサーバはUTF-8バイト。日本語67文字超で400になる。
@@ -672,6 +672,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（高優先3件）: リモートDB失効をDB正本照会+positiveキャッシュへ、
+  instance lock読取をfail-closed化、maxlengthをUTF-8 byte基準へ（common定数集約）。
+  me_exportテストのrevoked_subsシードとDB正本照会が衝突したため専用JWTへiat付与で解消。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests123）。残りは高5・中11・低5。
 
 - 2026-11-22 コンボ第3ラウンド（review 4担当 + discovery 3担当）: 全7担当完了。
   R6 で重複排除・Runtime Proof 確認のうえ新規25件（高7/中11/低5）を追記。

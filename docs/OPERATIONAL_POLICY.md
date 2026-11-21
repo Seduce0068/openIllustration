@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T07:30:00+09:00"
+  at: "2026-11-22T08:15:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -42,6 +42,11 @@ generated:
   DB 側のファミリ失効だけではブラウザに 30 日間有効な refresh_token Cookie が残るため、
   削除 Cookie の配信がログアウト完了の条件。`Secure` は `OIDC_COOKIE_SECURE` に追随し、
   未設定なら付与する（本番では HTTPS 配信で Secure を維持する）。
+- 失効判定（`sid` と sub 失効閾値）は DB を正本とし、認証リクエストごとに DB へ照会するため、
+  他インスタンスで記録された logout / BAN / backchannel logout が即時に反映される。
+  起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
+  miss 時に DB 照会、否定結果は非キャッシュ）として残し、判定の根拠には使わない。
+  DB エラーは fail-closed（Database / Internal、いずれも HTTP 500）とし、失効なしとして扱わない。
 - OIDC認証の未完了 `pending`（`state` / `nonce` / `code_verifier`）は10分TTLとし、保持数はコード定数
   `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
   上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
@@ -77,6 +82,8 @@ generated:
   TRUE のまま残す（自動でフラグを落とさない）。UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。
   これは運用ログであり第三者検証可能な監査ではない。
   投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
+- BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。
+  メモリの失効閾値は positive-only キャッシュに留め、書き込みは DB コミットを先に行うため、他インスタンスへ即時に反映される。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
   通報一覧は認証必須・Reported 限定・新着順を維持し、運用者限定にはしない。理由は `common::summarize_reason` で要約して返す。
@@ -152,9 +159,14 @@ generated:
   失敗ファイルは適用されない。復旧は原因修正後の再起動とし、`_migrations` の記録を確認する。適用済みバージョンに対応するファイルが無い場合（古いイメージでの起動等）、
   およびマイグレーションディレクトリ自体が存在しない場合も起動を拒否する（fail-closed、ディレクトリ欠落で欠落検査をすり抜けるのを防止）。単一プロセス内の書き込みトランザクションは接続ごとのロックで直列化する（libSQL
   は同一接続で同時に1つの `BEGIN` しか保持できない）。ローカル DB では起動時に `<DB path>.instance.lock` を原子的に作成し、生存 PID
-  のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。リモート DB ではこの排他が使えないため警告のみとし、
+  のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。
+  ロックファイルの読取失敗や内容不正（所有者 PID を識別できない場合を含む）は stale とみなさず起動を拒否する（fail-closed）。リモート DB ではこの排他が使えないため警告のみとし、
   単一ライター運用を契約とする。バックアップは `backup_db`（`VACUUM INTO`・上書き拒否）で取得し、`verify_backup` と `verify_audit_log` で検証する。手順は
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
+- 失効判定の DB 正本化: リモート DB では `instance.lock` による排他が使えず単一ライター契約を前提とするため、
+  `sid` / sub の失効は DB を正本として認証リクエストごとに照会し、他インスタンスの失効を即時に反映する。
+  起動時ロードのメモリは positive-only キャッシュ（失効済みのみ保持、miss 時に DB 照会、否定結果は非キャッシュ）としてのみ残す。
+  書き込み経路（logout / BAN / backchannel）は DB コミットを先に確定し、メモリ更新はその後に置く。
 - 起動時の外部キー検査（`PRAGMA foreign_key_check`）で孤立行を検出した場合、本番相当
   （`ALLOW_MOCK_AUTH` 無効）は検査失敗時と同様に起動を拒否する（fail-closed）。
   開発（`ALLOW_MOCK_AUTH=1`）では起動を止めず warn のみとする。`PRAGMA foreign_keys` は
@@ -270,6 +282,10 @@ generated:
   合意前の **Level 0（観測可能性）** は観測値が有限かつ 0 以上で保存されることを
   pass 条件とし、受入の根拠には使わない。受入値・対応マトリクス・最小バージョンが
   未決定の間は「合意済み」とみなさず、移行を完了しない。
+
+- 失効判定の DB 正本化に伴う per-request SELECT 増分は ADR-0011 の
+  **Level 0（観測可能性）** の観測値として記録する。有限かつ 0 以上の値が保存されることを
+  pass 条件とし、受入の根拠には使わない（Level 1 の受入値は ADR-0011 合意後に適用する）。
 
 ## 7. 環境変数リファレンス（サーバー＋運用スクリプトが読む環境変数）
 

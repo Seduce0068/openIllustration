@@ -8903,6 +8903,42 @@ async fn test_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // R2-REMOTE-REVOKE: 失効判定は DB 正本。メモリが空の第2 AppState（同一 DB）でも
+    // 同じ JWT は 401 になる（他インスタンスの logout が即時に反映される）。
+    let second_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        // メモリは意図的に空。DB の revoked_sessions だけに失効が残っている。
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+    });
+    let second_app = crate::build_router(second_state);
+    let response = second_app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// R1-18: ログアウト時に refresh_token Cookie を Max-Age=0 で削除する。
@@ -11866,9 +11902,10 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
     });
-    // HTTP 経由（build_router + send_mod_action）では AuthClaims extractor が
-    // revoked_subs_before を先に読み、poison でハンドラに到達できないため、
-    // ban_user を直接呼んで DB コミット→メモリ更新の順序を検証する。
+    // AuthClaims extractor は revoked_subs_before ではなく DB を読むため、
+    // poison でハンドラへの到達が塞がることはない。ここでは ban_user を直接
+    // 呼び、ban_user 自身がコミット後のメモリ更新で poison 失敗することと、
+    // DB 側の閾値が先にコミット済みであることを検証する。
     let result = crate::ban_user(
         State(Arc::clone(&state)),
         crate::AuthClaims(Claims {
@@ -12705,6 +12742,18 @@ fn test_instance_lock_rejects_live_pid() {
     assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_ok());
     let contents = std::fs::read_to_string(&lock).unwrap();
     assert_eq!(crate::parse_instance_lock(&contents).0, std::process::id());
+
+    // 読取失敗（存在しない先を指す壊れた symlink）は stale とみなさず拒否（fail-closed）。
+    // root では chmod 000 が効かないため symlink で読取エラーを再現する。
+    std::fs::remove_file(&lock).unwrap();
+    std::os::unix::fs::symlink("missing-target", &lock).unwrap();
+    assert!(crate::acquire_instance_lock(lock.to_str().unwrap()).is_err());
+    // 読取失敗時にロックを削除していないこと（symlink が残っていること）を確認する。
+    assert!(std::fs::symlink_metadata(&lock).is_ok());
+    assert_eq!(
+        std::fs::read_link(&lock).unwrap(),
+        std::path::Path::new("missing-target")
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -16674,7 +16723,21 @@ async fn setup_me_export_app() -> Router {
 async fn me_export_request(app: &Router, sub: Option<&str>) -> Response {
     let mut builder = Request::get("/me/export");
     if let Some(sub) = sub {
-        let token = generate_token(TEST_JWT_SECRET, sub).await;
+        // DB正本の revoked_subs には alice=1000/bob=2000 がシードされているため、
+        // それより未来の iat を付与して「失効前のセッション」として扱わせる。
+        // 失効判定は DB を正本とするため、JWT だけを操作すれば他テストへ波及しない。
+        let claims = Claims {
+            sub: sub.to_string(),
+            exp: 10000000000,
+            sid: None,
+            iat: Some(10_000_000),
+        };
+        let token = encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(TEST_JWT_SECRET.as_ref()).unwrap(),
+        )
+        .unwrap();
         builder = builder.header("authorization", format!("Bearer {token}"));
     }
     app.clone()

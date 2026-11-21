@@ -664,25 +664,21 @@ where
             .decode::<Claims>(token)
             .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?;
 
-        if let Some(sid) = &token_data.claims.sid {
-            let revoked = state
-                .revoked_sessions
-                .lock()
-                .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-            if revoked.contains(sid) {
-                return Err(AppError::Unauthorized("Session revoked".to_string()));
-            }
+        // R2-REMOTE-REVOKE: 失効判定は DB を正本とする。メモリは positive-only
+        // キャッシュ（失効済み sid のみ保持）で、miss 時に必ず DB を照会し、
+        // 否定結果はキャッシュしない（他インスタンスの失効を取りこぼさない）。
+        if let Some(sid) = &token_data.claims.sid
+            && is_session_revoked(&state, sid).await?
+        {
+            return Err(AppError::Unauthorized("Session revoked".to_string()));
         }
 
-        let revoked_subs = state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        if let Some(&threshold) = revoked_subs.get(&token_data.claims.sub) {
-            let issued_at = token_data.claims.iat.unwrap_or(0);
-            if issued_at <= threshold {
-                return Err(AppError::Unauthorized("Session revoked".to_string()));
-            }
+        // sub 閾値も DB の revoked_subs.revoked_at を SELECT して claims.iat と
+        // 比較する。メモリ（revoked_subs_before）は読まないため、他インスタンスの
+        // BAN / backchannel logout が即時に反映される。DB エラーは fail-closed
+        // （AppError::Internal）とし、失効なしとして扱わない。
+        if is_sub_revoked(&state.db, &token_data.claims.sub, token_data.claims.iat).await? {
+            return Err(AppError::Unauthorized("Session revoked".to_string()));
         }
 
         Ok(AuthClaims(token_data.claims))
@@ -802,8 +798,8 @@ fn init_tracing() {
 ///
 /// - 新形式: 1行目が PID、2行目が `/proc/<pid>/stat` の field 22 (starttime)。
 /// - 旧形式: PID のみ（`starttime` は `None`）。後方互換として扱う。
-/// - PID が読めない場合: `(0, None)` を返す。PID 0 は通常のプロセスに割り当てられないため、
-///   呼び出し側は stale ロックとして回収できる。
+/// - PID が読めない場合: `(0, None)` を返す。PID 0 は所有者を識別できないため、
+///   呼び出し側は stale として回収せず起動を拒否する（fail-closed）。
 pub(crate) fn parse_instance_lock(contents: &str) -> (u32, Option<u64>) {
     let mut lines = contents.lines();
     let pid = lines
@@ -873,21 +869,32 @@ fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
     {
         Ok(mut file) => write_instance_lock(&mut file),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let contents = std::fs::read_to_string(lock_path).unwrap_or_default();
+            // 読取失敗は内容不明＝所有者確認不能なので、stale とみなさず起動を拒否する（fail-closed）。
+            // エラー文言には lock_path と I/O 原因のみを含め、秘密情報は出さない。
+            let contents = std::fs::read_to_string(lock_path).map_err(|error| {
+                anyhow::anyhow!("failed to read instance lock (lock: {lock_path}): {error}")
+            })?;
             let (stale_pid, stale_starttime) = parse_instance_lock(&contents);
+            if stale_pid == 0 {
+                // PID が読めない壊れ内容は所有者を識別できないため、stale 回収の対象にしない。
+                anyhow::bail!(
+                    "instance lock has no identifiable owner (lock: {lock_path}); refusing to treat as stale"
+                );
+            }
             if instance_lock_owner_alive(stale_pid, stale_starttime) {
                 anyhow::bail!(
                     "another server instance appears to be running (lock: {lock_path}, pid: {stale_pid})"
                 );
             }
             // TOCTOU 対策: stale と判定した直後に再読込し、最初に読んだ (PID, starttime)
-            // と一致するときだけ削除する。書き換えられていたら他プロセスが先に
-            // ロックを取得したとして、こちらは削除せず失敗する。
-            let still_stale = std::fs::read_to_string(lock_path)
-                .ok()
-                .is_some_and(|current| {
-                    parse_instance_lock(&current) == (stale_pid, stale_starttime)
-                });
+            // と一致するときだけ削除する。再読込が失敗した場合も内容が変わった場合も
+            // 削除せず失敗する（fail-closed）。
+            let still_stale = match std::fs::read_to_string(lock_path) {
+                Ok(current) => parse_instance_lock(&current) == (stale_pid, stale_starttime),
+                Err(error) => {
+                    anyhow::bail!("failed to re-read instance lock (lock: {lock_path}): {error}")
+                }
+            };
             if !still_stale {
                 anyhow::bail!("instance lock changed while acquiring (lock: {lock_path}); retry");
             }
@@ -1346,6 +1353,11 @@ pub async fn run() -> anyhow::Result<()> {
         age_policy.settings_always_public
     );
 
+    // R2-REMOTE-REVOKE: 起動時ロードのメモリは positive-only 失効キャッシュとして残す。
+    // 失効済みの sub 閾値 / sid のみを保持し、認証時の判定は DB を正本として行う。
+    // miss 時に必ず DB を照会し、否定結果はキャッシュしない（他インスタンスの
+    // 失効を取りこぼさないため）。purge で DB 行が消えてもメモリに残り得るが、
+    // 対象 JWT は SESSION_TTL_SECS で期限切れになるため自然解消する。
     // 永続化済みの sub 失効閾値を起動時にロードする。
     let revoked_subs_before = {
         let mut rows = db
@@ -2857,8 +2869,11 @@ pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(
     Ok(())
 }
 
-/// sid が失効済みかをメモリと DB の両方で確認する（logout の冪等判定用）。
-async fn is_session_revoked(state: &Arc<AppState>, sid: &str) -> Result<bool, AppError> {
+/// sid が失効済みかを確認する（AuthClaims 抽出器と logout の冪等判定で共用）。
+/// メモリは positive-only キャッシュとして失効済み sid のみを保持し、
+/// miss 時は必ず DB を照会する。否定結果はキャッシュしないため、
+/// 他インスタンスで記録された失効も取りこぼさない。
+pub(crate) async fn is_session_revoked(state: &Arc<AppState>, sid: &str) -> Result<bool, AppError> {
     if state
         .revoked_sessions
         .lock()
@@ -2875,6 +2890,34 @@ async fn is_session_revoked(state: &Arc<AppState>, sid: &str) -> Result<bool, Ap
         )
         .await?;
     Ok(rows.next().await?.is_some())
+}
+
+/// sub の失効閾値を DB の `revoked_subs.revoked_at` から照会し、
+/// `iat <= revoked_at` なら失効と判定する。
+/// メモリの `revoked_subs_before` は読まず DB を正本とすることで、
+/// 他インスタンスの BAN / backchannel logout を即時に反映する。
+/// DB エラーは fail-closed として `AppError::Internal` を返し、
+/// 失効なし（`Ok(false)`）とみなさない。
+pub(crate) async fn is_sub_revoked(
+    db: &Connection,
+    sub: &str,
+    iat: Option<usize>,
+) -> Result<bool, AppError> {
+    // 捕捉しないクロージャは Copy なので3箇所で再利用できる。
+    let db_err =
+        |e: libsql::Error| AppError::Internal(format!("revoked_subs lookup failed: {}", e));
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = ? LIMIT 1",
+            [sub.to_string()],
+        )
+        .await
+        .map_err(db_err)?;
+    let Some(row) = rows.next().await.map_err(db_err)? else {
+        return Ok(false);
+    };
+    let revoked_at: i64 = row.get(0).map_err(db_err)?;
+    Ok((iat.unwrap_or(0) as i64) <= revoked_at)
 }
 
 /// セッションを失効させる。以後、同じ `sid` の JWT は拒否される。
