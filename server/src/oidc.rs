@@ -51,7 +51,7 @@ const BACKCHANNEL_LOGOUT_EVENT: &str = "http://schemas.openid.net/event/backchan
 /// 開発用の mock 認証が明示的に有効な場合だけ localhost の http を許容し、
 /// 本番相当では http / 不正文字列を拒否する（fail-closed）。
 /// 戻り値は真偽のみで、判定対象の値は保持・露出しない。
-/// `from_env_with` と `doctor` で同じ判定を共有するため pub にしている。
+/// `validate_oidc_config_with` 経由で `from_env_with` と `doctor` が同じ判定を共有する。
 pub fn is_valid_oidc_endpoint(value: &str, allow_mock_auth: bool) -> bool {
     match reqwest::Url::parse(value) {
         Ok(url) => {
@@ -69,6 +69,157 @@ pub fn is_valid_oidc_endpoint(value: &str, allow_mock_auth: bool) -> bool {
             }
         }
         Err(_) => false,
+    }
+}
+
+// 起動拒否相当の固定文言。設定値は一切含めず、doctor の警告文と完全一致させる。
+const OIDC_ENDPOINT_URL_ERROR: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
+const OIDC_EMPTY_VALUE_ERROR: &str = "OIDC configuration values must not be empty";
+const OIDC_MAX_AUTH_AGE_GREATER_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
+const OIDC_MAX_AUTH_AGE_POSITIVE_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+/// 真偽値フラグは `common::age::parse_bool_env` の受理値のみ。不正値は値をエコーしない。
+const ALLOW_MOCK_AUTH_BOOL_ERROR: &str = "ALLOW_MOCK_AUTH must be one of 1/true/0/false";
+const OIDC_COOKIE_SECURE_BOOL_ERROR: &str = "OIDC_COOKIE_SECURE must be one of 1/true/0/false";
+
+/// OIDC 設定の検証結果。秘密情報（`client_secret`）と `OidcState` は一切含めない。
+///
+/// `from_env_with`（起動時 fail-closed）と `doctor`（設定診断）が同じ判定を共有するための
+/// 非秘密の値だけを保持する。ハードエラーは固定文言のみで、設定値はエコーしない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OidcConfigValidation {
+    /// 必須 7 変数がすべて存在し、trim 後に非空か。本番必須設定の判定へ渡す。
+    pub required_present: bool,
+    /// 必須 7 変数がすべて設定されているか（空文字でも設定あり）。`Ok(None)` の判定に使う。
+    pub enabled: bool,
+    /// `OIDC_COOKIE_SECURE` の実効値（未設定時は true / fail-closed）。
+    pub cookie_secure: bool,
+    /// `OIDC_CLOCK_SKEW_SECS` の実効値（範囲外・不正値は既定値）。
+    pub clock_skew_secs: u64,
+    /// `OIDC_MAX_AUTH_AGE_SECS` の解析値。不正値は None（理由は hard_errors）。
+    pub max_auth_age_secs: Option<u64>,
+    /// (OIDC_REQUIRED_ACR に有効要素があるか, OIDC_REQUIRED_AMR に有効要素があるか)。
+    pub acr_amr_present: (bool, bool),
+    /// 起動拒否相当の理由（固定文言のみ）。本番警告へは流さない。
+    pub hard_errors: Vec<&'static str>,
+}
+
+/// 環境変数の読み取りを注入して OIDC 設定を検証する共通バリデータ。
+///
+/// `from_env_with` と `doctor` の双方から呼ばれ、必須変数・URL・空値・cookie_secure・
+/// clock_skew・max_auth_age・acr/amr の判定を一箇所へ集約する。戻り値には秘密情報を
+/// 含めないため、doctor へ `OidcState` や `client_secret` を渡す必要はない。
+pub fn validate_oidc_config_with<F>(lookup: F) -> OidcConfigValidation
+where
+    F: Fn(&str) -> Option<String>,
+{
+    const REQUIRED: [&str; 7] = [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    const ENDPOINTS: [&str; 5] = [
+        "OIDC_ISSUER",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+
+    let required: Vec<Option<String>> = REQUIRED.iter().map(|name| lookup(name)).collect();
+    let enabled = required.iter().all(Option::is_some);
+    let required_present = enabled
+        && required.iter().all(|value| {
+            value
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+        });
+    // 真偽値は共通 parse_bool_env（1/true と 0/false のみ）に統一する。
+    // 不正値は fail-closed で false とし、起動拒否理由を hard_errors へ積む。
+    let mut hard_errors = Vec::new();
+    let allow_mock_auth = match lookup("ALLOW_MOCK_AUTH") {
+        Some(value) => match common::age::parse_bool_env(&value) {
+            Some(parsed) => parsed,
+            None => {
+                hard_errors.push(ALLOW_MOCK_AUTH_BOOL_ERROR);
+                false
+            }
+        },
+        None => false,
+    };
+
+    if enabled {
+        // SSRF 対策は is_valid_oidc_endpoint に集約する（必須変数が揃ったときだけ検証）。
+        if ENDPOINTS
+            .iter()
+            .filter_map(|name| lookup(name))
+            .any(|value| !is_valid_oidc_endpoint(&value, allow_mock_auth))
+        {
+            hard_errors.push(OIDC_ENDPOINT_URL_ERROR);
+        }
+        // 必須 7 変数は Some でも trim 後に空文字なら設定ミスとして起動を拒否する。
+        // URL 検証の空文字は上で先に拒否されるが、配列は全 7 変数を含む。
+        if required.iter().any(|value| {
+            value
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+        }) {
+            hard_errors.push(OIDC_EMPTY_VALUE_ERROR);
+        }
+    }
+
+    // 未設定は true（fail-closed）。不正値も Secure を外さず true とし、
+    // 起動拒否理由を hard_errors へ積む（値はエコーしない）。
+    let cookie_secure = match lookup("OIDC_COOKIE_SECURE") {
+        Some(value) => match common::age::parse_bool_env(&value) {
+            Some(parsed) => parsed,
+            None => {
+                hard_errors.push(OIDC_COOKIE_SECURE_BOOL_ERROR);
+                true
+            }
+        },
+        None => true,
+    };
+    let clock_skew_secs = lookup("OIDC_CLOCK_SKEW_SECS")
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(seconds))
+        .unwrap_or(DEFAULT_CLOCK_SKEW_SECS);
+    let split_present = |name: &str| {
+        lookup(name)
+            .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
+            .unwrap_or(false)
+    };
+    let acr_amr_present = (
+        split_present("OIDC_REQUIRED_ACR"),
+        split_present("OIDC_REQUIRED_AMR"),
+    );
+    let max_auth_age_secs = match lookup("OIDC_MAX_AUTH_AGE_SECS") {
+        None => None,
+        Some(value) => match value.parse::<u64>() {
+            Ok(0) => {
+                hard_errors.push(OIDC_MAX_AUTH_AGE_GREATER_ERROR);
+                None
+            }
+            Ok(seconds) => Some(seconds),
+            // 負数・非数値・オーバーフローはすべて Err（起動拒否）。
+            Err(_) => {
+                hard_errors.push(OIDC_MAX_AUTH_AGE_POSITIVE_ERROR);
+                None
+            }
+        },
+    };
+
+    OidcConfigValidation {
+        required_present,
+        enabled,
+        cookie_secure,
+        clock_skew_secs,
+        max_auth_age_secs,
+        acr_amr_present,
+        hard_errors,
     }
 }
 
@@ -380,10 +531,20 @@ impl OidcState {
     /// 場合は `Err` を返す。特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 /
     /// オーバーフローを捨てると max_age 検証が黙って無効化されるため、
     /// フォールバックせず起動拒否にする（fail-closed）。
+    /// 判定は `validate_oidc_config_with` に集約し、ここでは秘密値の読み出しと
+    /// `OidcState` の組み立てだけを行う（doctor へは渡さない）。
     pub(crate) fn from_env_with<F>(lookup: F) -> Result<Option<Arc<Self>>, String>
     where
         F: Fn(&str) -> Option<String>,
     {
+        let validation = validate_oidc_config_with(&lookup);
+        if !validation.enabled {
+            return Ok(None);
+        }
+        if let Some(error) = validation.hard_errors.first() {
+            return Err((*error).to_string());
+        }
+
         let (
             issuer,
             client_id,
@@ -418,66 +579,16 @@ impl OidcState {
                 token_endpoint,
                 jwks_uri,
             ),
+            // validation.enabled が真なら到達しない。fail-closed の保険として残す。
             _ => return Ok(None),
         };
-        // SSRF 対策は is_valid_oidc_endpoint に集約する。
-        // エラー文言は固定で、設定値をエコーしない。
-        let allow_mock_auth = lookup("ALLOW_MOCK_AUTH")
-            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
-        for endpoint in [
-            issuer.as_str(),
-            redirect_uri.as_str(),
-            authorization_endpoint.as_str(),
-            token_endpoint.as_str(),
-            jwks_uri.as_str(),
-        ] {
-            if !is_valid_oidc_endpoint(endpoint, allow_mock_auth) {
-                return Err("OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)".to_string());
-            }
-        }
-        // 必須 7 変数は Some でも trim 後に空文字なら設定ミスとして起動を拒否する。
-        // 空の client_id / client_secret では認証が機能しないため fail-closed。
-        // エラー文言は固定で、設定値（特に秘密情報）を一切エコーしない。
-        // エンドポイントの空文字は上記 URL 検証で先に拒否されるが、配列は全 7 変数を含む。
-        for value in [
-            issuer.as_str(),
-            client_id.as_str(),
-            client_secret.as_str(),
-            redirect_uri.as_str(),
-            authorization_endpoint.as_str(),
-            token_endpoint.as_str(),
-            jwks_uri.as_str(),
-        ] {
-            if value.trim().is_empty() {
-                return Err("OIDC configuration values must not be empty".to_string());
-            }
-        }
         let scopes = lookup("OIDC_SCOPES").unwrap_or_else(|| "openid".to_string());
-        let cookie_secure = lookup("OIDC_COOKIE_SECURE")
-            .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-            .unwrap_or(true);
-        let clock_skew_secs = lookup("OIDC_CLOCK_SKEW_SECS")
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(seconds))
-            .unwrap_or(DEFAULT_CLOCK_SKEW_SECS);
         let required_acr = lookup("OIDC_REQUIRED_ACR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
         let required_amr = lookup("OIDC_REQUIRED_AMR")
             .map(|value| Self::split_config_list(&value))
             .unwrap_or_default();
-        let max_auth_age_secs = match lookup("OIDC_MAX_AUTH_AGE_SECS") {
-            None => None,
-            Some(value) => match value.parse::<u64>() {
-                Ok(0) => return Err("OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()),
-                Ok(seconds) => Some(seconds),
-                // 負数・非数値・オーバーフローはすべて Err（起動拒否）。
-                Err(_) => {
-                    return Err("OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string());
-                }
-            },
-        };
 
         Ok(Some(Arc::new(Self::new(OidcConfig {
             issuer,
@@ -488,11 +599,13 @@ impl OidcState {
             token_endpoint,
             jwks_uri,
             scopes,
-            cookie_secure,
-            clock_skew_secs,
+            cookie_secure: validation.cookie_secure,
+            clock_skew_secs: validation.clock_skew_secs,
             required_acr: std::sync::Arc::new(std::sync::Mutex::new(required_acr)),
             required_amr: std::sync::Arc::new(std::sync::Mutex::new(required_amr)),
-            max_auth_age_secs: std::sync::Arc::new(std::sync::Mutex::new(max_auth_age_secs)),
+            max_auth_age_secs: std::sync::Arc::new(std::sync::Mutex::new(
+                validation.max_auth_age_secs,
+            )),
         }))))
     }
 

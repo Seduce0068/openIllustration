@@ -273,10 +273,17 @@ pub fn is_ipv4(ip: IpAddr) -> bool {
     matches!(ip, IpAddr::V4(_))
 }
 
-/// `ALLOW_IPV4_LOCALHOST=1` のとき 127.0.0.0/8 のみ IPv4 を許可（ローカル開発用）
+/// `ALLOW_IPV4_LOCALHOST=1` のとき 127.0.0.0/8 のみ IPv4 を許可（ローカル開発用）。
+///
+/// この関数はリクエストごとに呼ばれるため、不正値をここで起動拒否できない。
+/// 受理値は共通 `parse_bool_env`（`1`/`true` と `0`/`false` のみ）へ統一し、
+/// 未設定・不正値は `None`→`false`（fail-closed）として IPv4 を一切許可しない。
+/// 不正値は `run()` が起動時に警告し、`doctor` も `ipv4_localhost` カテゴリで警告する
+/// （「起動時警告＋per-request fail-closed」の二段構え）。
 pub fn ipv4_permitted(ip: IpAddr) -> bool {
     if std::env::var("ALLOW_IPV4_LOCALHOST")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .ok()
+        .and_then(|value| common::age::parse_bool_env(&value))
         .unwrap_or(false)
         && let IpAddr::V4(v4) = ip
     {

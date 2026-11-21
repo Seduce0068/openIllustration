@@ -168,6 +168,16 @@ fn ensure_include_reasons_allowed(
     ))
 }
 
+/// 真偽値フラグを共通 `parse_bool_env` で読む。
+/// 未設定は `false`、不正値は入力値をエコーせず起動拒否（fail-closed）する。
+fn bool_flag_from_env(name: &str) -> anyhow::Result<bool> {
+    match std::env::var(name) {
+        Ok(value) => common::age::parse_bool_env(&value)
+            .ok_or_else(|| anyhow!("{name} must be one of 1/true/0/false")),
+        Err(_) => Ok(false),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
@@ -176,12 +186,8 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
     // 本番相当では平文理由のエクスポートを拒否する。値は判定にだけ使いエコーしない。
-    let allow_mock_auth = std::env::var("ALLOW_MOCK_AUTH")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let explicit_opt_in = std::env::var("AUDIT_EXPORT_INCLUDE_REASONS")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let allow_mock_auth = bool_flag_from_env("ALLOW_MOCK_AUTH")?;
+    let explicit_opt_in = bool_flag_from_env("AUDIT_EXPORT_INCLUDE_REASONS")?;
     ensure_include_reasons_allowed(args.include_reasons, allow_mock_auth, explicit_opt_in)?;
 
     let signing_key_path = args

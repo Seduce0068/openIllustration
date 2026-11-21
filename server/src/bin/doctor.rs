@@ -4,9 +4,9 @@
 
 use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, allowed_origins,
-    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, is_valid_oidc_endpoint,
-    jwt_keys_from_env, max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
-    production_config_errors, rate_limit_per_min, validate_jwt_secret,
+    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
+    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    production_config_errors, rate_limit_per_min, validate_jwt_secret, validate_oidc_config_with,
 };
 
 fn print_help() {
@@ -115,6 +115,27 @@ fn should_fail(strict: bool, problems: usize) -> bool {
     strict && problems > 0
 }
 
+/// 真偽値フラグをランタイムと同じ `common::age::parse_bool_env` で解釈する。
+/// 不正値は入力値をエコーせず、安全側の `default` へ倒した上で固定文言の警告を返す
+/// （doctor は診断専用なので起動拒否の代わりに既存カテゴリ内で警告する）。
+fn bool_flag_with_warning<F>(lookup: &F, name: &str, default: bool) -> (bool, Option<String>)
+where
+    F: Fn(&str) -> Option<String>,
+{
+    match lookup(name) {
+        None => (default, None),
+        Some(value) => match common::age::parse_bool_env(&value) {
+            Some(parsed) => (parsed, None),
+            None => (
+                default,
+                Some(format!(
+                    "{name} has an invalid boolean value; using {default} (fail-closed)"
+                )),
+            ),
+        },
+    }
+}
+
 /// 検査結果を (項目, 問題) の形で集める。
 /// 環境変数は `lookup` 経由でのみ読み、テストではプロセス環境を汚さず差し替えられる。
 /// 秘密情報の値は結果に含めない。
@@ -124,27 +145,18 @@ where
 {
     let mut results = Vec::new();
 
-    let allow_mock_auth = lookup("ALLOW_MOCK_AUTH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+    let (allow_mock_auth, mock_auth_bool_warning) =
+        bool_flag_with_warning(&lookup, "ALLOW_MOCK_AUTH", false);
+    // OIDC の判定は共通バリデータへ集約する。doctor には非秘密の結果だけが渡され、
+    // OidcState / client_secret を渡す必要はない（R1 の重要制約）。
+    let validation = validate_oidc_config_with(&lookup);
 
     // 本番必須設定は既存の fail-closed 判定へ委譲する（再実装しない）。
-    // OIDC 必須値は Some でも trim 後空文字なら「未設定」と同じく警告対象にする。
-    // 値は判定にだけ使い、結果へは含めない（秘密情報の非エコー）。
-    let oidc_value_present = |name: &str| {
-        lookup(name)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    };
+    // required_present は必須 7 変数の存在と trim 後非空を反映するため、
+    // 空文字の必須値も「未設定」と同じく警告対象になる。値は結果へ含めない。
     let mut production: Vec<String> = production_config_errors(
         allow_mock_auth,
-        oidc_value_present("OIDC_ISSUER")
-            && oidc_value_present("OIDC_CLIENT_ID")
-            && oidc_value_present("OIDC_CLIENT_SECRET")
-            && oidc_value_present("OIDC_REDIRECT_URI")
-            && oidc_value_present("OIDC_AUTHORIZATION_ENDPOINT")
-            && oidc_value_present("OIDC_TOKEN_ENDPOINT")
-            && oidc_value_present("OIDC_JWKS_URI"),
+        validation.required_present,
         lookup("PINATA_JWT").as_deref(),
     )
     .into_iter()
@@ -192,14 +204,6 @@ where
         "OIDC_TOKEN_ENDPOINT",
         "OIDC_JWKS_URI",
     ];
-    // URL 検証の対象は 7 変数のうちエンドポイントを指す 5 つ（クライアントID/秘密鍵は除く）。
-    const OIDC_ENDPOINT_KEYS: [&str; 5] = [
-        "OIDC_ISSUER",
-        "OIDC_REDIRECT_URI",
-        "OIDC_AUTHORIZATION_ENDPOINT",
-        "OIDC_TOKEN_ENDPOINT",
-        "OIDC_JWKS_URI",
-    ];
     let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_some());
     let pinata_production = lookup("PINATA_JWT")
         .map(|v| {
@@ -221,7 +225,7 @@ where
     // production_config_errors は allow_mock_auth で早期 return するため、
     // ALLOW_MOCK_AUTH=1 単独だと本番チェックが全スキップされてしまう。
     // ここで明示的に問題として計上し、--strict では exit 1 とする（既定は警告のみ）。
-    let mock_auth_enabled_errors = if allow_mock_auth {
+    let mut mock_auth_enabled_errors = if allow_mock_auth {
         vec![
             "ALLOW_MOCK_AUTH is enabled; acceptable for development but inappropriate for production"
                 .to_string(),
@@ -229,22 +233,28 @@ where
     } else {
         Vec::new()
     };
+    // 不正値は有効化せず、この既存カテゴリ内で固定文言の警告として計上する。
+    if let Some(warning) = mock_auth_bool_warning {
+        mock_auth_enabled_errors.push(warning);
+    }
     results.push(("mock_auth_enabled", mock_auth_enabled_errors));
 
     // JWT: HS256 は 32 バイト以上、RS256 は PEM と検証キーの整合を検査する。
     let jwt_pem = lookup("JWT_RSA_PRIVATE_KEY_PEM");
     let jwt_secret = lookup("JWT_SECRET");
-    let jwt_errors = match jwt_keys_from_env(
+    let (require_kid, jwt_bool_warning) = bool_flag_with_warning(&lookup, "JWT_REQUIRE_KID", false);
+    let mut jwt_errors = match jwt_keys_from_env(
         jwt_pem,
         jwt_secret,
         lookup("JWT_RSA_VERIFICATION_KEYS").as_deref(),
-        lookup("JWT_REQUIRE_KID")
-            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
-            .unwrap_or(false),
+        require_kid,
     ) {
         Ok(_) => Vec::new(),
         Err(error) => vec![error],
     };
+    if let Some(warning) = jwt_bool_warning {
+        jwt_errors.push(warning);
+    }
     results.push(("jwt", jwt_errors));
 
     let mut secret_errors = Vec::new();
@@ -336,101 +346,81 @@ where
     }
     results.push(("moderation_finalize_interval", finalize_interval_errors));
 
-    // OIDC_CLOCK_SKEW_SECS: 範囲外は既定 60 へフォールバックするため警告する。
+    // OIDC_CLOCK_SKEW_SECS: 共通バリデータが範囲外・不正値を既定 60 へ
+    // フォールバックさせるため、実効値と生のパース値が異なれば警告する。
     // 値は出力せず、範囲内かどうかのみを診断する。
     let oidc_clock_skew_errors = match lookup("OIDC_CLOCK_SKEW_SECS") {
         None => Vec::new(),
-        Some(value) => match value.parse::<u64>() {
-            Ok(seconds) if (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(&seconds) => {
-                Vec::new()
-            }
-            _ => vec![format!(
-                "OIDC_CLOCK_SKEW_SECS is outside {CLOCK_SKEW_MIN_SECS}..={CLOCK_SKEW_MAX_SECS}; using default {DEFAULT_CLOCK_SKEW_SECS} seconds"
-            )],
-        },
+        Some(value) if value.parse::<u64>().ok() == Some(validation.clock_skew_secs) => Vec::new(),
+        Some(_) => vec![format!(
+            "OIDC_CLOCK_SKEW_SECS is outside {CLOCK_SKEW_MIN_SECS}..={CLOCK_SKEW_MAX_SECS}; using default {DEFAULT_CLOCK_SKEW_SECS} seconds"
+        )],
     };
     results.push(("oidc_clock_skew", oidc_clock_skew_errors));
 
     // OIDC エンドポイント URL: https 必須。ALLOW_MOCK_AUTH 有効時だけ
-    // localhost 系の http を許容する（from_env_with と同じ判定を共有する）。
-    // OIDC 7 変数が揃っているときに 5 エンドポイントを検証し、1 件でも不正なら
+    // localhost 系の http を許容する（共通バリデータの判定を共有する）。
+    // 必須 7 変数が揃っているときに 5 エンドポイントを検証し、1 件でも不正なら
     // 固定文言で警告する。設定値は一切エコーしない。
     const OIDC_ENDPOINT_URL_WARNING: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
-    let oidc_endpoint_urls_errors = if OIDC_REQUIRED.iter().all(|name| lookup(name).is_some())
-        && OIDC_ENDPOINT_KEYS
-            .iter()
-            .filter_map(|name| lookup(name))
-            .any(|value| !is_valid_oidc_endpoint(&value, allow_mock_auth))
-    {
+    let oidc_endpoint_urls_errors = if validation.hard_errors.contains(&OIDC_ENDPOINT_URL_WARNING) {
         vec![OIDC_ENDPOINT_URL_WARNING.to_string()]
     } else {
         Vec::new()
     };
     results.push(("oidc_endpoint_urls", oidc_endpoint_urls_errors));
 
-    // OIDC_MAX_AUTH_AGE_SECS: server::oidc::OidcState::from_env_with は
-    // 0 / 負 / 非数値 / オーバーフローを Err（起動拒否）にして max_age 検証の
-    // 黙った無効化を防ぐ。from_env_with は pub(crate) で doctor から直接呼べない
-    // ため、ここで同一のパース検証を行い Err 相当を警告化する。値は出力しない。
-    // from_env_with は必須 7 変数が揃っていれば mock 有効時も max_auth_age を検証するため、
-    // doctor も 7 変数が揃っている場合は mock 有効でも警告する。
-    // 7 変数未揃いなら from_env_with が Ok(None) を返して max_auth_age を見ないため、
-    // mock 有効時は警告しない（本番相当では従来どおり警告する）。
-    let oidc_max_auth_age_errors =
-        if allow_mock_auth && !OIDC_REQUIRED.iter().all(|name| lookup(name).is_some()) {
-            Vec::new()
-        } else {
-            match lookup("OIDC_MAX_AUTH_AGE_SECS") {
-                None => Vec::new(),
-                Some(value) => match value.parse::<u64>() {
-                    Ok(0) => vec!["OIDC_MAX_AUTH_AGE_SECS must be greater than 0".to_string()],
-                    Ok(_) => Vec::new(),
-                    // 負数・非数値・オーバーフローはすべて Err 相当（起動拒否）。
-                    Err(_) => vec!["OIDC_MAX_AUTH_AGE_SECS must be a positive integer".to_string()],
-                },
-            }
-        };
+    // OIDC_MAX_AUTH_AGE_SECS: 共通バリデータが 0 / 負 / 非数値 / オーバーフローを
+    // 起動拒否相当のハードエラーとして返すため、その固定文言を警告化する。値は出力しない。
+    // 必須 7 変数が揃っていれば mock 有効時も警告する。7 変数未揃いなら from_env_with は
+    // Ok(None) を返して max_auth_age を見ないため、mock 有効時は警告しない
+    // （本番相当では従来どおり警告する）。
+    const MAX_AGE_GREATER: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
+    const MAX_AGE_POSITIVE: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+    let oidc_max_auth_age_errors = if allow_mock_auth && !validation.required_present {
+        Vec::new()
+    } else {
+        validation
+            .hard_errors
+            .iter()
+            .filter(|error| **error == MAX_AGE_GREATER || **error == MAX_AGE_POSITIVE)
+            .map(|error| (*error).to_string())
+            .collect()
+    };
     results.push(("oidc_max_auth_age", oidc_max_auth_age_errors));
 
-    // OIDC_COOKIE_SECURE: 既定は Secure 付与（fail-closed）。mock 無効構成で
-    // 偽値（0 / false）が設定されているなら警告する。値はエコーしない。
-    let oidc_cookie_secure_errors = match lookup("OIDC_COOKIE_SECURE") {
-        Some(value) => {
-            let falsy = value == "0" || value.eq_ignore_ascii_case("false");
-            if !allow_mock_auth && falsy {
-                vec![
-                    "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute"
-                        .to_string(),
-                ]
-            } else {
-                Vec::new()
-            }
-        }
-        None => Vec::new(),
+    // OIDC_COOKIE_SECURE: 共通バリデータの実効値（既定は Secure 付与 / fail-closed）。
+    // mock 無効構成で偽値（0 / false）が設定されているなら警告する。値はエコーしない。
+    let (_, cookie_bool_warning) = bool_flag_with_warning(&lookup, "OIDC_COOKIE_SECURE", true);
+    let mut oidc_cookie_secure_errors = if !allow_mock_auth && !validation.cookie_secure {
+        vec![
+            "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
     };
+    if let Some(warning) = cookie_bool_warning {
+        oidc_cookie_secure_errors.push(warning);
+    }
     results.push(("oidc_cookie_secure", oidc_cookie_secure_errors));
 
     // OIDC_REQUIRED_ACR / OIDC_REQUIRED_AMR: mock 無効時に未設定（または空要素
     // のみ）だと保証レベル（認証コンテキスト／認証方法）が一切強制されないため
-    // 警告する。値は出力しない。
+    // 警告する。有効要素の有無は共通バリデータの acr_amr_present を使う。値は出力しない。
     let mut oidc_required_assurance_errors = Vec::new();
     if !allow_mock_auth {
-        for (name, warning) in [
-            (
-                "OIDC_REQUIRED_ACR",
-                "OIDC_REQUIRED_ACR is not set; no required authentication context class is enforced",
-            ),
-            (
-                "OIDC_REQUIRED_AMR",
-                "OIDC_REQUIRED_AMR is not set; no required authentication method is enforced",
-            ),
-        ] {
-            let effective = lookup(name)
-                .map(|value| value.split(',').any(|entry| !entry.trim().is_empty()))
-                .unwrap_or(false);
-            if !effective {
-                oidc_required_assurance_errors.push(warning.to_string());
-            }
+        if !validation.acr_amr_present.0 {
+            oidc_required_assurance_errors.push(
+                "OIDC_REQUIRED_ACR is not set; no required authentication context class is enforced"
+                    .to_string(),
+            );
+        }
+        if !validation.acr_amr_present.1 {
+            oidc_required_assurance_errors.push(
+                "OIDC_REQUIRED_AMR is not set; no required authentication method is enforced"
+                    .to_string(),
+            );
         }
     }
     results.push(("oidc_required_assurance", oidc_required_assurance_errors));
@@ -496,10 +486,9 @@ where
 
     // IPv6-only が既定（SEC-01）。ALLOW_IPV4_LOCALHOST が真なら IPv4 loopback を
     // 許可するため本番では不適切。値（1/true）は出力せず有無のみ警告する。
-    let allow_ipv4_localhost = lookup("ALLOW_IPV4_LOCALHOST")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let ipv4_localhost_errors = if allow_ipv4_localhost {
+    let (allow_ipv4_localhost, ipv4_bool_warning) =
+        bool_flag_with_warning(&lookup, "ALLOW_IPV4_LOCALHOST", false);
+    let mut ipv4_localhost_errors = if allow_ipv4_localhost {
         vec![
             "ALLOW_IPV4_LOCALHOST is enabled; production should stay IPv6-only (SEC-01)"
                 .to_string(),
@@ -507,6 +496,9 @@ where
     } else {
         Vec::new()
     };
+    if let Some(warning) = ipv4_bool_warning {
+        ipv4_localhost_errors.push(warning);
+    }
     results.push(("ipv4_localhost", ipv4_localhost_errors));
 
     // TRUSTED_PROXY_CIDRS は X-Forwarded-For（XFF）を信頼する設定。設定自体は
@@ -524,20 +516,19 @@ where
     // EXPOSE_INTERNAL_ERRORS: 有効時（1 / true, 大小文字不問）は内部エラーの詳細が
     // クライアントへ露出するため警告する。mock 有効時は開発環境として許容し、
     // 値（1/true）はエコーしない。
-    let expose_internal_errors_errors = match lookup("EXPOSE_INTERNAL_ERRORS") {
-        Some(value) => {
-            let enabled = value == "1" || value.eq_ignore_ascii_case("true");
-            if !allow_mock_auth && enabled {
-                vec![
-                    "EXPOSE_INTERNAL_ERRORS is enabled; internal error details are exposed to clients"
-                        .to_string(),
-                ]
-            } else {
-                Vec::new()
-            }
-        }
-        None => Vec::new(),
+    let (expose_internal_errors, expose_bool_warning) =
+        bool_flag_with_warning(&lookup, "EXPOSE_INTERNAL_ERRORS", false);
+    let mut expose_internal_errors_errors = if !allow_mock_auth && expose_internal_errors {
+        vec![
+            "EXPOSE_INTERNAL_ERRORS is enabled; internal error details are exposed to clients"
+                .to_string(),
+        ]
+    } else {
+        Vec::new()
     };
+    if let Some(warning) = expose_bool_warning {
+        expose_internal_errors_errors.push(warning);
+    }
     results.push(("expose_internal_errors", expose_internal_errors_errors));
 
     // ALLOWED_ORIGINS: mock 無効時に実パーサ allowed_origins() が空ベクタなら
@@ -817,12 +808,22 @@ mod tests {
                 "value={value}"
             );
         }
-        for value in ["0", "false", "no", ""] {
+        for value in ["0", "false"] {
             let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", value)]));
             assert!(
                 errors_for(&results, "mock_auth_enabled").is_empty(),
                 "value={value}"
             );
+        }
+        // 受理値外（no / 空）は有効化せず、fail-closed の固定警告を1件だけ出す。
+        // 警告文は設定名と安全側既定値のみで、不正値はエコーしない。
+        const INVALID: &str =
+            "ALLOW_MOCK_AUTH has an invalid boolean value; using false (fail-closed)";
+        for value in ["no", ""] {
+            let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", value)]));
+            let errors = errors_for(&results, "mock_auth_enabled");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], INVALID, "value={value}");
         }
     }
 
@@ -962,12 +963,22 @@ mod tests {
 
     #[test]
     fn ipv4_localhost_falsy_and_unset_add_no_warning() {
-        for value in ["0", "false", "no", ""] {
+        for value in ["0", "false"] {
             let results = check_all_with(lookup_from(&[("ALLOW_IPV4_LOCALHOST", value)]));
             assert!(
                 errors_for(&results, "ipv4_localhost").is_empty(),
                 "value={value}"
             );
+        }
+        // 受理値外は IPv4 を許可しない（fail-closed）ため有効化警告は出さず、
+        // 既定カテゴリに不正値警告のみを1件出す（値はエコーしない）。
+        const INVALID: &str =
+            "ALLOW_IPV4_LOCALHOST has an invalid boolean value; using false (fail-closed)";
+        for value in ["no", ""] {
+            let results = check_all_with(lookup_from(&[("ALLOW_IPV4_LOCALHOST", value)]));
+            let errors = errors_for(&results, "ipv4_localhost");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], INVALID, "value={value}");
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "ipv4_localhost").is_empty());
@@ -1253,12 +1264,21 @@ mod tests {
             assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
             assert_eq!(errors[0], EXPECTED, "value={value}");
         }
-        for value in ["0", "false", "no", ""] {
+        for value in ["0", "false"] {
             let results = check_all_with(lookup_from(&[("EXPOSE_INTERNAL_ERRORS", value)]));
             assert!(
                 errors_for(&results, "expose_internal_errors").is_empty(),
                 "value={value}"
             );
+        }
+        // 受理値外は内部詳細を公開せず（fail-closed）、不正値警告のみを1件出す。
+        const INVALID: &str =
+            "EXPOSE_INTERNAL_ERRORS has an invalid boolean value; using false (fail-closed)";
+        for value in ["no", ""] {
+            let results = check_all_with(lookup_from(&[("EXPOSE_INTERNAL_ERRORS", value)]));
+            let errors = errors_for(&results, "expose_internal_errors");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], INVALID, "value={value}");
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "expose_internal_errors").is_empty());
@@ -1335,12 +1355,22 @@ mod tests {
             assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
             assert_eq!(errors[0], EXPECTED, "value={value}");
         }
-        for value in ["1", "true", "yes", ""] {
+        for value in ["1", "true"] {
             let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
             assert!(
                 errors_for(&results, "oidc_cookie_secure").is_empty(),
                 "value={value}"
             );
+        }
+        // 受理値外（yes / 空）は Secure を外さない（fail-closed）ため無効化警告は出さず、
+        // 不正値警告のみを1件出す（値はエコーしない）。
+        const INVALID: &str =
+            "OIDC_COOKIE_SECURE has an invalid boolean value; using true (fail-closed)";
+        for value in ["yes", ""] {
+            let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
+            let errors = errors_for(&results, "oidc_cookie_secure");
+            assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
+            assert_eq!(errors[0], INVALID, "value={value}");
         }
         let results = check_all_with(lookup_from(&[]));
         assert!(errors_for(&results, "oidc_cookie_secure").is_empty());

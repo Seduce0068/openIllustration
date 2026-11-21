@@ -250,7 +250,10 @@ fn validate_minimum_age(age: u32, label: &str) -> Result<u32, String> {
 /// 真偽値はドキュメントどおり `1`/`true` と `0`/`false` のみ受理する。
 /// `yes`/`on`/`no`/`off` のような別名を受理すると、ドキュメント外の設定が
 /// 黙って有効化される fail-open を招くため拒否する（trim・小文字化は維持）。
-fn parse_bool_env(value: &str) -> Option<bool> {
+///
+/// 全ての真偽値フラグ（AGE_* と 6 つの運用フラグ）がこの共通基準を使う。
+/// `None` は「未定義値」を表し、呼び出し側は fail-closed（起動拒否／安全側既定）で扱う。
+pub fn parse_bool_env(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" => Some(true),
         "0" | "false" => Some(false),
@@ -615,7 +618,7 @@ mod tests {
 
     #[test]
     fn parse_bool_env_accepts_only_documented_values() {
-        // 有効値: 1/true。無効値: 0/false。trim と小文字化は維持される。
+        // 受理値: 1/true（真）と 0/false（偽）。trim と小文字化は維持される。
         for raw in ["1", "true", " TRUE ", "0", "false", " FALSE "] {
             assert!(parse_bool_env(raw).is_some(), "{raw:?} must be accepted");
         }

@@ -10525,8 +10525,19 @@ fn test_jwt_require_kid_from_env_values() {
     assert!(crate::jwt_require_kid_from_env(Some("1")), "\"1\" is true");
     assert!(
         crate::jwt_require_kid_from_env(Some("true")),
-        "other values stay true (existing behavior)"
+        "\"true\" is true via the shared parse_bool_env"
     );
+    assert!(
+        crate::jwt_require_kid_from_env(Some(" TRUE ")),
+        "trim and lowercase are preserved by the shared parser"
+    );
+    // 受理値外は fail-closed で false（起動時は bool_env_at_startup が拒否する）。
+    for invalid in ["yes", "no", "", "maybe"] {
+        assert!(
+            !crate::jwt_require_kid_from_env(Some(invalid)),
+            "invalid value must fail closed: {invalid:?}"
+        );
+    }
 }
 
 /// RS256 選択時に短い JWT_SECRET が警告対象であること（警告条件を関数化して検証）。
@@ -17456,7 +17467,7 @@ fn test_oidc_from_env_with_required_acr_amr_normalization() {
     );
 }
 
-/// オプション値の既定と cookie_secure の真偽判定（0 / false 系のみ偽）。
+/// オプション値の既定と cookie_secure の真偽判定（1/true と 0/false のみ、他は拒否）。
 #[test]
 fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
     let assert_cookie = |value: Option<&str>, expected: bool| {
@@ -17480,7 +17491,18 @@ fn test_oidc_from_env_with_optional_defaults_and_cookie_secure() {
     assert_cookie(Some("false"), false);
     assert_cookie(Some("FALSE"), false);
     assert_cookie(Some("1"), true);
-    assert_cookie(Some(""), true);
+    // 受理値外（空文字）は fail-closed で起動拒否。固定文言で値はエコーしない。
+    const INVALID: &str = "OIDC_COOKIE_SECURE must be one of 1/true/0/false";
+    for raw in ["", "yes", "no"] {
+        let mut env = oidc_required_env();
+        env.insert("OIDC_COOKIE_SECURE".to_string(), raw.to_string());
+        let error = match crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned()) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid OIDC_COOKIE_SECURE must be rejected: raw={raw:?}"),
+        };
+        // 固定文言との完全一致により、入力値がエコーされていないことを検証する。
+        assert_eq!(error, INVALID, "raw={raw:?}");
+    }
 }
 
 /// OIDC エンドポイント URL: https 必須、mock 時のみ localhost の http を許容。
@@ -17555,8 +17577,8 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
         "error must not echo the value"
     );
 
-    // mock 無効とみなす値（0 / false / 空 / その他）では localhost の http も拒否。
-    for flag in ["0", "false", "", "yes"] {
+    // 受理値の偽（0 / false）では localhost の http も拒否。
+    for flag in ["0", "false"] {
         let mut env = oidc_required_env();
         env.insert("ALLOW_MOCK_AUTH".to_string(), flag.to_string());
         for key in ENDPOINT_KEYS {
@@ -17566,6 +17588,20 @@ fn test_oidc_from_env_with_endpoint_url_scheme_validation() {
             .err()
             .expect("ALLOW_MOCK_AUTH={flag} must not allow http");
         assert_eq!(err, INVALID_URL_ERROR);
+    }
+
+    // 受理値外（空 / yes）は共通 parse_bool_env で拒否し、固定文言の起動エラーを返す。
+    const INVALID_BOOL: &str = "ALLOW_MOCK_AUTH must be one of 1/true/0/false";
+    for flag in ["", "yes"] {
+        let mut env = oidc_required_env();
+        env.insert("ALLOW_MOCK_AUTH".to_string(), flag.to_string());
+        for key in ENDPOINT_KEYS {
+            env.insert(key.to_string(), "http://localhost/endpoint".to_string());
+        }
+        let err = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+            .err()
+            .expect("invalid ALLOW_MOCK_AUTH must be rejected");
+        assert_eq!(err, INVALID_BOOL, "flag={flag:?}");
     }
 
     // パース不能・不正スキームも拒否し、設定値をエコーしない。
@@ -17621,6 +17657,118 @@ fn test_is_valid_oidc_endpoint_host_boundaries() {
     for raw in ["not a url", "", "ftp://localhost/issuer", "https://"] {
         assert!(!crate::oidc::is_valid_oidc_endpoint(raw, true), "raw={raw}");
     }
+}
+
+// --- 共通 OIDC バリデータ（validate_oidc_config_with） -----------------------
+
+/// 必須変数の有無・空値・ハードエラーを `OidcState` なしで判定できる。
+#[test]
+fn test_validate_oidc_config_with_required_and_hard_errors() {
+    let env = oidc_required_env();
+    let result: crate::OidcConfigValidation =
+        crate::validate_oidc_config_with(|name| env.get(name).cloned());
+    assert!(result.enabled);
+    assert!(result.required_present);
+    assert!(result.hard_errors.is_empty());
+    assert!(result.cookie_secure);
+    assert_eq!(result.clock_skew_secs, 60);
+    assert_eq!(result.max_auth_age_secs, None);
+    assert_eq!(result.acr_amr_present, (false, false));
+
+    // 必須変数が欠けると enabled=false（from_env_with の Ok(None) と同じ条件）。
+    let mut partial = oidc_required_env();
+    partial.remove("OIDC_JWKS_URI");
+    let result = crate::validate_oidc_config_with(|name| partial.get(name).cloned());
+    assert!(!result.enabled);
+    assert!(!result.required_present);
+
+    // Some でも trim 後に空文字なら required_present=false（production 警告へ渡す値）。
+    // 7 変数はすべて設定されているため enabled は真のまま。
+    let mut empty = oidc_required_env();
+    empty.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
+    let result = crate::validate_oidc_config_with(|name| empty.get(name).cloned());
+    assert!(result.enabled);
+    assert!(!result.required_present);
+    assert_eq!(
+        result.hard_errors,
+        vec!["OIDC configuration values must not be empty"]
+    );
+
+    // 空文字と欠落が同時にある場合は Ok(None) 側が優先される。
+    let mut empty_and_missing = oidc_required_env();
+    empty_and_missing.insert("OIDC_CLIENT_SECRET".to_string(), String::new());
+    empty_and_missing.remove("OIDC_JWKS_URI");
+    let result = crate::validate_oidc_config_with(|name| empty_and_missing.get(name).cloned());
+    assert!(!result.enabled);
+    assert!(!result.required_present);
+    assert!(result.hard_errors.is_empty());
+}
+
+/// ハードエラーは固定文言のみで、秘密値も設定値も保持・露出しない。
+#[test]
+fn test_validate_oidc_config_with_errors_are_fixed_and_secret_free() {
+    const OIDC_SECRET: &str = "oidc-super-secret-value-1234567890-abcdef";
+    const REMOTE_URL: &str = "http://remote-secret.example.jp/issuer";
+    let mut env = oidc_required_env();
+    env.insert("OIDC_CLIENT_SECRET".to_string(), OIDC_SECRET.to_string());
+    env.insert("OIDC_ISSUER".to_string(), REMOTE_URL.to_string());
+    env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), "0".to_string());
+    let result = crate::validate_oidc_config_with(|name| env.get(name).cloned());
+
+    assert_eq!(
+        result.hard_errors,
+        vec![
+            "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)",
+            "OIDC_MAX_AUTH_AGE_SECS must be greater than 0",
+        ]
+    );
+    let debug = format!("{result:?}");
+    assert!(!debug.contains(OIDC_SECRET), "秘密値が露出: {debug}");
+    assert!(!debug.contains(REMOTE_URL), "設定値が露出: {debug}");
+    for error in &result.hard_errors {
+        assert!(!error.contains(OIDC_SECRET));
+        assert!(!error.contains(REMOTE_URL));
+    }
+}
+
+/// オプション値の実効値が from_env_with が組み立てる設定と一致する。
+#[test]
+fn test_validate_oidc_config_with_optional_values_match_from_env_with() {
+    let mut env = oidc_required_env();
+    env.insert("OIDC_COOKIE_SECURE".to_string(), "false".to_string());
+    env.insert("OIDC_CLOCK_SKEW_SECS".to_string(), "120".to_string());
+    env.insert("OIDC_MAX_AUTH_AGE_SECS".to_string(), "900".to_string());
+    env.insert(
+        "OIDC_REQUIRED_ACR".to_string(),
+        " urn:acr:1, , urn:acr:2 ".to_string(),
+    );
+    env.insert("OIDC_REQUIRED_AMR".to_string(), " pwd, otp ".to_string());
+
+    let result = crate::validate_oidc_config_with(|name| env.get(name).cloned());
+    assert!(!result.cookie_secure);
+    assert_eq!(result.clock_skew_secs, 120);
+    assert_eq!(result.max_auth_age_secs, Some(900));
+    assert_eq!(result.acr_amr_present, (true, true));
+    assert!(result.hard_errors.is_empty());
+
+    let state = crate::oidc::OidcState::from_env_with(|name| env.get(name).cloned())
+        .expect("valid OIDC configuration")
+        .expect("required variables are present");
+    assert_eq!(state.config().cookie_secure, result.cookie_secure);
+    assert_eq!(state.config().clock_skew_secs, result.clock_skew_secs);
+    assert_eq!(
+        *state.config().max_auth_age_secs.lock().unwrap(),
+        result.max_auth_age_secs
+    );
+    assert_eq!(state.config().required_acr.lock().unwrap().len(), 2);
+    assert_eq!(state.config().required_amr.lock().unwrap().len(), 2);
+
+    // 範囲外の clock_skew は既定へフォールバックし、生値との差で doctor が警告する。
+    let mut out_of_range = oidc_required_env();
+    out_of_range.insert("OIDC_CLOCK_SKEW_SECS".to_string(), "301".to_string());
+    let result = crate::validate_oidc_config_with(|name| out_of_range.get(name).cloned());
+    assert_eq!(result.clock_skew_secs, crate::DEFAULT_CLOCK_SKEW_SECS);
+    assert!(result.hard_errors.is_empty());
 }
 
 // ---- proptest: 入力境界と仕様不変条件の網羅 ----
