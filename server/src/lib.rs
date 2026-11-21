@@ -3616,13 +3616,18 @@ pub async fn process_report_conclusion(
     Ok(())
 }
 
-/// ADR-0004: 期限到達済みの通報を明示的に確定する（運用/スケジューラからの呼び出し用）。
+/// ADR-0004: 期限到達済みの通報を明示的に確定する（HTTP ハンドラ専用）。
+/// 手動 finalize は `require_moderation_operator` で運用者に限定し、
+/// 未設定・未登録・BAN 済みの主体は 403 で拒否する。
+/// スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は
+/// 本認可の対象外とし、期限到達済み通報の自動確定は認可なしで継続する。
 /// 期限内に呼ばれても早期確定は行わず、何も変更しない。冪等。
 pub async fn finalize_report(
     State(state): State<Arc<AppState>>,
-    _claims: AuthClaims,
+    claims: AuthClaims,
     Path(report_id): Path<i64>,
 ) -> Result<Json<bool>, AppError> {
+    require_moderation_operator(&state, &claims.sub).await?;
     if report_id <= 0 {
         return Err(AppError::BadRequest("Invalid report id".to_string()));
     }

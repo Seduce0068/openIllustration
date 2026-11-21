@@ -11261,7 +11261,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
     (build_router(state), db)
 }
 
-/// 認証済みで finalize エンドポイントを呼ぶ
+/// 認証済み運用者（sub=operator）で finalize エンドポイントを呼ぶ
 async fn send_finalize(app: &Router, report_id: i64) -> StatusCode {
     let response = app
         .clone()
@@ -11311,7 +11311,7 @@ async fn send_report(app: &Router, cid: &str, reason: &str, sub: &str) -> Status
 
 #[tokio::test]
 async fn test_finalize_is_noop_before_deadline() {
-    let (app, db) = setup_mod_app().await;
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
     assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
 
     let mut rows = db
@@ -11325,6 +11325,38 @@ async fn test_finalize_is_noop_before_deadline() {
     );
 
     expire_report(&db, 1).await;
+
+    // 手動 finalize は HTTP ハンドラのみ運用者限定。未登録 sub は 403 となり、
+    // 期限到達後でも通報を確定できない（自動確定はスケジューラの別経路）。
+    let forbidden = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/mod/reports/1/finalize")
+                .header(
+                    "Authorization",
+                    format!(
+                        "Bearer {}",
+                        generate_token(TEST_JWT_SECRET, "unregistered").await
+                    ),
+                )
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
+
+    let mut rows = db
+        .query("SELECT status FROM contents WHERE cid = 'QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T'", ())
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status, "Reported",
+        "unregistered sub must not conclude an expired report"
+    );
+
     assert_eq!(send_finalize(&app, 1).await, StatusCode::OK);
 
     let mut rows = db
