@@ -128,7 +128,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 ### 優先度: 中
 
-- [ ] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
+- [x] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
   任意の認証済みユーザーが通報キュー閲覧と確定を実行でき、運用判断を代行できる。
   `require_moderation_operator` を ban_user と同じ位置で呼ぶ（スケジューラ専用なら別トークン分離）。
 - [ ] **doctor が OIDC 空値ハードエラーを警告へ流す** — 根拠 `server/src/bin/doctor.rs` oidc_* カテゴリ / review R2-ER / 中。
@@ -620,6 +620,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding: 手動 finalize_report へ require_moderation_operator を追加
+  （未設定/未登録/BAN済み403、入力検証前）。スケジューラ経路は認可対象外で自動確定継続。
+  list_reports は ADR-0004:114 / ADR-0008 の要約公開契約を維持するため無変更。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests118）。
 
 - 2026-11-22 coding: 本番相当では DATABASE_URL を全プロセス必須・既定なしへ。
   サーバーは read_env 由来で未設定/非UTF-8/空/旧既定の相対 file:local.db を起動拒否、

@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T05:00:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -46,7 +46,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/report` | Bearer JWT | 通報登録と `Reported` 遷移 |
 | GET | `/mod/reports` | Bearer JWT | `Reported` コンテンツの通報一覧 |
 | POST | `/mod/vote` | Bearer JWT | 投票署名検証、投票登録、閾値判定 |
-| POST | `/mod/reports/{report_id}/finalize` | Bearer JWT | 期限到達済み通報を集計確定（冪等）。期限内・確定済みは変更しない |
+| POST | `/mod/reports/{report_id}/finalize` | Bearer JWT + 運用者 | 期限到達済み通報を集計確定（冪等）。期限内・確定済みは変更しない。手動は運用者限定（未設定・未登録・BAN済みは403）、自動確定スケジューラは認可対象外 |
 | POST | `/mod/operators/{user_hash}/ban` | Bearer JWT | 運用者特権。`MODERATION_OPERATOR_HASHES` 登録者のみBAN可能。根拠必須。`duration_days`（1〜3650、null=無期限）から期限を設定し `governance_audit_log` に記録 |
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
@@ -351,7 +351,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   サーバーが返すエラー本文や生のネットワークエラー文字列は画面へ出さない。
   新しい投票試行の開始時に通知とエラーの両方をクリアし、前回の結果が残らないようにする。
   E2E は `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（chromium で3件 pass）で検証する。
-- 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。
+- 期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須・運用者限定）または `process_report_conclusion` で集計する。期限内に呼び出しても確定しない（3票即時確定は廃止）。
   定足数3票未達なら通報を棄却し `Approved` に復帰、到達時は Reject >= Approve なら `Rejected`、それ以外は `Approved` とする。同数は `Rejected`（ADR-0004）。
 - 確定時刻は `reports.concluded_at` に記録し、確定後は追加投票を受け付けないため、多数決結果が後続票で再遷移することはない。
 - 運用者はプロジェクト側で固定せず、各デプロイが `MODERATION_OPERATOR_HASHES` で設定する。未設定・未登録・BAN済みの主体は BAN/UNBAN/UNPIN を拒否する。BAN
@@ -362,7 +362,9 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   UNPIN は判断と理由のみを記録する（実 Pinata ピン解除は手動）。これらは `governance_audit_log` に保存するが、
   DEC-04 の第三者検証可能な監査ではない。
 - 期限到達は起動時のバックグラウンドワーカーが自動検知し、`MODERATION_FINALIZE_INTERVAL_SECS`（既定300秒、30〜3600秒）ごとに `finalize_due_reports` を実行する。
-  停止シグナルでワーカーも終了する。手動の `POST /mod/reports/{report_id}/finalize` も残しており、両者は冪等。手動 finalize は認証済みユーザーなら誰でも呼べるが、
+  停止シグナルでワーカーも終了する。手動の `POST /mod/reports/{report_id}/finalize` も残しており、両者は冪等。手動 finalize の HTTP ハンドラは
+  `require_moderation_operator` により運用者限定（未設定・未登録・BAN済みは403）で、入力検証より前に認可する。
+  スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は認可対象外とし、期限到達済み通報の自動確定は認可なしで継続する。
   `process_report_conclusion` が期限到達・`Reported` 状態・未確定を検査し、投票結果を改変できないため、集計の確定という効果しか持たない（BAN/UNBAN/UNPIN
   のような運用判断エンドポイントではない）。確定理由は `content_audit_log` に記録される。
 - **未実装**: 投票者選出・Sybil耐性、オンチェーン記録、ランダム陪審員選出、第三者検証可能な監査。モデレーション結果を法的判断とみなさない。

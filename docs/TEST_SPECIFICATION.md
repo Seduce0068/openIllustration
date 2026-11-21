@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T04:40:00+09:00"
+  at: "2026-11-22T05:00:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T04:40:00+09:00"
+  at: "2026-11-22T05:00:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -133,7 +133,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-02 | 3人の異なる投票者による結果 | 規則通り状態遷移 | 実装済み（確定後の追加投票は400で拒否）、回帰テストあり |
 | MOD-03 | レビュー中コンテンツへの重複通報 | 拒否 | 実装済み、回帰テストあり |
 | MOD-04 | `/mod/stats` の集計（`build_mod_stats`） | 通報・確定・BAN/UNBAN/UNPIN の件数を月別に集計する。空入力は0件、同数は `Rejected`、定足数未達は `quorum_not_met` に計上し `approved` から除外、月境界は UTC の `YYYY-MM` で分割 | 実装済み・検証済み（対象テスト全12件 pass）: `test_build_mod_stats_empty` / `test_build_mod_stats_counts_rejected_status` / `test_build_mod_stats_quorum_not_met_excluded_from_approved` / `test_build_mod_stats_month_boundary_utc` / `test_mod_stats_quorum_excludes_banned_juror_votes`（BAN済み投票者の票を定足数へ算入しない）。同数→`Rejected` の実判定は `test_consensus_tie_resolves_to_rejected` が検証。実DBからの集計は `test_mod_stats_aggregates_from_real_db` |
-| MOD-05 | `/mod/stats` の認可 | 未認証は401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200 | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned` |
+| MOD-05 | `/mod/stats` と手動 finalize の認可 | `/mod/stats` は未認証401。`MODERATION_OPERATOR_HASHES` 未設定・未登録・BAN済みの主体は403。登録済み運用者は200。手動 `POST /mod/reports/{report_id}/finalize`（HTTP ハンドラ）も `require_moderation_operator` で運用者限定とし、未登録 sub は403。スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は認可対象外で自動確定を継続 | 実装済み・検証済み（`/mod/stats` 対象テスト全12件 pass）: `test_mod_stats_requires_authentication` / `test_mod_stats_forbidden_when_operator_not_configured` / `test_mod_stats_forbidden_when_operator_not_registered` / `test_mod_stats_forbidden_when_operator_banned`。手動 finalize は `test_finalize_is_noop_before_deadline` の既存1件内で運用者200と未登録subの403を検証（新規テスト関数なし、件数不変） |
 | MOD-06 | `/mod/stats` のレスポンス | CID・reason・`user_hash` を含めず、`generated_at` / `totals` / `monthly` のホワイトリスト項目のみ返す。`quorum_not_met` は `totals` のみ | 実装済み・検証済み（対象テスト全12件 pass）: `test_mod_stats_response_contains_no_sensitive_fields` |
 | MOD-07 | 透明性ダッシュボードのE2E（R5-09） | 初期表示は `/mod/stats` を0本とし、中立文言のボタン押下時にのみ1本送信する。200 応答のみを根拠に運用者パネルをマウントし、403 では一般画面へ権限エラーを描画せず黙って閉じる。不正 JSON ではパネル内へ `集計の解析に失敗しました。` を表示し、センチネル `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` を出さない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` 内、`R5-09: should mount operator stats panel only on opt-in and stay silent for general users`。初期0本→オプイン200→403パネル内（否定オラクル）の3フェーズを既存1件で検証。testid: `moderation-stats-toggle` / `moderation-stats-optin`。chromium で pass（moderation.spec.ts 全14件、フルスイート定義数69件を維持。webkit はホスト側 ICU/libxml2 欠落で未検証） |
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」） |

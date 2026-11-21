@@ -88,7 +88,7 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
 - **採用済み・実装済み（2026-11-16 追加）**:
   - `reports.deadline_at`（通報受理から7日）、`concluded_at`、`appeal_of` を
     マイグレーション `004_moderation_deadlines.sql` で追加。3票到達時の即時確定を
-    廃止し、期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須）または
+    廃止し、期限到達後に `POST /mod/reports/{report_id}/finalize`（認証必須・運用者限定）または
     `process_report_conclusion` で集計する。期限内に finalize を呼んでも確定しない。
   - 定足数（3票）未達時は通報を棄却し、コンテンツを `Approved` に復帰する。
     棄却理由は `content_audit_log` に記録する。
@@ -133,6 +133,16 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
   - 旧 `moderation_vote_message` は `#[deprecated]` で残すが検証には使わず、旧形式署名は
     `401 Unauthorized` で拒否する。
   - 4テストで正常系の受理・旧形式拒否・別投票者向け署名の転用拒否・全フィールド束縛を検証する。
+- **採用済み・実装済み（2026-11-22 追加）**: 手動 finalize の認可を運用者限定へ明示した。
+  - `POST /mod/reports/{report_id}/finalize` の HTTP ハンドラは
+    `require_moderation_operator` で認可し、`MODERATION_OPERATOR_HASHES`
+    未設定・未登録・BAN 済みの主体は 403 で拒否する。入力検証（不正な
+    `report_id`）より前に認可し、`ban_user` と同じ順序に揃える。
+  - スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は
+    本認可の対象外とし、期限到達済み通報の自動確定は認可なしで従来どおり継続する。
+    手動・自動の確定は冪等である。
+  - `GET /mod/reports` の要約公開は認証済み向けの現状維持（[ADR-0008](ADR-0008-moderation-stats-publication.md)）
+    であり、本変更の対象外。Status: Accepted 維持。
 - **採用済み・未実装（本番有効化の前提）**:
   - `governance_audit_log` は運用ログであり、DEC-04 の第三者検証可能な監査ではない。
     監査要件が決定するまで本番の監査証跡として扱わない。
