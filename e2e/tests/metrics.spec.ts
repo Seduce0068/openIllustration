@@ -233,7 +233,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
   test('NEUT-URL-02: protocol-relative URL は # に中立化され件数が送信される', async ({ page }) => {
     // network-path reference(//host) と Windows UNC(\\host) はスキームが無いため
     // 従来は安全とみなされていたが、ブラウザが現在のスキームを補完して
-    // 外部ホストへ誘導し得るため拒否される（client/src/lib.rs:520-539）。
+    // 外部ホストへ誘導し得るため拒否される（is_safe_markdown_url）。
     // 中立化された link/image の href/src は "#" になる（:462-486）。
     const protocolRelativeBody = '[phish](//evil.example/phish) ![img](//evil.example/img.png)';
     const { captured } = await setupNeutralizedMetricsPage(page, protocolRelativeBody);
@@ -272,7 +272,7 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     await expect.poll(() => contentBodyRequests.length, { timeout: 10000 }).toBe(2);
 
     // 同一描画ソースは thread_local の REPORTED で除外され POST は1回のまま
-    // （client/src/lib.rs:409-469）。
+    // （thread_local の REPORTED 集合）。
     // 再マウント直後に最初の POST を捕まえた時点では captured.length === 1 が
     // 既に真で、重複 POST がその後に飛んでも検出できない。観測ウィンドウ中に
     // captured が変化しない（ネットワークが静穏な）状態が続くまで待ってから検証する。

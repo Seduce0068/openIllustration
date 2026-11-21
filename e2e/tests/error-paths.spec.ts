@@ -51,7 +51,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
     await loginWithMockAuth(page);
 
-    // 実装文言（client/src/lib.rs:70, 1183）: "Network error loading content."
+    // 実装文言（CONTENT_INDEX_NETWORK_ERROR）: "Network error loading content."
     // 別の role=alert が増えても strict mode 違反にならないよう testid で特定する。
     const dashboardError = page.getByTestId('dashboard-error');
     await expect(dashboardError).toBeVisible({ timeout: 10000 });
@@ -170,7 +170,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
   /**
    * CONTENT-ERR: /content/{cid} の HTTP エラー（404 / 500）。
-   * 実装（client/src/lib.rs:1576-1581）は role="alert" の content-load-error に
+   * 実装（content_load_error_message / data-testid="content-load-error"）は role="alert" の content-load-error に
    * "Content Load Failed" を、content-load-error-detail に固定文言を出す。
    * verified=false でも取得失敗が優先され、バッジは "× LOAD FAILED"、
    * "Integrity Breach Detected" は出ない（:1309-1323, :1591-1594, :1636-1645）。

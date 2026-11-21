@@ -458,7 +458,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
   });
 
   // 通信エラー（HTTP ステータス無し）は固定文言 "Network error updating favorite."
-  // （client/src/lib.rs:1332）を favorite-error に出す。既存のリクエスト回数完全一致
+  // （favorite_error_message の 401 分岐）を favorite-error に出す。既存のリクエスト回数完全一致
   // アサーション（2回/8回）を壊さないよう独立 test にし、モックもここで完結させる。
   test('network error shows Network error updating favorite in favorite-error', async ({ page }) => {
     const { favoriteCalls, contentRequests, toggle, card } =

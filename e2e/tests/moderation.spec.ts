@@ -31,9 +31,9 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const reportsHttpErrorText = (status: number) => `投票一覧の取得に失敗しました (HTTP ${status}).`;
   const reportsNetworkErrorText = 'Network error loading reports.';
 
-  // client/src/lib.rs:2200 の submit_report 失敗時の固定文言。
-  // 成功文言は client/src/lib.rs:2197。失敗・成功どちらも status シグナルへ入り、
-  // <p role="status" class="text-xs text-gray-400">（client/src/lib.rs:2275）で描画される。
+  // submit_report の失敗時の固定文言。
+  // 成功文言は submit_report の成功アーム。失敗・成功どちらも status シグナルへ入り、
+  // <p role="status" class="text-xs text-gray-400">（通報 status ライブリージョン）で描画される。
   // レビュー指摘の「role="alert"」は実装と矛盾するため、テストは実装の role="status" を検証する。
   const reportFailedText = 'Report failed.';
   const reportSuccessText = 'Report accepted. Content marked Reported.';
@@ -593,7 +593,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'APPROVE (RESTORE)' }).click();
     await expect(page.getByTestId('vote-error')).toHaveCount(0);
     await expect(page.getByTestId('vote-notice')).toHaveText(voteNoticeText, { timeout: 10000 });
-    // vote-notice は role="status"（client/src/lib.rs:2205）。vote-error は role="alert" のまま。
+    // vote-notice（data-testid="vote-notice"）は role="status"。vote-error は role="alert" のまま。
     await expect(page.getByTestId('vote-notice')).toHaveAttribute('role', 'status');
 
     // 再度失敗 → 通知が消え、エラーが表示される（新しい試行でクリア）。
@@ -671,17 +671,39 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     });
     await openModeration(page);
 
-    // status は初期状態では空なので要素自体が存在しない（client/src/lib.rs:2274 の Show）。
+    // status は初期状態では空なので要素自体が存在しない（通報 status の Show 分岐）。
     // vote-notice は data-testid を持つため :not([data-testid]) で通報用 status を一意に特定する。
     const reportStatus = page.locator('p[role="status"]:not([data-testid])');
     await expect(reportStatus).toHaveCount(0);
 
+    // 空 CID / 空 reason は validate_report_input のクライアント側ガードで止まり、
+    // 専用の role="alert"（data-testid="report-validation-error"）を出す。POST は0本。
+    const validationError = page.getByTestId('report-validation-error');
+    await expect(validationError).toHaveCount(0);
+
+    await page.locator('input[placeholder="TARGET CID"]').fill('');
+    await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
+    await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
+    await expect(validationError).toHaveText('対象 CID を入力してください。');
+    await expect(validationError).toHaveAttribute('role', 'alert');
+    expect(reportRequests).toEqual([]);
+    await expect(reportStatus).toHaveCount(0);
+
     await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
+    await page.locator('textarea[placeholder="REASON"]').fill('');
+    await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
+    await expect(validationError).toHaveText('通報理由を入力してください。');
+    await expect(validationError).toHaveAttribute('role', 'alert');
+    expect(reportRequests).toEqual([]);
+    await expect(reportStatus).toHaveCount(0);
+
+    // ここから通常の送信フェーズ。検証エラーは消え、POST は1本だけになる。
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
+    await expect(validationError).toHaveCount(0);
     await expect(reportStatus).toHaveCount(1);
-    // 実装は role="alert" ではなく role="status"（client/src/lib.rs:2275）。
+    // 実装は role="alert" ではなく role="status"（通報 status ライブリージョン）。
     await expect(reportStatus).toHaveAttribute('role', 'status');
     await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
     // 成功文言とサーバー本文は出ない。
@@ -708,7 +730,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
-    // abort でも HTTP 500 と同じ固定文言（client/src/lib.rs:2199-2201 の else 節）。
+    // abort でも HTTP 500 と同じ固定文言（submit_report の else アーム）。
     await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
     await expect(reportStatus).not.toContainText(reportSuccessText);
     // 生のネットワークエラー文字列は画面へ出さない。

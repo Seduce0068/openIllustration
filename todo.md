@@ -233,17 +233,17 @@ P1（本番運用の健全性）:
 
 ### 優先度: 低
 
-- [ ] **UI 文言を日本語へ統一（日英混在解消）** — 根拠 `client/src/lib.rs` alert/status/sr-only 文言 / discovery R5-VU / 中。
+- [x] **UI 文言を日本語へ統一（日英混在解消）** — 根拠 `client/src/lib.rs` alert/status/sr-only 文言 / discovery R5-VU / 中。
   `<html lang="ja">` と Intl ja-JP なのにナビ・エラーが英語固定。読み上げ部分を優先して辞書化。
-- [ ] **通報フォームの必須入力と dedicated エラーを追加** — 根拠 `client/src/lib.rs` submit_report / discovery R5-VU / 中。
+- [x] **通報フォームの必須入力と dedicated エラーを追加** — 根拠 `client/src/lib.rs` submit_report / discovery R5-VU / 中。
   TARGET CID / REASON に required・maxlength が無く、空送信が汎用 "Report failed." になる。
-- [ ] **検索0件の条件付き文言とクリア導線** — 根拠 `client/src/lib.rs` 空状態 / discovery R5-VU / 中。
+- [x] **検索0件の条件付き文言とクリア導線** — 根拠 `client/src/lib.rs` 空状態 / discovery R5-VU / 中。
   条件指定時も「承認済みコンテンツはありません」でサイト側問題と誤認される。
-- [ ] **無題イラストの aria-label フォールバック** — 根拠 `client/src/lib.rs` canvas role=img / discovery R5-VU / 中。
+- [x] **無題イラストの aria-label フォールバック** — 根拠 `client/src/lib.rs` canvas role=img / discovery R5-VU / 中。
   title 空で aria-label="" になり画像が無名。cid 短縮形か「無題のイラスト」を表示。
-- [ ] **監査 Reason が要約表示である注記** — 根拠 `client/src/lib.rs` audit reason / discovery R5-VU / 低。
-- [ ] **クライアントテレメトリの告知とオプトアウト** — 根拠 `client/src/lib.rs` /metrics/client-events 送信 / discovery R5-VU / 低。
-- [ ] **E2E コメントの陳腐化行番号を識別子参照へ** — 根拠 `e2e/tests/error-paths.spec.ts`, `moderation.spec.ts` / discovery R5 / 低。
+- [x] **監査 Reason が要約表示である注記** — 根拠 `client/src/lib.rs` audit reason / discovery R5-VU / 低。
+- [x] **クライアントテレメトリの告知とオプトアウト** — 根拠 `client/src/lib.rs` /metrics/client-events 送信 / discovery R5-VU / 低。
+- [x] **E2E コメントの陳腐化行番号を識別子参照へ** — 根拠 `e2e/tests/error-paths.spec.ts`, `moderation.spec.ts` / discovery R5 / 低。
 
 P2（品質・保守・プロダクト拡張）:
 

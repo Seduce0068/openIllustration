@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T07:30:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T07:30:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -28,6 +28,15 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   auth は3件のまま。認証トークン失効時の回復経路は基盤実装のみで自動有効化は保留
   （`ENABLE_AUTO_REFRESH=false`）、E2E 回復フェーズは未統合。新規 `test()` は追加せず69件を維持する。
   R2-URL の回帰は既存 E2E 内へ統合し、新規 `test()` は追加していない（69件を維持）。
+  低優先(1)〜(7)の E2E 側反映でも `test()` 定義は増えていない（69件を維持）。
+  `upload.spec.ts` / `export.spec.ts` の件数文言は2件のみ更新し、GENERATED_AT 期待値と
+  固定文言（禁止リスト）は据え置いた。`moderation.spec.ts` は REPORT-ERR-01 内へ
+  空 CID / 空 reason の検証フェーズを、`search.spec.ts` は既存1件内へ `q='Ghost'` の
+  0件表示とクリア復帰フェーズを、`integrity.spec.ts` は既存2件内へ
+  aria-label フォールバックと要約注記のアサーションを追加した（新規 `test()` なし）。
+  新規に参照する testid は `clear-search-filters`（条件付き空状態のクリアボタン）と
+  `report-validation-error`（通報入力検証の `role="alert"`）で、既存の `dashboard-error` /
+  `upload-status` / `export-error` 等と併せて固定文言契約を検証する。
   `search.spec.ts` は重複 `q` と未知キーを含む URL を注入したうえで正規化書き出しを検証し、
   GET を増やさず `?q=Neon` と `#dashboard` へ冪等に収束することを確認する。
   `economy.spec.ts` は `history.pushState` を失敗させ、履歴更新失敗の固定警告を捕捉して

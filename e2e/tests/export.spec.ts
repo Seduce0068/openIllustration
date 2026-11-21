@@ -29,7 +29,7 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('export-my-data')).toBeVisible({ timeout: 10000 });
     // 一覧フェッチの完了を待ち、クリック後の再描画で export-error が消えないようにする。
-    await expect(page.getByText('0 content items displayed')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('0件のコンテンツを表示中')).toBeVisible({ timeout: 10000 });
   }
 
   test.beforeEach(async ({ page }) => {

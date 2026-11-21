@@ -95,6 +95,22 @@ impl std::fmt::Display for ApiOrigin {
 /// 各リクエスト URL の起点。`format!("{API_BASE}/...")` として使う。
 const API_BASE: ApiOrigin = ApiOrigin;
 
+/// 監視用 POST の有効/無効。ビルド時に `OIL_CLIENT_METRICS=0` を指定すると送信を止める。
+/// 未設定（既定）は送信を継続する（未リリース機能の既定契約を維持するため）。
+const CLIENT_METRICS_ENABLED: bool = metrics_enabled_from_env(option_env!("OIL_CLIENT_METRICS"));
+
+/// ビルド時設定値から監視送信の可否を決める（純粋関数）。
+/// `"0"` だけを無効とみなし、未設定・その他の値は有効とする。
+const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => {
+            let bytes = v.as_bytes();
+            !(bytes.len() == 1 && bytes[0] == b'0')
+        }
+        None => true,
+    }
+}
+
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
@@ -413,6 +429,29 @@ fn build_content_query(q: &str, tag: &str, content_type: &str, favorite_only: bo
         String::new()
     } else {
         format!("?{}", params.join("&"))
+    }
+}
+
+/// 検索条件が1つでも有効かどうか（純粋判定）。`build_content_query` と同じ
+/// trimming 規則を使い、0 件時の文言・クリアボタンの表示根拠にする。
+fn search_filters_active(q: &str, tag: &str, content_type: &str, favorite_only: bool) -> bool {
+    !q.trim().is_empty()
+        || !tag.trim().is_empty()
+        || !content_type.trim().is_empty()
+        || favorite_only
+}
+
+/// 0 件時の文言。条件があれば案内を出し、条件なしなら既存文言を維持する（純粋関数）。
+fn content_empty_state_message(
+    q: &str,
+    tag: &str,
+    content_type: &str,
+    favorite_only: bool,
+) -> &'static str {
+    if search_filters_active(q, tag, content_type, favorite_only) {
+        "条件に一致するコンテンツはありません。"
+    } else {
+        "承認済みコンテンツはありません。"
     }
 }
 
@@ -758,6 +797,17 @@ fn cid_scope_token(cid: &str) -> String {
     format!("c{normalized}-{:x}", hasher.finish())
 }
 
+/// canvas の読み上げラベル（純粋関数）。無題（空白のみを含む）なら cid 先頭 8 文字を添える。
+/// タイトル非空の場合は既存の aria-label を変えず、そのまま返す。
+fn illustration_aria_label(title: &str, cid: &str) -> String {
+    if title.trim().is_empty() {
+        let prefix: String = cid.chars().take(8).collect();
+        format!("無題のイラスト ({prefix})")
+    } else {
+        title.to_string()
+    }
+}
+
 /// 監査パネルの DOM id。トグルの `aria-controls` と同じ値を使う。
 fn forensic_panel_id(cid_token: &str) -> String {
     format!("forensic-timeline-{cid_token}")
@@ -854,6 +904,10 @@ fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
 /// 0 件のときは送信しない（`None`）ため `spawn_local` を起こさない。
 #[cfg(any(test, target_arch = "wasm32"))]
 fn client_event_payload(count: usize) -> Option<String> {
+    // ビルド時に OIL_CLIENT_METRICS=0 が指定された場合は一切送信しない。
+    if !CLIENT_METRICS_ENABLED {
+        return None;
+    }
     if count == 0 {
         return None;
     }
@@ -905,6 +959,10 @@ fn should_report_source(source_hash: u64) -> bool {
 /// 描画をブロックしないよう `spawn_local` で非同期に送る。認証ヘッダは付けず、
 /// 失敗しても画面にもコンソールにも何も出さない（機微情報をログに残さない）。
 fn report_neutralized_urls(count: usize, markdown: &str) {
+    // client_event_payload に渡す前にもガードし、送信経路を完全に止める。
+    if !CLIENT_METRICS_ENABLED {
+        return;
+    }
     #[cfg(target_arch = "wasm32")]
     {
         let Some(payload) = client_event_payload(count) else {
@@ -2059,7 +2117,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                 </form>
             </search>
             <p role="status" aria-live="polite" class="sr-only">
-                {move || format!("{} content items displayed", items.get().len())}
+                {move || format!("{}件のコンテンツを表示中", items.get().len())}
             </p>
             // 一覧取得の失敗は items が前回成功値を保持していても常に表示する。
             // （空状態の中に出すと items が残っているときにエラーが消えていた。）
@@ -2090,8 +2148,24 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                     }
                 />
                 <Show when=move || items.get().is_empty() fallback=|| ()>
-                    <div class="border border-white/10 p-4 opacity-50 flex items-center justify-center italic text-[10px] text-gray-600 col-span-full">
-                        "承認済みコンテンツはありません。"
+                    <div class="border border-white/10 p-4 flex flex-col items-center justify-center text-[10px] text-gray-600 col-span-full gap-2">
+                        <span class="italic opacity-50">
+                            {move || content_empty_state_message(&q.get(), &tag.get(), &content_type.get(), favorite_only.get())}
+                        </span>
+                        <Show when=move || search_filters_active(&q.get(), &tag.get(), &content_type.get(), favorite_only.get()) fallback=|| ()>
+                            <button
+                                type="button"
+                                data-testid="clear-search-filters"
+                                on:click=move |_| {
+                                    set_q.set(String::new());
+                                    set_tag.set(String::new());
+                                    set_content_type.set(String::new());
+                                    set_favorite_only.set(false);
+                                }
+                                class="border border-white/20 px-3 py-1 text-gray-400 hover:bg-white/10 hover:text-white transition-colors">
+                                "条件をクリア"
+                            </button>
+                        </Show>
                     </div>
                 </Show>
             </div>
@@ -2253,6 +2327,9 @@ where
     // メタデータは信頼できない入力なので、escape_html_text を通した文字列だけを
     // inner_html へ渡す（Markdown 本文/TOC の既存レンダリングには触れない）。
     let meta_html = render_content_meta_html(&title, &description, &tags);
+    // canvas の読み上げラベル。無題なら cid 先頭 8 文字を添える。
+    // entry_hash や検証バッジの契約には触れない。
+    let canvas_aria_label = illustration_aria_label(&title, &cid);
     let (verified, set_verified) = signal(None::<bool>);
     // チェックサムは正常だが JXL のデコードに失敗した場合を改ざん検知と区別する。
     let (decode_error, set_decode_error) = signal(false);
@@ -2552,7 +2629,7 @@ where
             <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
                 <canvas node_ref=canvas_ref
                     role="img"
-                    aria-label=move || title.clone()
+                    aria-label=move || canvas_aria_label.clone()
                     class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
 
                 <Show when=move || verified.get() == Some(true) && ct_nov == "Novel" fallback=|| ()>
@@ -2628,6 +2705,7 @@ where
                                             </div>
                                             <p class="text-gray-300">"By: " {log.changed_by.clone()}</p>
                                             <p class="italic">"Reason: " {log.reason.clone().unwrap_or_default()}</p>
+                                            <p class="text-[8px] text-gray-500">"※ 表示は要約です。全文は署名付きエクスポートで確認"</p>
                                             <p class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
                                         </div>
                                     }
@@ -3128,6 +3206,22 @@ fn claim_submission(busy: bool) -> bool {
     !busy
 }
 
+/// 通報フォームの入力検証（純粋関数）。CID・理由とも空白のみならエラーを返す。
+/// サーバー側の検証（CID 形式・理由 1..=2000 文字）に先立つクライアント側ガード。
+fn validate_report_input(cid: &str, reason: &str) -> Result<(), &'static str> {
+    if cid.trim().is_empty() {
+        return Err("対象 CID を入力してください。");
+    }
+    if reason.trim().is_empty() {
+        return Err("通報理由を入力してください。");
+    }
+    Ok(())
+}
+
+/// input/textarea の maxlength。サーバーの受理範囲（CID 128 文字・理由 2000 文字）に合わせる。
+const REPORT_CID_MAX_LEN: u32 = 128;
+const REPORT_REASON_MAX_LEN: u32 = 2000;
+
 /// 送信中フラグを確実に解除する RAII ガード。
 /// `spawn_local` 内の `match` を成否いずれのアームで抜けても、スコープ離脱時に `Drop` が走って
 /// busy を解除し、以降の送信が止まることを防ぐ（favorite_busy と同じ方針）。
@@ -3145,6 +3239,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
     let (reason, set_reason) = signal(String::new());
     let (status, set_status) = signal(String::new());
+    // 空入力で送信を止めた理由を role=alert で読み上げる（送信前に検証する）。
+    let (report_validation_error, set_report_validation_error) = signal(String::new());
     let (reports, set_reports) = signal(Vec::<Report>::new());
     // 投票一覧の取得失敗を明示する。失敗しても reports は空にせず既存データを維持し、
     // 空状態を「保留投票なし」と誤表示しない。
@@ -3325,9 +3421,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         if !claim_submission(report_busy.get()) {
             return;
         }
-        set_report_busy.set(true);
         let cid = cid.get();
         let reason = reason.get();
+        // POST 前に空入力を止める。検証エラーは role=alert で読み上げる。
+        // 既存の "Report failed." 固定文言は成否の通知として変更しない。
+        if let Err(message) = validate_report_input(&cid, &reason) {
+            set_report_validation_error.set(message.to_string());
+            set_status.set(String::new());
+            return;
+        }
+        set_report_validation_error.set(String::new());
+        set_report_busy.set(true);
         let token = token_stored.get_value();
         set_status.set("通報を送信中...".to_string());
         spawn_local(async move {
@@ -3457,12 +3561,16 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     type="text"
                     aria-label="TARGET CID"
                     placeholder="TARGET CID"
+                    required=true
+                    maxlength=REPORT_CID_MAX_LEN
                     on:input=move |ev| set_cid.set(event_target_value(&ev))
                     class="w-full bg-black border border-white/20 p-3 text-sm"
                 />
                 <textarea
                     aria-label="REASON"
                     placeholder="REASON"
+                    required=true
+                    maxlength=REPORT_REASON_MAX_LEN
                     on:input=move |ev| set_reason.set(event_target_value(&ev))
                     class="w-full bg-black border border-white/20 p-3 text-sm h-24"
                 />
@@ -3472,6 +3580,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
                     "SUBMIT FORENSIC REPORT"
                 </button>
+                <Show when=move || !report_validation_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="report-validation-error" class="text-xs text-red-500">
+                        {move || report_validation_error.get()}
+                    </p>
+                </Show>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
                     <p role="status" class="text-xs text-gray-400">{move || status.get()}</p>
                 </Show>
@@ -5032,6 +5145,117 @@ mod tests {
     #[test]
     fn export_filename_is_fixed_constant() {
         assert_eq!(super::EXPORT_FILENAME, "openillustration-export.json");
+    }
+
+    /// 通報は CID・理由が空（空白のみ含む）なら POST 前に止める。
+    #[test]
+    fn report_validation_rejects_blank_cid_and_reason() {
+        assert_eq!(
+            super::validate_report_input("", "理由"),
+            Err("対象 CID を入力してください。")
+        );
+        assert_eq!(
+            super::validate_report_input("   \n", "理由"),
+            Err("対象 CID を入力してください。")
+        );
+        assert_eq!(
+            super::validate_report_input("QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g", ""),
+            Err("通報理由を入力してください。")
+        );
+        assert_eq!(
+            super::validate_report_input("cid-123", " \t "),
+            Err("通報理由を入力してください。")
+        );
+        assert!(super::validate_report_input("cid-123", "不正コンテンツ").is_ok());
+    }
+
+    /// 入力欄の maxlength はサーバーの受理範囲（CID 128 / 理由 2000）と一致する。
+    #[test]
+    fn report_input_maxlength_matches_server_limits() {
+        assert_eq!(super::REPORT_CID_MAX_LEN, 128);
+        assert_eq!(super::REPORT_REASON_MAX_LEN, 2000);
+    }
+
+    /// 0 件時の文言は条件の有無で切り替わり、条件なしは既存文言を維持する。
+    #[test]
+    fn content_empty_state_message_switches_on_active_filters() {
+        assert_eq!(
+            super::content_empty_state_message("", "", "", false),
+            "承認済みコンテンツはありません。"
+        );
+        assert_eq!(
+            super::content_empty_state_message("  ", "", "", false),
+            "承認済みコンテンツはありません。"
+        );
+        for (q, tag, kind, favorite) in [
+            ("neon", "", "", false),
+            ("", "city", "", false),
+            ("", "", "Novel", false),
+            ("", "", "", true),
+            ("  ", "  ", "  ", true),
+        ] {
+            assert_eq!(
+                super::content_empty_state_message(q, tag, kind, favorite),
+                "条件に一致するコンテンツはありません。"
+            );
+            assert!(super::search_filters_active(q, tag, kind, favorite));
+        }
+        assert!(!super::search_filters_active("", "", "", false));
+    }
+
+    /// canvas の aria-label は無題のときだけ cid 先頭 8 文字を添える。
+    #[test]
+    fn illustration_aria_label_uses_cid_prefix_when_title_blank() {
+        let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111g";
+        assert_eq!(
+            super::illustration_aria_label("", cid),
+            "無題のイラスト (QmYwAPJz)"
+        );
+        assert_eq!(
+            super::illustration_aria_label(" \n\t ", cid),
+            "無題のイラスト (QmYwAPJz)"
+        );
+        // 8 文字に満たない cid やマルチバイトでもパニックせず文字単位で切る。
+        assert_eq!(
+            super::illustration_aria_label("", "abc"),
+            "無題のイラスト (abc)"
+        );
+        assert_eq!(
+            super::illustration_aria_label("", "あいうえおかきくけこ"),
+            "無題のイラスト (あいうえおかきく)"
+        );
+        // タイトル非空なら既存の aria-label をそのまま維持する。
+        assert_eq!(
+            super::illustration_aria_label("Neon City", cid),
+            "Neon City"
+        );
+        assert_eq!(super::illustration_aria_label("  Neon  ", cid), "  Neon  ");
+    }
+
+    /// 監視送信は "0" のときだけ止まり、未設定・他値は有効（既定継続）。
+    #[test]
+    fn client_metrics_enabled_only_disabled_by_zero() {
+        assert_eq!(
+            super::CLIENT_METRICS_ENABLED,
+            option_env!("OIL_CLIENT_METRICS") != Some("0")
+        );
+        assert!(super::metrics_enabled_from_env(None));
+        assert!(super::metrics_enabled_from_env(Some("1")));
+        assert!(super::metrics_enabled_from_env(Some("")));
+        assert!(!super::metrics_enabled_from_env(Some("0")));
+    }
+
+    /// ビルド設定に応じてペイロード作成が止まること。既定では既存契約を維持する。
+    #[test]
+    fn client_metrics_gate_controls_payload() {
+        if super::CLIENT_METRICS_ENABLED {
+            assert_eq!(
+                super::client_event_payload(3).as_deref(),
+                Some(r#"{"event":"neutralized_url","count":3}"#)
+            );
+        } else {
+            assert_eq!(super::client_event_payload(3), None);
+        }
     }
 }
 

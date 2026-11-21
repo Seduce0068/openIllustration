@@ -122,5 +122,20 @@ test.describe('Content search and filtering (R5-01)', () => {
     await expect(page.getByLabel('Search')).toHaveValue('Neon');
     // 復元時の二重 GET が無く、末尾 2 件が [Neon, Neon] になること。
     await expect.poll(() => seenQueries.slice(-2)).toEqual(['Neon', 'Neon']);
+
+    // 条件付き空状態: q='Ghost' は0件なので専用文言とクリアボタンを表示する（既存ケース内へ統合）。
+    // 条件なしの空状態文言（'承認済みコンテンツはありません。'）は据え置き。
+    await page.getByLabel('Search').fill('Ghost');
+    await expect.poll(() => seenQueries.slice(-1)).toEqual(['Ghost']);
+    await expect(page.getByText('条件に一致するコンテンツはありません。')).toBeVisible();
+    const clearFilters = page.getByTestId('clear-search-filters');
+    await expect(clearFilters).toBeVisible();
+
+    // クリアで条件が消え、一覧が復帰する。
+    await clearFilters.click();
+    await expect(page.getByText('Moonlit Harbor')).toBeVisible();
+    await expect(page.getByText('Neon Alley')).toBeVisible();
+    await expect(clearFilters).toHaveCount(0);
+    await expect.poll(() => new URL(page.url()).search).toBe('');
   });
 });

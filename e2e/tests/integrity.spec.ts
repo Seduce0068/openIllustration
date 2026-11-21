@@ -25,7 +25,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
           type: 'Novel',
           status: 'Approved',
           price: 0,
-          title: 'Forensic Evidence Log',
+          // タイトル空の fixture: illustration_aria_label の cid 先頭8文字フォールバックを検証する。
+          title: '',
           description: 'Integrity verification fixture',
           tags: ['forensic', 'test'],
           is_favorite: false
@@ -69,6 +70,13 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // ダッシュボードで最終的な「VERIFIED」が表示されることを確認する。
     const verifiedBadge = page.locator('span', { hasText: '● VERIFIED' });
     await expect(verifiedBadge).toBeVisible({ timeout: 30000 });
+
+    // タイトル空のとき canvas の aria-label は cid 先頭8文字のフォールバックになる
+    // （illustration_aria_label）。小説カードでも canvas は role="img" で描画される。
+    await expect(page.locator('canvas[role="img"]')).toHaveAttribute(
+      'aria-label',
+      `無題のイラスト (${MOCK_CID.slice(0, 8)})`,
+    );
   });
 
   test('should detect and block tampered content', async ({ page }) => {
@@ -342,6 +350,9 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       'Reason: oldest log 1',
     ]);
 
+    // 各 Reason 行の直後に要約注記が添わる（全部で3行）。全文は署名付きエクスポート側の契約。
+    await expect(card.getByText('※ 表示は要約です。全文は署名付きエクスポートで確認')).toHaveCount(3);
+
     // R2: 監査日時は Intl.DateTimeFormat で整形表示され、生 ISO の区切り 'T' を含まない。
     // ロケール依存の完全一致は期待せず、書式と生 ISO 属性の保持のみを確認する。
     const createdAtCells = card.getByTestId('audit-created-at');
@@ -509,13 +520,13 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(closeButton).toBeFocused();
 
     // モーダル中核契約②: フォーカストラップ。CLOSE フォーカス中に Tab / Shift+Tab を
-    // 送っても背後のトグル等へ抜けず CLOSE に留まる（client/src/lib.rs:1552-1560）。
+    // 送っても背後のトグル等へ抜けず CLOSE に留まる（ContentViewer の on:keydown フォーカス制御）。
     await page.keyboard.press('Tab');
     await expect(closeButton).toBeFocused();
     await page.keyboard.press('Shift+Tab');
     await expect(closeButton).toBeFocused();
 
-    // Escape ではなく dialog 内の CLOSE ボタンで閉じる（client/src/lib.rs:1645-1654）。
+    // Escape ではなく dialog 内の CLOSE ボタンで閉じる（audit_close_ref / forensic_panel_id のパネル）。
     await closeButton.click();
 
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');

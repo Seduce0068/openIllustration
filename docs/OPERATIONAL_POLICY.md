@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T07:30:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -244,6 +244,12 @@ generated:
   エンドポイントは認証不要のため `count=1000` の連投で指標を容易に汚染でき、
   累積値は実際の被害や不正の規模を保証しない。判断には認証済みデータや
   サーバー側の独立した記録を突き合わせる。
+- クライアント側メトリクス送信の無効化: ビルド時に `OIL_CLIENT_METRICS=0` を指定すると
+  `POST /metrics/client-events` を一切送らない（未設定・その他の値は送信する）。
+  有効時のペイロードは `event`（固定値 `neutralized_url`）と `count`（1〜1000 の整数）のみで、
+  URL 本文・IP アドレス・User-Agent・認証情報は含めず、サーバーも受信・記録・ログ出力しない。
+  送信を止めても `GET /metrics` の `openillustration_neutralized_urls_total` は
+  それまでに送信された count の累積値として残る。
 - finalizer／purge の観測: `GET /metrics` は `openillustration_finalizer_ticks_total`（周期 tick の実行回数）、
   `openillustration_finalizer_processed_total`（finalizer と周期 purge の処理件数）、
   `openillustration_finalizer_lock_busy_total`（書き込みロック取得失敗でスキップした回数）、

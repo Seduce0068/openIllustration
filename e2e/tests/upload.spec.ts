@@ -20,12 +20,12 @@ test.describe('Content Upload Flow', () => {
 
   test('should upload JXL content successfully', async ({ page }) => {
     // BROWSE ビューの一覧件数 sr-only ライブリージョン（UPLOAD へ遷移する前に検証）。
-    // 実装: client/src/lib.rs:1177 <p role="status" aria-live="polite" class="sr-only">。
+    // 実装: Dashboard の件数ライブリージョン <p role="status" aria-live="polite" class="sr-only">。
     const itemCountStatus = page.locator('p.sr-only[role="status"]');
     await expect(itemCountStatus).toHaveCount(1);
     await expect(itemCountStatus).toHaveAttribute('role', 'status');
     await expect(itemCountStatus).toHaveAttribute('aria-live', 'polite');
-    await expect(itemCountStatus).toContainText('content items displayed');
+    await expect(itemCountStatus).toContainText('件のコンテンツを表示中');
 
     await page.getByRole('button', { name: 'UPLOAD' }).click();
     
@@ -122,7 +122,7 @@ test.describe('Content Upload Flow', () => {
     const status = page.getByTestId('upload-status');
     await expect(status).toContainText('アップロードの準備に失敗しました。', { timeout: 15000 });
 
-    // ライブリージョン属性を明示的に検証（client/src/lib.rs:1900）。
+    // ライブリージョン属性を明示的に検証（data-testid="upload-status"）。
     await expect(status).toHaveAttribute('role', 'status');
     await expect(status).toHaveAttribute('aria-live', 'polite');
 
@@ -156,7 +156,7 @@ test.describe('Content Upload Flow', () => {
         .evaluate(input => Array.from((input as HTMLInputElement).files ?? []).map(file => file.name)),
     ).toEqual(['keyboard-enter.jxl']);
 
-    // Space (' ') でも filechooser が発火することを検証（client/src/lib.rs:1681-1683, 1823-1825）。
+    // Space (' ') でも filechooser が発火することを検証（is_file_picker_activation_key の Space 受理）。
     // is_file_picker_activation_key(" ") が ev.prevent_default() を呼ぶため、
     // Space 既定のページスクロールは抑制される。バブル phase の window リスナーで
     // defaultPrevented を記録し、レイアウトに依存せず決定論的に確認する。
