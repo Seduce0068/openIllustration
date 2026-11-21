@@ -5,7 +5,7 @@ description: "アップロード時の JPEG XL 完全デコード検証に用い
 tags: [adr, jxl, dependencies, accepted]
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## ADR-0006: JPEG XL デコード検証の技術選定

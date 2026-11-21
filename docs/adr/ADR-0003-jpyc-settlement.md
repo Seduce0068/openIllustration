@@ -5,7 +5,7 @@ description: JPYC決済の対応チェーン、コントラクト検証、最終
 tags: [adr, payment, jpyc, settlement, accepted]
 generated:
   by: dsh
-  at: "2026-11-19T23:13:24+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## ADR-0003: JPYC決済方式
@@ -159,5 +159,6 @@ Polygon 256、Kaia 12と公表されている。
 - [JPYCv2（公式リポジトリ）](https://github.com/jcam1/JPYCv2)
 - [JPYC 公式サイト](https://jpyc.co.jp/)
 - [Ethereum JPYC Token](https://etherscan.io/address/0xe7c3d8c9a439fede00d2600032d5db0be71c3c29)
+- [ADR-0009: payment_orders 部分 UNIQUE の却下（Rejected）](ADR-0009-payment-order-partial-unique-rejected.md)
 - [要件仕様書](../REQUIREMENTS_SPECIFICATION.md)
 - [詳細設計書](../DETAILED_DESIGN.md)

@@ -5,7 +5,7 @@ description: 必須のプロダクト原則、技術方針、信頼境界を記�
 tags: [adr, product, trust-boundaries]
 generated:
   by: dsh
-  at: "2026-11-17T13:02:57+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## ADR-0001: プロダクト原則と信頼境界

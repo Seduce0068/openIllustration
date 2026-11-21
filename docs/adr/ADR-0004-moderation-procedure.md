@@ -5,7 +5,7 @@ description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決
 tags: [adr, moderation, governance, accepted]
 generated:
   by: dsh
-  at: "2026-11-19T23:13:24+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## ADR-0004: モデレーション手続
