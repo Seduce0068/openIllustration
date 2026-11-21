@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-22T03:21:48+09:00"
+  at: "2026-11-22T06:30:00+09:00"
 ---
 
 ## 目的
@@ -235,7 +235,7 @@ cargo run -p server --bin verify_audit_export -- \
   バージョン検査を通過し署名検証へ進むことも確認した。
 - `verify_audit_export` に `--expect-root` を追加し、`VerificationOutcome` /
   `verify_export` を I/O を持たない純粋関数へ分離した。`server/src/bin/verify_audit_export.rs`
-  に17テスト（引数パース6 / 受理2 / 拒否5 / マスク出力3 / 一時ファイル1）を追加し、
+  に20テスト（引数パース6 / 受理2 / 拒否5 / マスク出力3 / 一時ファイル1 / 境界・回帰3）を追加し、
   有効 v3・改ざん entry/root/署名・version 1/2 拒否・expect-root 不一致・マスク出力を検証する。
   上位ゲートは [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-02 を参照。
 
@@ -245,5 +245,5 @@ cargo run -p server --bin verify_audit_export -- \
 - 署名鍵の HSM 管理、ローテーション、旧公開鍵の配布方針。
 - 公開範囲と個人情報（理由_TEXT 等）のマスキング方針。
 - スナップショットの自動生成頻度と公開手順。
-- AUDIT-02 の自動テストは `sign_audit_export.rs` の17件で充足済み。残るは外部アンカー運用と
+- AUDIT-02 の自動テストは `verify_audit_export.rs` の20件で充足済み。残るは外部アンカー運用と
   HSM 鍵管理の実試験（上記項目と重複）。

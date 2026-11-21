@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T06:20:00+09:00"
+  at: "2026-11-22T06:30:00+09:00"
 ---
 
 ## 目的
@@ -192,7 +192,7 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/backu
 
 使用形は `verify_backup --input PATH` である。判定は `parse_args_from` / `decide_output` /
 `ensure_no_sidecars` / `verify_backup_at` に分離され、`server/src/bin/verify_backup.rs` に
-17テスト（引数パース6 / 出力判定3 / サイドカー2 / 構造検証6）を追加済み。
+19テスト（引数パース6 / 出力判定3 / サイドカー2 / 構造検証6 / 境界・回帰2）を追加済み。
 
 - **トークン受け渡し**: `sign_audit_export` と同じ契約。`--database-token` は argv で
   受け付けず、`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
@@ -308,7 +308,7 @@ cargo run -p server --bin restore_db -- \
 ## 検証済み事項（2026-11-18）
 
 - `verify_backup` の判定を純粋関数 / 境界関数へ分離し、
-  `server/src/bin/verify_backup.rs` に17テストを追加した。実 libsql の一時 DB で
+  `server/src/bin/verify_backup.rs` に19テストを追加した。実 libsql の一時 DB で
   正常系・空 DB・台帳欠落・台帳空・不存在ファイル・非 SQLite ファイルを検証する。
 - argv の `--database-token` は値をエコーせずに拒否されることを実 CLI で確認した
   （`Error: --database-token is not accepted; set DATABASE_TOKEN in the environment instead`、

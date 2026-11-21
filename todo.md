@@ -141,7 +141,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   未認証401・認証済み200・機微キー非含有をサーバー/E2E で固定（69件維持）。
 - [x] **外部キー孤立行の fail-closed 方針を決定** — 根拠 `server/src/lib.rs` find_foreign_key_violations / discovery R1-OPS / 中。
   warn のみで起動継続。本番相当でエラー化するか現状維持を裁定し、コードコメントと運用方針へ明記。
-- [ ] **Runbook のテスト数と export E2E 記述を実測へ**
+- [x] **Runbook のテスト数と export E2E 記述を実測へ**
   — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md`, `docs/AUDIT_EXPORT_RUNBOOK.md`, `docs/TEST_SPECIFICATION.md` / review R5-DC / 中。
   verify_backup 17→19、verify_audit_export 17→20、export E2E「2/2 pass」→3件。doc-numbers 照合対象外。
 - [x] **CI の deny ゲートへ bans/sources を追加**
