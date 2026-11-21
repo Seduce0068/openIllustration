@@ -2305,6 +2305,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                     allowed_origins_env.as_deref(),
                     state.allow_mock_auth,
                 ))
+                // refresh Cookie を cross-origin fetch で送るため。許可オリジンは
+                // 上の明示リストのまま（wildcard は絶対に使わない）。
+                .allow_credentials(true)
                 .allow_methods([
                     axum::http::Method::GET,
                     axum::http::Method::POST,

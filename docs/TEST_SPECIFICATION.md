@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T02:38:26+09:00"
+  at: "2026-11-22T04:40:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T02:38:26+09:00"
+  at: "2026-11-22T04:40:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -25,6 +25,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   お気に入り追加削除 / `me/export`）でカバーする。実測は全69件（auth 3 / build-gate 15 / economy 3 /
   error-paths 6 / export 3 / favorites 5 / integrity 6 / metrics 3 / moderation 14 /
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
+  auth は3件のまま。認証トークン失効時の回復経路は基盤実装のみで自動有効化は保留
+  （`ENABLE_AUTO_REFRESH=false`）、E2E 回復フェーズは未統合。新規 `test()` は追加せず69件を維持する。
   favorites の5件はトグル基本フローに加え、二重クリック防止・401の再ログイン案内・
   失敗後の再トグルで旧エラーを消すこと・ネットワークエラー文言の表示を検証する。
   export の3件目はダウンロード開始失敗時の固定エラー表示（EXPORT-07）で、
@@ -86,6 +88,20 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 | 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は当時59件のまま（現在69件）。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
+
+### 認証トークン失効時の回復経路（基盤実装・自動有効化は保留）
+
+`client/src/lib.rs` の `api_fetch` / `api_fetch_request` は共有 JWT signal から試行ごとにトークンを読み、
+401 のときだけ `/auth/refresh` を単一フライトで1回呼び、新トークンで1回だけ再送する基盤を持つ。
+refresh 失敗時は元の 401 Response をそのまま返す。`auth/login` / `auth/verify` /
+`metrics/client-events`（再帰防止・認証不要）と既存契約を維持する `auth/logout` は対象外。
+ボディ付きの `/content/upload` / `/mod/report` / `/mod/vote` は `api_fetch_request` を使い、
+FormData / JSON を試行ごとに作り直して再送する。
+
+ただし全 fetch へ自動適用すると、401 固定文言ビューと一覧フェッチの再描画が競合して
+エラー表示が消える回帰が確認されたため、`ENABLE_AUTO_REFRESH=false` で既定無効としている。
+E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維持する。有効化には
+呼び出し側のエラー表示を refresh 非依存にする移行が必要。
 
 ## 3. 必須要件のリリースゲート
 

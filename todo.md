@@ -53,10 +53,16 @@ status: current
 - [x] **cron 配布テンプレートの MAILTO をプレースホルダ化** — 根拠 `deploy/openillustration-backup.cron:5` / review R4-DR / 重大度 high。
   `admin@example.com` が残っており、そのまま導入するとバックアップ失敗通知が届かない。
   `__SET_ME__` 等へ変更し、Runbook に差し替え手順と ALERT_CMD 必須化を追記。
-- [ ] **JWT 期限切れ (401) の refresh／再ログイン導線を追加**
+- [ ] **JWT 期限切れ (401) の自動 refresh を有効化（基盤は実装済み・既定無効）**
+  2026-11-22: 共有トークン signal・api_fetch/api_fetch_request（再試行・単一フライト）・
+  CORS allow_credentials を実装済み。ただし全 fetch に波及させると既存の 401 固定文言
+  ビューと一覧フェッチの再描画が競合し E2E が不安定になったため、
+  `ENABLE_AUTO_REFRESH=false` で段階的有効化の前に留めている。有効化には
+  呼び出し側のエラー表示を refresh 非依存にする移行が必要。
   — 根拠 `client/src/lib.rs` fetch 系ハンドラ群 / `docs/UNKNOWN_TASKS_INVESTIGATION.md` / discovery R5-VU / 重大度 high。
   `/auth/refresh` がクライアントに存在せず、期限切れ後は全ビューが固定エラーで固まる。
-  共通 fetch ラッパーで401を1回 refresh 再試行し、失敗時にのみログイン画面へ遷移。E2E69件維持。
+  共通 fetch ラッパーで401を1回 refresh 再試行する基盤を追加。失敗時は元の401を返し
+  各ビューの固定文言で案内する契約（有効化時に画面遷移の要否を再設計）。E2E69件維持。
 
 P0（本番公開前に解消すべきセキュリティ／データ完全性）:
 

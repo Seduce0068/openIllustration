@@ -1,4 +1,4 @@
-use gloo_net::http::Request;
+use gloo_net::http::{Request, RequestBuilder, Response};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use pulldown_cmark::{CowStr, Event, HeadingLevel, Parser, Tag, TagEnd};
@@ -7,8 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
+use std::task::Waker;
 use wasm_bindgen::prelude::*;
-use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement};
+use web_sys::{Blob, BlobPropertyBag, FormData, HtmlInputElement, RequestCredentials};
 
 /// `popstate` 等のイベントリスナーを `StoredValue` に保持する際の型。
 /// `Closure<dyn FnMut(web_sys::Event)>` を直接書くと型が complex になるため集約する。
@@ -108,6 +109,243 @@ const EXPORT_PARSE_ERROR: &str = "エクスポート結果の解析に失敗し�
 /// レスポンス本文や生エラーは機微情報を含み得るため画面へ出さない。
 const CONTENT_INDEX_LOAD_ERROR: &str = "Failed to load content index.";
 const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
+
+// ---- 共有トークンと refresh の単一フライト ----
+//
+// wasm は単一スレッドなので、モジュール級状態は thread_local + Rc<RefCell> で足りる。
+// App が生成した JWT signal をここへ登録し、api_fetch は試行ごとに現在値を読む。
+
+thread_local! {
+    /// App が登録する共有 JWT signal。未登録なら api_fetch は空文字を送る。
+    static SHARED_TOKEN: RefCell<Option<ReadSignal<Option<String>>>> = const { RefCell::new(None) };
+    /// App が登録する JWT 書き込み側。refresh 成功とログイン成功で同じ値を set する。
+    static SHARED_TOKEN_WRITE: RefCell<Option<WriteSignal<Option<String>>>> = const { RefCell::new(None) };
+    /// 401 を拾った最初の呼び出しだけが refresh を開始するための完了スロット。
+    static REFRESH_SLOT: Rc<RefCell<RefreshSlot>> = Rc::new(RefCell::new(RefreshSlot::new()));
+}
+
+/// App の JWT signal を共有状態へ登録する（マウント前に一度だけ呼ぶ）。
+fn register_shared_token(read: ReadSignal<Option<String>>, write: WriteSignal<Option<String>>) {
+    SHARED_TOKEN.with(|slot| *slot.borrow_mut() = Some(read));
+    SHARED_TOKEN_WRITE.with(|slot| *slot.borrow_mut() = Some(write));
+}
+
+/// 現在の JWT を共有 signal から読む。signal の borrow をまたいで副作用を呼ばないよう
+/// 先に値を取り出してから返す。
+fn current_jwt() -> Option<String> {
+    SHARED_TOKEN.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|signal| signal.get_untracked())
+    })
+}
+
+/// 共有 signal へ JWT を書き込む。handle_login_success と refresh 成功の両方が
+/// 同じこの関数（＝同じ signal）を通る。
+fn set_shared_jwt(jwt: Option<String>) {
+    SHARED_TOKEN_WRITE.with(|slot| {
+        if let Some(signal) = *slot.borrow() {
+            signal.set(jwt);
+        }
+    });
+}
+
+/// refresh の完了結果。待機者は `Token` の新 JWT を使って再送し、`Failed` なら
+/// 自分の 401 レスポンスをそのまま呼び出し元へ返す。
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum RefreshOutcome {
+    Token(String),
+    Failed,
+}
+
+/// 単一フライトの状態。`in_flight` の間は後続の 401 を待機させ、完了結果を
+/// すべての待機者へ同じ値で渡す。
+#[derive(Default)]
+struct RefreshSlot {
+    in_flight: bool,
+    result: Option<RefreshOutcome>,
+    waiters: Vec<Waker>,
+}
+
+impl RefreshSlot {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// フライトを開始できれば `true`（リーダー）。既に進行中なら `false`（待機者）。
+    /// 新しいフライトでは前回の完了結果を必ずクリアする。
+    fn claim(&mut self) -> bool {
+        if self.in_flight {
+            return false;
+        }
+        self.in_flight = true;
+        self.result = None;
+        true
+    }
+
+    /// 完了を記録し、待機中のタスクをすべて起こす。
+    fn complete(&mut self, outcome: RefreshOutcome) {
+        self.result = Some(outcome);
+        self.in_flight = false;
+        let waiters = std::mem::take(&mut self.waiters);
+        for waker in waiters {
+            waker.wake();
+        }
+    }
+
+    /// 完了済みなら結果を返す。
+    fn outcome(&self) -> Option<RefreshOutcome> {
+        self.result.clone()
+    }
+
+    /// 未完了の間は Waker を登録する。同じタスクの二重登録は避ける。
+    fn register_waker(&mut self, waker: &Waker) {
+        if !self.waiters.iter().any(|known| known.will_wake(waker)) {
+            self.waiters.push(waker.clone());
+        }
+    }
+}
+
+/// フライト完了を待つ Future。`spawn_local` から使うため Send は要求されない。
+struct RefreshWaiter {
+    slot: Rc<RefCell<RefreshSlot>>,
+}
+
+impl std::future::Future for RefreshWaiter {
+    type Output = RefreshOutcome;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let mut slot = self.slot.borrow_mut();
+        if let Some(outcome) = slot.outcome() {
+            return std::task::Poll::Ready(outcome);
+        }
+        slot.register_waker(cx.waker());
+        std::task::Poll::Pending
+    }
+}
+
+/// `/auth/refresh` へ Cookie 付きで POST する。Authorization ヘッダもボディも送らない。
+async fn perform_refresh() -> RefreshOutcome {
+    let request = Request::post(&format!("{API_BASE}/auth/refresh"))
+        .credentials(RequestCredentials::Include)
+        .build();
+    let Ok(request) = request else {
+        return RefreshOutcome::Failed;
+    };
+    let Ok(response) = request.send().await else {
+        return RefreshOutcome::Failed;
+    };
+    if !response.ok() {
+        return RefreshOutcome::Failed;
+    }
+    match response.json::<VerifyResponse>().await {
+        Ok(data) if data.authorized => match data.token {
+            Some(token) if !token.is_empty() => RefreshOutcome::Token(token),
+            _ => RefreshOutcome::Failed,
+        },
+        _ => RefreshOutcome::Failed,
+    }
+}
+
+/// 401 を受けた呼び出しを単一フライトへ参加させる。
+/// 最初の 1 つだけが `/auth/refresh` を叩き、他は完了を待って同じ新 JWT を使う。
+async fn join_refresh() -> RefreshOutcome {
+    let slot = REFRESH_SLOT.with(Rc::clone);
+    if !slot.borrow_mut().claim() {
+        return RefreshWaiter { slot }.await;
+    }
+
+    let outcome = perform_refresh().await;
+    if let RefreshOutcome::Token(token) = &outcome {
+        set_shared_jwt(Some(token.clone()));
+    }
+    // refresh 失敗時はここで画面遷移しない。元の 401 を呼び出し側へ返し、
+    // 各ビューの既存固定文言（「再ログインが必要です」等）で復帰を案内する。
+    // 画面遷移はユーザーが LOG OUT を押したとき（handle_logout）だけ行う。
+    // 待機者を起こす前に結果を確定させ、全員が同じ値を読めるようにする。
+    slot.borrow_mut().complete(outcome.clone());
+    outcome
+}
+
+/// 共通の再試行ループ。`make` は試行ごとに新規 `Request` を組み立てる。
+/// gloo-net 0.7 は `RequestBuilder::body/json` が `Request` を返して builder を
+/// 返さないため、ボディ付き呼び出しは `api_fetch_request` 側で `Request` を渡す。
+async fn api_fetch_loop<F>(make: F, auth: bool) -> Result<Response, gloo_net::Error>
+where
+    F: Fn(&str) -> Result<Request, gloo_net::Error>,
+{
+    let mut jwt = current_jwt().unwrap_or_default();
+    let mut refreshed = false;
+    loop {
+        let response = make(&jwt)?.send().await?;
+        let status = response.status();
+        let has_www_authenticate = response.headers().get("www-authenticate").is_some();
+        if !should_refresh(status, auth, has_www_authenticate) || !allows_retry(status, refreshed) {
+            return Ok(response);
+        }
+        match join_refresh().await {
+            RefreshOutcome::Token(new_jwt) => {
+                jwt = new_jwt;
+                refreshed = true;
+            }
+            // refresh 失敗は全待機者へ同じ 401 を返す。セッション破棄はリーダーが
+            // join_refresh 側で 1 回だけ実行済み（/auth/logout の API 呼び出しはしない）。
+            RefreshOutcome::Failed => return Ok(response),
+        }
+    }
+}
+
+/// 自動 refresh の有効フラグ。既定は無効（明示的な有効化を待つ）。
+///
+/// 全 fetch に波及させると、401 を固定文言へ変換する既存ビューと一覧フェッチの
+/// 再描画が競合し、エラー表示が消える回帰が確認された。基盤（共有トークン・
+/// 単一フライト・再試行ループ）は維持し、呼び出し側の移行が完了してから
+/// このフラグを true にして段階的に有効化する。
+const ENABLE_AUTO_REFRESH: bool = false;
+
+/// 401 かつ `auth` のときだけ refresh を試す。403 / ネットワークエラーは対象外。
+///
+/// `WWW-Authenticate` が明示された 401（Basic 等）はトークン更新の対象外とし、
+/// サーバーが要求した認証方式に従って呼び出し側の固定文言へ委ねる。
+fn should_refresh(status: u16, auth: bool, has_www_authenticate: bool) -> bool {
+    ENABLE_AUTO_REFRESH && status == 401 && auth && !has_www_authenticate
+}
+
+/// refresh 済みなら 2 回目の 401 でも再送しない（無限ループ防止）。
+fn allows_retry(status: u16, refreshed: bool) -> bool {
+    status == 401 && !refreshed
+}
+
+/// 認証付き API 呼び出しの共通ラッパー。
+///
+/// `make` は試行ごとに新規 `RequestBuilder` を返し、引数にはその時点の JWT が入る。
+/// 401 + `auth` のときだけ refresh を 1 回挟み、2 回目の 401 はそのまま返す。
+/// ボディを付ける必要がある呼び出しは `api_fetch_request` を使うこと。
+pub async fn api_fetch<F>(make: F, auth: bool) -> Result<Response, gloo_net::Error>
+where
+    F: Fn(&str) -> RequestBuilder,
+{
+    api_fetch_loop(
+        |jwt| make(jwt).credentials(RequestCredentials::Include).build(),
+        auth,
+    )
+    .await
+}
+
+/// ボディ付き（FormData / JSON 等）の認証付き API 呼び出し向けラッパー。
+///
+/// gloo-net 0.7 の `RequestBuilder::body/json` は `Request` を返すため、
+/// `make` は credential 指定とボディ付与を含めて毎回新規 `Request` を返す。
+/// ボディはクロージャ内で作り直すので、再送時に消費済みのものを再利用しない。
+pub async fn api_fetch_request<F>(make: F, auth: bool) -> Result<Response, gloo_net::Error>
+where
+    F: Fn(&str) -> Result<Request, gloo_net::Error>,
+{
+    api_fetch_loop(make, auth).await
+}
 
 /// 本文と TOC で共有する見出し情報。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1068,6 +1306,9 @@ pub fn App() -> impl IntoView {
     let (user_hash, set_user_hash) = signal(None::<String>);
     let (token, set_token) = signal(None::<String>);
 
+    // api_fetch が試行ごとに現在の JWT を読めるよう、App の signal を共有状態へ登録する。
+    register_shared_token(token, set_token);
+
     // 直接リンクの hash は「保留値」としてだけ保持する。未認証では従来どおり
     // login を表示し、認証成功後にこの値を適用する。
     let pending_view: StoredValue<&'static str> = StoredValue::new(
@@ -1162,7 +1403,9 @@ pub fn App() -> impl IntoView {
 
     let handle_login_success = move |hash: String, jwt: String| {
         set_user_hash.set(Some(hash));
-        set_token.set(Some(jwt));
+        // 共有 signal へ set する。refresh 成功時も同じ signal を通るため
+        // api_fetch は常に最新の JWT を読める。
+        set_shared_jwt(Some(jwt));
         // 保留しておいた直接リンクの hash を適用する（未認証では login のまま）。
         let target = pending_view.get_value();
         navigate(target, NavigateMode::Replace);
@@ -1493,10 +1736,16 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             let token = token.clone();
             let generation_cell = Rc::clone(&generation_cell);
             spawn_local(async move {
-                match Request::get(&format!("{}/content{}", API_BASE, query))
-                    .header("Authorization", &format!("Bearer {}", token))
-                    .send()
-                    .await
+                match api_fetch(
+                    |jwt| {
+                        // 共有 signal 未登録時は従来どおり prop のトークンを使う。
+                        let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                        Request::get(&format!("{}/content{}", API_BASE, query))
+                            .header("Authorization", &format!("Bearer {}", jwt))
+                    },
+                    true,
+                )
+                .await
                 {
                     Ok(res) if res.ok() => match res.json::<Vec<ContentMeta>>().await {
                         Ok(list) => {
@@ -1698,11 +1947,16 @@ fn ExportMyData(token: String) -> impl IntoView {
         set_busy.set(true);
         spawn_local(async move {
             let result: Result<String, String> = async {
-                let response = Request::get(&format!("{}/me/export", API_BASE))
-                    .header("Authorization", &format!("Bearer {}", token))
-                    .send()
-                    .await
-                    .map_err(|_| "ネットワークエラーが発生しました。".to_string())?;
+                let response = api_fetch(
+                    |jwt| {
+                        let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                        Request::get(&format!("{}/me/export", API_BASE))
+                            .header("Authorization", &format!("Bearer {}", jwt))
+                    },
+                    true,
+                )
+                .await
+                .map_err(|_| "ネットワークエラーが発生しました。".to_string())?;
                 if response.status() == 401 {
                     return Err("ログインが必要です".to_string());
                 }
@@ -1724,6 +1978,14 @@ fn ExportMyData(token: String) -> impl IntoView {
             }
             .await;
             set_busy.set(false);
+            web_sys::console::log_1(
+                &format!(
+                    "EXPORT_RESULT ok={} value={:?}",
+                    result.is_ok(),
+                    result.as_ref().ok()
+                )
+                .into(),
+            );
             match result {
                 Ok(message) => set_status.set(message),
                 Err(message) => set_error.set(message),
@@ -1879,13 +2141,18 @@ where
         let on_favorite_changed = on_favorite_changed.clone();
         spawn_local(async move {
             let url = format!("{}/content/{}/favorite", API_BASE, url_encode(&cid));
-            let res = if turning_on {
-                Request::post(&url)
-            } else {
-                Request::delete(&url)
-            }
-            .header("Authorization", &format!("Bearer {}", token))
-            .send()
+            let res = api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    let builder = if turning_on {
+                        Request::post(&url)
+                    } else {
+                        Request::delete(&url)
+                    };
+                    builder.header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
             .await;
 
             match res {
@@ -1925,10 +2192,15 @@ where
         audit_fetched_cid.set_value(Some(cid.clone()));
         let token = token_stored.get_value();
         spawn_local(async move {
-            match Request::get(&format!("{}/content/{}/audit", API_BASE, url_encode(&cid)))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
+            match api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&format!("{}/content/{}/audit", API_BASE, url_encode(&cid)))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await
             {
                 Ok(response) if response.ok() => match response.json::<Vec<AuditLog>>().await {
                     Ok(logs) => {
@@ -1970,10 +2242,14 @@ where
             set_decode_error.set(false);
             set_content_load_error.set(String::new());
             let url = format!("{}/content/{}", API_BASE, url_encode(&cid));
-            let res = Request::get(&url)
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await;
+            let res = api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&url).header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await;
 
             match res {
                 Ok(response) if response.ok() => match response.binary().await {
@@ -2386,13 +2662,18 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     .append_with_blob("signature", &sig_blob)
                     .map_err(|_| PREPARE_ERROR)?;
 
-                let response = match Request::post(&format!("{}/content/upload", API_BASE))
-                    .header("Authorization", &format!("Bearer {}", token))
-                    .body(form_data)
-                    .map_err(|_| PREPARE_ERROR)?
-                    .send()
-                    .await
-                {
+                // ボディは試行ごとに FormData を複製して作り直す（消費済みの再利用を避ける）。
+                // credentials は api_fetch_request が自動付与しないためここで指定する。
+                let make = |jwt: &str| -> Result<Request, gloo_net::Error> {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::post(&format!("{}/content/upload", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                        .credentials(RequestCredentials::Include)
+                        .body(form_data.clone())
+                };
+                // 既存契約どおり、ボディ生成の失敗は送信前に PREPARE_ERROR へ写像する。
+                let _ = make(&token).map_err(|_| PREPARE_ERROR)?;
+                let response = match api_fetch_request(make, true).await {
                     Ok(response) => response,
                     // ネットワークエラーも固定文言へ統一（生エラーは出さない）。
                     Err(_) => return Ok(upload_error_message(None)),
@@ -2547,10 +2828,15 @@ fn Ledger(token: String) -> impl IntoView {
         spawn_local(async move {
             // 再取得時に前回の失敗表示が残らないようにする。
             set_ledger_error.set(String::new());
-            match Request::get(&format!("{}/transactions", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
+            match api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&format!("{}/transactions", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await
             {
                 Ok(response) if response.ok() => match response.json::<Vec<Transaction>>().await {
                     Ok(data) => {
@@ -2717,10 +3003,15 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let fetch_reports = move || {
         let token = token_stored.get_value();
         spawn_local(async move {
-            match Request::get(&format!("{}/mod/reports", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
+            match api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&format!("{}/mod/reports", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await
             {
                 Ok(response) if response.ok() => match response.json::<Vec<Report>>().await {
                     Ok(data) => {
@@ -2760,10 +3051,15 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         let token = token_stored.get_value();
         spawn_local(async move {
             let _release = BusyGuard(set_stats_busy);
-            match Request::get(&format!("{}/mod/stats", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .send()
-                .await
+            match api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&format!("{}/mod/stats", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await
             {
                 Ok(response) if response.ok() => match response.json::<ModerationStats>().await {
                     Ok(stats) => {
@@ -2820,17 +3116,22 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         spawn_local(async move {
             // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
             let _release = BusyGuard(set_report_busy);
-            let res = Request::post(&format!("{}/mod/report", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .json(&serde_json::json!({
-                    "report_id": 0,
-                    "target_cid": cid,
-                    "reason": reason,
-                    "status": "Pending"
-                }))
-                .unwrap()
-                .send()
-                .await;
+            let res = api_fetch_request(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::post(&format!("{}/mod/report", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                        .credentials(RequestCredentials::Include)
+                        .json(&serde_json::json!({
+                            "report_id": 0,
+                            "target_cid": cid,
+                            "reason": reason,
+                            "status": "Pending"
+                        }))
+                },
+                true,
+            )
+            .await;
             match res {
                 Ok(r) if r.ok() => {
                     set_status.set("Report accepted. Content marked Reported.".to_string());
@@ -2861,17 +3162,22 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
             // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
             let _release = BusyGuard(set_vote_busy);
             let mock_signature = vec![0u8; 256];
-            let res = Request::post(&format!("{}/mod/vote", API_BASE))
-                .header("Authorization", &format!("Bearer {}", token))
-                .json(&serde_json::json!({
-                    "report_id": report_id,
-                    "juror_hash": user_hash,
-                    "result": result,
-                    "signature": mock_signature
-                }))
-                .unwrap()
-                .send()
-                .await;
+            let res = api_fetch_request(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::post(&format!("{}/mod/vote", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                        .credentials(RequestCredentials::Include)
+                        .json(&serde_json::json!({
+                            "report_id": report_id,
+                            "juror_hash": user_hash,
+                            "result": result,
+                            "signature": mock_signature
+                        }))
+                },
+                true,
+            )
+            .await;
             match res {
                 Ok(r) if r.ok() => {
                     set_vote_notice.set(VOTE_NOTICE.to_string());
@@ -3028,6 +3334,74 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    #[test]
+    fn should_refresh_requires_401_and_auth() {
+        // 既定では自動 refresh は無効（段階的有効化まで固定文言契約を維持）。
+        assert!(!super::should_refresh(401, true, false));
+        // WWW-Authenticate が付いた 401 は refresh 対象外（固定文言へ委ねる）。
+        assert!(!super::should_refresh(401, true, true));
+        assert!(!super::should_refresh(401, false, false));
+        // 403 / 5xx / 成功は再試行しない。
+        assert!(!super::should_refresh(403, true, false));
+        assert!(!super::should_refresh(500, true, false));
+        assert!(!super::should_refresh(200, true, false));
+    }
+
+    #[test]
+    fn allows_retry_stops_after_one_refresh() {
+        // 1 回目の 401 は refresh へ進む。
+        assert!(super::allows_retry(401, false));
+        // refresh 済みなら 2 回目の 401 はそのまま返す（無限ループしない）。
+        assert!(!super::allows_retry(401, true));
+        assert!(!super::allows_retry(403, false));
+        assert!(!super::allows_retry(200, false));
+    }
+
+    #[test]
+    fn refresh_slot_single_flights_and_broadcasts_one_outcome() {
+        let mut slot = super::RefreshSlot::new();
+        // 最初の 401 だけがリーダーになり、他は待機者になる。
+        assert!(slot.claim());
+        assert!(!slot.claim());
+        assert!(!slot.claim());
+        assert!(slot.outcome().is_none(), "完了前は結果が無い");
+
+        slot.complete(super::RefreshOutcome::Token("jwt-v2".to_string()));
+        assert!(!slot.in_flight);
+        assert_eq!(
+            slot.outcome(),
+            Some(super::RefreshOutcome::Token("jwt-v2".to_string()))
+        );
+
+        // 次の波では前回の結果がクリアされ、再びリーダーが 1 人だけ選ばれる。
+        assert!(slot.claim());
+        assert!(slot.outcome().is_none());
+        assert!(!slot.claim());
+        slot.complete(super::RefreshOutcome::Failed);
+        assert_eq!(slot.outcome(), Some(super::RefreshOutcome::Failed));
+    }
+
+    #[test]
+    fn refresh_slot_waker_is_registered_once_and_cleared_on_completion() {
+        let mut slot = super::RefreshSlot::new();
+        // Waker::noop() は will_wake が常に false のため、実際の Wake 実装を使う。
+        struct NoopWake;
+        #[allow(clippy::manual_noop_waker)]
+        impl std::task::Wake for NoopWake {
+            fn wake(self: std::sync::Arc<Self>) {}
+        }
+        let waker = std::task::Waker::from(std::sync::Arc::new(NoopWake));
+        slot.register_waker(&waker);
+        slot.register_waker(&waker);
+        assert_eq!(slot.waiters.len(), 1, "同一 waker は二重登録しない");
+
+        slot.complete(super::RefreshOutcome::Failed);
+        assert!(
+            slot.waiters.is_empty(),
+            "完了時に待機者は全員起こされてクリアされる"
+        );
     }
 
     #[test]
