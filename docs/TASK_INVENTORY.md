@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T07:00:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T07:00:00+09:00"
 status: current
 ---
 
@@ -60,7 +60,7 @@ status: current
   - [対応済み] `verify_backup` の契約明文化: `--database-token` は argv で拒否
     （値もエコーしない、`DATABASE_TOKEN` 環境変数のみ。 `sign_audit_export` と同じ契約）、
     `-wal` / `-shm` / `-journal` サイドカーは DB オープン前に fail-closed で拒否。
-    `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
+    `server/src/bin/verify_backup.rs` に19テストを追加（CLI-03、
     [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
     今回の追加は全てサーバー側 bin テストであり、E2E 定義数は当時59件のまま変更しない（現在69件）。
   - [対応済み] SSRF リダイレクト無効化: 本番・テスト共通の HTTP クライアント
@@ -480,7 +480,7 @@ status: current
   `--database-token` は受け付けず値もエコーしない（`DATABASE_TOKEN` 環境変数のみ、
   `sign_audit_export` と同じ契約）。`-wal` / `-shm` / `-journal` は DB オープン前に拒否。
   `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` を境界化し、
-  `server/src/bin/verify_backup.rs` に17テストを追加（CLI-03、
+  `server/src/bin/verify_backup.rs` に19テストを追加（CLI-03、
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] `backup_db` の取得後検証に `_migrations` 台帳チェックを追加（旧実装はコメントで保証を謳いながら未検証）。`backup_ok ... migrations=9` を実出力で確認。
 - [対応済み] スケジューラ設定例: `deploy/openillustration-backup.{service,timer,cron}` を追加。`backup-rotate.sh` は `BIN_DIR`

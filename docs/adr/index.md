@@ -10,3 +10,5 @@
 * [ADR-0008](ADR-0008-moderation-stats-publication.md) - モデレーション集計の第三者公開範囲（Accepted）。
 * [ADR-0009](ADR-0009-payment-order-partial-unique-rejected.md) - payment_orders 部分 UNIQUE の却下（Rejected）。
 * [ADR-0010](ADR-0010-foreign-key-startup-fail-closed.md) - 起動時 FK 孤立行の fail-closed 化（Accepted）。
+* [ADR-0011](ADR-0011-performance-measurement.md) - 性能計測の3層と受入値の扱い（Proposed）。
+* [ADR-0012](ADR-0012-compatibility-matrix.md) - ブラウザ互換マトリクスと状態分類（Proposed）。

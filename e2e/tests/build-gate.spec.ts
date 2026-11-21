@@ -360,9 +360,15 @@ test.describe('E2E project selection (EPS-01)', () => {
     summary: /SUMMARY>>([\s\S]*?)<<\n/.exec(stdout)?.[1] ?? '',
   });
 
-  test('explicit E2E_PROJECTS is honored even when browsers are unavailable', () => {
+  // COMPAT-01 のエビデンス用に、選択プロジェクトを stdout から取り出す。
+  const selectedProjectsOf = (result: SelectionResult): string[] =>
+    /PROJECTS=([^\n]*)/.exec(result.stdout)?.[1]?.split(/\s+/).filter(Boolean) ?? [];
+
+  test('explicit E2E_PROJECTS is honored even when browsers are unavailable', async ({}, testInfo) => {
     // (a) 明示指定は実行可能性に関わらず厳守され、警告も出ない。
-    const result = runSelection('firefox', '0', '0');
+    const firefoxOk: string = '0';
+    const webkitOk: string = '0';
+    const result = runSelection('firefox', firefoxOk, webkitOk);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PROJECTS=firefox');
     expect(result.stdout).toContain('WARN=0');
@@ -384,11 +390,23 @@ test.describe('E2E project selection (EPS-01)', () => {
     const unknown = runSelection('bogus', '1', '1');
     expect(unknown.status).toBe(1);
     expect(unknown.stderr).toContain('unknown E2E project: bogus');
+
+    await testInfo.attach('compat-selection', {
+      body: JSON.stringify({
+        case: 'explicit',
+        firefoxOk: firefoxOk === '1',
+        webkitOk: webkitOk === '1',
+        selectedProjects: selectedProjectsOf(result),
+      }),
+      contentType: 'application/json',
+    });
   });
 
-  test('both browsers executable selects all three projects without warning', () => {
+  test('both browsers executable selects all three projects without warning', async ({}, testInfo) => {
     // (b) 未指定かつ firefox/webkit が両方実行可能なら3プロジェクト。
-    const result = runSelection('', '1', '1');
+    const firefoxOk: string = '1';
+    const webkitOk: string = '1';
+    const result = runSelection('', firefoxOk, webkitOk);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PROJECTS=chromium firefox webkit');
     expect(result.stdout).toContain('WARN=0');
@@ -397,9 +415,19 @@ test.describe('E2E project selection (EPS-01)', () => {
     const { annotation, summary } = extract(result.stdout);
     expect(annotation).toBe('');
     expect(summary).toContain('Running projects: chromium firefox webkit');
+
+    await testInfo.attach('compat-selection', {
+      body: JSON.stringify({
+        case: 'both-available',
+        firefoxOk: firefoxOk === '1',
+        webkitOk: webkitOk === '1',
+        selectedProjects: selectedProjectsOf(result),
+      }),
+      contentType: 'application/json',
+    });
   });
 
-  test('one browser unavailable falls back to chromium with a warning', () => {
+  test('one browser unavailable falls back to chromium with a warning', async ({}, testInfo) => {
     // (c) 未指定で片方でも実行不可なら chromium のみ＋警告フラグ。
     const noWebkit = runSelection('', '1', '0');
     expect(noWebkit.status).toBe(0);
@@ -432,5 +460,23 @@ test.describe('E2E project selection (EPS-01)', () => {
     );
     expect(written.summaryFile).toContain('Running projects: chromium');
     expect(written.summaryFile).toContain('Fallback to chromium: 1');
+
+    await testInfo.attach('compat-selection', {
+      body: JSON.stringify([
+        {
+          case: 'webkit-unavailable',
+          firefoxOk: true,
+          webkitOk: false,
+          selectedProjects: selectedProjectsOf(noWebkit),
+        },
+        {
+          case: 'firefox-unavailable',
+          firefoxOk: false,
+          webkitOk: true,
+          selectedProjects: selectedProjectsOf(noFirefox),
+        },
+      ]),
+      contentType: 'application/json',
+    });
   });
 });

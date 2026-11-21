@@ -24,4 +24,13 @@
   公開型は `PublicModStatsResponse` / `PublicModStatsTotals` /
   `PublicModStatsMonthly` とし、bans/unbans/unpins と CID・reason・`user_hash` を
   含めない。純粋関数 `build_public_mod_stats` が `build_mod_stats` の結果を縮約。
-  Status: Accepted 維持。
+   Status: Accepted 維持。
+- [ADR-0011](ADR-0011-performance-measurement.md): 新規作成。計測3層（E2E 所要時間 /
+  `first-contentful-paint` と `responseEnd` / 転送量と wasm サイズ）、3回測定の中央値、
+  受入値は未合意、メモリは参考値のみ。Level 0 を今すぐの pass 条件、
+  Level 1 を ADR 合意後の受入と定義。Status: Proposed。
+- [ADR-0012](ADR-0012-compatibility-matrix.md): 新規作成。ブラウザ×OS×主要フローの
+  マトリクスと `verified` / `proxy_only` / `not_verified` / `blocked` の状態を定義。
+  Edge / Brave は `same_engine_proxy`、Safari は `webkit_proxy`、
+  認証 / 決済は `functional_only`、最小バージョン未決定、暗黙除外禁止。
+  Status: Proposed。

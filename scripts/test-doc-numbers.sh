@@ -27,7 +27,7 @@ extract_checks() {
 
 # --- 1. E2E 件数 ----------------------------------------------------------
 spec="docs/TEST_SPECIFICATION.md"
-e2e_total="$(grep -rc '^  test(' e2e/tests/*.spec.ts | awk -F: '{s+=$2} END {print s+0}')"
+e2e_total="$(grep -rEc '(^|[^.[:alnum:]_])test\(' e2e/tests/*.spec.ts | awk -F: '{s+=$2} END {print s+0}')"
 
 measured_line="$(grep -m1 '実測は全[0-9][0-9]*件' "$spec" || true)"
 measured_n="$(grep -oE '実測は全[0-9]+件' <<<"$measured_line" | grep -oE '[0-9]+' | head -n1 || true)"
@@ -101,7 +101,7 @@ done
 breakdown_sum=0
 for label in "${e2e_labels[@]}"; do
 	documented="${documented_breakdown[$label]:-}"
-	actual="$(grep -c '^  test(' "e2e/tests/${label}.spec.ts" || true)"
+	actual="$(grep -Ec '(^|[^.[:alnum:]_])test\(' "e2e/tests/${label}.spec.ts" || true)"
 	assert_numbers_match "e2e ${label}" "$actual" "$documented"
 	# 先頭ゼロ付き数値を8進数として解釈しないよう 10# を付ける。
 	breakdown_sum=$((breakdown_sum + 10#${documented:-0}))
@@ -190,32 +190,49 @@ done
 # --- 5. bin テスト数の照合 -------------------------------------------------
 # 7 bin（backup_db / doctor / restore_db / sign_audit_export / verify_audit_export /
 # verify_audit_log / verify_backup）の #[test] / #[tokio::test] の実数を grep -c で数え、
-# TEST_SPECIFICATION の記載件数（<bin> <N>件 / <bin> <N>テスト）と照合する。
+# TEST_SPECIFICATION と両 Runbook の記載件数（<bin> <N>件 / <bin> <N>テスト）と照合する。
 # 一方向のみ: ドキュメント側の記載が実コードとずれていれば FAIL とし、実コード側の
 # 全テストがドキュメントへ載っていることは要求しない（履歴表記と衝突しないため）。
-# 内訳・増分表記（"当初17件" / "追加4件" / "追加警告 2件" 等）は総数ではないため、
-# 抽出マッチの直前30文字を見て履歴判定し、そのマッチだけを除外する（行全体は落とさない）。
+# 内訳・増分表記（"当初17件" / "追加4件" / "追加警告 2件" / "時点17件" 等）は総数ではないため、
+# 抽出マッチだけを見て履歴判定し、そのマッチだけを除外する（行全体は落とさない）。
 # 同じ行に旧件数と現行件数が同居しても現行側は照合対象に残る。総数行の括弧内にある
 # "既存29件" 等は <bin> 直後ではないため抽出されず、誤抽出されない。
+# 「計N件/テスト」は総数表記なので最優先で採用する。内訳キーワード
+# （の / 含む / ＋）に隣接する数値は内訳として除外する。
+# これにより AUDIT_EXPORT_RUNBOOK の
+# "12テスト（...2件含む）と ...5テスト（計17テスト）" では 17 が採れる。
 doc_bin_counts() {
 	local bin="$1"
-	local token num
+	local doc token match num total
 	{
-		while IFS= read -r token; do
-			[[ -z "$token" ]] && continue
-			# マッチの直前30文字（.{0,30} 部分）とマッチ本体だけを見て履歴判定する。
-			# 除外語彙は数値に隣接する場合だけ（例: '追加4件' '当初17件'）除外し、
-			# L49 の 'テスト追加（doctor 46件' のような現行総数は誤除外しない。
-			if grep -qE '(当初|旧|追加)[^0-9]{0,4}[0-9]+(件|テスト)$' <<<"$token"; then
-				continue
-			fi
-			# 前方30文字側の数値を誤採用しないよう、<bin> 直後の数値だけを採る。
-			num="$(grep -oE "${bin}[^0-9]*[0-9]+(件|テスト)" <<<"$token" |
-				grep -oE '[0-9]+' | head -n1 || true)"
-			if [[ -n "$num" ]]; then
-				printf '%s\n' "$num"
-			fi
-		done < <(grep -oE ".{0,30}${bin}[^0-9]*[0-9]+(件|テスト)" "$spec" || true)
+		for doc in "$spec" docs/BACKUP_RESTORE_RUNBOOK.md docs/AUDIT_EXPORT_RUNBOOK.md; do
+			[[ -f "$doc" ]] || continue
+			while IFS= read -r token; do
+				[[ -z "$token" ]] && continue
+				# 「計N件/テスト」は内訳ではなく総数なので最優先で採る。
+				total="$(grep -oE '計[0-9]+(件|テスト)' <<<"$token" | grep -oE '[0-9]+' | head -n1 || true)"
+				if [[ -n "$total" ]]; then
+					printf '%s\n' "$total"
+					continue
+				fi
+				while IFS= read -r match; do
+					[[ -z "$match" ]] && continue
+					# 履歴語彙は数値に隣接する場合だけ除外し、現行総数は誤除外しない。
+					if grep -qE '(当初|旧|追加|時点)[^0-9]{0,4}[0-9]+(件|テスト)(含む|＋)?$' <<<"$match"; then
+						continue
+					fi
+					# 内訳キーワード（の / 含む / ＋）に隣接する数値は総数ではない。
+					if grep -qE 'の[^0-9]{0,4}[0-9]+(件|テスト)(含む|＋)?$|[0-9]+(件|テスト)(含む|＋)$' <<<"$match"; then
+						continue
+					fi
+					# <bin> 直後の数値だけを採る（前方の数値を誤採用しない）。
+					num="$(grep -oE '[0-9]+' <<<"$match" | head -n1 || true)"
+					if [[ -n "$num" ]]; then
+						printf '%s\n' "$num"
+					fi
+				done < <(grep -oE "${bin}[^0-9]*[0-9]+(件|テスト)(含む|＋)?" <<<"$token" || true)
+			done < <(grep -E "${bin}[^0-9]*[0-9]+(件|テスト)" "$doc" || true)
+		done
 	} | sort -u || true
 }
 
@@ -326,7 +343,7 @@ while IFS= read -r example_line; do
 		failures=$((failures + 1))
 		continue
 	fi
-	actual_n="$(grep -c '^  test(' "$spec_file" || true)"
+	actual_n="$(grep -Ec '(^|[^.[:alnum:]_])test\(' "$spec_file" || true)"
 	assert_numbers_match "e2e spec example ${spec_name}" "$actual_n" "$documented_n"
 done <<<"$spec_example_lines"
 

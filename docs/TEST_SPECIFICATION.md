@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T06:40:00+09:00"
+  at: "2026-11-22T07:00:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T06:40:00+09:00"
+  at: "2026-11-22T07:00:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -181,9 +181,9 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
 | AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
 | AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に17テスト（既存10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み。Runbookの手動確認手順も併用する |
-| PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | 指標・閾値未決定 |
-| COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | 環境・閾値未決定 |
-| COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | 方式・環境未決定 |
+| PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | status=not_evaluated（未作成、ADR-0011 で合意待ち。下記「性能・互換ゲートの評価状況」を参照） |
+| COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | status=not_evaluated（未作成、ADR-0012 で合意待ち。下同節を参照） |
+| COMPAT-02 | JXL/Wasm非対応・機能利用不可環境 | 代替表示または案内。認証・決済は迂回不可 | status=not_evaluated（未作成、ADR-0012 で合意待ち。下同節を参照） |
 | CFG-01 | `doctor` の設定不整合警告（R5-06 / R4-01） | `ALLOW_MOCK_AUTH` と PINATA_JWT / `OIDC_*` / RSA 秘密鍵の併用で警告。既定は警告のみで exit 0、`--strict` では exit 1。5パターンの実出力を確認 | 実装済み。純粋関数化と53テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件）を追加し、23カテゴリ固定を検証。`ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象。`AUDIT_EXPECT_ROOT` は本番相当で未設定/空白/不正 hex なら `audit_expect_root` に警告（値は非エコー）。下記「設定診断（`doctor`）の検証」および CLI-01 を参照 |
 | NET-03 | レート制限キーの解決済みクライアント IP 優先 | 信頼プロキシ配下では XFF 解決 IP ごとに独立バケット。未設定・信頼外ではピア IP をキーにする | 実装済み。`test_rate_limit_key_prefers_resolved_client_ip` / `test_rate_limit_uses_resolved_client_ip_under_trusted_proxy` / `test_rate_limit_key_falls_back_to_peer_without_trusted_proxy` |
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
@@ -211,6 +211,23 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。下記同節を参照 |
+
+### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
+
+R1 分析に従い、3 ゲートを「閾値未決定のまま名目上 pass」から評価対象へ移す。
+現状の status は **not_evaluated** である。「閾値未決定」ではなく
+**未作成（ADR-0011/0012 で合意待ち）** と明記する。個別の対応 ADR は下表を参照。
+
+- **Level 0（観測可能性）**: 今すぐの pass 条件。観測値が有限かつ 0 以上で、
+  エビデンスが `testInfo.attach` に保存されること。大小比較・閾値判定は行わない。
+- **Level 1（受入）**: ADR-0011 / ADR-0012 で受入値と対応マトリクスが合意された後に
+  適用する。合意前は適用せず、本番移行ゲートのブロッカーとして扱う。
+
+| ID | status | test oracle | evidence | 対応ADR |
+| --- | --- | --- | --- | --- |
+| PERF-01 | not_evaluated | 計測値（E2E 所要時間・paint / navigation timing）が有限かつ 0 以上。大小比較なし | `e2e/tests/metrics.spec.ts` の `perf-observation` 添付 | [ADR-0011](adr/ADR-0011-performance-measurement.md) |
+| COMPAT-01 | not_evaluated | 選択プロジェクトと firefox / webkit の可否が添付に記録される。実機 verified は未実施 | `e2e/tests/build-gate.spec.ts` の `compat-selection` 添付 | [ADR-0012](adr/ADR-0012-compatibility-matrix.md) |
+| COMPAT-02 | not_evaluated | JXL / Wasm 非対応時の代替表示・案内が存在すること。認証・決済は迂回不可 | ADR-0012 の状態クラス（functional_only / blocked） | [ADR-0012](adr/ADR-0012-compatibility-matrix.md) |
 
 ### 年齢ゲート共通化と TZ 境界の検証（AGE-02〜04）
 
@@ -520,6 +537,7 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 | 出力判定 | 3 | `success_output_keeps_existing_format` / `failure_has_no_stdout_and_exit_code_one` / `failure_never_writes_error_text_to_stdout` |
 | サイドカー | 2 | `sidecar_suffixes_are_appended_to_full_path` / `sidecars_are_rejected_before_opening_the_backup` |
 | 構造検証 | 6 | `valid_backup_is_accepted` / `empty_database_is_rejected` / `missing_migration_ledger_is_rejected` / `empty_migration_ledger_is_rejected` / `nonexistent_file_is_rejected` / `non_sqlite_file_is_rejected` |
+| 境界・回帰 | 2 | `help_text_does_not_advertise_database_token` / `option_like_value_is_rejected_without_echo` |
 
 ### 運用 bin のテスト数一覧（全7 bin）
 

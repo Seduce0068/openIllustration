@@ -21,7 +21,8 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     headers: Record<string, string | undefined>;
   };
 
-  test('MET-01: neutralized URL count is posted once as a minimal client event', async ({ page }) => {
+  test('MET-01: neutralized URL count is posted once as a minimal client event', async ({ page }, testInfo) => {
+    const startedAt = Date.now();
     const captured: CapturedCall[] = [];
 
     // page.route は goto / ログインより前に登録する。
@@ -118,6 +119,32 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     expect(call.headers['authorization']).toBeUndefined();
     expect(call.headers['x-forwarded-for']).toBeUndefined();
     await expect(page.getByRole('alert')).toHaveCount(0);
+
+    // PERF-01 Level 0: 観測値を保存するだけ。大小比較・閾値判定は行わない（ADR-0011 合意待ち）。
+    await test.step('PERF-01: record paint/navigation timing observation', async () => {
+      const timing = await page.evaluate(() => {
+        const nav = performance.getEntriesByType('navigation')[0] as
+          | PerformanceNavigationTiming
+          | undefined;
+        const paints = performance.getEntriesByType('paint');
+        const fcp = paints.find(entry => entry.name === 'first-contentful-paint');
+        return {
+          firstContentfulPaint: fcp ? fcp.startTime : null,
+          responseEnd: nav ? nav.responseEnd : null,
+          domContentLoadedEventEnd: nav ? nav.domContentLoadedEventEnd : null,
+        };
+      });
+      const observation = { ...timing, elapsedMs: Date.now() - startedAt };
+      for (const value of Object.values(observation)) {
+        if (value === null) continue;
+        expect(Number.isFinite(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+      await testInfo.attach('perf-observation', {
+        body: JSON.stringify(observation),
+        contentType: 'application/json',
+      });
+    });
   });
 
   /**

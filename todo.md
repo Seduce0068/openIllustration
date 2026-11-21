@@ -150,9 +150,9 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **E2E ブラウザフォールバックを可視化** — 根拠 `e2e/ci-e2e.sh` 選択ロジック / discovery R4-OPS / 中。
   firefox/webkit 不可時の chromium フォールバックが stderr 警告のみで、1ブラウザ green が見えない。
   ::warning:: アノテーションとジョブサマリへ選択プロジェクトを出力。
-- [ ] **性能/互換ゲート PERF-01/COMPAT-01/COMPAT-02 の測定条件を確定** — 根拠 `docs/TEST_SPECIFICATION.md:159-161` / discovery R4 / 中。
+- [x] **性能/互換ゲート PERF-01/COMPAT-01/COMPAT-02 の測定条件を確定** — 根拠 `docs/TEST_SPECIFICATION.md:159-161` / discovery R4 / 中。
   閾値・環境未決定のまま名目ゲート。E2E69件を増やさず既存 spec 内へ計測を統合。
-- [ ] **doc-numbers の照合対象を拡張** — 根拠 `scripts/test-doc-numbers.sh` / review R1-CF + discovery R4-OPS / 中。
+- [x] **doc-numbers の照合対象を拡張** — 根拠 `scripts/test-doc-numbers.sh` / review R1-CF + discovery R4-OPS / 中。
   Runbook・todo.md・CLI (Test_SPEC/DETAILED_DESIGN 以外) とクライアント単体テスト名が対象外。
   E2E カウントの `^  test(` インデント依存も `test(` 全般＋describe 除外へ。
 
