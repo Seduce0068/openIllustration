@@ -37,6 +37,27 @@ status: current
 
 ### 優先度: 高
 
+- [ ] **検証済み年齢属性の user_hash を signed_subject 由来へ変更**
+  — 根拠 `server/src/lib.rs` auth_verify (verified_age 分岐) / review R3-AU / 重大度 high。
+  verified_claims 受理時に `sha256(birthdate:country)` を user_hash としており、同一生年月日・居住国の
+  ユーザーが subject 衝突する。実証明書接続時に本番の主体分離が崩れるため、署名済み subject を
+  主体識別子とし、birthdate/country は年齢判定専用に留める。
+- [ ] **非 UTF-8 環境変数を fail-closed 起動拒否へ**
+  — 根拠 `server/src/lib.rs` bool_env_at_startup / `server/src/oidc.rs` validate_oidc_config_with / review R2-ER / 重大度 high。
+  `std::env::var` の Err を全て「未設定」として飲み込み、NotUnicode が起動拒否をすり抜ける。
+  `var_os` で None と非 UTF-8 を区別し、doctor/per-request 読込も同じ lookup 契約へ統一する（値は非エコー）。
+- [ ] **DATABASE_URL のサーバー既定をfail-closed化しdoctor診断を追加**
+  — 根拠 `server/src/lib.rs` run() / `server/src/bin/doctor.rs` production / review R1-CF / 重大度 high。
+  CLI3本は未設定起動拒否なのにサーバーは `file:local.db` へ暗黙フォールバックし、doctor も診断しない。
+  本番相当では未設定起動拒否、または既定値使用を production カテゴリへ警告追加。
+- [ ] **cron 配布テンプレートの MAILTO をプレースホルダ化** — 根拠 `deploy/openillustration-backup.cron:5` / review R4-DR / 重大度 high。
+  `admin@example.com` が残っており、そのまま導入するとバックアップ失敗通知が届かない。
+  `__SET_ME__` 等へ変更し、Runbook に差し替え手順と ALERT_CMD 必須化を追記。
+- [ ] **JWT 期限切れ (401) の refresh／再ログイン導線を追加**
+  — 根拠 `client/src/lib.rs` fetch 系ハンドラ群 / `docs/UNKNOWN_TASKS_INVESTIGATION.md` / discovery R5-VU / 重大度 high。
+  `/auth/refresh` がクライアントに存在せず、期限切れ後は全ビューが固定エラーで固まる。
+  共通 fetch ラッパーで401を1回 refresh 再試行し、失敗時にのみログイン画面へ遷移。E2E69件維持。
+
 P0（本番公開前に解消すべきセキュリティ／データ完全性）:
 
 - [x] **JPKI 証明書の暗号学的自己署名検証を追加（DN 迂回の遮断）** — 根拠 `server/src/jpki.rs:98-108` / R3-AU02 / 重大度 high。
@@ -100,6 +121,34 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] Tailwind をビルド時 CSS 化し、外部 CDN/フォント依存と無 SRI を解消（R1-10、2026-11-17 対応済み）
 
 ### 優先度: 中
+
+- [ ] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
+  任意の認証済みユーザーが通報キュー閲覧と確定を実行でき、運用判断を代行できる。
+  `require_moderation_operator` を ban_user と同じ位置で呼ぶ（スケジューラ専用なら別トークン分離）。
+- [ ] **doctor が OIDC 空値ハードエラーを警告へ流す** — 根拠 `server/src/bin/doctor.rs` oidc_* カテゴリ / review R2-ER / 中。
+  hard_errors のうち OIDC_EMPTY_VALUE_ERROR 等が警告化されず、起動は拒否されるのに --strict が exit 0 になる。
+- [ ] **URL 同期の履歴失敗・冪等性を堅牢化** — 根拠 `client/src/lib.rs` navigate() / current_content_query() / review R2-DI / 中。
+  履歴 API の Result を破棄し set_view を先に行うため URL と画面が不整合になり得る。
+  成功後に set_view、popstate ガード、生 search の双方向一致比較で正規化へ。
+- [ ] **ADR-0008 段階2 (公開集計ルート) を実装** — 根拠 `docs/adr/ADR-0008...` / `server/src/lib.rs` ルート表 / discovery R1-FG / 中。
+  Status Accepted の公開範囲（件数・月次分布・generated_at、機微除外）が未実装。
+  未認証401・認証済み200・機微キー非含有をサーバー/E2E で固定（69件維持）。
+- [ ] **外部キー孤立行の fail-closed 方針を決定** — 根拠 `server/src/lib.rs` find_foreign_key_violations / discovery R1-OPS / 中。
+  warn のみで起動継続。本番相当でエラー化するか現状維持を裁定し、コードコメントと運用方針へ明記。
+- [ ] **Runbook のテスト数と export E2E 記述を実測へ**
+  — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md`, `docs/AUDIT_EXPORT_RUNBOOK.md`, `docs/TEST_SPECIFICATION.md` / review R5-DC / 中。
+  verify_backup 17→19、verify_audit_export 17→20、export E2E「2/2 pass」→3件。doc-numbers 照合対象外。
+- [ ] **CI の deny ゲートへ bans/sources を追加**
+  — 根拠 `.github/workflows/ci.yml:40-42`, `deny.toml` / review R3-DE + discovery R4-DP / 中。
+  licenses/advisories のみで重複バージョン・未知レジストリを検出できていない。
+- [ ] **E2E ブラウザフォールバックを可視化** — 根拠 `e2e/ci-e2e.sh` 選択ロジック / discovery R4-OPS / 中。
+  firefox/webkit 不可時の chromium フォールバックが stderr 警告のみで、1ブラウザ green が見えない。
+  ::warning:: アノテーションとジョブサマリへ選択プロジェクトを出力。
+- [ ] **性能/互換ゲート PERF-01/COMPAT-01/COMPAT-02 の測定条件を確定** — 根拠 `docs/TEST_SPECIFICATION.md:159-161` / discovery R4 / 中。
+  閾値・環境未決定のまま名目ゲート。E2E69件を増やさず既存 spec 内へ計測を統合。
+- [ ] **doc-numbers の照合対象を拡張** — 根拠 `scripts/test-doc-numbers.sh` / review R1-CF + discovery R4-OPS / 中。
+  Runbook・todo.md・CLI (Test_SPEC/DETAILED_DESIGN 以外) とクライアント単体テスト名が対象外。
+  E2E カウントの `^  test(` インデント依存も `test(` 全般＋describe 除外へ。
 
 P1（本番運用の健全性）:
 
@@ -177,6 +226,18 @@ P1（本番運用の健全性）:
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
+
+- [ ] **UI 文言を日本語へ統一（日英混在解消）** — 根拠 `client/src/lib.rs` alert/status/sr-only 文言 / discovery R5-VU / 中。
+  `<html lang="ja">` と Intl ja-JP なのにナビ・エラーが英語固定。読み上げ部分を優先して辞書化。
+- [ ] **通報フォームの必須入力と dedicated エラーを追加** — 根拠 `client/src/lib.rs` submit_report / discovery R5-VU / 中。
+  TARGET CID / REASON に required・maxlength が無く、空送信が汎用 "Report failed." になる。
+- [ ] **検索0件の条件付き文言とクリア導線** — 根拠 `client/src/lib.rs` 空状態 / discovery R5-VU / 中。
+  条件指定時も「承認済みコンテンツはありません」でサイト側問題と誤認される。
+- [ ] **無題イラストの aria-label フォールバック** — 根拠 `client/src/lib.rs` canvas role=img / discovery R5-VU / 中。
+  title 空で aria-label="" になり画像が無名。cid 短縮形か「無題のイラスト」を表示。
+- [ ] **監査 Reason が要約表示である注記** — 根拠 `client/src/lib.rs` audit reason / discovery R5-VU / 低。
+- [ ] **クライアントテレメトリの告知とオプトアウト** — 根拠 `client/src/lib.rs` /metrics/client-events 送信 / discovery R5-VU / 低。
+- [ ] **E2E コメントの陳腐化行番号を識別子参照へ** — 根拠 `e2e/tests/error-paths.spec.ts`, `moderation.spec.ts` / discovery R5 / 低。
 
 P2（品質・保守・プロダクト拡張）:
 
@@ -553,6 +614,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 コンボ第2ラウンド（無制限・review 4担当＋discovery 3担当）: 全7担当完了。
+  R6 で重複排除・Runtime Proof 確認のうえ、新規21件（高5/中10/低6）を未着手へ追記。
+  高優先: 検証済み年齢のuser_hash主体衝突・非UTF-8環境変数のfail-closedすり抜け・
+  DATABASE_URLサーバー既定とCLIの矛盾・cron MAILTO未差し替え・JWT期限切れの導線欠如。
+  却下: sha256→sha2統一（既知判断と重複）・npm test workers=1（CI側対応済み）・
+  client logout Cookie（speculative・root cause未確定）。次は高優先から coding を継続。
 
 - 2026-11-22 swarm コンボ（無制限・R1 5担当＋R2 5担当＋R4 2担当＋R5 3担当）:
   parse_bool_env を6フラグ13箇所へ統一（fail-closed・check23/doctor53不変）、OIDC設定判定を
