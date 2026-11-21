@@ -13,3 +13,10 @@
   と明記。スケジューラ経路（`finalize_due_reports*` / `process_report_conclusion`）は
   認可対象外で自動確定を継続。`GET /mod/reports` の要約公開は現状維持。
   Status: Accepted 維持。
+- [ADR-0008](ADR-0008-moderation-stats-publication.md): 段階2（公開集計ルート）を
+  実装済みへ更新。`GET /mod/stats/public` は `AuthClaims` のみ必須（未認証 401・
+  認証済みは運用者でなくても 200）、`require_moderation_operator` は呼ばない。
+  公開型は `PublicModStatsResponse` / `PublicModStatsTotals` /
+  `PublicModStatsMonthly` とし、bans/unbans/unpins と CID・reason・`user_hash` を
+  含めない。純粋関数 `build_public_mod_stats` が `build_mod_stats` の結果を縮約。
+  Status: Accepted 維持。

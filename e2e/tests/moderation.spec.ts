@@ -45,6 +45,42 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   // client/src/lib.rs の 403 固定文言。一般画面へ漏れないことの否定オラクルとして使う。
   const statsForbiddenText = '運用者権限が必要です';
 
+  // ADR-0008 段階2の公開集計 DTO。bans / unbans / unpins と CID・reason・user_hash は
+  // 型に存在しないホワイトリストのみを含む。
+  const publicStatsFixture = {
+    generated_at: '2026-11-18T00:00:00Z',
+    totals: {
+      reports: 3,
+      concluded: 2,
+      approved: 1,
+      rejected: 1,
+      quorum_not_met: 0,
+    },
+    monthly: [
+      {
+        month: '2026-11',
+        reports: 3,
+        concluded: 2,
+        approved: 1,
+        rejected: 1,
+      },
+    ],
+  };
+
+  // 公開集計は MODERATION 画面の初期表示でオプインを待たず取得されるため、
+  // 全テスト共通の既定モックを登録する（未モックの実サーバーへのリクエストを防ぐ）。
+  // R5-09 では同じパターンのルートを後から登録して上書きする。
+  // Playwright は最も新しく登録したルートを優先する。
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/mod/stats/public', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(publicStatsFixture),
+      });
+    });
+  });
+
   // 投票フィードバック用の共通セットアップ。モック認証でログインし、
   // 投票キューに1件（report_id=42）を表示した状態まで進める。
   const openModerationWithReport = async (page: Page) => {
@@ -297,6 +333,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 同じテスト内で 200 → 403 を切り替える（ボタン押下でプローブさせる）。
     let forbidStats = false;
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    // ADR-0008 段階2: 初期表示と再マウントで送られる公開集計のリクエストを記録する。
+    const publicStatsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
 
     await page.route('**/auth/login', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ nonce: 'test-nonce' }) });
@@ -310,6 +348,19 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     });
     await page.route('**/mod/reports', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    });
+    // beforeEach の既定モックを上書きし、公開集計のリクエストを記録する。
+    await page.route('**/mod/stats/public', async route => {
+      publicStatsRequests.push({
+        method: route.request().method(),
+        path: new URL(route.request().url()).pathname,
+        authorization: route.request().headers()['authorization'],
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(publicStatsFixture),
+      });
     });
     await page.route('**/mod/stats', async route => {
       statsRequests.push({
@@ -336,6 +387,24 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
     await page.getByRole('button', { name: 'MODERATION' }).click();
+
+    // フェーズ0（公開集計）: オプインを待たず初期表示で 1 本だけ取得し、
+    // 一般画面へホワイトリストの指標だけを描画する。
+    await expect(page.getByTestId('public-mod-stats')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByTestId('public-mod-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
+    await expect(page.getByTestId('public-mod-stats-totals')).toContainText('Reports');
+    await expect(page.getByTestId('public-mod-stats-totals')).toContainText('Quorum Not Met');
+    await expect(page.getByTestId('public-mod-stats-monthly')).toContainText('2026-11');
+    await expect(page.getByTestId('public-mod-stats-error')).toHaveCount(0);
+    // 機微キー（型に存在しないフィールド名）は本文へ出ない。
+    for (const sensitiveKey of ['reason', 'cid', 'user_hash', 'bans', 'unbans', 'unpins']) {
+      await expect(page.locator('body')).not.toContainText(sensitiveKey);
+    }
+    expect(publicStatsRequests).toEqual([
+      { method: 'GET', path: '/mod/stats/public', authorization: 'Bearer mock_jwt_token' },
+    ]);
+    // 公開集計が発生しても運用者向け /mod/stats は初期表示で 0 本のまま。
+    expect(statsRequests).toEqual([]);
 
     // フェーズ1: 初期表示は一般画面として描画し、/mod/stats を一切送らない。
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
@@ -376,6 +445,15 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('moderation-stats-toggle')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0);
     expect(statsRequests).toHaveLength(2);
+    // 再マウント後の公開集計のロード完了を待ってから本数を確認する（レース回避）。
+    await expect(page.getByTestId('public-mod-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z', { timeout: 10000 });
+    // 公開集計はマウントごとに 1 本増える（初期表示 1 本 + 再マウント 1 本 = 2 本）。
+    expect(publicStatsRequests).toHaveLength(2);
+
+    // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
+    // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。
+    const unauthorized = await page.request.get('http://127.0.0.1:3000/mod/stats/public');
+    expect(unauthorized.status()).toBe(401);
   });
 
   test('R5-09 (parse error): /mod/stats が不正 JSON のとき moderation-stats-error に固定文言のみを表示し serde の生エラーを出さない', async ({ page }) => {

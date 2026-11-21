@@ -2,9 +2,11 @@ use crate::{
     AppError, AppState, ContentFilter, ContentMeta, ContentQuery, DEFAULT_CONTENT_LIMIT,
     FavoriteResponse, MAX_CONTENT_DESCRIPTION_BYTES, MAX_CONTENT_LIMIT, MAX_CONTENT_TAG_BYTES,
     MAX_CONTENT_TAGS, MAX_CONTENT_TITLE_BYTES, ModAuditCountRow, ModConclusionCountRow,
-    ModGovernanceCountRow, ModStatsMonthly, ModStatsResponse, ModStatsTotals, VerifyRequest,
-    VerifyResponse, allowed_origins, build_content_query, build_mod_stats, build_router,
-    ensure_user_not_banned, escape_like, parse_content_query, parse_pagination, parse_tags_field,
+    ModGovernanceCountRow, ModStatsMonthly, ModStatsResponse, ModStatsTotals,
+    PublicModStatsMonthly, PublicModStatsResponse, PublicModStatsTotals, VerifyRequest,
+    VerifyResponse, allowed_origins, build_content_query, build_mod_stats, build_public_mod_stats,
+    build_router, ensure_user_not_banned, escape_like, parse_content_query, parse_pagination,
+    parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
     process_report_conclusion, today_for_policy, update_content_status, validate_age,
     validate_age_at, validate_content_metadata, validate_jwt_secret, validate_upload_content,
@@ -16314,6 +16316,201 @@ async fn test_mod_stats_aggregates_from_real_db() {
                 concluded: 2,
                 unbans: 1,
                 unpins: 1,
+                ..Default::default()
+            },
+        ]
+    );
+}
+
+// ---- R2-PUBLISHED-SERVER / ADR-0008 段階2: 公開集計ルート ----
+
+/// 認証付きで `/mod/stats/public` を呼ぶ（`None` なら認証ヘッダなし）。
+async fn send_public_mod_stats_request(app: &Router, sub: Option<&str>) -> Response {
+    let mut request = Request::get("/mod/stats/public");
+    if let Some(sub) = sub {
+        request = request.header(
+            "authorization",
+            format!("Bearer {}", generate_token(TEST_JWT_SECRET, sub).await),
+        );
+    }
+    app.clone()
+        .oneshot(with_peer(
+            request.body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_public_mod_stats_requires_authentication() {
+    // 未認証は AuthClaims extractor により 401。
+    let (app, _db) = setup_mod_app_with_operators(&["operator"]).await;
+    let response = send_public_mod_stats_request(&app, None).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn test_public_mod_stats_allows_general_sub() {
+    // 運用者未設定・未登録の一般 sub でも 200（require_moderation_operator を呼ばない）。
+    let (app, _db) = setup_mod_app().await;
+    let response = send_public_mod_stats_request(&app, Some("general_user")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: PublicModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed.totals, PublicModStatsTotals::default());
+    assert!(parsed.monthly.is_empty());
+}
+
+#[tokio::test]
+async fn test_public_mod_stats_allows_operator_sub() {
+    // 運用者 sub も同じ契約で 200（特権ルートではない）。
+    let (app, _db) = setup_mod_app_with_operators(&["operator"]).await;
+    let response = send_public_mod_stats_request(&app, Some("operator")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let parsed: PublicModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(parsed.totals, PublicModStatsTotals::default());
+}
+
+#[tokio::test]
+async fn test_public_mod_stats_response_contains_no_forbidden_fields() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute(
+        "INSERT INTO content_audit_log
+             (cid, old_status, new_status, changed_by, reason, entry_hash, created_at)
+         VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T', 'Approved', 'Reported', 'SECRET_USER_HASH_SENTINEL',
+                 'SECRET_REASON_SENTINEL', 'hash1', '2026-01-31 23:59:59')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO governance_audit_log (action, target, actor_hash, reason, created_at)
+         VALUES ('BAN', 'SECRET_CID_SENTINEL', 'SECRET_USER_HASH_SENTINEL',
+                 'SECRET_REASON_SENTINEL', '2026-02-01 00:00:00')",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "UPDATE reports SET reason = 'SECRET_REASON_SENTINEL' WHERE report_id = 1",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = send_public_mod_stats_request(&app, Some("general_user")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+
+    // 移送してはならない値・キーがレスポンス文字列に一切現れないこと。
+    for sentinel in [
+        "SECRET_REASON_SENTINEL",
+        "SECRET_CID_SENTINEL",
+        "SECRET_USER_HASH_SENTINEL",
+        "reason",
+        "cid",
+        "user_hash",
+        "bans",
+        "unbans",
+        "unpins",
+    ] {
+        assert!(
+            !body.contains(sentinel),
+            "public response must not contain {sentinel:?}: {body}"
+        );
+    }
+
+    // ホワイトリストでキー集合を固定（余分なフィールドがないこと）。
+    let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let root = value.as_object().unwrap();
+    let mut root_keys: Vec<&String> = root.keys().collect();
+    root_keys.sort();
+    assert_eq!(root_keys, vec!["generated_at", "monthly", "totals"]);
+
+    let mut total_keys: Vec<&String> = root["totals"].as_object().unwrap().keys().collect();
+    total_keys.sort();
+    assert_eq!(
+        total_keys,
+        vec![
+            "approved",
+            "concluded",
+            "quorum_not_met",
+            "rejected",
+            "reports",
+        ]
+    );
+
+    let monthly = root["monthly"].as_array().unwrap();
+    // 月数はフィクスチャの集計結果に依存するため、キー集合のみを検証する。
+    assert!(!monthly.is_empty());
+    for entry in monthly {
+        let mut keys: Vec<&String> = entry.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec!["approved", "concluded", "month", "rejected", "reports"],
+            "public monthly must not contain quorum_not_met or moderation actions"
+        );
+    }
+
+    let parsed: PublicModStatsResponse = serde_json::from_slice(&bytes).unwrap();
+    assert!(chrono::DateTime::parse_from_rfc3339(&parsed.generated_at).is_ok());
+    assert_eq!(parsed.totals.reports, 1);
+    assert_eq!(parsed.totals.approved, 0);
+}
+
+#[test]
+fn test_build_public_mod_stats_matches_source() {
+    // build_mod_stats の結果をそのまま縮約し、公開項目の値が元と同値であること。
+    let source = build_mod_stats(
+        STATS_GENERATED_AT,
+        &[
+            audit_count("2025-12", "Reported", 2),
+            audit_count("2026-01", "Approved", 3),
+            audit_count("2026-01", "Rejected", 1),
+        ],
+        &[
+            governance_count("2025-12", "BAN", 4),
+            governance_count("2026-01", "UNBAN", 5),
+            governance_count("2026-01", "UNPIN", 6),
+        ],
+        &[conclusion_count("2026-01", true, 1)],
+    );
+    let public = build_public_mod_stats(&source);
+
+    assert_eq!(public.generated_at, source.generated_at);
+    assert_eq!(public.generated_at, STATS_GENERATED_AT);
+    assert_eq!(
+        public.totals,
+        PublicModStatsTotals {
+            reports: source.totals.reports,
+            concluded: source.totals.concluded,
+            approved: source.totals.approved,
+            rejected: source.totals.rejected,
+            quorum_not_met: source.totals.quorum_not_met,
+        }
+    );
+    assert_eq!(public.totals.reports, 2);
+    assert_eq!(public.totals.concluded, 1);
+    assert_eq!(public.totals.approved, 2); // 3 - 定足数未達1
+    assert_eq!(public.totals.rejected, 1);
+    assert_eq!(public.totals.quorum_not_met, 1);
+    assert_eq!(
+        public.monthly,
+        vec![
+            PublicModStatsMonthly {
+                month: "2025-12".to_string(),
+                reports: 2,
+                ..Default::default()
+            },
+            PublicModStatsMonthly {
+                month: "2026-01".to_string(),
+                approved: 2,
+                rejected: 1,
+                concluded: 1,
                 ..Default::default()
             },
         ]

@@ -5,7 +5,7 @@ description: "モデレーション集計を認証済み利用者へ公開する
 tags: [adr, moderation, transparency, privacy, accepted]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T06:00:00+09:00"
 ---
 
 ## ADR-0008: モデレーション集計の第三者公開範囲
@@ -13,7 +13,7 @@ generated:
 - Status: Accepted（プロジェクトオーナーの委任に基づくエージェント専門家判断）
 - Date: 2026-11-21
 - Scope: 認証済み利用者向け公開。未認証は 401。
-- 実装段階: 本 ADR は公開範囲の決定のみ。段階2（公開ルート追加）は未実施。
+- 実装段階: 段階1（クライアントのプローブ制御）に加え、段階2（公開ルート追加）も実装済み。
 
 ## Context
 
@@ -40,8 +40,10 @@ DEC-04 は第三者検証可能な監査を本番要件とする。ADR-0005 は�
    - 個別行（通報・投票・確定のレコード）
    - 署名、監査エントリ、`content_audit_log` / `governance_audit_log`
    - BAN / UNBAN / UNPIN の件数（`bans` / `unbans` / `unpins`）
-4. 段階2（認証済み利用者向け公開ルートの追加）は後続作業に委ね、今回は行わない。
-   現行の `/mod/stats` は運用者限定のままである。
+4. 段階2として認証済み利用者向けの公開ルート `GET /mod/stats/public` を追加する。
+   `AuthClaims` のみを要求し、`require_moderation_operator` は呼ばない。未認証は 401、
+   認証済みは運用者登録の有無にかかわらず 200 を返す。既存の `/mod/stats` は
+   運用者限定のまま変更しない。
 
 ## ADR-0004 決定9 との優先関係
 
@@ -59,11 +61,26 @@ ADR-0004 決定9 は「通報件数、確定結果、理由の要約を公開す
 根拠に運用者パネルをマウントし、403 は一般画面へ描画せずにパネルを黙って
 閉じる。固定文言とセンチネル検証は維持する。
 
+## 段階2のサーバ実装
+
+- ルート: `GET /mod/stats/public`。`server/src/lib.rs` の `build_router` に `/mod/stats` の直後へ追加する。
+- ハンドラ: `public_mod_stats` は `State<Arc<AppState>>` と `AuthClaims` のみを受け取り、
+  `require_moderation_operator` を呼ばない。DB 読み出しは既存の集計行ローダを再利用する。
+- 型: `PublicModStatsResponse` / `PublicModStatsTotals` / `PublicModStatsMonthly`。
+  `generated_at` と `totals`（`reports` / `concluded` / `approved` / `rejected` /
+  `quorum_not_met`）、`monthly`（`month` と reports / concluded / approved / rejected）のみ。
+  `bans` / `unbans` / `unpins` と CID / reason / `user_hash` は型に存在しない。
+- 変換: 純粋関数 `build_public_mod_stats(&ModStatsResponse)` が
+  `build_mod_stats` の結果をホワイトリストへ縮約する。`generated_at` は引き継ぐ。
+- テスト: 認証なし 401、一般 sub 200、運用者 sub 200、機微キー非含有、
+  変換が元と同値（`server/src/tests.rs`）。E2E 定義数は69件のまま変更しない。
+
 ## Consequences
 
 - 認証済み利用者は個人情報を露出させない集計値だけを参照できる。
 - 未認証は 401 で拒否され、閲覧を含む未認証利用を認めない方針と整合する。
-- 段階2 が未実装のため、現時点で一般利用者が集計を取得できる経路はない。
+- 一般利用者は `GET /mod/stats/public` からホワイトリスト内の集計だけを取得できる。
+  運用者向けの `/mod/stats` は従来どおり 403 境界を維持する。
 - `quorum_not_met` は合計値のみで月次表には含めない既存契約を維持する。
 
 ## Alternatives

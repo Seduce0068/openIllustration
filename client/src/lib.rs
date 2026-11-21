@@ -647,6 +647,70 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html
 }
 
+/// 認証済み利用者向けの公開集計カードと月次表を組み立てる。
+/// 運用者向けの `render_moderation_stats_html` とは異なり Bans / Unbans / Unpins 列は出さない。
+/// サーバー由来の文字列・数値はすべて `escape_html_text` を通してから
+/// `inner_html` へ渡す（属性やタグとして解釈されないようにする）。
+fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
+    let mut html = String::new();
+    let _ = writeln!(
+        html,
+        "<p class=\"mb-4 text-[10px] text-gray-500\">GENERATED_AT: {}</p>",
+        escape_html_text(&stats.generated_at)
+    );
+
+    let totals = [
+        ("Reports", stats.totals.reports),
+        ("Concluded", stats.totals.concluded),
+        ("Approved", stats.totals.approved),
+        ("Rejected", stats.totals.rejected),
+        ("Quorum Not Met", stats.totals.quorum_not_met),
+    ];
+    html.push_str(
+        "<div data-testid=\"public-mod-stats-totals\" class=\"grid grid-cols-2 md:grid-cols-4 gap-3\">",
+    );
+    for (label, value) in totals {
+        let _ = writeln!(
+            html,
+            "<div class=\"border border-white/10 p-3\"><p class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
+            escape_html_text(&value.to_string())
+        );
+    }
+    html.push_str("</div>");
+
+    html.push_str(
+        "<table data-testid=\"public-mod-stats-monthly\" class=\"w-full mt-6 text-left text-[10px] font-mono\">",
+    );
+    html.push_str("<caption>月次集計</caption>");
+    html.push_str(
+        "<thead class=\"border-b border-white/10 text-gray-500 uppercase\"><tr>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Concluded</th><th scope=\"col\" class=\"py-2 pr-4\">Approved</th>\
+         <th scope=\"col\" class=\"py-2 pr-4\">Rejected</th></tr></thead>",
+    );
+    html.push_str("<tbody class=\"divide-y divide-white/5\">");
+    for row in &stats.monthly {
+        let _ = writeln!(
+            html,
+            "<tr><td class=\"py-2 pr-4 text-gray-300\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
+             <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td></tr>",
+            escape_html_text(&row.month),
+            escape_html_text(&row.reports.to_string()),
+            escape_html_text(&row.concluded.to_string()),
+            escape_html_text(&row.approved.to_string()),
+            escape_html_text(&row.rejected.to_string()),
+        );
+    }
+    html.push_str("</tbody></table>");
+    if stats.monthly.is_empty() {
+        html.push_str(
+            "<p class=\"mt-2 text-[9px] text-gray-600 italic\">月次集計はありません。</p>",
+        );
+    }
+    html
+}
+
 /// 見出しテキストから slug を作る。許可するのは Unicode の英数字・`-`・`_` のみで、
 /// それ以外（HTML 属性を壊す `"`, `'`, `<`, `>`, `&`, 空白, 制御文字, `/` 等）は
 /// すべて除去する（属性注入を防ぐ）。大文字は `to_lowercase()` で畳み、
@@ -1137,6 +1201,54 @@ pub struct ModerationStats {
     pub totals: ModerationStatsTotals,
     #[serde(default)]
     pub monthly: Vec<ModerationStatsMonthly>,
+}
+
+/// `GET /mod/stats/public` の合計値（ADR-0008 段階2の公開ホワイトリスト）。
+///
+/// `bans` / `unbans` / `unpins` は公開しないため型に存在しない。
+/// 全フィールドに `#[serde(default)]` を付けて旧サーバー互換を保つ。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PublicModerationStatsTotals {
+    #[serde(default)]
+    pub reports: i64,
+    #[serde(default)]
+    pub concluded: i64,
+    #[serde(default)]
+    pub approved: i64,
+    #[serde(default)]
+    pub rejected: i64,
+    #[serde(default)]
+    pub quorum_not_met: i64,
+}
+
+/// `GET /mod/stats/public` の月次集計の1行（`month` は "YYYY-MM"）。
+///
+/// `quorum_not_met` は totals のみに存在するため月次には含めない。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PublicModerationStatsMonthly {
+    #[serde(default)]
+    pub month: String,
+    #[serde(default)]
+    pub reports: i64,
+    #[serde(default)]
+    pub concluded: i64,
+    #[serde(default)]
+    pub approved: i64,
+    #[serde(default)]
+    pub rejected: i64,
+}
+
+/// `GET /mod/stats/public` レスポンス（認証済み利用者向けの公開集計）。
+///
+/// 機微情報（CID / reason / `user_hash`）は型に存在しない。
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct PublicModerationStats {
+    #[serde(default)]
+    pub generated_at: String,
+    #[serde(default)]
+    pub totals: PublicModerationStatsTotals,
+    #[serde(default)]
+    pub monthly: Vec<PublicModerationStatsMonthly>,
 }
 
 /// `GET /me/export` レスポンス（R5-04: 自分のデータをエクスポート）。
@@ -3042,6 +3154,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (stats_html, set_stats_html) = signal(String::new());
     let (stats_error, set_stats_error) = signal(String::new());
     let (stats_loaded, set_stats_loaded) = signal(false);
+    // ADR-0008 段階2: 認証済み利用者向けの公開集計。オプインとは独立にマウント時に取得し、
+    // 一般画面へ無条件に描画する。既存の運用者パネル状態（stats_authorized/toggle/loaded）は触らない。
+    let (public_stats_html, set_public_stats_html) = signal(String::new());
+    let (public_stats_error, set_public_stats_error) = signal(String::new());
+    let (public_stats_loaded, set_public_stats_loaded) = signal(false);
     // 運用者パネルのマウント条件。`/mod/stats` が 200 を返したというサーバ応答だけを根拠にし、
     // トークン内容やクライアント状態から運用者を推測しない。
     let (stats_authorized, set_stats_authorized) = signal(false);
@@ -3095,6 +3212,49 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
     Effect::new(move |_| {
         fetch_reports();
+    });
+
+    // ADR-0008 段階2: 認証済み利用者向けの公開集計をマウント時に一度だけ取得する。
+    // オプイン押下を待たず、一般画面へ無条件に描画するためのデータ取得。
+    Effect::new(move |_| {
+        let token = token_stored.get_value();
+        spawn_local(async move {
+            match api_fetch(
+                |jwt| {
+                    let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
+                    Request::get(&format!("{}/mod/stats/public", API_BASE))
+                        .header("Authorization", &format!("Bearer {}", jwt))
+                },
+                true,
+            )
+            .await
+            {
+                Ok(response) if response.ok() => {
+                    match response.json::<PublicModerationStats>().await {
+                        Ok(stats) => {
+                            set_public_stats_html.set(render_public_mod_stats_html(&stats));
+                            set_public_stats_error.set(String::new());
+                            set_public_stats_loaded.set(true);
+                        }
+                        Err(_) => {
+                            // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず、
+                            // 取得失敗と同じ固定文言のみを表示する。
+                            set_public_stats_html.set(String::new());
+                            set_public_stats_loaded.set(false);
+                            set_public_stats_error
+                                .set(stats_error_message(StatsFailure::Fetch).to_string());
+                        }
+                    }
+                }
+                // 401 / 403 / 5xx / ネットワークエラー: 生情報やステータス詳細は出さない。
+                _ => {
+                    set_public_stats_html.set(String::new());
+                    set_public_stats_loaded.set(false);
+                    set_public_stats_error
+                        .set(stats_error_message(StatsFailure::Fetch).to_string());
+                }
+            }
+        });
     });
 
     // 運用者パネルを開くためのオプイン。初期表示では /mod/stats を 1 本も送らず、
@@ -3254,6 +3414,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
 
     view! {
         <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
+            <section data-testid="public-mod-stats" class="md:col-span-2 border border-white/10 p-8 space-y-4">
+                <h2 class="text-xl font-bold tracking-widest uppercase">"PUBLIC STATS"</h2>
+                <Show when=move || !public_stats_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="public-mod-stats-error" class="text-xs text-red-500">
+                        {move || public_stats_error.get()}
+                    </p>
+                </Show>
+                <Show when=move || public_stats_loaded.get() fallback=|| ()>
+                    <div data-testid="public-mod-stats-content" inner_html=move || public_stats_html.get() />
+                </Show>
+            </section>
             <div data-testid="moderation-stats-optin" class="md:col-span-2 border border-white/10 p-8 space-y-4">
                 <button
                     on:click=move |_| fetch_stats()
@@ -4542,6 +4713,86 @@ mod tests {
         assert!(html.contains(">1</p>"), "{html}");
         assert!(html.contains("moderation-stats-totals"), "{html}");
         assert!(html.contains("moderation-stats-monthly"), "{html}");
+    }
+
+    #[test]
+    fn public_mod_stats_json_matches_server_interface() {
+        let stats: super::PublicModerationStats = serde_json::from_str(
+            r#"{
+                "generated_at":"2026-11-18T00:00:00Z",
+                "totals":{"reports":3,"concluded":2,"approved":1,"rejected":1,"quorum_not_met":0},
+                "monthly":[{"month":"2026-11","reports":3,"concluded":2,"approved":1,"rejected":1}]
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(stats.generated_at, "2026-11-18T00:00:00Z");
+        assert_eq!(stats.totals.reports, 3);
+        assert_eq!(stats.totals.quorum_not_met, 0);
+        assert_eq!(stats.monthly.len(), 1);
+        assert_eq!(stats.monthly[0].month, "2026-11");
+        assert_eq!(stats.monthly[0].rejected, 1);
+
+        // 全フィールド #[serde(default)] により、欠落フィールドは既定値で受け取る。
+        let minimal: super::PublicModerationStats =
+            serde_json::from_str(r#"{"generated_at":"2026-11-18T00:00:00Z"}"#).unwrap();
+        assert_eq!(minimal.totals.reports, 0);
+        assert!(minimal.monthly.is_empty());
+    }
+
+    #[test]
+    fn public_mod_stats_html_omits_moderation_actions_and_private_fields() {
+        let stats: super::PublicModerationStats = serde_json::from_str(
+            r#"{
+                "generated_at":"2026-11-18T00:00:00Z",
+                "totals":{"reports":3,"concluded":2,"approved":1,"rejected":1,"quorum_not_met":0},
+                "monthly":[{"month":"2026-11","reports":3,"concluded":2,"approved":1,"rejected":1}]
+            }"#,
+        )
+        .unwrap();
+        let html = super::render_public_mod_stats_html(&stats);
+
+        // 公開範囲外のモデレーション操作・個人情報は一切現れないこと。
+        for forbidden in ["Bans", "Unbans", "Unpins", "reason", "cid", "user_hash"] {
+            assert!(
+                !html.contains(forbidden),
+                "public html must not contain {forbidden:?}: {html}"
+            );
+        }
+        // 公開ホワイトリストの5項目は描画されること。
+        for allowed in [
+            "Reports",
+            "Concluded",
+            "Approved",
+            "Rejected",
+            "Quorum Not Met",
+        ] {
+            assert!(
+                html.contains(allowed),
+                "public html must contain {allowed:?}: {html}"
+            );
+        }
+        assert!(html.contains("public-mod-stats-totals"), "{html}");
+        assert!(html.contains("public-mod-stats-monthly"), "{html}");
+    }
+
+    #[test]
+    fn public_mod_stats_html_escapes_server_supplied_strings() {
+        let stats: super::PublicModerationStats = serde_json::from_str(
+            r#"{
+                "generated_at":"<img src=x onerror=alert(1)>",
+                "totals":{"reports":1},
+                "monthly":[{"month":"\"><script>alert(1)</script>","reports":1}]
+            }"#,
+        )
+        .unwrap();
+        let html = super::render_public_mod_stats_html(&stats);
+
+        assert!(!html.contains("<img"), "{html}");
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(html.contains("&lt;img"), "{html}");
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+        assert!(html.contains("&quot;&gt;"), "{html}");
+        assert!(html.contains(">1</p>"), "{html}");
     }
 
     #[test]

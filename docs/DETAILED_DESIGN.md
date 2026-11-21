@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T05:00:00+09:00"
+  at: "2026-11-22T06:00:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -51,6 +51,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | POST | `/mod/operators/{user_hash}/unban` | Bearer JWT | 運用者特権。同上の運用者のみUNBAN可能、`governance_audit_log` に記録 |
 | POST | `/mod/content/{cid}/unpin` | Bearer JWT | 運用者特権。ピン解除の判断と理由を `governance_audit_log` に記録（実Pinata操作は手動） |
 | GET | `/mod/stats` | Bearer JWT + 運用者 | 認証内集計。`AuthClaims` 必須かつ `require_moderation_operator`（未設定・未登録・BAN済みは403）。`generated_at` / `totals` / `monthly` のみをホワイトリスト方式で返し、CID・reason・`user_hash` は返さない |
+| GET | `/mod/stats/public` | Bearer JWT | 認証済み利用者向けの公開集計（ADR-0008 段階2）。`AuthClaims` 必須、`require_moderation_operator` は呼ばないため未認証401・認証済みは運用者でなくても200。`generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみを返し、bans/unbans/unpins と CID・reason・`user_hash` は型に存在しない |
 | GET | `/me/export` | Bearer JWT (`AuthClaims` 必須) | 自分のデータのエクスポート（R5-04）。`version:1` / `generated_at` / `sub` と12表（`users`, `contents`, `favorites`, `transactions`, `signatures`, `content_audit_log`, `reports`, `votes`, `payment_orders`, `governance_audit_log`, `refresh_tokens`, `revoked_subs`）の配列を返す。全行を返し行数上限・`truncated` フラグは設けない。`reason` / `details` は `mask_reason`（既定でマスク）、`token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID は除外。`Content-Disposition: attachment`、`Cache-Control: no-store`。本文はログへ出さない。12表は単一の読み取りトランザクション（`BEGIN DEFERRED`）で読み切る |
 
 ### API横断規則
@@ -385,6 +386,25 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
   本エンドポイントをもって監査要件を満たしたとはみなさない。
 - 既存ギャップ（注記のみ、修正しない）: `GET /mod/reports` は認証済み参加者へ `reason` を返す。
   本ダッシュボードは個人情報を返さないが、当該ルートの返却項目は現行のまま維持する。
+
+### 公開集計 `GET /mod/stats/public`（ADR-0008 段階2）
+
+- 位置づけ: 認証済み利用者向けの公開集計。`AuthClaims` 必須（未認証は401）だが
+  `require_moderation_operator` は呼ばず、運用者未設定・未登録・BAN済みでも200を返す。
+  既存の `/mod/stats` は運用者限定のまま変更しない。
+- レスポンス型: `PublicModStatsResponse` / `PublicModStatsTotals` /
+  `PublicModStatsMonthly`（いずれも `server/src/lib.rs`）。`generated_at` と `totals`
+  （`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）、`monthly`
+  （`month` と `reports` / `concluded` / `approved` / `rejected`）のみ。
+  `quorum_not_met` は `totals` のみで月次表には含めない。
+- 除外項目: `bans` / `unbans` / `unpins` に加え、CID・`reason`・`user_hash` も
+  レスポンス型に存在しない。DB行をそのままシリアライズせずホワイトリストで定義する。
+- 集計: 既存の純粋関数 `build_mod_stats` で集計した結果を、
+  `build_public_mod_stats(&ModStatsResponse)` が公開ホワイトリストへ縮約する。
+  `generated_at` は元の値を引き継ぎ、集計ロジックの二重実装は行わない。
+- 検証: `server/src/tests.rs` に認証なし401・一般sub 200・運用者sub 200・
+  機微キー非含有・変換が元と同値のテストを追加済み（TEST_SPECIFICATION の MOD-13）。
+  E2E 定義数は69件のまま変更しない。
 
 ## 5. データモデル（現行起動時DDLの要約）
 

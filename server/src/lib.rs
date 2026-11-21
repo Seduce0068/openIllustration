@@ -2265,6 +2265,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/mod/content/{cid}/unpin", post(record_unpin))
         .route("/mod/vote", post(mod_vote))
         .route("/mod/stats", get(mod_stats))
+        .route("/mod/stats/public", get(public_mod_stats))
         .route("/content/{cid}", get(get_content))
         .route("/content/{cid}/audit", get(get_content_audit))
         .route(
@@ -4437,6 +4438,38 @@ pub struct ModStatsResponse {
     pub monthly: Vec<ModStatsMonthly>,
 }
 
+/// `GET /mod/stats/public` の全体集計（ADR-0008 の公開ホワイトリスト）。
+///
+/// `bans` / `unbans` / `unpins` は公開しないため型に存在しない。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicModStatsTotals {
+    pub reports: i64,
+    pub concluded: i64,
+    pub approved: i64,
+    pub rejected: i64,
+    pub quorum_not_met: i64,
+}
+
+/// `GET /mod/stats/public` の月次集計。`quorum_not_met` は totals のみに存在する。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicModStatsMonthly {
+    pub month: String,
+    pub reports: i64,
+    pub concluded: i64,
+    pub approved: i64,
+    pub rejected: i64,
+}
+
+/// `GET /mod/stats/public` のレスポンス。機微情報（CID / reason / user_hash）は
+/// 型に存在しない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublicModStatsResponse {
+    /// RFC 3339（UTC）。集計元から引き継ぐ。
+    pub generated_at: String,
+    pub totals: PublicModStatsTotals,
+    pub monthly: Vec<PublicModStatsMonthly>,
+}
+
 /// 月次エントリを取得（または既定値で作成）する。
 fn mod_stats_month<'a>(
     monthly: &'a mut BTreeMap<String, ModStatsMonthly>,
@@ -4521,6 +4554,34 @@ pub fn build_mod_stats(
         generated_at: generated_at.to_string(),
         totals,
         monthly: monthly.into_values().collect(),
+    }
+}
+
+/// 運用者向け集計を ADR-0008 の公開ホワイトリストへ縮約する純粋関数。
+///
+/// 集計ロジックは `build_mod_stats` を再利用し、ここではフィールドの取捨選択だけを行う。
+/// `generated_at` は元の値をそのまま引き継ぐ。
+pub fn build_public_mod_stats(source: &ModStatsResponse) -> PublicModStatsResponse {
+    PublicModStatsResponse {
+        generated_at: source.generated_at.clone(),
+        totals: PublicModStatsTotals {
+            reports: source.totals.reports,
+            concluded: source.totals.concluded,
+            approved: source.totals.approved,
+            rejected: source.totals.rejected,
+            quorum_not_met: source.totals.quorum_not_met,
+        },
+        monthly: source
+            .monthly
+            .iter()
+            .map(|month| PublicModStatsMonthly {
+                month: month.month.clone(),
+                reports: month.reports,
+                concluded: month.concluded,
+                approved: month.approved,
+                rejected: month.rejected,
+            })
+            .collect(),
     }
 }
 
@@ -4624,6 +4685,26 @@ pub async fn mod_stats(
         &governance,
         &conclusions,
     )))
+}
+
+/// R2-PUBLISHED-SERVER: 認証済み利用者向けの公開集計（ADR-0008 段階2）。
+///
+/// `AuthClaims` のみで認証を要求し、`require_moderation_operator` は呼ばない。
+/// 未認証は 401、認証済みは運用者登録の有無にかかわらず 200 を返す。
+pub async fn public_mod_stats(
+    State(state): State<Arc<AppState>>,
+    _claims: AuthClaims,
+) -> Result<Json<PublicModStatsResponse>, AppError> {
+    let audits = load_mod_audit_counts(&state.db).await?;
+    let governance = load_mod_governance_counts(&state.db).await?;
+    let conclusions = load_mod_conclusion_counts(&state.db).await?;
+
+    Ok(Json(build_public_mod_stats(&build_mod_stats(
+        &chrono::Utc::now().to_rfc3339(),
+        &audits,
+        &governance,
+        &conclusions,
+    ))))
 }
 
 /// `TZ` が固定オフセット形式のときに使うオフセットを解釈する。

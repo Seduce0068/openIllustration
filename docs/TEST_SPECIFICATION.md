@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T05:32:00+09:00"
+  at: "2026-11-22T06:00:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T05:32:00+09:00"
+  at: "2026-11-22T06:00:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -88,7 +88,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | お気に入り | 追加/削除の冪等（重複追加・未登録削除）、未認証401・不正CID400・非Approved404、他人subからの操作拒否、`favorite_only` の本人分のみ返却（真理値パース・既存条件とのAND・ページング・Approved限定）、旧JSONの `is_favorite` 欠落互換、migration 012 の UNIQUE + FK CASCADE を API・ユニットテストで検証 | `user_hash` をログ・監査・レスポンスへ出さないことは設計方針で担保。実運用ログの確認は未実施 |
 | 決済 | 注文ライフサイクル、未対応チェーン拒否、ウォレット署名不一致拒否、派生アドレスの一意性をモックverifierで検証、非UUID注文IDの400拒否、verifyの金額不一致（MISMATCH遷移）・送金再利用・期限切れ・確認数不足（CONFIRMING維持）の拒否、同一送金の確認数進展に伴う再verifyとFINALIZED到達、FINALIZED後の再verifyが状態を戻さないこと、`expires_at` 経過（status が PENDING のまま）の拒否と EXPIRED 更新、BIP44 derivation index の u32 境界拒否、EVM アドレスの大小文字非区別（正規化照合）を検証。`wallet_bind_message_v2` が注文ID・chain_id・wallet_address・recipient_address・amount_jpy を署名対象とし、注文IDのみの旧形式署名を401で拒否する下記 PAY-05 を追加 | 実チェーン検証、2-of-3クォーラム、実チェーン上の再編成/二重通知の試験は未実施（DEC-03） |
 | Support | 501無効化のAPIテスト、送信不可UIと模擬記録注記のE2Eテスト | JPYC決済は未実装、実送金の証明はない |
-| 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 運用者限定の認証内集計。公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み（認証済み利用者向け公開・未認証は401）だが、段階2の公開ルートは未実装。クライアントは初期表示で `/mod/stats` を0本とし、オプイン押下時のみプローブする。403 は一般画面へ描画しない。`quorum_not_met` は `totals` のみで月次表には含めない |
+| 透明性ダッシュボード | `build_mod_stats` の空/同数/定足数未達/月境界、認可（未認証401・未設定/未登録/BAN済み403）、個人情報非含有、実DB集計を `server/src/tests.rs` で検証。公開集計ルートは MOD-13 の5件で検証。E2E は `e2e/tests/moderation.spec.ts` で表示と403を確認（R5-09） | 運用者限定の認証内集計。公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み（認証済み利用者向け公開・未認証は401）。段階2の公開ルート `GET /mod/stats/public` は実装済み（MOD-13、運用者認可なし）。クライアントは初期表示で `/mod/stats` を0本とし、オプイン押下時のみプローブする。403 は一般画面へ描画しない。`quorum_not_met` は `totals` のみで月次表には含めない |
 | 通報理由の要約 | `common::summarize_reason` の単体テスト（空・119/120/121 Unicode文字境界・日本語・`@` を含むトークン／`://` を含むトークン／`www.` で始まるトークン／IPv4 らしいドット区切り／Unicode 数字4連続（全角含む）の `[redacted]` 置換、4桁ちょうど境界）と `GET /mod/reports` の統合テスト（要約値のみ返却、全文・PII 非露出、認証必須・Reported 限定・新着順・運用者非限定の維持） | DB 全文と監査エクスポートの本文は変更しない（EXPORT-04 のマスクは従来どおり）。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み（要約は集計レスポンスへ含めない） |
 | データエクスポート | `GET /me/export` の全12表網羅・他ユーザー非漏えい・空ユーザー・機微項目除外・`reason`/`details` マスク・未認証401・ヘッダを `server/src/tests.rs` の `me_export_*` で検証（R5-04）。全12表が単一の読み取りトランザクション内で読み切られること（`debug_assert!`）と、別接続の未コミット BAN 書き込みに対して書き込み前の単一時点スナップショットを返すことを2件で検証。E2E は `e2e/tests/export.spec.ts` でダウンロードと401表示を確認（chromium / firefox で2/2 pass） | 削除権（erase）は未実装。法務・外部アンカー・バックアップ消去方針の決定後に着手（詳細設計「9. データ主体の権利」） |
 | 監査CLI | `sign_audit_export` の鍵権限検査（0600/0400・親ディレクトリ0700）・`DATABASE_TOKEN` 環境変数限定（`--database-token` 拒否）・出力 `create_new` による上書き拒否を下記 AUDIT-02 で仕様化。検証系CLIは下記 CLI-01〜03 を参照 | 実装は完了。`sign_audit_export` は bin 内に17テスト（鍵権限・トークン・上書き拒否10件＋include_reasons本番ガード2件＋DB接続先必須化5件）、`doctor` 53件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件） / `verify_audit_export` 20件 / `verify_backup` 19件の bin テストを追加済み。匿名化・外部アンカーは未実装 |
@@ -147,6 +147,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
+| MOD-13 | `GET /mod/stats/public`（ADR-0008 段階2の公開集計） | 未認証は401。認証済みは運用者未設定・未登録・BAN済みでも200。レスポンスは `generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみで、bans / unbans / unpins と CID・reason・`user_hash` は型に存在しない。`require_moderation_operator` を呼ばない | 実装済み。サーバー側テスト5件: `test_public_mod_stats_requires_authentication` / `test_public_mod_stats_allows_general_sub` / `test_public_mod_stats_allows_operator_sub` / `test_public_mod_stats_response_contains_no_forbidden_fields` / `test_build_public_mod_stats_matches_source`。E2E 定義数は69件のまま変更なし（新規 E2E なし）。既存ゲート（E2E69件 / check23 / doctor53 / migrations14）は不変 |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -329,7 +330,7 @@ Reported 限定・新着順・運用者非限定）である。設計技法は�
 DB 全文（`reports.reason`）と監査エクスポートの本文は変更しない。エクスポートの
 マスクは EXPORT-04 の既存挙動を維持する。本テストは第三者公開範囲
 （[ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み、段階2の
-公開ルートは未実装）を証明するものではない。
+公開ルートは MOD-13 で検証）を証明するものではない。
 
 ### 設定診断（`doctor`）の検証
 
@@ -774,6 +775,23 @@ E2E 定義数は69件のまま変更しない。
 | `test_vote_rejects_legacy_v1_signature` | 旧 `moderation_vote_message` のメッセージへ署名 | 401（UNAUTHORIZED）、票は0行 |
 | `test_vote_rejects_signature_bound_to_other_juror` | B の鍵で A の juror_hash に束縛したメッセージへ署名し B として投票 | 401、票は0行 |
 
+#### MOD-13: 公開集計ルート `GET /mod/stats/public`
+
+ADR-0008 段階2として、`AuthClaims` のみを要求する公開集計ルートを `/mod/stats` の直後に追加した。
+`require_moderation_operator` は呼ばず、認証済みなら運用者登録の有無にかかわらず 200 を返す。
+集計は既存の `build_mod_stats` を再利用し、純粋関数 `build_public_mod_stats` が
+公開ホワイトリストへ縮約する（`generated_at` は引き継ぐ）。
+
+| テスト | 配置 | 検証する test oracle |
+| --- | --- | --- |
+| `test_public_mod_stats_requires_authentication` | `server/src/tests.rs` | 認証ヘッダなしでは 401。`AuthClaims` extractor が認証を強制すること |
+| `test_public_mod_stats_allows_general_sub` | `server/src/tests.rs` | 運用者未設定の一般 sub で 200。空の集計が返ること |
+| `test_public_mod_stats_allows_operator_sub` | `server/src/tests.rs` | 登録済み運用者 sub でも同じ契約で 200 であること |
+| `test_public_mod_stats_response_contains_no_forbidden_fields` | `server/src/tests.rs` | 機微センチネルと `reason` / `cid` / `user_hash` / `bans` / `unbans` / `unpins` が本文に現れないこと。キー集合が `generated_at` / `monthly` / `totals`、totals が5項目、monthly が5項目であること |
+| `test_build_public_mod_stats_matches_source` | `server/src/tests.rs` | `build_mod_stats` の結果から公開項目が同値に変換されること。BAN/UNBAN/UNPIN の件数が public 側へ漏れないこと |
+
+既存の E2E 定義は変更せず、E2E69件・check23・doctor53・migrations14 の各ゲートは不変である。
+
 #### CONTENT-10: 一覧の price NULL
 
 `test_list_contents_null_price_is_returned_as_zero` が、`price` が NULL の Approved 行を
@@ -829,6 +847,7 @@ cargo test -p server concurrent_request_limit_rejects_second_and_releases_permit
 cargo test -p server property_tests   # PROP-01〜04（各128ケース）
 cargo test -p server --lib upload   # CONTENT-01（MIME・価格）のAPI回帰のみ
 cargo test -p server --lib mod_stats   # R5-09 集計・認可・プライバシーの回帰のみ
+cargo test -p server public_mod_stats   # MOD-13 公開集計ルートの回帰のみ（5件）
 cargo test -p server --lib me_export   # R5-04 エクスポートの回帰のみ
 cargo test -p common summarize_reason   # 要約の単体テスト（PII除去・境界・日本語）
 cargo test -p server list_reports       # GET /mod/reports の要約適用・全文非漏えいの回帰のみ
@@ -963,6 +982,17 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
 モック認証（`ALLOW_MOCK_AUTH=1`）で `GET /mod/stats` の応答を差し替えて3フェーズを確認する。
 既存の1 test() 内で完結させ、moderation.spec.ts 14件・フルスイート69件は変更しない。
 
+0. **公開集計（フェーズ0、ADR-0008 段階2）**: MODERATION 画面の初期表示ではオプインを
+   待たずに `GET /mod/stats/public` が `Authorization: Bearer mock_jwt_token` 付きで1本だけ
+   送られる。`data-testid="public-mod-stats"` に `GENERATED_AT: <generated_at>`、
+   `data-testid="public-mod-stats-totals"` に Reports / Concluded / Approved / Rejected /
+   Quorum Not Met、`data-testid="public-mod-stats-monthly"` に Month / Reports /
+   Concluded / Approved / Rejected が描画される。機微キー文字列（`reason` / `cid` /
+   `user_hash` / `bans` / `unbans` / `unpins`）は `body` に現れない。
+   `publicStatsRequests` の完全一致で初期表示1本を検証し、この時点で `/mod/stats` は0本。
+   BROWSE → MODERATION の再マウントで公開集計は2本目が送られる（公開側は2本）。
+   `test.beforeEach` は全テスト共通の `**/mod/stats/public` 既定モック（200・公開DTO）を
+   登録し、R5-09 は個別ルートモックで上書きしてリクエストを記録する。
 1. **初期表示（一般画面）**: MODERATION 画面を開いても `/mod/stats` は0本である。
    `data-testid="moderation-stats-toggle"`（中立文言 `SHOW STATS`）は表示されるが、
    `data-testid="moderation-stats-section"` / `moderation-stats-error` は0件で、
@@ -981,7 +1011,7 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    レスポンスに CID / reason / `user_hash` は無いため表示されず、サーバー側の
    `test_mod_stats_response_contains_no_sensitive_fields` と合わせて個人情報非含有を担保する。
    本シナリオは認証内集計の表示確認であり、第三者公開（ADR-0008 の範囲。
-   段階2の公開ルートは未実装）を証明するものではない。
+   段階2の公開ルートは MOD-13 で検証）を証明するものではない。
 5. `/mod/stats` へのリクエストはトグル押下ごとに1本で、いずれもメソッド `GET`、パス
    `/mod/stats`、`Authorization: Bearer mock_jwt_token` であることを配列の完全一致で検証する
    （初期表示と再マウント後は0本、200→403の2押下で合計2本）。余計な再フェッチや
@@ -992,6 +1022,12 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    注入したセンチネル `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` はページ全体で非表示で、
    serde の生エラー（フィールド名・型情報・解析位置）も出ないことを確認する。
    文言は `client/src/lib.rs` の `stats_error_message(StatsFailure::Parse)` の確定値を使う。
+
+7. **未認証401（実サーバー）**: `page.request.get('http://127.0.0.1:3000/mod/stats/public')`
+   で認証ヘッダなしのリクエストを送り、ステータス 401 を同じ test() 内で確認する。
+   `page.request`（APIRequestContext）は `page.route` の対象外のため実サーバーへ届き、
+   client の baseURL（8080）ではなく絶対 URL のポート 3000 を明示する。
+   未認証拒否（`AuthClaims` 必須）を E2E でも担保する。
 
 ### E2E 投票フィードバックシナリオ（VOTE-FB-01〜03）
 
@@ -1056,7 +1092,7 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    `not.toContainText` を検証する。サーバー本文・生の PII は画面へ出さない。
 4. 本シナリオは定義14件の moderation.spec.ts に含まれ、chromium で pass を確認済み。
    認証内集計の表示確認であり、第三者公開（ADR-0008 の範囲。
-   段階2の公開ルートは未実装）を証明するものではない。
+   段階2の公開ルートは MOD-13 で検証）を証明するものではない。
 
 ### 二重送信ガードの E2E（REPORT-GUARD-01 / VOTE-GUARD-01）
 
