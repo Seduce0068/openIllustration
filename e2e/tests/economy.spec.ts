@@ -129,6 +129,42 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.locator('text=JPYC settlement verification is in development')).toBeVisible();
     expect(supportRequested).toBe(false);
 
+    // R2-URL: pushState を失敗させても view は BROWSE のまま（fail-closed）であることを検証する。
+    // 固定警告は client/src/lib.rs の HISTORY_UPDATE_WARNING（履歴の更新に失敗しました。）。
+    // R1 分析の英語文言で実装されていた場合も拾えるよう、両方の文言を受け付ける。
+    const historyWarnings: string[] = [];
+    page.on('console', message => {
+      const text = message.text();
+      if (
+        text.includes('履歴の更新に失敗しました。') ||
+        text.includes('history update failed; view unchanged')
+      ) {
+        historyWarnings.push(text);
+      }
+    });
+    await page.evaluate(() => {
+      const w = window as Window & { __originalPushState?: History['pushState'] };
+      w.__originalPushState = history.pushState;
+      history.pushState = () => {
+        throw new Error('history.pushState disabled for fail-closed regression');
+      };
+    });
+
+    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+    expect(new URL(page.url()).hash).toBe('#dashboard');
+    await expect.poll(() => historyWarnings.length).toBeGreaterThan(0);
+
+    // 履歴 API を必ず復元してから、通常のタブ遷移・goBack の回帰を継続する。
+    await page.evaluate(() => {
+      const w = window as Window & { __originalPushState?: History['pushState'] };
+      const original = w.__originalPushState;
+      if (original) {
+        history.pushState = original;
+        delete w.__originalPushState;
+      }
+    });
+
     // The ledger stays readable for legacy mock records, labeled as such
     await page.getByRole('button', { name: 'LEDGER' }).click();
     await expect(page.locator('text=Forensic Transaction Ledger')).toBeVisible();

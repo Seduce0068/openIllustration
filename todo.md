@@ -133,7 +133,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   `require_moderation_operator` を ban_user と同じ位置で呼ぶ（スケジューラ専用なら別トークン分離）。
 - [x] **doctor が OIDC 空値ハードエラーを警告へ流す** — 根拠 `server/src/bin/doctor.rs` oidc_* カテゴリ / review R2-ER / 中。
   hard_errors のうち OIDC_EMPTY_VALUE_ERROR 等が警告化されず、起動は拒否されるのに --strict が exit 0 になる。
-- [ ] **URL 同期の履歴失敗・冪等性を堅牢化** — 根拠 `client/src/lib.rs` navigate() / current_content_query() / review R2-DI / 中。
+- [x] **URL 同期の履歴失敗・冪等性を堅牢化** — 根拠 `client/src/lib.rs` navigate() / current_content_query() / review R2-DI / 中。
   履歴 API の Result を破棄し set_view を先に行うため URL と画面が不整合になり得る。
   成功後に set_view、popstate ガード、生 search の双方向一致比較で正規化へ。
 - [ ] **ADR-0008 段階2 (公開集計ルート) を実装** — 根拠 `docs/adr/ADR-0008...` / `server/src/lib.rs` ルート表 / discovery R1-FG / 中。

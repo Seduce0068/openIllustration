@@ -181,6 +181,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     // 「Favorites only」で favorite_only=1 が送られ、結果が絞り込まれる。
     await page.getByLabel('Favorites only').check();
+    // R2-URL: トグル操作は replaceState で URL クエリへ同期され、GET は増えない。
+    await expect.poll(() => new URL(page.url()).searchParams.get('favorite_only')).toBe('1');
     await expect.poll(() => contentRequests).toContainEqual({
       q: null,
       tag: null,
@@ -217,6 +219,8 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
       .poll(() => contentRequests[5], { timeout: 10000 })
       .toEqual({ q: null, tag: null, type: null, favorite_only: '1' });
     await page.getByLabel('Favorites only').uncheck();
+    // R2-URL: 解除時は favorite_only が消え、生 search が空へ戻る（未知キーは残らない）。
+    await expect.poll(() => new URL(page.url()).search).toBe('');
     await expect(page.getByText('Fav Story')).toBeVisible();
     await card('Fav Story').getByRole('button', { name: 'Add to favorites' }).focus();
     await page.keyboard.press('Enter');

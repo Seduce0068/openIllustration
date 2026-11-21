@@ -95,6 +95,10 @@ test.describe('Content search and filtering (R5-01)', () => {
 
     // 1文字ずつ入力してもデバウンスで1回の GET にまとまること。
     // 初期表示の q=null と合わせ、q 付きリクエストは最終語 'Neon' の1件だけ。
+    // R2-URL: 重複 q と未知キーを含む URL を注入し、正規化書き出しでも GET が増えないことを検証する。
+    await page.evaluate(() => {
+      history.replaceState(null, '', '/?q=Neon&q=Ghost&utm_source=test#dashboard');
+    });
     await page.getByLabel('Search').pressSequentially('Neon', { delay: 20 });
 
     await expect.poll(() => seenQueries).toEqual([null, 'Neon']);
@@ -104,6 +108,12 @@ test.describe('Content search and filtering (R5-01)', () => {
     // R2-URL: 検索条件が URL クエリへ同期される（view は hash に残る）。
     await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('Neon');
     expect(new URL(page.url()).hash).toBe('#dashboard');
+
+    // R2-URL: 重複キー・未知キーは除去され、?q=Neon と #dashboard へ冪等に収束する。
+    // 正規化は replaceState なので、seenQueries は [null, 'Neon'] のまま（GET は増えない）。
+    await expect.poll(() => new URL(page.url()).search).toBe('?q=Neon');
+    expect(new URL(page.url()).hash).toBe('#dashboard');
+    await expect.poll(() => seenQueries).toEqual([null, 'Neon']);
 
     // 再読込 -> 未認証なのでログインへ戻る -> 再ログインで URL から条件が復元される。
     await page.reload();

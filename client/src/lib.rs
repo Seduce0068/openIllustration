@@ -491,10 +491,23 @@ fn parse_content_query(query: &str) -> ContentQuery {
     parsed
 }
 
-/// ブラウザの `location.search` を一度だけ読み、`build_content_query` と同じ
-/// 形式へ正規化してから純粋な `parse_content_query` へ渡す。
-/// `UrlSearchParams` にブラウザのデコード規則（`+` や percent escape）を
-/// 吸収させ、既知キーだけを取り出してから再エンコードする。
+/// 生のクエリ文字列を `parse_content_query` → `build_content_query` の順に合成し、
+/// 既知キーだけを残す正規形式へ変換する純粋関数。
+/// `parse_content_query` の「同じキーは最後の値を採用する」意味を維持するため、
+/// `UrlSearchParams::get`（先頭値を返す）は使わず、必ず parse を通す。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn canonical_content_query(raw: &str) -> String {
+    let parsed = parse_content_query(raw);
+    build_content_query(
+        &parsed.q,
+        &parsed.tag,
+        &parsed.content_type,
+        parsed.favorite_only,
+    )
+}
+
+/// ブラウザの `location.search` を読み、`canonical_content_query` で正規化する。
+/// 初回読み・popstate・navigate のすべてが同じ純粋関数を通るため意味が統一される。
 /// non-wasm の単体テストでは検索条件を読まない（空文字を返す）。
 fn current_content_query() -> String {
     #[cfg(target_arch = "wasm32")]
@@ -505,20 +518,7 @@ fn current_content_query() -> String {
         let Ok(search) = window.location().search() else {
             return String::new();
         };
-        let Ok(params) = web_sys::UrlSearchParams::new_with_str(&search) else {
-            return search;
-        };
-        let mut parts = Vec::new();
-        for key in ["q", "tag", "type", "favorite_only"] {
-            if let Some(value) = params.get(key) {
-                parts.push(format!("{key}={}", url_encode(&value)));
-            }
-        }
-        if parts.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", parts.join("&"))
-        }
+        canonical_content_query(&search)
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -1288,6 +1288,28 @@ enum NavigateMode {
     Replace,
 }
 
+/// 履歴 API の更新失敗時に 1 回だけ出す固定文言。
+/// URL・ペイロード・失敗した `JsValue` の中身は一切含めない。
+const HISTORY_UPDATE_WARNING: &str = "履歴の更新に失敗しました。";
+
+thread_local! {
+    /// 履歴更新失敗の警告をページ寿命で 1 回だけ出すためのフラグ。
+    static HISTORY_WARNED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 履歴更新失敗を固定文言で 1 回だけ警告する（詳細はエコーしない）。
+fn warn_history_update_once() {
+    HISTORY_WARNED.with(|warned| {
+        if warned.replace(true) {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        web_sys::console::warn_1(&JsValue::from_str(HISTORY_UPDATE_WARNING));
+        #[cfg(not(target_arch = "wasm32"))]
+        let _ = HISTORY_UPDATE_WARNING;
+    });
+}
+
 /// `#` 付き hash から許可された view を取り出す。許可リスト外は dashboard 固定。
 /// `login` は認証画面であってナビの view ではないため、ここでは dashboard へ
 /// 正規化する（ログアウト後の直接リンクも認証画面から始まる）。
@@ -1298,6 +1320,16 @@ fn view_from_hash(hash: &str) -> &'static str {
         "ledger" => "ledger",
         _ => "dashboard",
     }
+}
+
+/// popstate で view 同期の対象にしてよい hash かどうか。
+/// TOC の `#slug` 等はナビの view ではないため早期 return の判定に使う。
+/// `history.state` マーカーは使わず、hash の許可リストだけを根拠にする。
+fn is_known_view_hash(hash: &str) -> bool {
+    matches!(
+        hash.strip_prefix('#').unwrap_or(hash),
+        "dashboard" | "upload" | "moderation" | "ledger" | "login"
+    )
 }
 
 #[component]
@@ -1319,29 +1351,45 @@ pub fn App() -> impl IntoView {
     );
 
     // 全 view 遷移をここへ集約する。タブ切替だけ pushState、ログイン成功・
-    // ログアウト・初期化は replaceState。検索条件（query）は書き換えず保持する。
+    // ログアウト・初期化は replaceState。検索条件（query）は current_content_query()
+    // で正規化して埋め込み、未知キーを引き継がない。
     let navigate = move |next: &str, mode: NavigateMode| {
-        set_view.set(next.to_string());
-        let Some(window) = web_sys::window() else {
-            return;
-        };
-        let Ok(pathname) = window.location().pathname() else {
-            return;
-        };
-        let Ok(search) = window.location().search() else {
-            return;
-        };
-        let url = format!("{pathname}{search}#{next}");
-        let result = match mode {
-            NavigateMode::Push => window
-                .history()
-                .and_then(|history| history.push_state_with_url(&JsValue::NULL, "", Some(&url))),
-            NavigateMode::Replace => window
-                .history()
-                .and_then(|history| history.replace_state_with_url(&JsValue::NULL, "", Some(&url))),
-        };
-        // 履歴 API が使えない環境でも view の切替自体は成功させる。
-        let _ = result;
+        // URL を先に組み、履歴 API の結果を保持する（view 更新より前）。
+        // 失敗内容の JsValue は保持せず、警告は固定文言だけにする。
+        let history_result: Result<(), ()> = (|| {
+            let window = web_sys::window().ok_or(())?;
+            let pathname = window.location().pathname().map_err(|_| ())?;
+            // 生 search ではなく current_content_query() を埋め、未知キーを落とす。
+            let url = format!("{pathname}{}#{next}", current_content_query());
+            let history = window.history().map_err(|_| ())?;
+            match mode {
+                NavigateMode::Push => history
+                    .push_state_with_url(&JsValue::NULL, "", Some(&url))
+                    .map_err(|_| ()),
+                NavigateMode::Replace => history
+                    .replace_state_with_url(&JsValue::NULL, "", Some(&url))
+                    .map_err(|_| ()),
+            }
+        })();
+        match mode {
+            // タブ切替（Push）は履歴更新が成功したときだけ view を進める。
+            // 失敗時は view を保ち、固定文言の警告を 1 回だけ出す。
+            NavigateMode::Push => {
+                if history_result.is_ok() {
+                    set_view.set(next.to_string());
+                } else {
+                    warn_history_update_once();
+                }
+            }
+            // 初期化・ログイン成功・ログアウト（Replace）は履歴の成否にかかわらず
+            // set_view を維持し、失敗時だけ警告する。
+            NavigateMode::Replace => {
+                set_view.set(next.to_string());
+                if history_result.is_err() {
+                    warn_history_update_once();
+                }
+            }
+        }
     };
 
     // popstate では view だけを同期し、履歴をさらに操作しない。
@@ -1356,6 +1404,10 @@ pub fn App() -> impl IntoView {
         let Ok(hash) = window.location().hash() else {
             return;
         };
+        // TOC の #slug 等、既知 view 以外の hash では view を書き換えない。
+        if !is_known_view_hash(&hash) {
+            return;
+        }
         let next = if token.get_untracked().is_some() {
             view_from_hash(&hash)
         } else {
@@ -1662,7 +1714,9 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
 
     // 検索条件 -> URL。build_content_query の戻り値を pathname + query + hash へ
     // replaceState する（pushState は view のみ）。hash を残すのは view を壊さない
-    // ため。差分が無いときは履歴を書かず、ここでは signal を読むだけ（set/fetch しない）。
+    // ため。比較は正規化後ではなく「生の location.search」と行う。正規化後と
+    // 比べると未知キーやエンコード差で毎回差分が出て履歴を書き換え続ける。
+    // replaceState は popstate を出さないため、書き換えてもこの Effect は再入しない。
     Effect::new(move |_| {
         let Some(window) = web_sys::window() else {
             return;
@@ -1673,13 +1727,16 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
         let Ok(hash) = window.location().hash() else {
             return;
         };
+        let Ok(raw_search) = window.location().search() else {
+            return;
+        };
         let query = build_content_query(
             &q.get(),
             &tag.get(),
             &content_type.get(),
             favorite_only.get(),
         );
-        if current_content_query() == query {
+        if raw_search == query {
             return;
         }
         let url = format!("{pathname}{query}{hash}");
@@ -4267,6 +4324,78 @@ mod tests {
         // 値なしの favorite_only もフラグとして扱う（空値も同様）。
         assert!(parsed.favorite_only);
         assert!(super::parse_content_query("?favorite_only=").favorite_only);
+    }
+
+    /// canonical は parse→build の合成なので、適用済みの値へ再適用しても変わらない。
+    #[test]
+    fn canonical_content_query_is_idempotent() {
+        let samples = [
+            "",
+            "?unknown=x",
+            "?q=a&q=b",
+            "?utm=1&type=Novel&bogus=2&q=hi&tag=city&favorite_only=1",
+            "?q=a+b%26c&tag=%E6%97%A5%E6%9C%AC",
+            "?favorite_only=0&favorite_only=1",
+        ];
+        for raw in samples {
+            let once = super::canonical_content_query(raw);
+            assert_eq!(
+                super::canonical_content_query(&once),
+                once,
+                "raw={raw:?} の再適用で値が変わった"
+            );
+        }
+        // build の出力は canonical の固定点でもある。
+        let built = super::build_content_query("neon", "city", "Novel", true);
+        assert_eq!(super::canonical_content_query(&built), built);
+    }
+
+    /// parse が「同じキーは最後の値を採用する」ことを canonical も維持する。
+    #[test]
+    fn canonical_content_query_keeps_last_value_for_duplicate_keys() {
+        assert_eq!(super::canonical_content_query("?q=first&q=last"), "?q=last");
+        assert_eq!(
+            super::canonical_content_query("?tag=a&tag=b&q=x"),
+            "?q=x&tag=b"
+        );
+        // フラグも最後の値が採用される（後勝ちで 0 なら条件なし）。
+        assert_eq!(
+            super::canonical_content_query("?favorite_only=1&favorite_only=0"),
+            ""
+        );
+        assert_eq!(
+            super::canonical_content_query("?favorite_only=0&favorite_only=1"),
+            "?favorite_only=1"
+        );
+    }
+
+    /// 未知キーは捨て、既知キーは build の順序へ正規化される。
+    #[test]
+    fn canonical_content_query_drops_unknown_keys_and_normalizes_order() {
+        assert_eq!(super::canonical_content_query("?unknown=x"), "");
+        assert_eq!(
+            super::canonical_content_query(
+                "?utm=1&type=Novel&bogus=2&q=hi&tag=city&favorite_only=1"
+            ),
+            "?q=hi&tag=city&type=Novel&favorite_only=1"
+        );
+        // 先頭 '?' が無い形も同じ結果になる。
+        assert_eq!(
+            super::canonical_content_query("tag=city&q=hi"),
+            "?q=hi&tag=city"
+        );
+    }
+
+    /// '+' は空白へ、percent escape はバイト列へ戻してから再エンコードされる。
+    #[test]
+    fn canonical_content_query_decodes_plus_and_percent_before_reencoding() {
+        assert_eq!(super::canonical_content_query("?q=a+b%26c"), "?q=a%20b%26c");
+        assert_eq!(
+            super::canonical_content_query("?q=%E6%97%A5%E6%9C%AC"),
+            "?q=%E6%97%A5%E6%9C%AC"
+        );
+        // 重複と '+' が混在しても最後の値が採用される。
+        assert_eq!(super::canonical_content_query("?q=a+b&q=c+d"), "?q=c%20d");
     }
 
     /// cid はパスSegment として使うため `/` や `?` 等を percent-encode する。

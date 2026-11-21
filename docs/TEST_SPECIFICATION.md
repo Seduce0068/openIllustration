@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T05:08:00+09:00"
+  at: "2026-11-22T05:32:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T05:08:00+09:00"
+  at: "2026-11-22T05:32:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -27,6 +27,13 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   auth は3件のまま。認証トークン失効時の回復経路は基盤実装のみで自動有効化は保留
   （`ENABLE_AUTO_REFRESH=false`）、E2E 回復フェーズは未統合。新規 `test()` は追加せず69件を維持する。
+  R2-URL の回帰は既存 E2E 内へ統合し、新規 `test()` は追加していない（69件を維持）。
+  `search.spec.ts` は重複 `q` と未知キーを含む URL を注入したうえで正規化書き出しを検証し、
+  GET を増やさず `?q=Neon` と `#dashboard` へ冪等に収束することを確認する。
+  `economy.spec.ts` は `history.pushState` を失敗させ、履歴更新失敗の固定警告を捕捉して
+  view が BROWSE のまま変わらない fail-closed を検証し、API 復元後は通常のタブ遷移を継続する。
+  `favorites.spec.ts` は `favorite_only` の ON/OFF が URL クエリへ同期し、解除時に
+  クエリが空へ戻ることを既存のリクエスト完全一致アサーションを維持したまま確認する。
   favorites の5件はトグル基本フローに加え、二重クリック防止・401の再ログイン案内・
   失敗後の再トグルで旧エラーを消すこと・ネットワークエラー文言の表示を検証する。
   export の3件目はダウンロード開始失敗時の固定エラー表示（EXPORT-07）で、
