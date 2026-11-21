@@ -708,6 +708,118 @@ EOF
 	fi
 fi
 
+echo "=== ケース9: バックアップ窓 unit の停止→backup→起動（独立オラクル） ==="
+# 既存の expect_failure / expect_success 件数は増やさない。unit 定義を直接読み取り、
+# oneshot の実行順（ExecStartPre → ExecStart → ExecStopPost）を stub systemctl で再生する。
+# ExecStopPost は ExecStart 成否にかかわらず必ず実行される systemd 契約を前提とし、
+# バックアップ失敗時もアプリ unit 起動が呼ばれることを検証する。
+window_unit="${repo_root}/deploy/openillustration-backup-window.service"
+if [[ ! -f "$window_unit" ]]; then
+	echo "FAIL case 9: backup window unit missing"
+	failures=$((failures + 1))
+else
+	# 指定キーの先頭 1 行の値を返す（eval 不使用・パイプの SIGPIPE も避ける）。
+	read_unit_kv() {
+		local key="$1=" line
+		while IFS= read -r line || [[ -n "$line" ]]; do
+			if [[ "$line" == "$key"* ]]; then
+				printf '%s' "${line#"$key"}"
+				return 0
+			fi
+		done <"$window_unit"
+		return 1
+	}
+	app_unit_value="$(read_unit_kv Environment=APP_UNIT || true)"
+	pre_cmd="$(read_unit_kv ExecStartPre || true)"
+	start_cmd="$(read_unit_kv ExecStart || true)"
+	post_cmd="$(read_unit_kv ExecStopPost || true)"
+	if [[ -z "$app_unit_value" || -z "$pre_cmd" || -z "$start_cmd" || -z "$post_cmd" ]]; then
+		echo "FAIL case 9: APP_UNIT / Exec* not configured in window unit"
+		failures=$((failures + 1))
+	else
+		stub_bin="${work}/case9-bin"
+		backup_abs="/opt/openIllustration/scripts/backup-rotate.sh"
+		systemctl_log="${work}/case9-systemctl.log"
+		mkdir -p "$stub_bin"
+		case9_backup_dir="${work}/case9-backups"
+		new_backup_dir "$case9_backup_dir"
+		export BACKUP_DIR="$case9_backup_dir"
+		export SYSTEMCTL_LOG="$systemctl_log"
+		export BACKUP_SCRIPT="$script"
+
+		cat >"${stub_bin}/systemctl" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "systemctl $*" >> "$SYSTEMCTL_LOG"
+EOF
+		# バックアップ段をログに残して本体へ委譲する。CASE9_FAIL_BACKUP=1 のときは
+		# 暗号化設定を外して本体を失敗させ、起動が依然呼ばれることを検証する。
+		cat >"${stub_bin}/backup-step" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "backup" >> "$SYSTEMCTL_LOG"
+if [[ "${CASE9_FAIL_BACKUP:-0}" == "1" ]]; then
+  exec env -u BACKUP_GPG_RECIPIENT -u ALLOW_UNENCRYPTED_BACKUP "$BACKUP_SCRIPT" "$@"
+fi
+exec env BACKUP_GPG_RECIPIENT=test "$BACKUP_SCRIPT" "$@"
+EOF
+		chmod +x "${stub_bin}/systemctl" "${stub_bin}/backup-step"
+
+		run_unit_cmd() {
+			local cmd="$1" token='${APP_UNIT}'
+			local -a argv=()
+			cmd="${cmd//"$token"/$app_unit_value}"
+			# root 特権接頭辞 '+' を外し、systemctl / backup-rotate.sh をスタブへ差し替える。
+			cmd="${cmd#+}"
+			if [[ "$cmd" =~ ^/usr/bin/systemctl(.*)$ ]]; then
+				cmd="${stub_bin}/systemctl${BASH_REMATCH[1]}"
+			fi
+			if [[ "$cmd" =~ ^"${backup_abs}"(.*)$ ]]; then
+				cmd="${stub_bin}/backup-step${BASH_REMATCH[1]}"
+			fi
+			read -r -a argv <<<"$cmd"
+			"${argv[@]}"
+		}
+
+		replay_window() {
+			local label="$1" pre_rc=0 start_rc=0 post_rc=0
+			local expected actual
+			: >"$SYSTEMCTL_LOG"
+			run_unit_cmd "$pre_cmd" || pre_rc=$?
+			# ExecStartPre 失敗時は systemd が ExecStart をスキップする。
+			if ((pre_rc == 0)); then
+				run_unit_cmd "$start_cmd" || start_rc=$?
+			fi
+			# ExecStopPost は ExecStartPre / ExecStart の成否にかかわらず実行される。
+			run_unit_cmd "$post_cmd" || post_rc=$?
+			expected="$(printf 'systemctl stop %s\nbackup\nsystemctl start %s' \
+				"$app_unit_value" "$app_unit_value")"
+			actual="$(cat "$SYSTEMCTL_LOG")"
+			if [[ "$actual" == "$expected" ]]; then
+				echo "PASS case 9 (${label}): stop -> backup -> start order"
+			else
+				echo "FAIL case 9 (${label}): unexpected order"
+				printf 'expected:\n%s\nactual:\n%s\n' "$expected" "$actual" >&2
+				failures=$((failures + 1))
+			fi
+			if ((post_rc != 0)); then
+				echo "FAIL case 9 (${label}): start command failed"
+				failures=$((failures + 1))
+			fi
+			# 失敗シナリオでは backup 段が実際に失敗していることを確認する。
+			if [[ "$label" == "backup failure" ]] && ((start_rc == 0)); then
+				echo "FAIL case 9: backup failure injection did not fail"
+				failures=$((failures + 1))
+			fi
+		}
+
+		CASE9_FAIL_BACKUP=0
+		export CASE9_FAIL_BACKUP
+		replay_window "backup success"
+		sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+		CASE9_FAIL_BACKUP=1
+		replay_window "backup failure"
+	fi
+fi
+
 if ((failures > 0)); then
 	echo "backup-rotate tests FAILED (${failures})" >&2
 	exit 1

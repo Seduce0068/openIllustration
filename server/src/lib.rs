@@ -978,11 +978,31 @@ pub fn production_config_errors(
     errors
 }
 
+/// `DATABASE_URL` がリモート DSN かを判定する純粋ヘルパ。
+///
+/// ローカルは `file:` で始まる値とスキーム区切り `://` を含まない値（素のパス）。
+/// それ以外（`libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を
+/// リモートとみなす。判定は `starts_with("file:") || !contains("://")` の否定で、
+/// `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` が
+/// 同じ判定を共有する（単一情報源）。値やトークンは保持・出力しない。
+fn is_remote_database_url(value: &str) -> bool {
+    let is_local = value.starts_with("file:") || !value.contains("://");
+    !is_local
+}
+
+/// `file:` URL のパス部分が `/` で始まる（絶対パス）かを判定する純粋関数。
+fn is_absolute_local_file_url(value: &str) -> bool {
+    value
+        .strip_prefix("file:")
+        .is_some_and(|path| path.starts_with('/'))
+}
+
 /// 本番相当（モック認証無効）で `DATABASE_URL` が安全に設定されているかを検証する純粋関数。
 ///
 /// 開発（`allow_mock_auth = true`）では従来どおり `file:local.db` の暗黙既定を許容するため常に `None`。
-/// 本番相当では未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db` を固定文言で拒否する
-/// （fail-closed）。生バイトも設定値も一切エコーしない。
+/// 本番相当では未設定・非 UTF-8・trim 後空・相対 `file:` パス（旧既定の
+/// `file:local.db` を含む）・リモート DSN（`libsql://` 等）を固定文言で拒否する（fail-closed）。
+/// 生バイトも設定値もトークンも一切エコーしない。
 /// 絶対パスの `file:/var/lib/openillustration/local.db` 等は受理する。
 pub fn production_database_url_error(
     allow_mock_auth: bool,
@@ -1000,8 +1020,12 @@ pub fn production_database_url_error(
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 Some("DATABASE_URL is empty")
-            } else if trimmed == "file:local.db" {
-                Some("DATABASE_URL is the development default (relative local file path)")
+            } else if is_remote_database_url(trimmed) {
+                Some("DATABASE_URL remote DSN is not permitted in production")
+            } else if !is_absolute_local_file_url(trimmed) {
+                // `file:local.db` だけでなく `file:./data.db` 等の相対パスも、
+                // 作業ディレクトリ依存で起動結果が変わるため本番では拒否する。
+                Some("DATABASE_URL must be an absolute local file path in production")
             } else {
                 None
             }
@@ -1123,7 +1147,7 @@ async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
         }
     };
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
-    if db_url.starts_with("file:") || !db_url.contains("://") {
+    if !is_remote_database_url(&db_url) {
         let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
         let db = Builder::new_local(path).build().await?;
         Ok(db.connect()?)
@@ -1213,7 +1237,7 @@ pub async fn run() -> anyhow::Result<()> {
     };
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
 
-    let local_path = if db_url.starts_with("file:") || !db_url.contains("://") {
+    let local_path = if !is_remote_database_url(&db_url) {
         Some(db_url.strip_prefix("file:").unwrap_or(&db_url).to_string())
     } else {
         None

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T08:15:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T08:15:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -37,8 +37,10 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
    byte 契約（CONTENT-06 / MOD-08）の境界回帰もクライアント側の既存 `#[cfg(test)]`
    モジュール内へ単体テストとして統合し、E2E の `test()` は追加していない（69件を維持）。
   新規に参照する testid は `clear-search-filters`（条件付き空状態のクリアボタン）と
-  `report-validation-error`（通報入力検証の `role="alert"`）で、既存の `dashboard-error` /
-  `upload-status` / `export-error` 等と併せて固定文言契約を検証する。
+  `report-validation-error`（通報入力検証の `role="alert"`）、`upload-failed` /
+  `report-failed`（失敗専用の `role="alert"`）で、既存の `dashboard-error` /
+  `upload-status`（成功・進捗の `role="status"`） / `export-error` 等と併せて固定文言契約を検証する。
+  既存 test() 内へのアサーション追加のみで、E2E 定義数69件は変更しない。
   `search.spec.ts` は重複 `q` と未知キーを含む URL を注入したうえで正規化書き出しを検証し、
   GET を増やさず `?q=Neon` と `#dashboard` へ冪等に収束することを確認する。
   `economy.spec.ts` は `history.pushState` を失敗させ、履歴更新失敗の固定警告を捕捉して
@@ -54,13 +56,16 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   metrics の3件は MET-01 と E2E 固有の NEUT-URL-02 / NEUT-URL-03 であり、
   サーバー側 `observe_metrics` の MET-02 とは別 ID である。
   moderation の14件のうち3件は投票結果のフィードバック表示（VOTE-FB-01〜03）、
-  2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）、2件は二重送信ガード（REPORT-GUARD-01 / VOTE-GUARD-01）の回帰である。
+  2件は投票一覧の取得失敗表示（REPORTS-ERR-01〜02）、2件は通報送信失敗表示
+  （REPORT-ERR-01〜02、失敗は dedicated `role="alert"`）、2件は二重送信ガード
+  （REPORT-GUARD-01 / VOTE-GUARD-01）の回帰である。
   integrity の6件は正規・改ざんに加え、3件目が R1-13（チェックサム一致だが JXL デコード失敗時に
   VERIFIED にしない）、4件目が AUDIT-04 の FORENSIC_TIMELINE 順序、
   5件目が Audit トグルの ARIA 状態と Escape 時のフォーカス復帰（a11y）、
   6件目が CLOSE ボタンでダイアログを閉じてトグルへフォーカスが復帰することを検証する。
   upload の6件は送信成功・10 MiB 拒否・INT-02 に加え、4件目が R1-14
-  （`arrayBuffer()` 拒否時に固定エラー文言を表示しボタンを再活性化）、
+  （`arrayBuffer()` 拒否時に失敗用 `role="alert"` の `upload-failed` へ固定エラー文言を
+  表示し、`upload-status` の `role="status"` も維持したうえでボタンを再活性化）、
   5件目がファイル選択 label のキーボード操作と価格入力の上下限（a11y）、
   6件目が R2 価格境界テスト（-1 / 1000001 がクライアントの送信前ゲートで固定文言により
   拒否されて route 0回、0 / 1000000 が丸めずに送信されること）を検証する。
@@ -1245,6 +1250,16 @@ CLOSE ボタンのフォーカス復帰）の4件を追加した。
 error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため、ここでは重複して数えない。
 この分岐はチェックサム不一致（`× COMPROMISED`）・デコード失敗（`× DECODE FAILED`）と排他である。
 
+### E2E 通報送信失敗シナリオ（REPORT-ERR-01 / 02）
+
+`e2e/tests/moderation.spec.ts` の REPORT-ERR-01（HTTP 500）/ 02（`route.abort()`）は、
+`POST /mod/report` の失敗を dedicated な `data-testid="report-failed"`
+（`role="alert"`、固定文言 `Report failed.`）で告知することを検証する。
+入力検証エラーは既存の `data-testid="report-validation-error"`（`role="alert"`）と区別し、
+成功文言 `Report accepted. Content marked Reported.` と進捗 `通報を送信中...` は
+既存どおり `role="status"` に描画する。新しい試行と送信開始時に失敗表示をクリアする。
+いずれも既存 test() 内へアサーションを追加するだけで、E2E 定義数69件は不変である。
+
 ### E2E Upload シナリオ（R1-14 / INT-02 / CONTENT-01）
 
 `e2e/tests/upload.spec.ts` の `Content Upload Flow` は、モック認証（`ALLOW_MOCK_AUTH=1`）
@@ -1260,9 +1275,10 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
    `Failed to upload content (HTTP 400).` が表示されることを確認する。
 4. `R1-14: shows an error and re-enables the button when arrayBuffer() rejects`:
    `Blob.prototype.arrayBuffer` を拒否させ、準備フェーズの unwrap パニック
-   （`Processing...` のまま固まる状態）を再現する。`data-testid="upload-status"` に固定
-   文言 `アップロードの準備に失敗しました。` が表示され、送信ボタンが再活性化して
-   `Processing...` のまま残らないことを確認する。
+   （`Processing...` のまま固まる状態）を再現する。`data-testid="upload-failed"`
+   （`role="alert"`）に固定文言 `アップロードの準備に失敗しました。` が表示されることを
+   確認する。既存の `data-testid="upload-status"`（`role="status"` / `aria-live="polite"`）の
+   検証は維持し、送信ボタンが再活性化して `Processing...` のまま残らないことを確認する。
 
 5. `R2: file-upload label is keyboard operable and price input has bounds`:
    `label[for="file-upload"]` が表示され、`tabindex="0"` を持つことを確認する。
@@ -1273,8 +1289,9 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
 6. `R2 (price boundary): 送信前ゲートで範囲外を拒否し、0/1000000 を丸めずに送信する`:
    `#upload-price` へ -1 / 1000001 / 0 / 1000000 の順に入力して送信する。
    -1 と 1000001 はクライアントの送信前ゲート（`sign_and_upload` の
-   `price_range_error`）で拒否され、固定文言 `Price must be between 0 and 1000000 JPY.` が
-   表示される。`page.route('**/content/upload', ...)` の呼び出し回数は0回で、
+   `price_range_error`）で拒否され、失敗用の `data-testid="upload-failed"`
+   （`role="alert"`）に固定文言 `Price must be between 0 and 1000000 JPY.` が表示される。
+   `page.route('**/content/upload', ...)` の呼び出し回数は0回で、
    HTTP エラー文言や生エラー本文は表示されない。0（購入不可）と 1000000 は送信され、
    multipart の `price` フィールドは `['0', '1000000']` であることを確認する
    （`price_from_number` は丸めない）。モック応答はサーバー契約 0..=1_000_000 と同じ
@@ -1291,7 +1308,8 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
 | 通信（`Request::send` の `Err`） | `Network error uploading content.` |
 | 応答読取（`response.json::<String>()`） | `アップロード結果の読み取りに失敗しました。` |
 
-`data-testid="upload-status"` は `[STATUS]` の接頭辞に続けて状態文言を描画し、
+`data-testid="upload-status"` は `[STATUS]` の接頭辞に続けて成功・進捗文言を描画し、
+`data-testid="upload-failed"` は `[FAILED]` の接頭辞に続けて失敗文言を `role="alert"` で描画する。
 文言が空のときは `Show` により非表示になる。loading 中は送信ボタンが `Processing...`
 かつ `disabled` で、完了後に `Sign & Submit to Evidence Ledger` へ戻る。
 通信／HTTP応答は `upload_error_message` の4分岐で固定文言を選ぶ: 401=再ログイン

@@ -42,18 +42,18 @@ status: current
   DB照会または単一インスタンス強制でfail-closedにする。
 - [x] **instance lock読取失敗のfail-closed化** — 根拠 `server/src/lib.rs` acquire_instance_lock / review R2-DI / 重大度 high。
   read_to_stringのErrを空内容として扱い有効ロックを奪取し得る。最初の読取を?伝播し再読込も失敗時bailする。
-- [ ] **deny のRUSTSEC ignoreを本番リモートDB構成ですり抜けないように** — 根拠 `deny.toml:48` / review R3-DE / 重大度 high。
+- [x] **deny のRUSTSEC ignoreを本番リモートDB構成ですり抜けないように** — 根拠 `deny.toml:48` / review R3-DE / 重大度 high。
   h2/rustls系ignoreの理由が「リモートDB接続時のみ」なのに本番推奨構成そのものが到達経路を持つ。
   構成別denyプロファイルまたはリモートDB検出ゲート、あるいは依存更新。
-- [ ] **アップロード/通報失敗をrole=alertで告知**
-  — 根拠 `client/src/lib.rs` upload-status / `docs/OPERATIONAL_POLICY.md:190` / discovery R5-VU / 重大度 high。
+- [x] **アップロード/通報失敗をrole=alertで告知**
+  — 根拠 `client/src/lib.rs` upload-status / `docs/OPERATIONAL_POLICY.md:202` / discovery R5-VU / 重大度 high。
   成功はrole=statusのまま、失敗時のみrole=alert専用領域へ。E2E既存2件内へアサーション、69件維持。
 - [x] **maxlengthをUTF-8バイト基準へ**
   — 根拠 `client/src/lib.rs` REPORT_REASON_MAX_LEN 等 / `server/src/lib.rs` validate_content_metadata / discovery R5-VU
     重大度 high。
   ブラウザmaxlengthはUTF-16 code unitsでサーバはUTF-8バイト。日本語67文字超で400になる。
   TextEncoderでバイト数ゲートするかサーバをUnicode文字数へ。E2E既存2件内へ日本語ケース、69件維持。
-- [ ] **定期バックアップとinstance.lockの衝突を解消**
+- [x] **定期バックアップとinstance.lockの衝突を解消**
   — 根拠 `deploy/openillustration-backup.timer` / `scripts/backup-rotate.sh` / review R5-DR / 重大度 high。
   常時稼働環境では03:17の実行が必ず失敗する。停止→backup→起動のオーケストレーションまたはオンライン快照方式へ。
 - [x] **検証済み年齢属性の user_hash を signed_subject 由来へ変更**
@@ -672,6 +672,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（高優先3件）: 本番リモートDSNを拒否しis_remote_database_urlを単一情報源化、
+  deny受容根拠を「ゲートで禁止」へ変更（件数11→12は履歴として保持）。
+  アップロード/通報の失敗をdedicated role=alertへ分離（固定文言不変）。
+  バックアップは停止→backup→起動の窓unitを追加し失敗時も再起動を保証。
+  前ラウンドのリモート失効DB正本照会は「複数プロセス對策」として統合し矛盾を解消。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests123）。残りは高2・中11・低5。
 
 - 2026-11-22 coding（高優先3件）: リモートDB失効をDB正本照会+positiveキャッシュへ、
   instance lock読取をfail-closed化、maxlengthをUTF-8 byte基準へ（common定数集約）。

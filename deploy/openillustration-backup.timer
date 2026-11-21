@@ -1,15 +1,18 @@
 [Unit]
-Description=Daily OpenIllustration database backup
+Description=Daily OpenIllustration database backup window (stop -> backup -> start)
 Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 
 [Timer]
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
 # 利用環境のサーバー停止メンテナンス窓に合わせて OnCalendar を変更すること。
-# 停止を前提としない方式を採る場合は、ロック検出の挙動を事前に確認する。
+# オーケストレーションは openillustration-backup-window.service が行う
+# （ExecStartPre でアプリ unit 停止 → ExecStart で backup-rotate.sh →
+# ExecStopPost でアプリ unit 起動）。バックアップ失敗時も ExecStopPost が
+# 実行されるため、アプリが停止したまま放置されることはない。
 OnCalendar=*-*-* 03:17:00
 Persistent=true
 RandomizedDelaySec=300
-Unit=openillustration-backup.service
+Unit=openillustration-backup-window.service
 
 [Install]
 WantedBy=timers.target

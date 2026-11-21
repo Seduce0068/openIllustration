@@ -120,9 +120,12 @@ test.describe('Content Upload Flow', () => {
     await submitButton.click();
 
     const status = page.getByTestId('upload-status');
-    await expect(status).toContainText('アップロードの準備に失敗しました。', { timeout: 15000 });
+    const failed = page.getByTestId('upload-failed');
+    // 失敗は dedicated role="alert" の upload-failed に既存固定文言で表示される。
+    await expect(failed).toContainText('アップロードの準備に失敗しました。', { timeout: 15000 });
+    await expect(failed).toHaveAttribute('role', 'alert');
 
-    // ライブリージョン属性を明示的に検証（data-testid="upload-status"）。
+    // 既存の status ライブリージョン検証は維持（成功・進捗は status のまま）。
     await expect(status).toHaveAttribute('role', 'status');
     await expect(status).toHaveAttribute('aria-live', 'polite');
 
@@ -235,20 +238,22 @@ test.describe('Content Upload Flow', () => {
     const priceInput = page.locator('#upload-price');
     const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
     const status = page.getByTestId('upload-status');
+    const failed = page.getByTestId('upload-failed');
     const clientPriceError = 'Price must be between 0 and 1000000 JPY.';
 
-    // -1: クライアントの送信前ゲートで拒否され、固定文言のみ表示。route は0回。
+    // -1: クライアントの送信前ゲートで拒否され、失敗用 role="alert" に固定文言のみ表示。route は0回。
     await priceInput.fill('-1');
     await submitButton.click();
-    await expect(status).toContainText(clientPriceError, { timeout: 15000 });
+    await expect(failed).toContainText(clientPriceError, { timeout: 15000 });
+    await expect(failed).toHaveAttribute('role', 'alert');
     expect(uploadRouteCalls).toBe(0);
 
     // 1000001: 上限超過も同じゲートで拒否され、引き続き route は0回。
     await priceInput.fill('1000001');
     await submitButton.click();
-    await expect(status).toContainText(clientPriceError, { timeout: 15000 });
+    await expect(failed).toContainText(clientPriceError, { timeout: 15000 });
     expect(uploadRouteCalls).toBe(0);
-    await expect(status).not.toContainText('Failed to upload content');
+    await expect(failed).not.toContainText('Failed to upload content');
 
     // 0: 購入不可を表すが、サーバー契約では下限として受理される。
     await priceInput.fill('0');

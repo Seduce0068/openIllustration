@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 status: current
 ---
 
@@ -150,7 +150,8 @@ status: current
     `register` / `take` / `sweep` で共有。`run_moderation_finalizer` へ `OidcState` を配線し
     起動時と周期 tick で回収。3テスト追加、配線 mutation で検出を確認
     （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知11件を理由付き ignore、`unused-ignored-advisory = "deny"`
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知12件＝脆弱性8/unmaintained4、libsql系10・paste1・chrono1を理由付き ignore
+  `unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、
   法的確定/専門家レビューは未完）と公開レスポンスの非秘密性回帰テスト追加（`3662145`）。

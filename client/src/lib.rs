@@ -2850,6 +2850,8 @@ fn metadata_byte_error(title: &str, description: &str, tags_csv: &str) -> Option
 #[component]
 fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (status, set_status) = signal(String::new());
+    // 失敗は dedicated role="alert" で告知する。成功・進捗は status のまま。
+    let (failed, set_failed) = signal(String::new());
     let (loading, set_loading) = signal(false);
     let (file, set_file) = signal(None::<web_sys::File>);
     let (price, set_price) = signal(100);
@@ -2866,22 +2868,25 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         {
             if f.size() > MAX_UPLOAD_BYTES {
                 set_file.set(None);
-                set_status.set("ERROR: File exceeds the 10 MiB limit.".to_string());
+                set_failed.set("ERROR: File exceeds the 10 MiB limit.".to_string());
                 return;
             }
             set_status.set(String::new());
+            // 新しいファイル選択で前回の失敗表示を消す。
+            set_failed.set(String::new());
             set_file.set(Some(f));
         } else {
             // 選択解除（キャンセル）時は古い File を破棄し、送信ボタンを無効化する。
             set_file.set(None);
             set_status.set(String::new());
+            set_failed.set(String::new());
         }
     };
 
     let sign_and_upload = move |_| {
         // ファイル未選択（サイズ拒否を含む）ではパニックせずエラー表示する。
         let Some(f) = file.get() else {
-            set_status.set("ERROR: Select a file first.".to_string());
+            set_failed.set("ERROR: Select a file first.".to_string());
             return;
         };
         let user_hash = user_hash.clone();
@@ -2893,16 +2898,18 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         // 送信直前にサーバー契約 0..=1_000_000 をゲートする。入力中に黙って丸めない
         // 経路を維持するため、範囲外はここで固定文言を出して通信を開始しない。
         if let Some(error) = price_range_error(price_val) {
-            set_status.set(error.to_string());
+            set_failed.set(error.to_string());
             return;
         }
         // メタデータも通信前に UTF-8 バイト契約でゲートする。HTML の maxlength は
         // UTF-16 単位のため日本語では守れず、ここで拒否すれば HTTP は 0 本のまま。
         if let Some(error) = metadata_byte_error(&title_val, &description_val, &tags_val) {
-            set_status.set(error.to_string());
+            set_failed.set(error.to_string());
             return;
         }
         set_loading.set(true);
+        // 新しい試行では前回の失敗を消し、進捗は status のまま通知する。
+        set_failed.set(String::new());
         set_status.set("監査証跡を生成中...".to_string());
 
         // 失敗時に表示する文言は固定文字列のみ（生データ・機微情報は出さない）。
@@ -2986,8 +2993,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             .await;
 
             match outcome {
-                Ok(message) => set_status.set(message),
-                Err(message) => set_status.set(message.to_string()),
+                // 成功は "SUCCESS:" で始まるため status へ。それ以外の Ok は
+                // upload_error_message の固定エラー文言なので failed へ振り分ける（文言は不変）。
+                Ok(message) if message.starts_with("SUCCESS:") => set_status.set(message),
+                Ok(message) => set_failed.set(message),
+                Err(message) => set_failed.set(message.to_string()),
             }
             // finally 相当: 成否にかかわらずボタンを再活性化する。
             set_loading.set(false);
@@ -3100,6 +3110,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
                     <div data-testid="upload-status" role="status" aria-live="polite" class="p-4 bg-white/5 border border-white/20 text-xs">
                         <span class="text-gray-500 mr-2">"[STATUS]"</span> {move || status.get()}
+                    </div>
+                </Show>
+                <Show when=move || !failed.get().is_empty() fallback=|| ()>
+                    <div data-testid="upload-failed" role="alert" class="p-4 bg-white/5 border border-red-500/40 text-xs">
+                        <span class="text-gray-500 mr-2">"[FAILED]"</span> {move || failed.get()}
                     </div>
                 </Show>
             </div>
@@ -3301,6 +3316,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (cid, set_cid) = signal(String::new());
     let (reason, set_reason) = signal(String::new());
     let (status, set_status) = signal(String::new());
+    // 送信失敗は dedicated role="alert" で告知する。成功・進捗は status のまま。
+    let (report_failed, set_report_failed) = signal(String::new());
     // 空入力で送信を止めた理由を role=alert で読み上げる（送信前に検証する）。
     let (report_validation_error, set_report_validation_error) = signal(String::new());
     let (reports, set_reports) = signal(Vec::<Report>::new());
@@ -3483,6 +3500,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         if !claim_submission(report_busy.get()) {
             return;
         }
+        // 新しい試行では前回の送信失敗を消す。
+        set_report_failed.set(String::new());
         let cid = cid.get();
         let reason = reason.get();
         // POST 前に空入力を止める。検証エラーは role=alert で読み上げる。
@@ -3501,6 +3520,8 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         set_report_validation_error.set(String::new());
         set_report_busy.set(true);
         let token = token_stored.get_value();
+        // 送信開始時にも失敗表示を消し、進捗は status へ出す。
+        set_report_failed.set(String::new());
         set_status.set("通報を送信中...".to_string());
         spawn_local(async move {
             // 成否いずれのアームでもスコープ離脱時の Drop で busy を解除する（panic=abort に非依存）。
@@ -3527,7 +3548,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     fetch_reports();
                 }
                 _ => {
-                    set_status.set("Report failed.".to_string());
+                    set_report_failed.set("Report failed.".to_string());
                 }
             }
         });
@@ -3651,6 +3672,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 <Show when=move || !report_validation_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="report-validation-error" class="text-xs text-red-500">
                         {move || report_validation_error.get()}
+                    </p>
+                </Show>
+                <Show when=move || !report_failed.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="report-failed" class="text-xs text-red-500">
+                        {move || report_failed.get()}
                     </p>
                 </Show>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>

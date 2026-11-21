@@ -9,35 +9,39 @@ tags:
   - triage
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
 
 ## 1. 結論
 
-- `cargo deny check advisories`（cargo-deny 0.20.2）は 11 件の勧告で
-  失敗する（初回は 14 件）。内訳は vulnerability 8 件、unmaintained 3 件。
-- 11 件は 2 系統に集約できる。
+- `cargo deny check advisories`（cargo-deny 0.20.2）は 12 件の勧告で
+  失敗する（初回は 14 件）。内訳は vulnerability 8 件、unmaintained 4 件。
+- 12 件は 3 系統に集約できる。
   - libsql 0.10.0 の TLS / gRPC スタック: 10 件
   - leptos 経由のビルド時依存 paste: 1 件
+  - chrono の unmaintained 情報勧告: 1 件
 - RustCrypto 0.13 系（RUSTSEC-2023-0071、RUSTSEC-2026-0387）は
   2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
   解消済み（§3.3、§8）。
-- `cargo deny check advisories` は既知の 11 件を理由付きで ignore して
+- `cargo deny check advisories` は既知の 12 件を理由付きで ignore して
   CI に導入済み。新しい勧告は CI を失敗させる（§5）。
-- 既定の開発構成（`DATABASE_URL` 未設定で `file:local.db`）では、libsql の
-  TLS / gRPC 経路は実行時に使われない。libsql 由来の 10 件は
-  「ビルドはされるが既定構成では到達しない」。
+- 本番は `production_database_url_error` のゲートでリモート DSN
+  （`libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を
+  固定文言で起動拒否し、`file:` 絶対パスのみ受理する（fail-closed）。
+  libsql 由来の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する
+  点にある（§4.1、§5）。
 - ECDSA は公開鍵検証のみ。RSA は `JWT_RSA_PRIVATE_KEY_PEM` 設定時に
   RS256 本番署名で秘密鍵演算を実行する。受容根拠は「演算なし」ではなく、
   rsa 0.10 の定数時間実装と 2048bit 以上の鍵長要求であり、
   Marvin 攻撃と timing 系勧告は解消済み（§3.2、§4.2）。
-- 本番公開前、およびリモート DB を採用する前に解消を必須とする。
+- 本番はリモート DSN をゲートで禁止する。リモート DB を採用する場合は、
+  ゲートの解除と合わせて 3.1 の 10 件の解消を必須とする。
 
 ## 2. 検出条件
 
@@ -129,13 +133,18 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ### 4.1 サーバー実行時（libsql）
 
-- `server/src/lib.rs` は `DATABASE_URL` 未設定時に `file:local.db` を使う
-  （256 行目付近）。`file:` または `://` を含まない値では
-  `Builder::new_local` を通り、TLS も gRPC も張らない。
-- `DATABASE_URL` に `libsql://` や `https://` を設定した場合だけ
-  `Builder::new_remote` を通り、rustls / h2 / bincode の経路が有効になる。
-- したがって 3.1 の 10 件は、既定の開発・CI 構成では到達しない。
-  リモート DB を本番採用する場合は到達する。
+- `server/src/lib.rs` の `is_remote_database_url` が DSN 判定の単一情報源で、
+  `starts_with("file:") || !contains("://")` の否定（`file:` 開始または
+  `://` 非含有ならローカル、それ以外がリモート）として実装する。
+- 本番相当（`ALLOW_MOCK_AUTH` 無効）では `production_database_url_error` が
+  `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等のリモート DSN を
+  固定文言で起動拒否し、`file:/var/lib/openillustration/local.db` 等の
+  `file:` 絶対パスのみ受理する（fail-closed、値・トークンはエコーしない）。
+  `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` は
+  同じヘルパで分岐する。
+- 本番で受理される値は `Builder::new_local` を通り、TLS も gRPC も張らない。
+  3.1 の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する点にある。
+  開発（`ALLOW_MOCK_AUTH=1`）では従来どおりリモート DSN も許容する。
 
 ### 4.2 暗号検証（RSA / ECDSA）
 
@@ -191,8 +200,9 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ### CI ゲートと ignore 運用
 
-- `deny.toml` の `[advisories].ignore` に既知の 11 件を理由付きで列挙する。
-  理由は「到達経路」と「受容の根拠」を1行で示す。
+- `deny.toml` の `[advisories].ignore` に既知の 12 件を理由付きで列挙する。
+  理由は「経路」と「受容の根拠（本番はリモート DSN をゲートで禁止する）」を
+  1 行で示す。
 - `unused-ignored-advisory = "deny"` により、依存から消えた勧告の
   ignore が残っていれば CI を失敗させる。
 - 新しい勧告は ignore しない限り CI を失敗させる。ignore の追加は
@@ -226,5 +236,7 @@ cargo deny check advisories
   CI に導入。paste は上流修正がないため受容した。
 - 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
   受容 11 件に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
-- 2026-11-17: 新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を受容。
-  脆弱性ではなく情報区分で修正版なし。受容は 12 件へ増加。jiff/time 移行を計画。
+- 2026-11-17: 11→12 件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
+  受容。脆弱性ではなく情報区分で修正版なし。内訳は脆弱性 8 件 /
+  unmaintained 4 件（libsql 系 10 件 + paste 1 件 + chrono 1 件）。
+  jiff/time 移行を計画。

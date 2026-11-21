@@ -17,6 +17,15 @@ MAILTO=__SET_ME__
 # systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
 # コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
-# 利用環境のサーバー停止メンテナンス窓に合わせて起動時刻を変更すること。
-# 停止を前提としない方式を採る場合は、ロック検出の挙動を事前に確認する。
+# 停止→backup→起動のオーケストレーションが必須。この cron ジョブは openillustration
+# ユーザーで backup-cron-wrapper.sh のみを実行し、systemctl の stop/start は行わない
+# （sudoers / polkit で権限付与するリスクを避けるため）。
+# オーケストレーションは root 側スケジューラで行う。推奨は systemd timer 版:
+#   deploy/openillustration-backup.timer + deploy/openillustration-backup-window.service
+# （root の systemd が停止→backup→起動を実行し、バックアップ失敗時も起動を保証）。
+# cron で構成する場合は root の crontab でラッパーの前後に stop/start を置く:
+#   17 3 * * * /usr/bin/systemctl stop openillustration.service && /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; /usr/bin/systemctl start openillustration.service; exit $rc
+#   （BACKUP_DIR 等は backup.env 側へ集約して渡す。start は backup 成否にかかわらず実行する。）
+# MAILTO は wrapper の失敗通知先。アプリ再起動失敗は root 側スケジューラの
+# journald / unit 結果をアラート対象にして検知する。
 17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh

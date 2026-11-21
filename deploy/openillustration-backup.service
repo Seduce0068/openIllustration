@@ -1,6 +1,9 @@
 [Unit]
 Description=OpenIllustration database backup with rotation
 Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+# 定期実行は openillustration-backup.timer から
+# openillustration-backup-window.service（停止→backup→起動）へ切り替えた。
+# 本 unit はオーケストレーション無しの手動・単体実行用として残す。
 
 [Service]
 Type=oneshot

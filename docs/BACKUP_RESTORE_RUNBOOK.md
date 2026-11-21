@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T06:30:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 ---
 
 ## 目的
@@ -30,6 +30,8 @@ generated:
   既存ファイルは上書きしない（安全側）。
 - バックアップ取得時はサーバーが停止していること。生存 `instance.lock` を検出した
   `backup_db` は `VACUUM INTO` を実行せず拒否する（下記「サーバー稼働中のロック拒否」を参照）。
+  定期実行では `deploy/openillustration-backup-window.service` が停止→バックアップ→起動を
+  自動オーケストレーションするため、手動停止は不要（下記「自動オーケストレーション」を参照）。
 
 ## バックアップ取得
 
@@ -46,8 +48,9 @@ cargo run -p server --bin backup_db -- \
 （`verify_backup` はさらに `PRAGMA integrity_check` も実施する二段構え）。
 
 定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
-`verify_audit_log` 検証→古い世代の削除を一行で行う（サーバー停止中に実行する。
-稼働中は下記のとおり `backup_db` がロックを検出して拒否する）:
+`verify_audit_log` 検証→古い世代の削除を一行で行う。取得は停止済みサーバーを前提とし、
+systemd 版は下記「自動オーケストレーション」が停止と起動を担う（手動で直接呼ぶ場合は
+サーバーを停止してから実行する。稼働中は `backup_db` がロックを検出して拒否する）:
 
 ```bash
 # Kubuntu / cron 等から実行（BIN_DIR はビルド済みバイナリのディレクトリ）
@@ -80,9 +83,12 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
 `BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
 無ければ `cargo run` にフォールバックする（開発用）。設定例:
 
-- systemd: `deploy/openillustration-backup.service` と
-  `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`）
-- cron: `deploy/openillustration-backup.cron`（`/etc/cron.d/` に配置）
+- systemd（推奨）: `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`、
+  `RandomizedDelaySec=300`）→ `deploy/openillustration-backup-window.service`
+  （停止→`backup-rotate.sh`→起動）。`deploy/openillustration-backup.service` は
+  オーケストレーション無しの単体実行用として残す。
+- cron: `deploy/openillustration-backup.cron`（`/etc/cron.d/` に配置）。
+  このジョブはラッパーのみを実行し、停止/起動は行わない（root 側スケジューラで行う）。
 
 導入前に `/etc/openillustration/backup.env`（所有者 `openillustration`、権限 600）へ
 `BACKUP_GPG_RECIPIENT=<GPG 公開鍵のメール/ID>` を設定する。未設定なら
@@ -164,10 +170,52 @@ refusing restore: a live server instance holds the <side> instance lock (<lock p
 
 `<side>` は `backup` または `target`。ロックの読み取り不能・判定不能も拒否する。
 
-対処: サーバーを停止して（SIGTERM、`/ready` が 503 になることを確認して）から
-`backup_db` または `backup-rotate.sh` を再実行する。`scripts/backup-rotate.sh` は
-サーバーを停止しないため、稼働中に cron / systemd から呼ぶと拒否されて失敗する。
-定期実行はメンテナンス窓などサーバー停止中にスケジュールする。
+対処: 定期実行では `deploy/openillustration-backup.timer` と
+`deploy/openillustration-backup-window.service` による自動オーケストレーションを使う
+（下記「自動オーケストレーション」を参照）。手動で再実行する場合はサーバーを停止して
+（SIGTERM、`/ready` が 503 になることを確認して）から `backup_db` または
+`backup-rotate.sh` を実行し、完了後にサーバーを起動して `/health` / `/ready` が 200
+になることを確認する。`scripts/backup-rotate.sh` は単体ではサーバーを停止しないため、
+オーケストレーション無しで稼働中に呼ぶと拒否されて失敗する。
+
+## 自動オーケストレーション（停止→バックアップ→起動）
+
+常時稼働環境で 03:17 にバックアップを直接実行すると生存 `instance.lock` により必ず失敗する。
+systemd 版ではタイマーが窓 unit を起動し、次の順で実行する。
+
+1. `deploy/openillustration-backup.timer` が `OnCalendar=*-*-* 03:17:00`
+   （`Persistent=true`、`RandomizedDelaySec=300`）で
+   `openillustration-backup-window.service` を起動する。
+1. `ExecStartPre=+/usr/bin/systemctl stop ${APP_UNIT}` でアプリ unit を停止する。
+1. `ExecStart=/opt/openIllustration/scripts/backup-rotate.sh` で取得・検証・ローテーションを行う。
+1. `ExecStopPost=+/usr/bin/systemctl start ${APP_UNIT}` でアプリ unit を起動する。
+   `Type=oneshot` の `ExecStopPost` は `ExecStartPre` / `ExecStart` の成否にかかわらず
+   実行されるため、バックアップ失敗時も起動が保証される。
+
+`APP_UNIT` は設定可能値で、既定は `openillustration.service`。`deploy/` にはアプリ unit を
+置いていないため、導入環境の実 unit 名へ合わせる（`systemctl edit` の drop-in で
+`[Service] Environment=APP_UNIT=<実 unit 名>` を上書き）。`+` 接頭辞は systemd が
+`User=` / `Group=` を無視して当該コマンドを root で実行するものであり、`sudoers` / `polkit`
+での権限付与は不要。`backup-rotate.sh` 自体は `User=openillustration` で実行され、
+成果物の所有者は従来どおり維持される。
+
+```bash
+echo "== 窓 unit とタイマーの状態確認 =="
+systemctl status openillustration.service
+systemctl status openillustration-backup-window.service
+systemctl list-timers openillustration-backup.timer
+```
+
+- バックアップ窓の間、アプリが停止していることを `/ready` が 503 を返すことで確認する。
+- 再起動後は `/health` 200 と `/ready` 200 を確認する。これが窓 unit 完了の条件。
+- バックアップ失敗は `ALERT_CMD`（設定時）が通知する。さらに再起動（`ExecStopPost`）が
+  失敗した場合は窓 unit の結果が失敗となるため、`OnFailure=` または journald の unit 結果
+  監視をアラート対象に含め、アプリが停止したまま放置されないようにする。
+
+cron 版は `backup-cron-wrapper.sh` のみを実行し、`systemctl` の stop/start は行わない。
+オーケストレーションが必要なら root 側スケジューラ（上記 systemd timer と窓 unit、
+または root crontab でラッパーの前後に stop/start を置く構成）を使う。
+`openillustration` ユーザーへ `systemctl` 実行権限を与える方式は採らない。
 
 ## バックアップ検証
 

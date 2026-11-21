@@ -32,9 +32,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const reportsNetworkErrorText = 'Network error loading reports.';
 
   // submit_report の失敗時の固定文言。
-  // 成功文言は submit_report の成功アーム。失敗・成功どちらも status シグナルへ入り、
-  // <p role="status" class="text-xs text-gray-400">（通報 status ライブリージョン）で描画される。
-  // レビュー指摘の「role="alert"」は実装と矛盾するため、テストは実装の role="status" を検証する。
+  // 成功・進捗は status シグナルへ入り <p role="status" class="text-xs text-gray-400">
+  // （通報 status ライブリージョン）で描画される。失敗は dedicated な
+  // <p role="alert" data-testid="report-failed"> で描画し、入力検証の
+  // report-validation-error とは data-testid で区別する。
   const reportFailedText = 'Report failed.';
   const reportSuccessText = 'Report accepted. Content marked Reported.';
 
@@ -671,10 +672,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     });
     await openModeration(page);
 
-    // status は初期状態では空なので要素自体が存在しない（通報 status の Show 分岐）。
-    // vote-notice は data-testid を持つため :not([data-testid]) で通報用 status を一意に特定する。
-    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
-    await expect(reportStatus).toHaveCount(0);
+    // 送信失敗は dedicated な role="alert"（data-testid="report-failed"）で描画される。
+    // 入力検証の report-validation-error とは別要素であり、初期状態では存在しない。
+    const reportFailed = page.getByTestId('report-failed');
+    await expect(reportFailed).toHaveCount(0);
 
     // 空 CID / 空 reason は validate_report_input のクライアント側ガードで止まり、
     // 専用の role="alert"（data-testid="report-validation-error"）を出す。POST は0本。
@@ -687,7 +688,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(validationError).toHaveText('対象 CID を入力してください。');
     await expect(validationError).toHaveAttribute('role', 'alert');
     expect(reportRequests).toEqual([]);
-    await expect(reportStatus).toHaveCount(0);
+    await expect(reportFailed).toHaveCount(0);
 
     await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
     await page.locator('textarea[placeholder="REASON"]').fill('');
@@ -695,19 +696,19 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(validationError).toHaveText('通報理由を入力してください。');
     await expect(validationError).toHaveAttribute('role', 'alert');
     expect(reportRequests).toEqual([]);
-    await expect(reportStatus).toHaveCount(0);
+    await expect(reportFailed).toHaveCount(0);
 
     // ここから通常の送信フェーズ。検証エラーは消え、POST は1本だけになる。
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
     await expect(validationError).toHaveCount(0);
-    await expect(reportStatus).toHaveCount(1);
-    // 実装は role="alert" ではなく role="status"（通報 status ライブリージョン）。
-    await expect(reportStatus).toHaveAttribute('role', 'status');
-    await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
+    await expect(reportFailed).toHaveCount(1);
+    // 失敗は dedicated role="alert"、成功・進捗は status のまま。
+    await expect(reportFailed).toHaveAttribute('role', 'alert');
+    await expect(reportFailed).toHaveText(reportFailedText, { timeout: 10000 });
     // 成功文言とサーバー本文は出ない。
-    await expect(reportStatus).not.toContainText(reportSuccessText);
+    await expect(reportFailed).not.toContainText(reportSuccessText);
     await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
     expect(reportRequests).toEqual([
       { method: 'POST', path: '/mod/report', authorization: 'Bearer mock_jwt_token' },
@@ -723,19 +724,20 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     });
     await openModeration(page);
 
-    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
-    await expect(reportStatus).toHaveCount(0);
+    const reportFailed = page.getByTestId('report-failed');
+    await expect(reportFailed).toHaveCount(0);
 
     await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
     // abort でも HTTP 500 と同じ固定文言（submit_report の else アーム）。
-    await expect(reportStatus).toHaveText(reportFailedText, { timeout: 10000 });
-    await expect(reportStatus).not.toContainText(reportSuccessText);
+    await expect(reportFailed).toHaveAttribute('role', 'alert');
+    await expect(reportFailed).toHaveText(reportFailedText, { timeout: 10000 });
+    await expect(reportFailed).not.toContainText(reportSuccessText);
     // 生のネットワークエラー文字列は画面へ出さない。
     for (const raw of ['Failed to fetch', 'net::ERR_FAILED', 'AbortError']) {
-      await expect(reportStatus).not.toContainText(raw);
+      await expect(reportFailed).not.toContainText(raw);
     }
   });
 

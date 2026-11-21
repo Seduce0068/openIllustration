@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -353,8 +353,10 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - JPYC のコントラクトアドレスと確認数は、実装前に JPYC の一次ソース
   （公式リポジトリ、公式サイト、Explorer）で再確認する。
 - 旧 JPYC Prepaid の `0x431D...` は現行コントラクトではない。
-- `cargo deny check advisories` は既知の 11 件（`libsql` 由来 10 件と
-  `paste` 1 件）を理由付きで ignore して CI に導入済み。新しい勧告は
-  CI を失敗させる。詳細は [脆弱性トリアージ](SECURITY_ADVISORIES.md)。
+- `cargo deny check advisories` は既知の 12 件（脆弱性 8 件 / unmaintained 4 件 =
+  `libsql` 由来 10 件、`paste` 1 件、`chrono` 1 件）を理由付きで ignore して CI に
+  導入済み。本番は `production_database_url_error` のゲートでリモート DSN を
+  禁止する（fail-closed）。新しい勧告は CI を失敗させる。
+  詳細は [脆弱性トリアージ](SECURITY_ADVISORIES.md)。
 - Termux 固有の `rustls-platform-verifier` 失敗は、テストの
   ローカルモック化により解消済み。

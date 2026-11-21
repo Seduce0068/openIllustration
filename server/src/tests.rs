@@ -2274,7 +2274,7 @@ fn test_production_config_fail_closed() {
             false,
             common::env::EnvValue::Utf8("file:local.db".to_string())
         ),
-        Some("DATABASE_URL is the development default (relative local file path)"),
+        Some("DATABASE_URL must be an absolute local file path in production"),
         "the old relative default must be rejected in production"
     );
     assert_eq!(
@@ -2282,9 +2282,36 @@ fn test_production_config_fail_closed() {
             false,
             common::env::EnvValue::Utf8("  file:local.db  ".to_string())
         ),
-        Some("DATABASE_URL is the development default (relative local file path)"),
-        "padded old default must be rejected too"
+        Some("DATABASE_URL must be an absolute local file path in production"),
+        "the old relative default with spaces must be rejected in production"
     );
+    assert_eq!(
+        crate::production_database_url_error(
+            false,
+            common::env::EnvValue::Utf8("file:./data.db".to_string())
+        ),
+        Some("DATABASE_URL must be an absolute local file path in production"),
+        "any relative file path must be rejected in production"
+    );
+    // R2-DENY-IGNORE: 本番相当ではリモート DSN をゲートで拒否する（fail-closed）。
+    // 値やトークンはエコーせず、固定文言のみを返す。
+    for remote in [
+        "libsql://db.example.invalid:443/main?token=dummy-token",
+        "https://db.example.invalid/main",
+        "http://db.example.invalid/main",
+        "wss://db.example.invalid/main",
+        "foo://db.example.invalid/main",
+        "  libsql://db.example.invalid:443/main  ",
+    ] {
+        assert_eq!(
+            crate::production_database_url_error(
+                false,
+                common::env::EnvValue::Utf8(remote.to_string())
+            ),
+            Some("DATABASE_URL remote DSN is not permitted in production"),
+            "remote DSN must be rejected in production: {remote:?}"
+        );
+    }
     // 絶対パスの file: URL は本番でも受理。前後空白付きも trim 後の判定で受理し、
     // run() 側も同じ trim を適用して接続 URL へ空白が残らないことを検証する。
     for raw in [

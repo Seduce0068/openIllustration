@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T08:15:00+09:00"
+  at: "2026-11-22T08:45:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -162,9 +162,12 @@ generated:
   のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。
   ロックファイルの読取失敗や内容不正（所有者 PID を識別できない場合を含む）は stale とみなさず起動を拒否する（fail-closed）。リモート DB ではこの排他が使えないため警告のみとし、
   単一ライター運用を契約とする。バックアップは `backup_db`（`VACUUM INTO`・上書き拒否）で取得し、`verify_backup` と `verify_audit_log` で検証する。手順は
-  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。自動化・オフサイト保存・実運用での復旧訓練は本番前に整備する。
-- 失効判定の DB 正本化: リモート DB では `instance.lock` による排他が使えず単一ライター契約を前提とするため、
-  `sid` / sub の失効は DB を正本として認証リクエストごとに照会し、他インスタンスの失効を即時に反映する。
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+  自動オーケストレーションの設定例（systemd timer ＋ 停止→バックアップ→起動 unit）は `deploy/` に提供済み。
+  実環境への適用・オフサイト保存・実運用での復旧訓練は本番前に整備する。
+- 失効判定の DB 正本化: 本番はリモート DSN を拒否し `file:` 絶対パス＋`instance.lock` の単一ライター契約とするが、
+  手動起動やロック回収の競合で複数プロセスが存在し得るため、`sid` / sub の失効は DB を正本として
+  認証リクエストごとに照会し、他プロセスの失効を即時に反映する。
   起動時ロードのメモリは positive-only キャッシュ（失効済みのみ保持、miss 時に DB 照会、否定結果は非キャッシュ）としてのみ残す。
   書き込み経路（logout / BAN / backchannel）は DB コミットを先に確定し、メモリ更新はその後に置く。
 - 起動時の外部キー検査（`PRAGMA foreign_key_check`）で孤立行を検出した場合、本番相当
@@ -178,10 +181,15 @@ generated:
   （[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)、[ADR-0010](adr/ADR-0010-foreign-key-startup-fail-closed.md)）。
 - バックアップ運用では、サーバー稼働中は `backup_db` が拒否される。ソース DB（ローカルの場合）と
   出力先 DB の `<db>.instance.lock` を検査し、生存サーバーが保持していれば `refusing backup`
-  で失敗する（判定不能時も拒否、stale ロックのみ許可、fail-closed）。cron / systemd の定期実行は
-  サーバー停止中（メンテナンス窓）に行う。`scripts/backup-rotate.sh` はサーバーを停止せず既定どおり
-  `backup_db` を呼ぶため、稼働中に実行すると拒否されて失敗する（取得→検証→ローテーションの既定動作）。
-  ロック拒否時の対処は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+  で失敗する（判定不能時も拒否、stale ロックのみ許可、fail-closed）。定期実行は
+  `deploy/openillustration-backup.timer` と `deploy/openillustration-backup-window.service`
+  による停止→バックアップ→起動の自動オーケストレーションで運用する。`Type=oneshot` の
+  `ExecStopPost` は成否にかかわらず実行されるため、バックアップ失敗時もアプリ unit が起動する。
+  cron 版はラッパーのみを実行し、停止/起動は root 側スケジューラが担う（`openillustration`
+  ユーザーへ `systemctl` 権限を与えない）。窓の前後で `/ready` 503 → `/health` / `/ready` 200
+  を確認し、再起動失敗は unit 結果をアラート対象にする。`scripts/backup-rotate.sh` 単体は
+  サーバーを停止しないため、オーケストレーション無しの稼働中実行は拒否されて失敗する。
+  詳細は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
 - `payment_orders.derivation_index` には migration 003 の部分 UNIQUE インデックス
   （`WHERE derivation_index IS NOT NULL`）が適用済みである。固定受取アドレスの注文
   （`derivation_index IS NULL`）は制約対象外とし、xprv 設定時は注文ごとの受取先
@@ -199,17 +207,24 @@ generated:
   ログのみに保ち、クライアントへは固定文言 `Internal server error` を返す（開発時は
   `EXPOSE_INTERNAL_ERRORS=1` で詳細を公開）。観測性は `LOG_FORMAT=json` と `/metrics` で提供し、
   アラート通知先は導入環境で選定する。
-- クライアント側のエラー表示方針: サイレント失敗を禁止し、HTTP 通信の失敗は必ず `role="alert"` で
-  利用者へ告知する。`Login` は `data-testid="login-error"`、エクスポートは `data-testid="export-error"`、
-  ContentViewer の監査は `data-testid="audit-error"`、モデレーション集計は
+- クライアント側のエラー表示方針: サイレント失敗を禁止し、成功・進捗は `role="status"`、
+  失敗は専用の `role="alert"` で利用者へ告知する。失敗用の testid は `Login` の
+  `data-testid="login-error"`、エクスポートの `data-testid="export-error"`、
+  ContentViewer の監査の `data-testid="audit-error"`、モデレーション集計の
   `data-testid="moderation-stats-error"` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
-  アップロードは `data-testid="upload-status"` に成否を表示し、準備失敗は
+  アップロードは成功・進捗を `data-testid="upload-status"`（`role="status"`）、失敗を
+  `data-testid="upload-failed"`（`role="alert"`）へ表示し、準備失敗は
   `アップロードの準備に失敗しました。`、応答読取失敗は `アップロード結果の読み取りに失敗しました。`
   を使う。通信／HTTP 応答は `upload_error_message` の4分岐で固定文言を選ぶ:
   401=再ログイン（`再ログインが必要です。`）、413=サイズ超過（`ERROR: File exceeds the 10 MiB limit.`）、
   HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータス取得不可）=
-  `Network error uploading content.`。サーバー本文・生エラーは表示しない。いずれの結果でも
-  `loading` を解除してボタンを再活性化する。
+  `Network error uploading content.`。Ok で返る `upload_error_message` は `SUCCESS:` 開始なら
+  `upload-status`、それ以外は `upload-failed` へ振り分ける（文言は変更しない）。
+  通報は成功・進捗を `role="status"`、送信失敗を `data-testid="report-failed"`
+  （`role="alert"`、`Report failed.`）へ表示する。入力検証エラーは
+  `data-testid="report-validation-error"` と区別する。サーバー本文・生エラーは表示しない。
+  いずれの結果でも `loading` を解除してボタンを再活性化する。既存 E2E 内へ検証を追加し、
+  test() 定義数69件は変更しない。
   JXL デコード失敗は `content-verification-badge` を `× DECODE FAILED` とし、
   `data-testid="jxl-decode-error"` に固定文言を表示する（デコーダのエラー値は出さない）。
   Illustration ではデコード成功時のみ `● VERIFIED` を表示し、サーバー側の完全デコード検証は未実装である。
@@ -297,7 +312,7 @@ generated:
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
-| `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db` を起動拒否（fail-closed、値はエコーしない）。絶対パス（例: `file:/var/lib/openillustration/local.db`）を指定する。 |
+| `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
@@ -340,6 +355,7 @@ generated:
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
 | `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら `doctor` の `audit_expect_root` カテゴリで固定文言の警告（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。 |
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | cron 版は `backup-cron-wrapper.sh` がこのパスを読む。systemd 版はこの変数を使わず、`EnvironmentFile=` の固定パス（同パス）から読む。権限600・所有者固定、秘密情報は配布物へ含めない。 |
+| `APP_UNIT` | 任意（systemd 窓 unit） | `openillustration.service` | `deploy/openillustration-backup-window.service` が停止/起動するアプリ unit 名。`deploy/` にはアプリ unit を置いていないため、導入環境の実 unit 名へ drop-in 等で上書きする。バックアップ失敗時も `ExecStopPost` が起動を保証する。 |
 | `BACKUP_DIR` | 任意 | リポジトリルートの `backups/` | バックアップ出力先。deploy 設定例では `/var/backups/openillustration`。事前に存在させ、権限を適切に設定する。 |
 | `BIN_DIR` | 任意 | リポジトリルートの `target/debug` | `backup_db` / `verify_backup` / `verify_audit_log` のあるディレクトリ。無ければ `cargo run` へフォールバック（開発用）。本番はビルド済みパスを指定。 |
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
@@ -348,9 +364,13 @@ generated:
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし、CI では `::warning::E2E browser fallback: firefox=0/1 webkit=0/1; running SELECTED_PROJECTS` の annotation と GitHub Actions の step summary（firefox / webkit の可否と選択プロジェクト。フォールバック時も選択プロジェクトを記録）を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
 - 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセス（サーバーおよび DB 接続3 CLI）
-  で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db` を起動拒否し
-  （fail-closed、値はエコーしない）、`file:/var/lib/openillustration/local.db` 等の絶対パスを指定する。
-  開発（`ALLOW_MOCK_AUTH=1`）では従来どおり未設定時に `file:local.db` を使う。
+  で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db`・
+  リモート DSN を起動拒否し（fail-closed、値・トークンはエコーしない）、
+  `file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。
+  リモート DSN は `is_remote_database_url`（`file:` で始まらず `://` を含む値）で判定し、
+  `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` が同じヘルパを共有する。
+  開発（`ALLOW_MOCK_AUTH=1`）では従来どおり未設定時に `file:local.db` を使い、
+  リモート DSN も許容する。
   DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙既定値を撤廃し、
   `--database-url` または `DATABASE_URL` の明示設定がなければ起動を拒否する
   （空・空白のみも未設定として扱い、値はエコーしない / fail-closed）。
