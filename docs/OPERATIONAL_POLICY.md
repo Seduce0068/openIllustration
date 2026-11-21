@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T03:21:48+09:00"
+  at: "2026-11-22T03:37:12+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -258,7 +258,7 @@ generated:
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
-| `DATABASE_URL` | DB 接続3 CLI では必須（サーバーは任意） | なし（CLI）/ `file:local.db`（サーバー） | libSQL 接続先。DB 接続3 CLI は未設定時に起動拒否（下記注記を参照）。 |
+| `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db` を起動拒否（fail-closed、値はエコーしない）。絶対パス（例: `file:/var/lib/openillustration/local.db`）を指定する。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
@@ -308,10 +308,15 @@ generated:
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし警告を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
-- サーバーは `DATABASE_URL` 未設定時に `file:local.db` を使うが、DB 接続3 CLI
-  （`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙既定値を撤廃し、
+- 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセス（サーバーおよび DB 接続3 CLI）
+  で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db` を起動拒否し
+  （fail-closed、値はエコーしない）、`file:/var/lib/openillustration/local.db` 等の絶対パスを指定する。
+  開発（`ALLOW_MOCK_AUTH=1`）では従来どおり未設定時に `file:local.db` を使う。
+  DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙既定値を撤廃し、
   `--database-url` または `DATABASE_URL` の明示設定がなければ起動を拒否する
   （空・空白のみも未設定として扱い、値はエコーしない / fail-closed）。
+  `doctor` は本番相当で同じ共通判定を `production` カテゴリ内で警告する（カテゴリ数は据え置き、
+  既定は警告のみで `--strict` のときだけ失敗）。
   deploy 設定例（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）は
   `file:/var/lib/openillustration/local.db` を明示済みで、設定値の変更は不要。
   手動実行でも接続先を明示し、誤った DB を検証して成功と誤信するのを防ぐ。

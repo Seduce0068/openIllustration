@@ -46,7 +46,7 @@ status: current
   — 根拠 `server/src/lib.rs` bool_env_at_startup / `server/src/oidc.rs` validate_oidc_config_with / review R2-ER / 重大度 high。
   `std::env::var` の Err を全て「未設定」として飲み込み、NotUnicode が起動拒否をすり抜ける。
   `var_os` で None と非 UTF-8 を区別し、doctor/per-request 読込も同じ lookup 契約へ統一する（値は非エコー）。
-- [ ] **DATABASE_URL のサーバー既定をfail-closed化しdoctor診断を追加**
+- [x] **DATABASE_URL のサーバー既定をfail-closed化しdoctor診断を追加**
   — 根拠 `server/src/lib.rs` run() / `server/src/bin/doctor.rs` production / review R1-CF / 重大度 high。
   CLI3本は未設定起動拒否なのにサーバーは `file:local.db` へ暗黙フォールバックし、doctor も診断しない。
   本番相当では未設定起動拒否、または既定値使用を production カテゴリへ警告追加。
@@ -614,6 +614,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding: 本番相当では DATABASE_URL を全プロセス必須・既定なしへ。
+  サーバーは read_env 由来で未設定/非UTF-8/空/旧既定の相対 file:local.db を起動拒否、
+  doctor production が同一判定警告（check23不変）。受理値と接続URLの trim を統一。
+  開発(mock有効)は従来どおり。全ゲート green。
 
 - 2026-11-22 coding: common::env に EnvValue/BoolEnvState 分類器を新設し、起動時・
   per-request・OIDC validation・CLI の全経路で非UTF-8を「未設定」ではなく不正値として

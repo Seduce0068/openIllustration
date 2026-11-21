@@ -5,19 +5,22 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-21T02:46:23+09:00"
+  at: "2026-11-22T03:37:12+09:00"
 ---
 
 ## 目的
 
-本番 DB（`file:local.db` 等）の矛盾のないスナップショットを取得し、
+本番 DB（`file:/var/lib/openillustration/local.db` 等の絶対パス）の矛盾のないスナップショットを取得し、
 復元可能なことを確認する手順を標準化する。現行運用は単一ライターを前提とし、
 複数インスタンスからの同時書き込みは行わない。
 
 ## 前提
 
 - サーバーバイナリと同じリポジトリでビルドされた `backup_db` / `verify_backup` / `verify_audit_log` を使う。
-- `DATABASE_URL` は必須。ローカル DB のパス（`file:` プレフィックス）を指し、
+- 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセスで必須。ローカル DB の
+  絶対パス（例: `file:/var/lib/openillustration/local.db`）を指す。サーバーは未設定・非 UTF-8・
+  空白のみ・旧既定の相対 `file:local.db` を起動拒否し（fail-closed、値はエコーしない）、
+  開発（`ALLOW_MOCK_AUTH=1`）のみ `file:local.db` を許容する。
   `backup_db` / `verify_audit_log` は `--database-url` または環境変数での明示設定がなければ
   起動を拒否する（暗黙の `file:local.db` 既定は撤廃済み、値はエコーしない）。
 - リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ渡す。`verify_backup` は
