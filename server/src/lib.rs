@@ -971,6 +971,37 @@ pub fn production_config_errors(
     errors
 }
 
+/// 本番相当（モック認証無効）で `DATABASE_URL` が安全に設定されているかを検証する純粋関数。
+///
+/// 開発（`allow_mock_auth = true`）では従来どおり `file:local.db` の暗黙既定を許容するため常に `None`。
+/// 本番相当では未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db` を固定文言で拒否する
+/// （fail-closed）。生バイトも設定値も一切エコーしない。
+/// 絶対パスの `file:/var/lib/openillustration/local.db` 等は受理する。
+pub fn production_database_url_error(
+    allow_mock_auth: bool,
+    value: common::env::EnvValue,
+) -> Option<&'static str> {
+    if allow_mock_auth {
+        return None;
+    }
+    match value {
+        common::env::EnvValue::Missing => {
+            Some("DATABASE_URL is not configured (required in production)")
+        }
+        common::env::EnvValue::NonUtf8 => Some("DATABASE_URL is not valid UTF-8"),
+        common::env::EnvValue::Utf8(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Some("DATABASE_URL is empty")
+            } else if trimmed == "file:local.db" {
+                Some("DATABASE_URL is the development default (relative local file path)")
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 本番・テスト共通の HTTP クライアントを組み立てる。
 ///
 /// `Policy::none()` で全リダイレクトを拒否する。IPFS ゲートウェイ（および
@@ -1064,11 +1095,19 @@ pub async fn run() -> anyhow::Result<()> {
         common::env::EnvValue::NonUtf8 => Some(String::new()),
         common::env::EnvValue::Missing => None,
     };
-    let config_errors = production_config_errors(
+    // DATABASE_URL は read_env で一度だけ読み、未設定 / 非 UTF-8 を「未設定」と混同しない。
+    // 本番相当では production_database_url_error が固定文言で起動拒否し、開発（mock 有効）では
+    // 従来どおり file:local.db へフォールバックする（値はエコーしない）。
+    let database_url_env = common::env::read_env("DATABASE_URL");
+    let mut config_errors = production_config_errors(
         allow_mock_auth,
         oidc_validation.required_present,
         pinata_jwt.as_deref(),
     );
+    config_errors.extend(production_database_url_error(
+        allow_mock_auth,
+        database_url_env.clone(),
+    ));
     if !config_errors.is_empty() {
         return Err(anyhow::anyhow!(
             "Production configuration is incomplete: {}",
@@ -1076,7 +1115,15 @@ pub async fn run() -> anyhow::Result<()> {
         ));
     }
 
-    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "file:local.db".to_string());
+    let db_url = match &database_url_env {
+        // 検証側（production_database_url_error）と同じ trim を適用し、
+        // 受理した値と実際に接続へ使う値を一致させる（前後空白でスキーム解釈が壊れないように）。
+        common::env::EnvValue::Utf8(value) => value.trim().to_string(),
+        // 開発（mock 有効）のみ従来の暗黙既定を使う。本番相当は上の検査で既に拒否済み。
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
+            "file:local.db".to_string()
+        }
+    };
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
 
     let local_path = if db_url.starts_with("file:") || !db_url.contains("://") {

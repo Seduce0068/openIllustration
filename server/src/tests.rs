@@ -2247,6 +2247,66 @@ fn test_production_config_fail_closed() {
 
     // 実値は従来どおり警告なし（前後の空白があっても非空なら許可）。
     assert!(crate::production_config_errors(false, true, Some("  real-jwt  ")).is_empty());
+
+    // R2-DBURL-SERVER: 本番相当では DATABASE_URL が必須（既定なし、値はエコーしない）。
+    assert_eq!(
+        crate::production_database_url_error(false, common::env::EnvValue::Missing),
+        Some("DATABASE_URL is not configured (required in production)")
+    );
+    assert_eq!(
+        crate::production_database_url_error(false, common::env::EnvValue::NonUtf8),
+        Some("DATABASE_URL is not valid UTF-8")
+    );
+    for blank in [" ", "\t", "\n", " \t\n "] {
+        assert_eq!(
+            crate::production_database_url_error(
+                false,
+                common::env::EnvValue::Utf8(blank.to_string())
+            ),
+            Some("DATABASE_URL is empty"),
+            "blank={blank:?} must be rejected without echoing the value"
+        );
+    }
+    assert_eq!(
+        crate::production_database_url_error(
+            false,
+            common::env::EnvValue::Utf8("file:local.db".to_string())
+        ),
+        Some("DATABASE_URL is the development default (relative local file path)"),
+        "the old relative default must be rejected in production"
+    );
+    assert_eq!(
+        crate::production_database_url_error(
+            false,
+            common::env::EnvValue::Utf8("  file:local.db  ".to_string())
+        ),
+        Some("DATABASE_URL is the development default (relative local file path)"),
+        "padded old default must be rejected too"
+    );
+    // 絶対パスの file: URL は本番でも受理。前後空白付きも trim 後の判定で受理し、
+    // run() 側も同じ trim を適用して接続 URL へ空白が残らないことを検証する。
+    for raw in [
+        "file:/var/lib/openillustration/local.db",
+        "  file:/var/lib/openillustration/local.db  ",
+    ] {
+        assert_eq!(
+            crate::production_database_url_error(
+                false,
+                common::env::EnvValue::Utf8(raw.to_string())
+            ),
+            None,
+            "absolute path must be accepted: {raw:?}"
+        );
+        assert_eq!(raw.trim(), "file:/var/lib/openillustration/local.db");
+    }
+    // 開発（mock 有効）では従来どおり全て受理（未設定・旧既定も許容）。
+    for value in [
+        common::env::EnvValue::Missing,
+        common::env::EnvValue::NonUtf8,
+        common::env::EnvValue::Utf8("file:local.db".to_string()),
+    ] {
+        assert_eq!(crate::production_database_url_error(true, value), None);
+    }
 }
 
 /// T-01: IPFS ゲートウェイ設定の既定値と無効要素の除外。

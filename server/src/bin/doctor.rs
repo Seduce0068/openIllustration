@@ -171,6 +171,15 @@ where
     // `[[ -n "$var" ]]` と一致させる。ALERT_CMD は実行ファイルのパスなので生値のまま
     // `-x "$alert_cmd"` 相当を調べ、値は出力しない。
     if !allow_mock_auth {
+        // DATABASE_URL の必須化もサーバー起動判定と同じ共通判定で診断する。
+        // results.push は増やさず production カテゴリ内へマージする（check23 維持）。
+        // 非 UTF-8 は classify が NonUtf8 へ変換し、固定文言のみを警告する（値は非エコー）。
+        if let Some(message) = server::production_database_url_error(
+            allow_mock_auth,
+            common::env::classify(lookup("DATABASE_URL")),
+        ) {
+            production.push(message.to_string());
+        }
         let recipient_set = lookup("BACKUP_GPG_RECIPIENT")
             .ok()
             .map(|value| !value.is_empty())
@@ -1297,6 +1306,8 @@ mod tests {
                 // OIDC 未設定だけに孤立させる（新規バックアップ警告の混入を防ぐ）。
                 pairs.push(("PINATA_JWT", "real-production-jwt"));
                 pairs.push(("BACKUP_GPG_RECIPIENT", "backup@example.jp"));
+                // DB 必須化の警告を混入させないため絶対パスを明示（値はエコーしない）。
+                pairs.push(("DATABASE_URL", "file:/var/lib/openillustration/local.db"));
                 let results = check_all_with(lookup_from(&pairs));
                 let errors = errors_for(&results, "production");
                 assert_eq!(errors.len(), 1, "key={key}, raw={raw:?}, errors={errors:?}");
@@ -1782,6 +1793,8 @@ mod tests {
             ("ALERT_CMD", executable.as_str()),
             ("TZ", "Asia/Tokyo"),
             ("AGE_TARGET_REGIONS", "JP"),
+            // 本番相当では DATABASE_URL も必須。絶対パスを明示して空期待を維持する。
+            ("DATABASE_URL", "file:/var/lib/openillustration/local.db"),
         ]);
         let results = check_all_with(lookup_from(&pairs));
         assert!(
