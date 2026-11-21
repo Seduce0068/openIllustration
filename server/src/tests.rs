@@ -10794,6 +10794,40 @@ async fn test_verified_age_accepts_valid_signed_attribute_in_mock_path() {
     assert_eq!(status, StatusCode::OK, "unexpected response: {body}");
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(json["authorized"], true);
+
+    // R2-USERHASH: issuer + signed_subject 由来の 64-hex で、旧 birthdate:country とは異なる。
+    let user_hash = json["user_hash"]
+        .as_str()
+        .expect("user_hash must be issued on the verified path");
+    assert_eq!(
+        user_hash.len(),
+        64,
+        "user_hash must be a 64-character sha256 hex digest"
+    );
+    assert!(
+        user_hash.bytes().all(|b| b.is_ascii_hexdigit()),
+        "user_hash must be hex only"
+    );
+    let legacy_hash = sha256::digest("2000-01-01:JP".as_bytes());
+    assert_ne!(
+        user_hash, legacy_hash,
+        "legacy birthdate:country hash must not be reused"
+    );
+
+    // signed_subject を変えた2回目（別 nonce）で hash が変わる（pairwise 性）。
+    let nonce2 = crate::issue_mock_nonce_for_test();
+    let mut payload: serde_json::Value =
+        serde_json::from_str(&verified_verify_body(&nonce2, "jpki-test", "")).unwrap();
+    payload["verified_claims"]["attribute"]["signed_subject"] =
+        serde_json::json!("age-over-20-pairwise");
+    let (status, body2) = post_verify(&app, payload.to_string()).await;
+    assert_eq!(status, StatusCode::OK, "unexpected response: {body2}");
+    let json2: serde_json::Value = serde_json::from_str(&body2).unwrap();
+    assert_ne!(
+        json2["user_hash"].as_str(),
+        Some(user_hash),
+        "a different signed_subject must derive a different user_hash"
+    );
 }
 
 /// DEC-01-02: 自己申告の混入拒否。自己申告フィールドは検証済み属性へ昇格しない。

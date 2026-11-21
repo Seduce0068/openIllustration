@@ -2429,6 +2429,23 @@ pub async fn auth_login(
     }))
 }
 
+/// 信頼属性経路の `user_hash` を `issuer` + `signed_subject` から導出する（R2-USERHASH）。
+///
+/// `nonce` / `birthdate` / `country` は導出入力に含めない。adapter の一段目で
+/// `signed_subject` の空を拒否しているが、導出側でも二段目として明示的に
+/// 403（TrustedAttributeRequired）とし、空文字列から主体 ID が発行されないようにする。
+fn verified_age_user_hash(verified: &verified_age::VerifiedAge) -> Result<String, AppError> {
+    if verified.signed_subject.trim().is_empty() {
+        return Err(age_validation_error_to_app_error(
+            common::age::AgeValidationError::TrustedAttributeRequired,
+        ));
+    }
+    Ok(sha256::digest(format!(
+        "verified-age:v1:{}:{}",
+        verified.issuer, verified.signed_subject
+    )))
+}
+
 pub async fn auth_verify(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<VerifyRequest>,
@@ -2587,8 +2604,8 @@ pub async fn auth_verify(
     let user_hash = if let Some(ref der) = verified_key {
         sha256::digest(&der[..])
     } else if let Some(ref verified) = verified_age {
-        // 信頼属性経路では自己申告値ではなく検証済みクレームから主体を導出する。
-        sha256::digest(format!("{}:{}", verified.birthdate, verified.country).as_bytes())
+        // 信頼属性経路は issuer + signed_subject 由来（R2-USERHASH）。
+        verified_age_user_hash(verified)?
     } else {
         sha256::digest(format!("{}:{}", birth_date, country_code).as_bytes())
     };
