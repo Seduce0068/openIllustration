@@ -37,7 +37,7 @@ status: current
 
 ### 優先度: 高
 
-- [ ] **検証済み年齢属性の user_hash を signed_subject 由来へ変更**
+- [x] **検証済み年齢属性の user_hash を signed_subject 由来へ変更**
   — 根拠 `server/src/lib.rs` auth_verify (verified_age 分岐) / review R3-AU / 重大度 high。
   verified_claims 受理時に `sha256(birthdate:country)` を user_hash としており、同一生年月日・居住国の
   ユーザーが subject 衝突する。実証明書接続時に本番の主体分離が崩れるため、署名済み subject を
@@ -614,6 +614,10 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding: 検証済み年齢の user_hash を issuer+signed_subject 由来の sha256(64-hex)へ
+  是正。nonce/birthdate/country は除外、空 subject は二段目403。OIDC callback は sub 生値の
+  別契約として維持。pairwise 性は実証明書接続前に ADR で確定する前提。全ゲート green。
 
 - 2026-11-22 コンボ第2ラウンド（無制限・review 4担当＋discovery 3担当）: 全7担当完了。
   R6 で重複排除・Runtime Proof 確認のうえ、新規21件（高5/中10/低6）を未着手へ追記。

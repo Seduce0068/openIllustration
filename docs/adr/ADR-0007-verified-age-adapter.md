@@ -5,7 +5,7 @@ description: "DEC-01 連携に向けた署名付き年齢属性 adapter の境�
 tags: [adr, age-validation, dec-01, adapter, accepted]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:38:26+09:00"
 ---
 
 ## ADR-0007: 署名付き年齢属性 adapter の境界と発行者許可リスト
@@ -46,6 +46,14 @@ R1 分析では、署名付き属性を扱う責務を狭い adapter 境界に�
 - `auth_verify` の mock 分岐では `allow_mock_auth` 有効時のみ
   `verified_claims` を受理する。欠落・不正は 403 とし、自己申告の
   `birth_date` / `country_code` は信頼属性として扱わない。
+- `auth_verify` の verified_claims 経路の `user_hash` は
+  `sha256("verified-age:v1:{issuer}:{signed_subject}")` から導出する（R2-USERHASH）。
+  `nonce` / `birthdate` / `country` は入力に含めず、sha256 の 64-hex を維持する。
+  `issuer` と `signed_subject` は adapter が返す `VerifiedAge` から取得し、
+  `signed_subject` が trim 後も空なら adapter の一段目に加え導出ヘルパの二段目でも
+  `TrustedAttributeRequired`（403）で拒否する。OIDC callback の `sub` 生値は
+  別契約（R1 の経路別契約判断）であり変更しない。verify_key 分岐・自己申告分岐も
+  変更しない。
 
 ### 発行者許可リストの構成
 
@@ -73,6 +81,11 @@ R1 分析では、署名付き属性を扱う責務を狭い adapter 境界に�
   `trusted_attribute_required` への切替えを行わない。
 - `GET /policy/age` は設定変更の公開確認に使う。公開面へ秘密情報が
   混入していないことを変更のたびに確認する。
+- `user_hash` 導出契約（`"verified-age:v1:"` プレフィックスと入力フィールド）の
+  変更は `users.user_hash` と JWT `sub` を変える破壊的変更として扱い、
+  ADR 改訂と開発 DB の作り直しを伴う。バージョンを上げる場合は移行方針を
+  本 ADR に記録する。実証明書接続前に `signed_subject` の pairwise 性を
+  確定し、必要なら導出契約を見直す。
 
 ## 緊急 delist
 
@@ -90,6 +103,10 @@ R1 分析では、署名付き属性を扱う責務を狭い adapter 境界に�
 - 発行者許可リストが公開されるため、信頼対象の列挙が外部へ開示される
   （非秘密設定として許容する設計判断）。
 - 許可リスト変更時は再起動が必要で、誤設定は起動拒否として検出される。
+- 旧 `sha256("{birthdate}:{country}")` で発行した開発 DB の `user_hash` は
+  新導出と一致しないため、開発 DB は作り直し前提となる（移行パスなし）。
+- `signed_subject` の pairwise 性が未確定のため、発行者が固定値を返す場合は
+  同じ主体の hash が使い回される。実証明書接続前の仕様確定が必須である。
 
 ## Links
 

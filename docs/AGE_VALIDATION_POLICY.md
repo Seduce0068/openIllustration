@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-22T02:38:26+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -115,6 +115,9 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
 - 本型のフィールドは署名検証・発行者検証済みを意味しない。検証済み属性のみを扱う経路の実装は
   外部仕様確定後の課題である。
 - ADR-0007 で、この型を attestation として再利用する adapter 境界を追加した（下記 2.6）。
+- R2-USERHASH により、この `signed_subject` は verified_claims 経路の `user_hash` 導出入力
+  （`issuer` と組）としても契約化された（下記 2.6）。`nonce` はリプレイ防止専用で
+  導出入力には使わない。
 
 ### 2.6 署名付き年齢属性 adapter（mock 経路のみ・ADR-0007）
 
@@ -134,6 +137,15 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
   `allow_mock_auth` 有効時のみ `verified_claims` を受理する。自己申告の
   `birth_date` / `country_code` は信頼属性として扱わず、必須モードでは
   検証済みクレームの欠落を 403 とする。既定モードは自己申告のまま維持する。
+- `verified_claims` 経路の `user_hash` は
+  `sha256("verified-age:v1:{issuer}:{signed_subject}")` から導出する（R2-USERHASH）。
+  `nonce` / `birthdate` / `country` は導出入力へ含めず、sha256 の 64-hex 表現を維持する。
+  `issuer` と `signed_subject` は adapter が返す `VerifiedAge` から取得する。
+  `signed_subject` が trim 後も空なら adapter の一段目に加え、導出ヘルパの二段目でも
+  403（`TrustedAttributeRequired`）として拒否し、主体 ID を発行しない。
+- [server/src/oidc.rs](../server/src/oidc.rs): OIDC callback の `user_hash` は `sub` の
+  生値を使う別契約であり、本変更の対象外（R1 の経路別契約判断）。
+  verify_key 分岐・自己申告分岐の導出も変更しない。
 
 ## 3. 現行の制約・未完了事項
 
@@ -145,6 +157,11 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
 - 対象地域、必要属性、閾値、属性保持期間、コンテンツ種別ごとの適用法令の最終確定は未決定（DEC-02の残作業）。
 - 「21歳が最も高い成人年齢」等の外部事実は一次ソースに基づく確認と専門家レビューが必要であり、本実装の既定値をその事実の証明として扱わない。
 - 年齢判定の結果は、現行入力が自己申告である限り、法的・本人確認上の保証にならない。
+- 旧 `sha256("{birthdate}:{country}")` で発行した開発 DB の `user_hash` は新導出と一致しない。
+  移行パスは提供せず、旧 hash を含む開発 DB は作り直し前提とする（実証明書は未接続）。
+- `signed_subject` の pairwise 性（発行者が relying party ごとに別値を割り当てるか、
+  同一主体に固定値を返すか）は外部仕様として未確定。実証明書を接続する前に
+  issuer ごとの属性仕様を確定し、導出契約を再レビューする必要がある。
 
 ## 4. 本番化前に必要なこと
 
@@ -153,3 +170,6 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
 - `GET /policy/age` を含む公開面に秘密情報が混入しないことを継続的に確認する（設定追加時のレビュー対象）。
 - 境界値（閏日、未来日、国コード正規化、設定変更時の挙動）と実運用手順（変更管理、監査、利用者告知）を整備する。
 - 「保守的」「法的に安全」「準拠済み」等の表現は、根拠（一次ソース・レビュー記録・試験証跡）がある範囲に限定する。
+- 実証明書を接続する前に `signed_subject` の pairwise 性を確定し、
+  `issuer` + `signed_subject` 由来の `user_hash` 契約が要件を満たすことを確認する。
+- 旧 `sha256("{birthdate}:{country}")` を含む開発 DB は作り直す（移行は行わない）。

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T02:38:26+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T02:08:19+09:00"
+  at: "2026-11-22T02:38:26+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -144,13 +144,14 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。必須設定値が未充足（`configuration_satisfied() == false`）のときの全経路拒否は AGE-03 で検証 |
 | AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（`default_minimum_age=21` ・`country_minimums` 空・`target_regions` 空）のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
 | AGE-04 | 年齢基準日の TZ ローカル化 | `TZ` の `Asia/Tokyo`（UTC+9）/ `Etc/GMT±N`（POSIX 符号反転）/ 未設定・未対応名（UTC フォールバック）で「今日」が変わり、年齢境界が1日ずれる。UTC 2024-01-01T16:00Z の JST は翌日 | 実装済み。`test_today_for_policy_uses_configured_local_timezone` と `test_validate_age_at_uses_local_today_for_age_boundary` の2件。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
-| AGE-05 | 署名付き年齢属性 adapter の正常系（DEC-01 / ADR-0007） | `verify(issuer, claims, nonce, audience)` が許可リスト完全一致・発行者束縛・audience 束縛・nonce 束縛を通した場合のみ `VerifiedAge` を返す。mock 経路では自己申告の成人判定を上書きして検証済み生年月日で判定 | 実装済み。`verified_age.rs` の `verify_accepts_valid_claims` と `test_verified_age_accepts_valid_signed_attribute_in_mock_path` |
+| AGE-05 | 署名付き年齢属性 adapter の正常系（DEC-01 / ADR-0007） | `verify(issuer, claims, nonce, audience)` が許可リスト完全一致・発行者束縛・audience 束縛・nonce 束縛を通した場合のみ `VerifiedAge` を返す。mock 経路では自己申告の成人判定を上書きして検証済み生年月日で判定。`verified_claims` 経路の `user_hash` は issuer + signed_subject 由来 | 実装済み。`verified_age.rs` の `verify_accepts_valid_claims` と `test_verified_age_accepts_valid_signed_attribute_in_mock_path`（hash 契約は AGE-12） |
 | AGE-06 | 自己申告混入拒否 | `birth_date` / `country_code` を `verified_claims` へ混ぜた JSON は `deny_unknown_fields` で拒否。信頼属性必須モードで `verified_claims` 欠落時は自己申告が成人でも 403 | 実装済み。`self_reported_fields_cannot_be_injected_into_claims` と `test_verified_age_rejects_self_reported_fields_and_missing_claims` |
 | AGE-07 | nonce 再利用拒否 | 既存 `MOCK_NONCES.remove()` の単回消費を再利用し、2回目の提示は 400 | 実装済み。`test_verified_age_rejects_reused_nonce`、`verify_rejects_nonce_mismatch` |
 | AGE-08 | 未許可 issuer 拒否 | 許可リストに無い発行者、空リスト、発行者束縛不一致は 403 | 実装済み。`verify_rejects_untrusted_issuer`、`verify_rejects_issuer_mismatch_between_argument_and_attestation`、`test_verified_age_rejects_untrusted_issuer` |
 | AGE-09 | audience 不一致拒否 | `claims.audience` が引数 audience（OIDC client_id フォールバック）と不一致なら 403 | 実装済み。`verify_rejects_audience_mismatch`、`test_verified_age_rejects_audience_mismatch` |
 | AGE-10 | 発行者許可リスト設定（非秘密） | `AGE_TRUSTED_ISSUERS` は trim・空要素除去・完全一致。信頼属性必須モードで空なら起動拒否。既定モードは自動昇格しない | 実装済み（`common/src/age.rs`）。`from_env_with_trims_deduplicates_trusted_issuers`、`trusted_issuer_matching_is_exact`、`trusted_attribute_mode_without_trusted_issuers_fails_closed`、`self_reported_mode_does_not_require_trusted_issuers` |
 | AGE-11 | mock 無効時の verified_claims 拒否・OIDC callback の adapter 境界 | `allow_mock_auth` 無効では `verified_claims` を 403。callback は `ensure_age_policy_configured` 直後に adapter 境界を呼び、信頼属性必須モードでは fail closed（認可フローは変更しない） | 実装済み。`test_verified_age_claims_rejected_when_mock_auth_disabled`、`oidc_binding_keeps_self_reported_mode_and_fails_closed_on_trusted_mode` |
+| AGE-12 | verified_claims 経路の user_hash 導出（R2-USERHASH） | `sha256("verified-age:v1:{issuer}:{signed_subject}")`（64-hex）。`birthdate` / `country` / `nonce` は不使用。旧 `sha256("2000-01-01:JP")` とは異なる。signed_subject 変更で hash が変わる。空 subject は 403。OIDC callback の `sub` 生値は別契約で変更なし | 実装済み。`test_verified_age_accepts_valid_signed_attribute_in_mock_path` の (a)(b)(c) と `verify_rejects_missing_or_invalid_age_claim` の empty_subject で検証。旧 hash の開発 DB は作り直し前提 |
 | PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
@@ -210,7 +211,7 @@ TZ の強制変更はプロセス環境を汚さないため、純粋関数 `tod
 `configuration_satisfied`（計算結果）へ置換した。`doctor` の `age_policy` カテゴリは
 `require_explicit_configuration` 有効かつ未充足のときに固定文言で警告する（値はエコーしない）。
 
-### 署名付き年齢属性 adapter の検証（AGE-05〜11）
+### 署名付き年齢属性 adapter の検証（AGE-05〜12）
 
 R1 分析と ADR-0007 に基づき、`server/src/verified_age.rs` の adapter 境界と
 `auth_verify` の mock 分岐を検証する。実証明書は未接続のため、すべて
@@ -223,7 +224,7 @@ R1 分析と ADR-0007 に基づき、`server/src/verified_age.rs` の adapter �
 | `verify_rejects_untrusted_issuer` | 未許可 issuer、空許可リスト | 403 |
 | `verify_rejects_audience_mismatch` | 引数 audience と `claims.audience` が不一致 | 403 |
 | `verify_rejects_nonce_mismatch` | 引数 nonce と attestation の nonce が不一致 | 403 |
-| `test_verified_age_accepts_valid_signed_attribute_in_mock_path` | 信頼属性必須モード・自己申告は未成年（2010年生）・検証済みは 2000年生 | 200。自己申告値が信頼属性として使われない |
+| `test_verified_age_accepts_valid_signed_attribute_in_mock_path` | 信頼属性必須モード・自己申告は未成年（2010年生）・検証済みは 2000年生。2回目は別 nonce で signed_subject を `"age-over-20-pairwise"` に変更 | 200。自己申告値が信頼属性として使われない。(a) `user_hash` は64文字hex、(b) `sha256("2000-01-01:JP")` と異なる、(c) signed_subject 変更で hash が変わる |
 | `test_verified_age_rejects_reused_nonce` | 同一 nonce で `/auth/verify` を2回 | 1回目 200、2回目 400（`MOCK_NONCES.remove()` で消費済み） |
 | `test_verified_age_rejects_untrusted_issuer` / `test_verified_age_rejects_audience_mismatch` | 信頼属性必須モード・mock 経路で不正な issuer / audience | 403 |
 | `test_verified_age_claims_rejected_when_mock_auth_disabled` | `allow_mock_auth=false` で `verified_claims` を提示 | 403 |
