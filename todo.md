@@ -147,7 +147,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **CI の deny ゲートへ bans/sources を追加**
   — 根拠 `.github/workflows/ci.yml:40-42`, `deny.toml` / review R3-DE + discovery R4-DP / 中。
   licenses/advisories のみで重複バージョン・未知レジストリを検出できていない。
-- [ ] **E2E ブラウザフォールバックを可視化** — 根拠 `e2e/ci-e2e.sh` 選択ロジック / discovery R4-OPS / 中。
+- [x] **E2E ブラウザフォールバックを可視化** — 根拠 `e2e/ci-e2e.sh` 選択ロジック / discovery R4-OPS / 中。
   firefox/webkit 不可時の chromium フォールバックが stderr 警告のみで、1ブラウザ green が見えない。
   ::warning:: アノテーションとジョブサマリへ選択プロジェクトを出力。
 - [ ] **性能/互換ゲート PERF-01/COMPAT-01/COMPAT-02 の測定条件を確定** — 根拠 `docs/TEST_SPECIFICATION.md:159-161` / discovery R4 / 中。

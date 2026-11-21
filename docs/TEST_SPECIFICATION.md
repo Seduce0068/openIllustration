@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T06:30:00+09:00"
+  at: "2026-11-22T06:40:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T06:30:00+09:00"
+  at: "2026-11-22T06:40:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -876,10 +876,15 @@ cd e2e && npm test -- upload.spec.ts   # R1-14 / INT-02 / CONTENT-01 / R2 a11y U
 ```
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
-既定は `chromium`（システム Chrome）のみ。`E2E_PROJECTS=chromium,firefox,webkit`
-で複数ブラウザを選択できるが、firefox / webkit はバイナリ導入と共有ライブラリが
-必要で、本ホスト（Kubuntu 26.04）では Playwright 未対応プラットフォームのため
-未検証（CI 環境での導入は別途検討）。
+実行対象は条件付きで選択する。`E2E_PROJECTS=chromium,firefox,webkit` の明示指定は
+厳守し、未知値は拒否する。未指定時は firefox / webkit のバイナリ導入と共有ライブラリの
+解決可否を検出し、両方実行可能なら3プロジェクトを実行する。片方でも不可なら
+`chromium` へフォールバックし、CI では固定形の
+`::warning::E2E browser fallback: firefox=<0|1> webkit=<0|1>; running <projects>`
+annotation を出す。GitHub Actions の step summary には firefox / webkit の可否と
+選択プロジェクトを記録し、フォールバック時も選択プロジェクトを残す。
+本ホスト（Kubuntu 26.04）では Playwright 未対応プラットフォームのため
+firefox / webkit の実実行は未検証（CI 環境での導入・検証は別途検討）。
 開発サーバーとクライアントは `e2e/playwright.config.ts` の `webServer` が
 自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、ローカルでは開発用の
 固定 JWT シークレット。`E2E_JWT_SECRET` で上書きできる）。

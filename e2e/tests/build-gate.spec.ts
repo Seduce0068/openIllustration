@@ -269,16 +269,24 @@ test.describe('Version gate (VG-01)', () => {
 
 // ci-e2e.sh のプロジェクト選択ロジックの単体テスト（EPS-01）。
 // E2E_LIB_ONLY=1 で source するとダウンロード/ビルド等の副作用なしで
-// select_e2e_projects が呼べる。明示指定の厳守・両利用可で3プロジェクト・
-// 片方不可で chromium＋警告 の3ケースを確認する。
+// select_e2e_projects と、その選択を可視化する formatter / writer が呼べる。
+// 明示指定の厳守・両利用可で3プロジェクト・片方不可で chromium＋警告 の3ケースを確認する。
 test.describe('E2E project selection (EPS-01)', () => {
   const e2eDir = path.resolve(__dirname, '..');
   const scriptPath = path.join(e2eDir, 'ci-e2e.sh');
+
+  const tempDirs: string[] = [];
+  test.afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   type SelectionResult = { status: number | null; stdout: string; stderr: string };
 
   // bash -c の位置パラメータで純粋関数へ入力を渡す。
   // $1=scriptPath, $2=E2E_PROJECTS 明示値, $3=firefox 可否, $4=webkit 可否。
+  // source した formatter にも同じ入力を渡し、annotation / summary 文字列を検証する。
   const runSelection = (
     explicit: string,
     firefoxOk: string,
@@ -286,11 +294,16 @@ test.describe('E2E project selection (EPS-01)', () => {
   ): SelectionResult => {
     const inner = [
       'source "$1"; shift',
+      'declare firefox_ok="$2" webkit_ok="$3"',
       'declare -a projects=()',
       'declare warn=0',
       'select_e2e_projects "$@" projects warn || exit $?',
+      'declare annotation="" summary=""',
+      'format_e2e_browser_selection projects "$firefox_ok" "$webkit_ok" "$warn" annotation summary',
       'printf "PROJECTS=%s\\n" "${projects[*]}"',
       'printf "WARN=%s\\n" "$warn"',
+      'printf "ANNOTATION=%s\\n" "$annotation"',
+      'printf "SUMMARY>>%s<<\\n" "$summary"',
     ].join('\n');
     const result = spawnSync(
       'bash',
@@ -304,12 +317,68 @@ test.describe('E2E project selection (EPS-01)', () => {
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   };
 
+  type WriterResult = {
+    status: number | null;
+    stdout: string;
+    summaryFile: string;
+  };
+
+  // writer を実際に呼び、annotation が stdout へ、summary が要約ファイルへ出ることを確認する。
+  // githubActions / writeSummary を渡さない場合は GitHub Actions 外の no-op となる。
+  const runWriter = (
+    annotation: string,
+    summary: string,
+    options: { githubActions?: string; writeSummary?: boolean } = {},
+  ): WriterResult => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-writer-'));
+    tempDirs.push(tempDir);
+    const summaryPath = path.join(tempDir, 'summary.md');
+    fs.writeFileSync(summaryPath, '');
+
+    const env: NodeJS.ProcessEnv = { ...process.env, E2E_LIB_ONLY: '1' };
+    delete env.GITHUB_ACTIONS;
+    delete env.GITHUB_STEP_SUMMARY;
+    if (options.githubActions !== undefined) env.GITHUB_ACTIONS = options.githubActions;
+    if (options.writeSummary) env.GITHUB_STEP_SUMMARY = summaryPath;
+
+    const inner = 'source "$1"; shift; write_e2e_browser_selection "$@"';
+    const result = spawnSync('bash', ['-c', inner, '_', scriptPath, annotation, summary], {
+      encoding: 'utf8',
+      env,
+    });
+    if (result.error) throw result.error;
+    return {
+      status: result.status,
+      stdout: result.stdout,
+      summaryFile: fs.readFileSync(summaryPath, 'utf8'),
+    };
+  };
+
+  // formatter の出力を runSelection の stdout から取り出す（SUMMARY は複数行）。
+  const extract = (stdout: string) => ({
+    annotation: /ANNOTATION=(.*)\n/.exec(stdout)?.[1] ?? '',
+    summary: /SUMMARY>>([\s\S]*?)<<\n/.exec(stdout)?.[1] ?? '',
+  });
+
   test('explicit E2E_PROJECTS is honored even when browsers are unavailable', () => {
     // (a) 明示指定は実行可能性に関わらず厳守され、警告も出ない。
     const result = runSelection('firefox', '0', '0');
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PROJECTS=firefox');
     expect(result.stdout).toContain('WARN=0');
+
+    // 可視化: 明示指定では annotation は空、サマリには選択プロジェクト名が残る。
+    const { annotation, summary } = extract(result.stdout);
+    expect(annotation).toBe('');
+    expect(result.stdout).toContain('ANNOTATION=\n');
+    expect(summary).toContain('Running projects: firefox');
+    expect(result.stdout).not.toContain('::warning::');
+
+    // writer は GitHub Actions 外では no-op（終了コード0・stdout 空・要約ファイル未変更）。
+    const noop = runWriter(annotation, summary);
+    expect(noop.status).toBe(0);
+    expect(noop.stdout).toBe('');
+    expect(noop.summaryFile).toBe('');
 
     // 既存の未知プロジェクト拒否も維持される。
     const unknown = runSelection('bogus', '1', '1');
@@ -323,6 +392,11 @@ test.describe('E2E project selection (EPS-01)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('PROJECTS=chromium firefox webkit');
     expect(result.stdout).toContain('WARN=0');
+
+    // 可視化: 警告なしで、サマリに3プロジェクトすべてが記録される。
+    const { annotation, summary } = extract(result.stdout);
+    expect(annotation).toBe('');
+    expect(summary).toContain('Running projects: chromium firefox webkit');
   });
 
   test('one browser unavailable falls back to chromium with a warning', () => {
@@ -337,5 +411,26 @@ test.describe('E2E project selection (EPS-01)', () => {
     expect(noFirefox.status).toBe(0);
     expect(noFirefox.stdout).toContain('PROJECTS=chromium');
     expect(noFirefox.stdout).toContain('WARN=1');
+
+    // 可視化: フォールバック時は固定形の ::warning:: と理由（firefox/webkit 可否）が出る。
+    const { annotation, summary } = extract(noWebkit.stdout);
+    expect(annotation).toBe(
+      '::warning::E2E browser fallback: firefox=1 webkit=0; running chromium',
+    );
+    expect(annotation).toContain('::warning::E2E browser fallback:');
+    expect(summary).toContain('Fallback to chromium: 1');
+    expect(summary).toContain('Running projects: chromium');
+
+    // writer は GitHub Actions 設定時に annotation を stdout、summary を要約ファイルへ書く。
+    const written = runWriter(annotation, summary, {
+      githubActions: 'true',
+      writeSummary: true,
+    });
+    expect(written.status).toBe(0);
+    expect(written.stdout).toContain(
+      '::warning::E2E browser fallback: firefox=1 webkit=0; running chromium',
+    );
+    expect(written.summaryFile).toContain('Running projects: chromium');
+    expect(written.summaryFile).toContain('Fallback to chromium: 1');
   });
 });

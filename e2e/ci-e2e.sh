@@ -92,6 +92,63 @@ select_e2e_projects() {
 	return 0
 }
 
+# ブラウザ選択の可視化データを生成する純粋な formatter（副作用なし）。
+# E2E_LIB_ONLY=1 で source しても安全に呼べるよう、判定や外部コマンドを伴わない。
+# 入力:
+#   $1 = 選択プロジェクト配列の名前（nameref。呼び出し側の配列は変更しない）
+#   $2 = firefox 実行可否 (1/0)
+#   $3 = webkit 実行可否 (1/0)
+#   $4 = 警告フラグ (1=chromium へフォールバック)
+# 出力（nameref）:
+#   $5 = annotation 文字列（フォールバック時だけ ::warning:: 行、それ以外は空）
+#   $6 = summary markdown 文字列（warn_fallback に関わらず選択プロジェクトを記録）
+# 固定文言は printf の書式リテラルとして持ち、入力はすべて %s で埋め込む。
+# E2E_PROJECTS の生文字列を書式として解釈させず、メッセージへ外部入力を混入させない。
+format_e2e_browser_selection() {
+	local -n in_projects="$1"
+	local firefox_ok="$2"
+	local webkit_ok="$3"
+	local warn="$4"
+	local -n out_annotation="$5"
+	local -n out_summary="$6"
+	local projects_joined=""
+
+	printf -v projects_joined '%s ' "${in_projects[@]}"
+	projects_joined="${projects_joined% }"
+
+	out_annotation=""
+	if ((warn)); then
+		printf -v out_annotation \
+			'::warning::E2E browser fallback: firefox=%s webkit=%s; running %s' \
+			"$firefox_ok" "$webkit_ok" "$projects_joined"
+	fi
+
+	printf -v out_summary \
+		'### E2E browser selection\n\n- Firefox executable: %s\n- WebKit executable: %s\n- Fallback to chromium: %s\n- Running projects: %s\n' \
+		"$firefox_ok" "$webkit_ok" "$warn" "$projects_joined"
+}
+
+# formatter の出力を GitHub Actions の annotation / step summary へ反映する writer。
+# GITHUB_ACTIONS / GITHUB_STEP_SUMMARY が未設定なら何もせず成功扱い（no-op）。
+# 設定されていても要約ファイルが存在しない・書き込み不可なら return 0 とし、
+# set -euo pipefail 下でスクリプトが落ちないようにする。
+# 出力は printf のみ。本文は formatter が生成した固定文言で、ここでは外部入力を
+# 書式として解釈しない（%s として渡すだけ）。
+write_e2e_browser_selection() {
+	local annotation="${1:-}"
+	local summary="${2:-}"
+
+	[[ -n "${GITHUB_ACTIONS:-}" && -n "${GITHUB_STEP_SUMMARY:-}" ]] || return 0
+	local summary_path="${GITHUB_STEP_SUMMARY}"
+	[[ -f "$summary_path" && -w "$summary_path" ]] || return 0
+
+	if [[ -n "$annotation" ]]; then
+		printf '%s\n' "$annotation" || return 0
+	fi
+	printf '%s\n' "$summary" >>"$summary_path" || return 0
+	return 0
+}
+
 # テストから関数定義だけを source 可能にする（E2E_LIB_ONLY=1 のときは
 # 副作用のあるダウンロード/ビルドへ進まず、ここで source を終了する）。
 # 通常の CI 実行では環境変数が無いため、以降の処理はこれまでどおり動く。
@@ -274,6 +331,15 @@ if ((warn_fallback)); then
 	echo "warning: firefox=${firefox_executable} webkit=${webkit_executable};" \
 		"chromium へフォールバックします。" >&2
 fi
+
+# ブラウザ選択を annotation / step summary へ可視化する（writer はここでのみ呼ぶ）。
+# 判定ロジック（select_e2e_projects / detect_browser_executable）は変更しない。
+declare annotation_e2e_browser=""
+declare summary_e2e_browser=""
+format_e2e_browser_selection \
+	selected_projects "$firefox_executable" "$webkit_executable" "$warn_fallback" \
+	annotation_e2e_browser summary_e2e_browser
+write_e2e_browser_selection "$annotation_e2e_browser" "$summary_e2e_browser"
 
 # --project 引数と、導入が必要なブラウザバイナリを組み立てる。
 # chromium は channel: chrome（システム Chrome）を使うため取得不要。

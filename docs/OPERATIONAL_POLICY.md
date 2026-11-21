@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T06:20:00+09:00"
+  at: "2026-11-22T06:40:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -315,7 +315,7 @@ generated:
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_COPY_CMD` | 任意（`OFFSITE_DEST` と対で設定） | 空（無効） | オフサイトコピーコマンドの実行ファイルパス。`<成果物> <宛先>` の2引数で呼び出す（eval 不使用）。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
-| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし警告を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
+| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし、CI では `::warning::E2E browser fallback: firefox=0/1 webkit=0/1; running SELECTED_PROJECTS` の annotation と GitHub Actions の step summary（firefox / webkit の可否と選択プロジェクト。フォールバック時も選択プロジェクトを記録）を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
 - 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセス（サーバーおよび DB 接続3 CLI）
   で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db` を起動拒否し
