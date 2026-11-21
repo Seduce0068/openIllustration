@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-21T05:32:50+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -24,7 +24,9 @@ generated:
    - 対象地域や有効な年齢基準は運用者の判断・現地法令・運用方針に依存し得るため、国別しきい値・対象地域・適用モードを設定可能とする。
    - 既定値は保守的に保つ。運用者が設定を変更/緩和する場合は、適用法令・利用規約・対象コンテンツ・専門家レビューに基づく責任で行う。
 3. **フェイルクローズ選択肢（明示設定の要求）**
-   - `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ `AGE_POLICY_CONFIGURED=0` の場合、年齢検証は通過させず拒否する（設定未完了としてフェイルクローズ）。
+   - `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（最少年齢が既定値 `21`・
+     国別上書きと対象地域が空）の場合、年齢検証は通過させず拒否する（設定未完了として
+     フェイルクローズ）。充足判定は `AgePolicy::configuration_satisfied()` が実効値から導出する。
    - セッション発行の全経路（`/auth/verify` と OIDC の callback / refresh）が同じ設定ゲートで
      拒否する（後者は `ConfigurationRequired` / `TrustedAttributeRequired` を 403 に変換）。
 4. **信頼できる属性に依存する検証方向（DEC-01連携）**
@@ -41,7 +43,8 @@ generated:
 ### 2.1 実装箇所
 
 - [common/src/age.rs](../common/src/age.rs): `AgePolicy`, `AgeEnforcementMode`, `AgeValidationError`,
-  `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `calculate_age`, `is_age_allowed_with_policy`,
+  `AgePolicy::from_env()`, `AgePolicy::public_settings()`, `AgePolicy::configuration_satisfied()`,
+  `calculate_age`, `is_age_allowed_with_policy`,
   `VerifiedAgeAttribute` と `VERIFIED_AGE_ATTRIBUTE_FIXTURE`（未結線の型契約、2.5 参照）。
 - [server/src/lib.rs](../server/src/lib.rs): 起動時に `AgePolicy::from_env()` を読み込み検証（不正値は起動失敗）、`AppState.age_policy` に保持、
   `GET /policy/age` を公開、`/auth/verify` の年齢検証に `validate_age(&state.age_policy, ...)` を適用。
@@ -59,26 +62,27 @@ generated:
 | `AGE_DEFAULT_MINIMUM` | `21` | 一律の既定最少年齢（1以上、0 は年齢ゲート無効化のため拒否）。保守的な安全余裕ベースライン。 |
 | `AGE_COUNTRY_OVERRIDES` | 空 | 国別上書き。形式: `CC=NN,CC=NN`（例: `JP=18,US=21`）。国コードは英字2文字を大文字化、年齢は1以上（0 は拒否）。 |
 | `AGE_TARGET_REGIONS` | 空 | 対象地域コードのカンマ区切り（例: `JP,US,DE`）。英字2文字を大文字化し重複除去・ソート。英字2文字以外（例: `jpn`, `12`, `j-P`）は起動拒否（fail-closed）。 |
-| `AGE_ENFORCEMENT_MODE` | `self_reported` | `self_reported` / `self_reported_dob_country`: 申告された生年月日・国コードで判定（信頼属性ではない）。`trusted_attribute_required` / `trusted_attribute`: 検証済み属性入力が未実装のため現時点では常に拒否（フェイルクローズ）。 |
+| `AGE_ENFORCEMENT_MODE` | `self_reported` | `self_reported` / `self_reported_dob_country`: 申告された生年月日・国コードで判定（信頼属性ではない）。`trusted_attribute_required` / `trusted_attribute`: 下記 `AGE_TRUSTED_ISSUERS` が必須。実証明書は未接続のためフェイルクローズ。 |
+| `AGE_TRUSTED_ISSUERS` | 空 | 検証済み年齢属性を受理する発行者の許可リスト（カンマ区切り・trim・空要素除去・完全一致）。信頼属性必須モードで空なら起動拒否。非秘密設定として `GET /policy/age` で公開。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。明示設定を要求。 |
-| `AGE_POLICY_CONFIGURED` | `false` | `1`/`true`=有効、`0`/`false`=無効のみ（yes/on/off/no は拒否）。設定確認/確定フラグ（前項目と併用）。単独では充足を意味しない。 |
+| `AGE_POLICY_CONFIGURED`（廃止） | — | 旧手動フラグ。読取を廃止し、設定されても無視される。年齢ゲートの通過条件には使わず、下記の実効値から充足を導出する。 |
 
 不正な値（未知モード、不正な真偽値、不正な国コード/年齢形式、範囲外年齢など）は `AgePolicy::from_env()` がエラーを返し、サーバー起動は失敗する（fail closed）。
 
-`AGE_POLICY_CONFIGURED=1` は運用者の宣言であり、
-`AGE_DEFAULT_MINIMUM` / `AGE_TARGET_REGIONS` / `AGE_COUNTRY_OVERRIDES` の明示設定を保証しない。
-フラグのみが真で必須設定値が既定のまま（最少年齢が既定値・対象地域と国別上書きが空）の場合、
-`doctor` の `age_policy` カテゴリが固定文言で警告する。
-後方互換を保つため `AgePolicy::operator_configured` の意味と
-`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` の fail-closed 契約
-（フラグ未設定なら `ConfigurationRequired` として 403）は変更しない。
+充足条件は `AgePolicy::configuration_satisfied()` が実効値から導出する。
+すなわち `default_minimum_age != 21`、`country_minimums` が非空、`target_regions` が非空の
+いずれかを満たせば充足とみなす（旧 doctor の `age_policy_values_at_defaults` と同じ述語の反転）。
+手動フラグは保持しないため、フラグを設定しても既定値のままでは充足にならない。
+`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` のとき未充足なら `ConfigurationRequired` として 403 で
+フェイルクローズし、`doctor` の `age_policy` カテゴリが固定文言で警告する（値はエコーしない）。
 警告は既定では終了コードに影響せず、`--strict` のときのみ 1 となる。
 
 ### 2.3 公開エンドポイント
 
 - `GET /policy/age`（認証不要）: 有効な年齢/地域ポリシー設定値を返す。設定値は常に公開される前提のため、秘密情報を含めない。
-- 応答例の主なフィールド: `default_minimum_age`, `country_minimums`, `target_regions`, `operator_configured`,
-  `require_explicit_configuration`, `enforcement_mode`, `settings_always_public`, `notes`。
+- 応答例の主なフィールド: `default_minimum_age`, `country_minimums`, `target_regions`,
+  `configuration_satisfied`（計算結果）, `require_explicit_configuration`, `enforcement_mode`,
+  `settings_always_public`, `notes`。
 
 ### 2.4 基準日（ローカル TZ）
 
@@ -110,11 +114,34 @@ JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01
   従来どおり `TrustedAttributeRequired` でフェイルクローズする。
 - 本型のフィールドは署名検証・発行者検証済みを意味しない。検証済み属性のみを扱う経路の実装は
   外部仕様確定後の課題である。
+- ADR-0007 で、この型を attestation として再利用する adapter 境界を追加した（下記 2.6）。
+
+### 2.6 署名付き年齢属性 adapter（mock 経路のみ・ADR-0007）
+
+- [server/src/verified_age.rs](../server/src/verified_age.rs): 検証境界を
+  `verify(issuer, claims, nonce, audience) -> Result<VerifiedAge, AppError>`
+  に限定した adapter。年齢クレーム（`birthdate` / `country`）と
+  attestation（`VerifiedAgeAttribute`）を分離し、自己申告フィールドの混入を
+  `deny_unknown_fields` で拒否する。発行者は `trusted_issuers` と完全一致で比較し、
+  audience / nonce / 署名対象の束縛も検証する。失敗は TrustedAttributeRequired と
+  同等の 403 に変換する。
+- nonce の単回消費は既存 `MOCK_NONCES.remove()` を再利用し、audience は
+  OIDC `client_id` をフォールバックに使用する。
+- [server/src/oidc.rs](../server/src/oidc.rs): callback の
+  `ensure_age_policy_configured` 直後に adapter 境界を呼ぶ。実証明書が未接続のため
+  信頼属性必須モードでは fail closed とし、認可フロー自体は変更しない。
+- [server/src/lib.rs](../server/src/lib.rs): `auth_verify` の mock 分岐で
+  `allow_mock_auth` 有効時のみ `verified_claims` を受理する。自己申告の
+  `birth_date` / `country_code` は信頼属性として扱わず、必須モードでは
+  検証済みクレームの欠落を 403 とする。既定モードは自己申告のまま維持する。
 
 ## 3. 現行の制約・未完了事項
 
 - 本人確認済み発行者からの生年月日・居住国・年齢属性の取得、提示署名/nonce/信頼ルート/失効検証は未実装（DEC-01連携）。
-- `trusted_attribute_required` モードは、検証済み属性入力経路がないため現時点で常に拒否する。
+  adapter は mock 経路にのみ結線されており、実証明書は未接続である。
+- `trusted_attribute_required` モードは、実証明書経路が未接続のため OIDC では常に拒否する。
+  `/auth/verify` の mock 経路では `AGE_TRUSTED_ISSUERS` に許可された発行者の
+  `verified_claims` のみ受理する（許可リストが空なら起動拒否）。
 - 対象地域、必要属性、閾値、属性保持期間、コンテンツ種別ごとの適用法令の最終確定は未決定（DEC-02の残作業）。
 - 「21歳が最も高い成人年齢」等の外部事実は一次ソースに基づく確認と専門家レビューが必要であり、本実装の既定値をその事実の証明として扱わない。
 - 年齢判定の結果は、現行入力が自己申告である限り、法的・本人確認上の保証にならない。

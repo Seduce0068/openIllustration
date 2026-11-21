@@ -60,13 +60,16 @@ pub struct AgePolicy {
     pub country_minimums: BTreeMap<String, u32>,
     /// 運用者が対象とする地域・運用範囲の宣言（メタデータ、公開可）。
     pub target_regions: Vec<String>,
-    /// 運用者が明示的に設定済みと宣言したか（`AGE_POLICY_CONFIGURED`）。
-    /// 単独では必須設定値の充足を意味しない（doctor の `age_policy` 診断で警告）。
-    pub operator_configured: bool,
-    /// 明示設定がない場合に fail closed するか（`AGE_REQUIRE_EXPLICIT_CONFIGURATION`）。
+    /// 必須設定値が未充足の場合に fail closed するか（`AGE_REQUIRE_EXPLICIT_CONFIGURATION`）。
     pub require_explicit_configuration: bool,
     /// 判定モード。
     pub enforcement_mode: AgeEnforcementMode,
+    /// 検証済み年齢属性を受理する発行者の許可リスト（完全一致・非秘密設定）。
+    ///
+    /// `AGE_TRUSTED_ISSUERS` のカンマ区切り値から trim 後に空要素を除いて読み込む。
+    /// 大文字小文字の正規化や部分一致は行わず、常に完全一致で比較する。
+    #[serde(default)]
+    pub trusted_issuers: Vec<String>,
     /// 設定値は常に公開される前提であることを示す固定フラグ。
     pub settings_always_public: bool,
     /// 実装上の注意（公開可）。
@@ -82,9 +85,9 @@ impl Default for AgePolicy {
             default_minimum_age: 21,
             country_minimums: BTreeMap::new(),
             target_regions: Vec::new(),
-            operator_configured: false,
             require_explicit_configuration: false,
             enforcement_mode: AgeEnforcementMode::SelfReportedDobCountry,
+            trusted_issuers: Vec::new(),
             settings_always_public: true,
             notes: vec![
                 "Effective age policy settings are always public by design."
@@ -155,19 +158,31 @@ impl AgePolicy {
             };
         }
 
+        if let Some(value) = getter("AGE_TRUSTED_ISSUERS") {
+            // trim と空要素除去は parse_csv_list に集約する。正規化・部分一致は
+            // 行わず、adapter 側で完全一致比較する（発行者 URL の大小文字は意味を持つ）。
+            policy.trusted_issuers = parse_csv_list(&value);
+        }
+
         if let Some(value) = getter("AGE_REQUIRE_EXPLICIT_CONFIGURATION") {
             policy.require_explicit_configuration = parse_bool_env(&value).ok_or_else(|| {
                 "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)".to_string()
             })?;
         }
 
-        if let Some(value) = getter("AGE_POLICY_CONFIGURED") {
-            policy.operator_configured = parse_bool_env(&value).ok_or_else(|| {
-                "AGE_POLICY_CONFIGURED must be a boolean (1/0/true/false)".to_string()
-            })?;
+        policy.normalize();
+
+        // 信頼属性必須モードで許可リストが空なら、検証済み属性を受理する経路が
+        // 存在しないため fail closed（起動拒否）。値はエコーしない。
+        if policy.enforcement_mode == AgeEnforcementMode::TrustedAttributeRequired
+            && policy.trusted_issuers.is_empty()
+        {
+            return Err(
+                "AGE_TRUSTED_ISSUERS must contain at least one issuer when trusted-attribute enforcement is enabled"
+                    .to_string(),
+            );
         }
 
-        policy.normalize();
         Ok(policy)
     }
 
@@ -175,6 +190,8 @@ impl AgePolicy {
         self.target_regions.retain(|r| !r.trim().is_empty());
         self.target_regions.sort();
         self.target_regions.dedup();
+        self.trusted_issuers.sort();
+        self.trusted_issuers.dedup();
         self.notes.sort();
         self.notes.dedup();
         if self.enforcement_mode == AgeEnforcementMode::TrustedAttributeRequired {
@@ -196,9 +213,29 @@ impl AgePolicy {
             .unwrap_or(self.default_minimum_age)
     }
 
+    /// 発行者が許可リストに完全一致で含まれるか。
+    ///
+    /// 正規化（trim / 大文字小文字）は行わない。設定読込時に trim 済みのため、
+    /// ここでは文字列の完全一致のみを判定する。
+    pub fn is_trusted_issuer(&self, issuer: &str) -> bool {
+        self.trusted_issuers.iter().any(|trusted| trusted == issuer)
+    }
+
     /// 公開用の有効設定値（同一構造体。全フィールドが非秘密の前提）。
     pub fn public_settings(&self) -> &Self {
         self
+    }
+
+    /// 必須設定値が充足されているかを実効値から導出する。
+    ///
+    /// 手動フラグ（`AGE_POLICY_CONFIGURED`）は保持せず、
+    /// `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS`
+    /// のいずれかが既定値から変更されていれば充足とみなす。
+    /// 旧的 doctor の `age_policy_values_at_defaults` と同じ述語（反転）である。
+    pub fn configuration_satisfied(&self) -> bool {
+        self.default_minimum_age != 21
+            || !self.country_minimums.is_empty()
+            || !self.target_regions.is_empty()
     }
 }
 
@@ -332,7 +369,7 @@ pub fn is_age_allowed_with_policy(
     country_code: &str,
     today: NaiveDate,
 ) -> Result<(), AgeValidationError> {
-    if policy.require_explicit_configuration && !policy.operator_configured {
+    if policy.require_explicit_configuration && !policy.configuration_satisfied() {
         return Err(AgeValidationError::ConfigurationRequired);
     }
     if policy.enforcement_mode == AgeEnforcementMode::TrustedAttributeRequired {
@@ -368,6 +405,8 @@ mod tests {
         assert_eq!(policy.default_minimum_age, 21);
         assert!(policy.country_minimums.is_empty());
         assert!(policy.settings_always_public);
+        // 手動フラグを持たず、既定値のみでは充足とみなさない。
+        assert!(!policy.configuration_satisfied());
     }
 
     #[test]
@@ -395,6 +434,7 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
         let mut policy = AgePolicy::default();
         policy.country_minimums.insert("JP".to_string(), 18);
+        assert!(policy.configuration_satisfied());
         assert!(is_age_allowed_with_policy(&policy, "2007-01-01", "JP", today).is_ok());
         // US など未指定国は既定の保守的閾値が維持される
         assert!(is_age_allowed_with_policy(&policy, "2007-01-01", "US", today).is_err());
@@ -405,9 +445,9 @@ mod tests {
         let today = NaiveDate::from_ymd_opt(2026, 6, 5).unwrap();
         let policy = AgePolicy {
             require_explicit_configuration: true,
-            operator_configured: false,
             ..AgePolicy::default()
         };
+        assert!(!policy.configuration_satisfied());
         let err = is_age_allowed_with_policy(&policy, "1990-01-01", "JP", today).unwrap_err();
         assert_eq!(err, AgeValidationError::ConfigurationRequired);
     }
@@ -500,7 +540,7 @@ mod tests {
         assert_eq!(policy.default_minimum_age, 21);
         assert!(policy.country_minimums.is_empty());
         assert!(policy.target_regions.is_empty());
-        assert!(!policy.operator_configured);
+        assert!(!policy.configuration_satisfied());
         assert!(!policy.require_explicit_configuration);
         assert_eq!(
             policy.enforcement_mode,
@@ -560,8 +600,12 @@ mod tests {
     #[test]
     fn from_env_with_parses_trusted_attribute_required_mode() {
         for raw in ["trusted_attribute_required", " TRUSTED_ATTRIBUTE_REQUIRED "] {
-            let policy =
-                AgePolicy::from_env_with(getter_from(&[("AGE_ENFORCEMENT_MODE", raw)])).unwrap();
+            // 信頼属性必須モードは許可リストが必須（空なら起動拒否）。
+            let policy = AgePolicy::from_env_with(getter_from(&[
+                ("AGE_ENFORCEMENT_MODE", raw),
+                ("AGE_TRUSTED_ISSUERS", "jpki-test"),
+            ]))
+            .unwrap();
             assert_eq!(
                 policy.enforcement_mode,
                 AgeEnforcementMode::TrustedAttributeRequired
@@ -593,14 +637,22 @@ mod tests {
 
     #[test]
     fn from_env_with_rejects_undocumented_boolean_alias_fail_open() {
-        // AGE_POLICY_CONFIGURED=yes のような設定が黙って有効化されないことを保証する。
+        // 真偽値の別名（yes/on/no/off）はドキュメント外。受理すると fail-open を招くため拒否する。
+        // 旧手動フラグ AGE_POLICY_CONFIGURED は読取自体を廃止し、充足判定へ影響しない。
         for raw in ["yes", "on", "no", "off"] {
-            let err = AgePolicy::from_env_with(getter_from(&[("AGE_POLICY_CONFIGURED", raw)]))
-                .unwrap_err();
+            let err = AgePolicy::from_env_with(getter_from(&[(
+                "AGE_REQUIRE_EXPLICIT_CONFIGURATION",
+                raw,
+            )]))
+            .unwrap_err();
             assert!(
-                err.contains("AGE_POLICY_CONFIGURED"),
+                err.contains("AGE_REQUIRE_EXPLICIT_CONFIGURATION"),
                 "error must name the variable: {err}"
             );
+
+            let policy =
+                AgePolicy::from_env_with(getter_from(&[("AGE_POLICY_CONFIGURED", raw)])).unwrap();
+            assert!(!policy.configuration_satisfied(), "raw={raw:?}");
         }
     }
 
@@ -627,8 +679,12 @@ mod tests {
                 AgeEnforcementMode::TrustedAttributeRequired,
             ),
         ] {
-            let policy =
-                AgePolicy::from_env_with(getter_from(&[("AGE_ENFORCEMENT_MODE", raw)])).unwrap();
+            // 信頼属性必須の別名も許可リストを併記する（空リストは起動拒否）。
+            let policy = AgePolicy::from_env_with(getter_from(&[
+                ("AGE_ENFORCEMENT_MODE", raw),
+                ("AGE_TRUSTED_ISSUERS", "jpki-test"),
+            ]))
+            .unwrap();
             assert_eq!(policy.enforcement_mode, expected, "raw={raw:?}");
         }
     }
@@ -781,5 +837,78 @@ mod tests {
             is_age_allowed_with_policy(&policy, &claim.birth_date, &claim.country_code, today)
                 .unwrap_err();
         assert_eq!(err, AgeValidationError::TrustedAttributeRequired);
+    }
+
+    #[test]
+    fn from_env_with_trims_deduplicates_trusted_issuers() {
+        let policy = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_TRUSTED_ISSUERS",
+            " https://issuer.example.jp , jpki-test, , https://issuer.example.jp ",
+        )]))
+        .unwrap();
+        assert_eq!(
+            policy.trusted_issuers,
+            vec!["https://issuer.example.jp", "jpki-test"]
+        );
+        assert!(policy.settings_always_public);
+        assert!(
+            policy
+                .public_settings()
+                .trusted_issuers
+                .contains(&"jpki-test".to_string())
+        );
+    }
+
+    #[test]
+    fn trusted_issuer_matching_is_exact() {
+        let policy = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_TRUSTED_ISSUERS",
+            "https://issuer.example.jp",
+        )]))
+        .unwrap();
+        assert!(policy.is_trusted_issuer("https://issuer.example.jp"));
+        // 部分一致・大小文字変更・前後空白はすべて拒否する（完全一致）。
+        assert!(!policy.is_trusted_issuer("issuer.example.jp"));
+        assert!(!policy.is_trusted_issuer("HTTPS://ISSUER.EXAMPLE.JP"));
+        assert!(!policy.is_trusted_issuer(" https://issuer.example.jp "));
+        assert!(!AgePolicy::default().is_trusted_issuer("jpki-test"));
+    }
+
+    #[test]
+    fn trusted_attribute_mode_without_trusted_issuers_fails_closed() {
+        // 空リストは起動拒否（fail closed）。値はエコーしない。
+        let err = AgePolicy::from_env_with(getter_from(&[(
+            "AGE_ENFORCEMENT_MODE",
+            "trusted_attribute_required",
+        )]))
+        .expect_err("trusted mode without trusted issuers must be rejected");
+        assert!(
+            err.contains("AGE_TRUSTED_ISSUERS"),
+            "error must name the variable: {err}"
+        );
+
+        // 許可リストが1件あれば起動できる（実証明書は未接続でも設定は受け付ける）。
+        let policy = AgePolicy::from_env_with(getter_from(&[
+            ("AGE_ENFORCEMENT_MODE", "trusted_attribute_required"),
+            ("AGE_TRUSTED_ISSUERS", "jpki-test"),
+        ]))
+        .unwrap();
+        assert_eq!(
+            policy.enforcement_mode,
+            AgeEnforcementMode::TrustedAttributeRequired
+        );
+        assert_eq!(policy.trusted_issuers, vec!["jpki-test"]);
+    }
+
+    #[test]
+    fn self_reported_mode_does_not_require_trusted_issuers() {
+        // R1 item9: 既定モードは自己申告のままで、信頼属性必須へ自動昇格しない。
+        let policy =
+            AgePolicy::from_env_with(getter_from(&[("AGE_TRUSTED_ISSUERS", "jpki-test")])).unwrap();
+        assert_eq!(
+            policy.enforcement_mode,
+            AgeEnforcementMode::SelfReportedDobCountry
+        );
+        assert_eq!(policy.trusted_issuers, vec!["jpki-test"]);
     }
 }

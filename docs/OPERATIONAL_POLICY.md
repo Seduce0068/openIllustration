@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-21T07:23:27+09:00"
+  at: "2026-11-21T21:33:39+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -27,9 +27,12 @@ generated:
 - JWT署名鍵、JPKI信頼情報、JPYC運用鍵等の保管者、最小権限、ローテーション、漏えい時失効・再発行手順を定める。秘密をログや監査公開データへ出さない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*`）は非秘密情報として `GET /policy/age` で常時公開する。公開対象に秘密情報（`JWT_SECRET`, `JWT_RSA_PRIVATE_KEY_PEM`,
   `OIDC_CLIENT_SECRET`, `PAYMENT_RECEIVING_XPRV`, `PINATA_JWT`, DBトークン等）を含めない。ポリシー設定変更は運用者の責任で管理し、適用法令・専門家レビューの根拠を記録する。
-- `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` で `AGE_POLICY_CONFIGURED` が未設定/`0` のときは、
+- `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` で必須設定値が未充足（`AGE_DEFAULT_MINIMUM=21` かつ
+  `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` が空）のときは、
   `/auth/verify` だけでなく `/auth/oidc/callback` と `/auth/refresh` も共通ゲート
   `ensure_age_policy_configured` が `ConfigurationRequired` を 403 にして全経路 fail-closed とする。
+  充足判定は `AgePolicy::configuration_satisfied()` が実効値から導出し、旧手動フラグ
+  `AGE_POLICY_CONFIGURED` は読取を廃止したため通過条件に使わない。
   `AGE_ENFORCEMENT_MODE=trusted_attribute_required` も同様に `TrustedAttributeRequired` を 403 にする。
   設定ゲートは state / Cookie の消費より前に適用し、年齢数値判定は `/auth/verify` に委ねる。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
@@ -114,7 +117,7 @@ generated:
   `0700` でなければ警告する。リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ
   読み、`--database-token` は受け付けない（`argv` 露出対策）。出力先は `create_new` で原子的に
   生成し、既存ファイルの上書きを拒否する。手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
-- 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト12件を追加済み
+- 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト17件を追加済み
   （TEST_SPECIFICATION AUDIT-02）。Runbook の手動確認（鍵権限・親ディレクトリ権限・
   `DATABASE_TOKEN` 設定・既存出力の有無）は補助的な確認として扱う。
 - 本番前に署名鍵の HSM 管理とローテーション、監査対象・公開範囲、外部アンカー、個人情報保護、障害時運用を定めて試験する。
@@ -248,7 +251,7 @@ generated:
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | `1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
-| `DATABASE_URL` | 任意 | `file:local.db` | libSQL接続先（既定値の運用上の差分は下記注記を参照）。 |
+| `DATABASE_URL` | DB 接続3 CLI では必須（サーバーは任意） | なし（CLI）/ `file:local.db`（サーバー） | libSQL 接続先。DB 接続3 CLI は未設定時に起動拒否（下記注記を参照）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
@@ -267,7 +270,7 @@ generated:
 | `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |
 | `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。 |
-| `AGE_POLICY_CONFIGURED` | 任意（非秘密） | `false` | 運用者が設定を確認/確定したことを示すフラグ。`AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` と併用し、未設定/`0` では `/auth/verify` / OIDC callback / refresh の全経路が 403（fail-closed）。 |
+| `AGE_POLICY_CONFIGURED`（廃止） | — | — | 旧手動フラグ。読取を廃止し設定されても無視される。充足判定は `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の実効値から導出（`AgePolicy::configuration_satisfied()`）。 |
 | `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
 | `PAYMENT_RECEIVING_XPRV` | 任意 | 未設定 | BIP44派生用のxprv。設定時は注文ごとの受取アドレスを派生し、`PAYMENT_RECEIVING_ADDRESS` より優先する。秘密管理基盤から注入し、ログへ出さない。 |
@@ -298,11 +301,13 @@ generated:
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
 | `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし警告を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
 
-- `DATABASE_URL` の既定値はサーバー・CLI ともに `file:local.db`（後方互換のため変更しない）。
-  一方 deploy 設定例（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）は
-  `file:/var/lib/openillustration/local.db` を使い、両者は別 DB を指す。
-  手動で CLI を実行するときは `--database-url` または `DATABASE_URL` を明示し、
-  誤った DB を検証して成功と誤信するのを防ぐ。
+- サーバーは `DATABASE_URL` 未設定時に `file:local.db` を使うが、DB 接続3 CLI
+  （`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙既定値を撤廃し、
+  `--database-url` または `DATABASE_URL` の明示設定がなければ起動を拒否する
+  （空・空白のみも未設定として扱い、値はエコーしない / fail-closed）。
+  deploy 設定例（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）は
+  `file:/var/lib/openillustration/local.db` を明示済みで、設定値の変更は不要。
+  手動実行でも接続先を明示し、誤った DB を検証して成功と誤信するのを防ぐ。
 - OIDC の URL 設定（`OIDC_ISSUER` / `OIDC_REDIRECT_URI` / `OIDC_AUTHORIZATION_ENDPOINT` /
   `OIDC_TOKEN_ENDPOINT` / `OIDC_JWKS_URI`）は https が必須。`ALLOW_MOCK_AUTH` が有効な場合のみ
   `localhost` / `127.0.0.1` / `[::1]` / `::1` の http を許容し、それ以外の http や不正 URL は

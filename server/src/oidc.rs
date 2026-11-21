@@ -520,6 +520,11 @@ impl OidcState {
         self.config.cookie_secure
     }
 
+    /// OIDC client_id。verified_claims の audience フォールバック等で使用する。
+    pub(crate) fn client_id(&self) -> &str {
+        &self.config.client_id
+    }
+
     /// 期限切れ pending を回収し、削除件数を返す。
     /// `register_pending` / `take_pending` は認証リクエストが来たときだけ掃除するため、
     /// 起動時 purge や周期 tick からも呼んでアイドル中の古いエントリを回収する。
@@ -1014,6 +1019,12 @@ pub async fn callback(
     // 信頼属性必須モード／明示設定必須モードでは、OIDC 経路に検証済み年齢属性が
     // 無いため fail-closed で拒否する（数値判定は auth_verify に委ねる）。
     crate::ensure_age_policy_configured(&state.age_policy)?;
+
+    // DEC-01: 署名付き年齢属性 adapter の境界を設定ゲート直後に配線する。
+    // 実証明書／検証済み属性の入力経路は未接続のため、信頼属性必須モードでは
+    // ここで fail closed（上記と同じ 403）。既定の自己申告モードでは no-op。
+    // 認可フロー（state / PKCE / ID トークン検証）は変更しない。
+    crate::verified_age::verify_oidc_age_binding(&state.age_policy)?;
 
     // ログイン CSRF（state すり替え）対策: Cookie の state と query の state を
     // 比較し、一致しなければ値をエコーせずに拒否する。take_pending より前で
