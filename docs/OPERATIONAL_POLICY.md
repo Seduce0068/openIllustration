@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T00:20:00+09:00"
+  at: "2026-11-23T01:05:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -311,6 +311,10 @@ generated:
   黙ってデータを修正せず、運用側の確認を強制するための動作である。
   並行注文対策（R1-26）は新規マイグレーションを追加せず、`create_order` が
   書き込みロックとトランザクション内で採番を直列化することで実現する。
+   verify の CAS 更新が UNIQUE 違反で失敗したときは、メッセージ文字列だけを根拠に
+   「同一送金の再利用」と判断せず、SQLite の extended code（2067）に加えて違反カラム名が
+   `payment_orders(chain_id, tx_hash, log_index)` のときだけ 400 の再利用扱いとする。
+   他の UNIQUE インデックス（例: `derivation_index`）や非 UNIQUE エラーは Internal(500) へ伝播させる。
 - IPv6のみの制御をプロキシ経由で使う場合、`TRUSTED_PROXY_CIDRS` に信頼済みプロキシの範囲のみを
   設定する。プロキシの `X-Forwarded-For`（XFF）は**上書きを推奨**するが、**追記も可**である。
   追記型（末尾がピア）ではサーバーが末尾のピアを除去して最左のクライアントを採用し、
@@ -371,7 +375,9 @@ generated:
   `oidc_endpoint_urls` 等のカテゴリを対象とし、カテゴリ数・判定ロジックは変更しない。
   問題検出時は終了コード1でゲート失敗とし、設定是正後に再実行する。
 - liveness は `GET /health`（プロセス生存のみ、固定 200）。readiness は `GET /ready` とし、DB への `SELECT 1` が成功し停止処理中でなければ 200、それ以外は 503
-  を返す。停止シグナル受信時は readiness を即 503 にしてから drain する。いずれも IPv6/IP ゲートの対象（バイパスしない）。
+  を返す。停止シグナル（SIGTERM / SIGINT）受信時は、まず `shutting_down` を立てて readiness を即 503 にし、
+  固定のドレイン窓（`READINESS_DRAIN_WINDOW`）をおいてから graceful shutdown を開始する。
+   LB がヘルスチェックでこのインスタンスを除外してから drain するため、新規リクエストの到着を抑える。いずれも IPv6/IP ゲートの対象（バイパスしない）。
 - readiness の意味は「このインスタンスが API リクエストを受けられるか」に限定する。IPFS / JPKI / チェーンなどの外部依存が壊れても、影響を受けるエンドポイントは個別にエラーを返し、他機能は継続できるため
   readiness は 200 を維持する（意図的な設計判断）。外部依存の障害検知は `GET /metrics` のエラーカウンタと WARN ログ（IPFS チェックサム不整合等）で行い、アラート通知先へ接続して監視する。
   外部依存を丸ごと停止させる運用が必要になった場合は、ロードバランサー側のヘルスチェックではなく専用の依存チェックを別途設計する。
@@ -398,6 +404,10 @@ generated:
   URL 本文・IP アドレス・User-Agent・認証情報は含めず、サーバーも受信・記録・ログ出力しない。
   送信を止めても `GET /metrics` の `openillustration_neutralized_urls_total` は
   それまでに受け付けたイベント数の累積値として残る。
+- 自動確定（`finalize_due_reports*`）は一件ごとに `BEGIN` / `COMMIT` し、
+  途中で一件が失敗しても既に確定済みの件数を失わず、成功件は `COMMIT` ごとに
+  `note_finalizer_success(metrics, 1)` で `finalizer_processed` へ加算する。
+  失敗件は `finalizer_failures` へ分離計上し、成功件と失敗件を混同しない。
 - finalizer／purge の観測: `GET /metrics` は `openillustration_finalizer_ticks_total`（周期 tick の実行回数）、
   `openillustration_finalizer_processed_total`（finalizer と周期 purge の処理件数）、
   `openillustration_finalizer_lock_busy_total`（書き込みロック取得失敗でスキップした回数）、
@@ -441,7 +451,7 @@ generated:
 | `JWT_SECRET` | 必須 | なし | HS256署名鍵。未設定・32バイト未満は起動を拒否する。秘密管理基盤から注入する。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない。 |
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
-| `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
+| `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。`add_verification_key` は引数 `kid` と`kid_from_public_pem`（SPKI DER の SHA-256 先頭16バイト）の導出値を照合し、不一致なら登録を拒否する。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、有効な `http(s)://` オリジンのみ、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
@@ -564,6 +574,16 @@ generated:
    （`AGE_REQUIRE_EXPLICIT_CONFIGURATION` は真偽値受理値列挙、`AGE_ENFORCEMENT_MODE` は
    モード受理値列挙）。`doctor` は同じ判定を `age_policy` カテゴリの固定文言警告へ反映する。
    いずれも値・生バイトはエコーしない。
+- `JWT_RSA_PRIVATE_KEY_PEM` / `JWT_SECRET` / `JWT_RSA_VERIFICATION_KEYS` と
+   `IPFS_GATEWAYS` / `IPFS_TIMEOUT_SECS` / `IPFS_MAX_ATTEMPTS` /
+   `PAYMENT_RECEIVING_ADDRESS` / `PAYMENT_RECEIVING_XPRV` も
+   `common::env::read_env` で一度だけ読み、未設定 / 非 UTF-8 / 有効値を区別する。
+   JWT の非 UTF-8 は「未設定」と混同すると署名アルゴリズムが黙って切り替わるため
+   固定文言で起動拒否とし、IPFS / 決済の非 UTF-8 は固定文言の警告のうえ未設定と同じく
+   機能を無効化する（fail-closed）。`doctor` は
+   `common::env::classify(lookup(..))` と共有分類関数 `env_value_for_use` で同じ区別を行い、
+   `production` カテゴリ内へ固定文言の警告をマージする（check23 は不変）。
+   いずれも設定値・生バイトをエコーしない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।
 
@@ -643,3 +663,13 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
   tests136 の数値は不変。
+- **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
+  監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
+  ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
+  goBack は直前の既知 view へ正規化する。ログアウト API 失敗は dedicated
+  `role=alert` で再試行を案内するが画面遷移は現行どおりログインへ戻す。
+  集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
+  object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
+  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
+  migrations14 / tests136 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。

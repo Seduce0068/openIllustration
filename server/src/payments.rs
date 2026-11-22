@@ -662,27 +662,40 @@ async fn is_wallet_bound(db: &libsql::Connection, order_id: &str) -> Result<bool
     }
 }
 
-/// libsql の UNIQUE 制約違反を判別する。
+/// `payment_orders(chain_id, tx_hash, log_index)` の UNIQUE 違反だけを同一送金の再利用として扱う。
 ///
 /// ローカル DB の `SqliteFailure` 第1引数は extended SQLite コードで、
 /// UNIQUE 違反は `SQLITE_CONSTRAINT_UNIQUE` (2067) となる。リモート DB (Hrana) の
 /// `RemoteSqliteFailure` は第1引数が基本コード (19)、第2引数が extended コードなので
-/// 両方を見る。コードが基本コードしか渡されない実装に備え、メッセージも補助で確認する
-/// （メッセージは判定だけに使い、クライアントへは返さない）。
+/// 両方を見る。メッセージ文字列は UNIQUE 判定のフォールバックには使わず、
+/// コードが UNIQUE のときだけ違反カラム名を検査して対象インデックスかを確定する
+/// （メッセージは判定以外へ渡さず、クライアントへは返さない）。
 fn is_unique_constraint_violation(error: &libsql::Error) -> bool {
     const SQLITE_CONSTRAINT_UNIQUE: i32 = 2067;
-    const UNIQUE_MESSAGE: &str = "UNIQUE constraint failed";
-    match error {
-        libsql::Error::SqliteFailure(code, message) => {
-            *code == SQLITE_CONSTRAINT_UNIQUE || message.contains(UNIQUE_MESSAGE)
+    const UNIQUE_COLUMNS: [&str; 3] = [
+        "payment_orders.chain_id",
+        "payment_orders.tx_hash",
+        "payment_orders.log_index",
+    ];
+    let message = match error {
+        libsql::Error::SqliteFailure(code, message) if *code == SQLITE_CONSTRAINT_UNIQUE => {
+            message.as_str()
         }
-        libsql::Error::RemoteSqliteFailure(code, extended_code, message) => {
-            *code == SQLITE_CONSTRAINT_UNIQUE
-                || *extended_code == SQLITE_CONSTRAINT_UNIQUE
-                || message.contains(UNIQUE_MESSAGE)
+        libsql::Error::RemoteSqliteFailure(code, extended_code, message)
+            if *code == SQLITE_CONSTRAINT_UNIQUE || *extended_code == SQLITE_CONSTRAINT_UNIQUE =>
+        {
+            message.as_str()
         }
-        _ => false,
-    }
+        _ => return false,
+    };
+    let Some(columns) = message.strip_prefix("UNIQUE constraint failed:") else {
+        return false;
+    };
+    let violated: Vec<&str> = columns.split(',').map(str::trim).collect();
+    violated.len() == UNIQUE_COLUMNS.len()
+        && UNIQUE_COLUMNS
+            .iter()
+            .all(|column| violated.contains(column))
 }
 
 pub async fn verify_order(
@@ -866,29 +879,33 @@ pub async fn verify_order(
 mod unique_violation_tests {
     use super::is_unique_constraint_violation;
 
+    const REUSE_COLUMNS: &str = "UNIQUE constraint failed: payment_orders.chain_id, payment_orders.tx_hash, payment_orders.log_index";
+
     #[test]
     fn local_unique_error_is_detected() {
-        let error = libsql::Error::SqliteFailure(2067, "UNIQUE constraint failed: x".to_string());
+        let error = libsql::Error::SqliteFailure(2067, REUSE_COLUMNS.to_string());
         assert!(is_unique_constraint_violation(&error));
+        // 同じ UNIQUE 違反でも対象インデックスでなければ再利用扱いにしない。
+        let other_index = libsql::Error::SqliteFailure(
+            2067,
+            "UNIQUE constraint failed: payment_orders.derivation_index".to_string(),
+        );
+        assert!(!is_unique_constraint_violation(&other_index));
         let other = libsql::Error::SqliteFailure(5, "database is locked".to_string());
         assert!(!is_unique_constraint_violation(&other));
     }
 
     #[test]
     fn remote_unique_error_is_detected_by_code_and_extended_code() {
-        let by_extended =
-            libsql::Error::RemoteSqliteFailure(19, 2067, "UNIQUE constraint failed: x".to_string());
+        let by_extended = libsql::Error::RemoteSqliteFailure(19, 2067, REUSE_COLUMNS.to_string());
         assert!(is_unique_constraint_violation(&by_extended));
 
-        let by_basic = libsql::Error::RemoteSqliteFailure(2067, 0, "constraint failed".to_string());
+        let by_basic = libsql::Error::RemoteSqliteFailure(2067, 0, REUSE_COLUMNS.to_string());
         assert!(is_unique_constraint_violation(&by_basic));
 
-        let by_message = libsql::Error::RemoteSqliteFailure(
-            19,
-            0,
-            "UNIQUE constraint failed: payment_orders.x".to_string(),
-        );
-        assert!(is_unique_constraint_violation(&by_message));
+        // メッセージ文字列だけでは UNIQUE 判定しない（文字列フォールバックの廃止）。
+        let by_message = libsql::Error::RemoteSqliteFailure(19, 0, REUSE_COLUMNS.to_string());
+        assert!(!is_unique_constraint_violation(&by_message));
 
         let other = libsql::Error::RemoteSqliteFailure(19, 5, "database is locked".to_string());
         assert!(!is_unique_constraint_violation(&other));

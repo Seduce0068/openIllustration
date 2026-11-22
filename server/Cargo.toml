@@ -48,6 +48,5 @@ governor = "0.10.4"
 # dev-dependencies に置く。通常依存にすると cargo の unused dependency 警告が出る。
 proptest = "1.12"
 rcgen = "0.14"
-tokio-test = "0.4.5"
 rsa = { version = "0.10", features = ["pkcs1v15", "getrandom"] }
 p256 = { version = "0.14", features = ["ecdsa", "pkcs8"] }

@@ -175,11 +175,36 @@ test.describe('Error paths (network error / HTTP 500)', () => {
         body: 'Test content',
       });
     });
+    // R2-CLIENT-02: 後続フェーズで監査ログを追加し、再オープン時の再取得を検証する。
+    type AuditMode = 'error' | 'one' | 'two';
+    let auditMode: AuditMode = 'error';
+    let auditRequests = 0;
+    const auditLog = (id: number, by: string) => ({
+      log_id: id,
+      old_status: null,
+      new_status: 'Approved',
+      changed_by: by,
+      reason: null,
+      created_at: '2026-11-18T00:00:00Z',
+      entry_hash: `hash-${id}`,
+    });
     await page.route(`**/content/${cid}/audit`, async route => {
+      auditRequests += 1;
+      if (auditMode === 'error') {
+        await route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'audit failed' }),
+        });
+        return;
+      }
+      const logs = auditMode === 'one'
+        ? [auditLog(1, 'alice')]
+        : [auditLog(1, 'alice'), auditLog(2, 'bob')];
       await route.fulfill({
-        status: 500,
+        status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ error: 'audit failed' }),
+        body: JSON.stringify(logs),
       });
     });
 
@@ -201,6 +226,24 @@ test.describe('Error paths (network error / HTTP 500)', () => {
       .toHaveText('監査ログの取得に失敗しました (HTTP 500).', { timeout: 10000 });
     await expect(auditAlert).toHaveAttribute('role', 'alert');
     await expect(auditAlert).toBeVisible();
+
+    // R2-CLIENT-02 追加フェーズ: 成功 → ログ追加 → 再オープン。
+    // パネルを閉じるたびに取得済みフラグが戻り、開くたびに再取得されることを検証する。
+    const auditToggle = page.locator('button:has-text("Audit")').first();
+    const closePanel = page.getByRole('button', { name: 'CLOSE' });
+    await closePanel.click();
+    auditMode = 'one';
+    await auditToggle.click();
+    await expect(page.getByText('By: alice')).toBeVisible({ timeout: 10000 });
+    await expect(auditAlert).toHaveCount(0);
+    const afterFirstSuccess = auditRequests;
+
+    await closePanel.click();
+    auditMode = 'two';
+    await auditToggle.click();
+    await expect(page.getByText('By: bob')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByText('By: alice')).toBeVisible();
+    expect(auditRequests).toBeGreaterThan(afterFirstSuccess);
   });
 
   /**

@@ -4,8 +4,8 @@
 
 use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, MAX_AUTH_AGE_MAX_SECS,
-    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
-    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    env_value_for_use, graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout,
+    jwt_keys_from_env, max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
     pinata_jwt_production_like, policy_utc_offset_hours, production_allowed_origins_error,
     production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
     validate_jwt_secret, validate_oidc_config_with,
@@ -192,6 +192,24 @@ where
             production.push(BACKUP_ALERT_CMD_WARNING.to_string());
         }
     }
+    // JWT / IPFS / 決済の非 UTF-8 は run() と同じ env_value_for_use で分類し、
+    // 固定文言の警告へ倒す（生バイトは保持しない）。check23 を維持するため
+    // 新規カテゴリは作らず production 内へマージする。
+    for name in [
+        "JWT_RSA_PRIVATE_KEY_PEM",
+        "JWT_SECRET",
+        "JWT_RSA_VERIFICATION_KEYS",
+        "IPFS_GATEWAYS",
+        "IPFS_TIMEOUT_SECS",
+        "IPFS_MAX_ATTEMPTS",
+        "PAYMENT_RECEIVING_ADDRESS",
+        "PAYMENT_RECEIVING_XPRV",
+    ] {
+        let value = common::env::classify(lookup(name));
+        if let Some(warning) = env_value_for_use(name, &value).1 {
+            production.push(warning);
+        }
+    }
     results.push(("production", production));
 
     // モック認証と本番相当の設定の併用は危険（モック認証で本番データが触れる）。
@@ -237,13 +255,19 @@ where
     results.push(("mock_auth_enabled", mock_auth_enabled_errors));
 
     // JWT: HS256 は 32 バイト以上、RS256 は PEM と検証キーの整合を検査する。
-    let jwt_pem = lookup("JWT_RSA_PRIVATE_KEY_PEM").ok();
-    let jwt_secret = lookup("JWT_SECRET").ok();
+    // 値の取り出しは run() と同じ env_value_for_use を使う（非 UTF-8 は production で警告済み）。
+    let jwt_pem_value = common::env::classify(lookup("JWT_RSA_PRIVATE_KEY_PEM"));
+    let jwt_secret_value = common::env::classify(lookup("JWT_SECRET"));
+    let verification_keys_value = common::env::classify(lookup("JWT_RSA_VERIFICATION_KEYS"));
+    let (jwt_pem, _) = env_value_for_use("JWT_RSA_PRIVATE_KEY_PEM", &jwt_pem_value);
+    let (jwt_secret, _) = env_value_for_use("JWT_SECRET", &jwt_secret_value);
+    let (verification_keys, _) =
+        env_value_for_use("JWT_RSA_VERIFICATION_KEYS", &verification_keys_value);
     let (require_kid, jwt_bool_warning) = bool_flag_with_warning(&lookup, "JWT_REQUIRE_KID", false);
     let mut jwt_errors = match jwt_keys_from_env(
-        jwt_pem,
-        jwt_secret,
-        lookup("JWT_RSA_VERIFICATION_KEYS").ok().as_deref(),
+        jwt_pem.map(str::to_string),
+        jwt_secret.map(str::to_string),
+        verification_keys,
         require_kid,
     ) {
         Ok(_) => Vec::new(),
@@ -255,8 +279,9 @@ where
     results.push(("jwt", jwt_errors));
 
     let mut secret_errors = Vec::new();
-    if let Ok(secret) = lookup("JWT_SECRET")
-        && let Err(error) = validate_jwt_secret(&secret)
+    // 同じ EnvValue 分類から取り出した値だけを検証する（非 UTF-8 は production で警告済み）。
+    if let Some(secret) = jwt_secret
+        && let Err(error) = validate_jwt_secret(secret)
     {
         secret_errors.push(error);
     }
@@ -266,10 +291,11 @@ where
     // ipfs_gateways() は不正値を除外して有効値だけ返すため、設定した非空エントリ数
     // との差を問題として計上する（値は出力しない）。未設定時は既定ゲートウェイを
     // 使うため加算しない。
-    let gateways_env = lookup("IPFS_GATEWAYS").ok();
-    let gateways = ipfs_gateways(gateways_env.as_deref());
+    let gateways_value = common::env::classify(lookup("IPFS_GATEWAYS"));
+    let (gateways_env, _) = env_value_for_use("IPFS_GATEWAYS", &gateways_value);
+    let gateways = ipfs_gateways(gateways_env);
     let mut ipfs_errors = Vec::new();
-    if let Some(value) = &gateways_env {
+    if let Some(value) = gateways_env {
         let configured = value
             .split(',')
             .filter(|entry| !entry.trim().is_empty())
@@ -291,8 +317,10 @@ where
     // rate_limit と同じ方式で「生のパース値」と「正規化後の値」を比較し、
     // フォールバックが発生した場合のみ警告する。設定値自体は出力しない。
     let mut timeout_errors = Vec::new();
-    if let Ok(value) = lookup("IPFS_TIMEOUT_SECS")
-        && ipfs_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    let ipfs_timeout_value = common::env::classify(lookup("IPFS_TIMEOUT_SECS"));
+    let (timeout_value, _) = env_value_for_use("IPFS_TIMEOUT_SECS", &ipfs_timeout_value);
+    if let Some(value) = timeout_value
+        && ipfs_timeout(Some(value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         timeout_errors
             .push("IPFS_TIMEOUT_SECS is invalid or outside 1..=300; using default".to_string());
@@ -300,8 +328,10 @@ where
     results.push(("ipfs_timeout", timeout_errors));
 
     let mut attempts_errors = Vec::new();
-    if let Ok(value) = lookup("IPFS_MAX_ATTEMPTS")
-        && ipfs_max_attempts(Some(&value)) != value.parse::<usize>().unwrap_or(0)
+    let ipfs_attempts_value = common::env::classify(lookup("IPFS_MAX_ATTEMPTS"));
+    let (attempts_value, _) = env_value_for_use("IPFS_MAX_ATTEMPTS", &ipfs_attempts_value);
+    if let Some(value) = attempts_value
+        && ipfs_max_attempts(Some(value)) != value.parse::<usize>().unwrap_or(0)
     {
         attempts_errors
             .push("IPFS_MAX_ATTEMPTS is invalid or outside 1..=5; using default".to_string());
@@ -411,7 +441,7 @@ where
     let (_, cookie_bool_warning) = bool_flag_with_warning(&lookup, "OIDC_COOKIE_SECURE", true);
     let mut oidc_cookie_secure_errors = if !allow_mock_auth && !validation.cookie_secure {
         vec![
-            "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute"
+            "OIDC_COOKIE_SECURE is disabled; refresh and OIDC state cookies will lack the Secure attribute"
                 .to_string(),
         ]
     } else {
@@ -1452,7 +1482,7 @@ mod tests {
 
     #[test]
     fn oidc_cookie_secure_falsy_warns_without_disclosing_value() {
-        const EXPECTED: &str = "OIDC_COOKIE_SECURE is disabled; session, refresh, and OIDC state cookies will lack the Secure attribute";
+        const EXPECTED: &str = "OIDC_COOKIE_SECURE is disabled; refresh and OIDC state cookies will lack the Secure attribute";
         for value in ["0", "false", "FALSE", "FaLsE"] {
             let results = check_all_with(lookup_from(&[("OIDC_COOKIE_SECURE", value)]));
             let errors = errors_for(&results, "oidc_cookie_secure");

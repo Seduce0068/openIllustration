@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T00:20:00+09:00"
+  at: "2026-11-23T01:05:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T00:20:00+09:00"
+  at: "2026-11-23T01:05:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -35,7 +35,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
    EXPORT-11 の解析失敗フェーズは `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ、
    REPORTS-ERR の解析失敗フェーズは `moderation.spec.ts` の REPORTS-ERR-01 内へ、
    監査注記のアサーション更新は `integrity.spec.ts` の既存 test 内へ追加した
-   （いずれも既存テスト内へ統合、新規 `test()` なし、E2E69件を維持）。
+   （いずれも既存テスト内へ統合、新規 `test()` なし、E2E2E69件を維持）。
    `moderation.spec.ts` は REPORT-ERR-01 内へ
   空 CID / 空 reason の検証フェーズを、`search.spec.ts` は既存1件内へ `q='Ghost'` の
   0件表示とクリア復帰フェーズを、`integrity.spec.ts` は既存2件内へ
@@ -99,7 +99,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理。オラクル: 代表4xx（400/404/429）の本文は `{"error": "<固定文言>"}` のみで、入力値・内部詳細・トークンをエコーしない（400: `Invalid CID` / `Invalid report reason`、404: `Resource not found`、429: `rate limit exceeded` / `too many concurrent requests`）。500系の既定非公開とは独立に仕様化する |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
-| 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
+| 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM / SIGINT 受信時に `shutting_down` を先に立てて readiness を 503 とし、固定ドレイン窓のあと graceful shutdown を開始して LB の 503 検出を可能にする。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証。migration 014 は `test_migration_014_declares_expires_at_as_text` / `test_migration_014_preserves_rfc3339_expires_at` / `test_migration_014_rewrite_detects_checksum_mismatch` の3件で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
 | 完全性 | SHA-256一致・不一致、IPFS取得系をローカルモックで検証（サイズ超過・タイムアウト・次ゲートウェイへのフォールバック・ストリーム途中切断を含む）、`IPFS_MAX_ATTEMPTS` の既定/範囲検証、CIDのURLパス注入拒否、取得/監査系の不正CID 400・不存在CID 404、チェックサム不一致時の WARN ログ、チェックサム一致でも JXL デコード失敗時は VERIFIED にしないこと（E2E INT-01 / R1-13） | 実ゲートウェイの遅延・切断、実Pinata連携、厳密なCID仕様検証、ネットワークエラー時の実リトライは未検証 |
 | Markdown表示 | raw HTMLのエスケープ、インライン・参照リンク・自動リンク・画像URLの危険スキーム拒否（実体参照による難読化、Unicode 空白/制御文字（ZWSP・NBSP）によるスキーム隠しを含む）と安全スキーム維持をユニットテスト。危険 URL が `render_markdown` を通した後も `href="#"` / `src="#"` に置換される統合検証も実施 | ブラウザ別URL解釈のE2Eは未実施 |
@@ -168,7 +168,7 @@ auth 3件・export 3件・全体69件を維持する。
   `SHOW STATS` / `SUBMIT FORENSIC REPORT` / `DOWNLOAD ALL OF YOUR DATA AS JSON` 等である。
   これによりスクリーンリーダーの発音と言語宣言が整合する。ボタンの `textContent` と
   `data-testid` は不変で、E2E は `e2e/tests/integrity.spec.ts` の既存 ARIA テスト内へ
-  `lang="en"` のアサーションを追加するのみ（新規 `test()` なし、E2E69件を維持）。
+  `lang="en"` のアサーションを追加するのみ（新規 `test()` なし、E2E2E69件を維持）。
 - **リリース無ログ**: `client/src/lib.rs` の `EXPORT_RESULT` コンソール出力は
   `#[cfg(feature = "dev-console")]` でゲートし、`dev-console` を明示した開発ビルド以外では
   コンソールへ出力しない。エクスポート結果（件数・成功可否）や内部 URL・リクエストデータを
@@ -278,7 +278,7 @@ auth 3件・export 3件・全体69件を維持する。
 | PAY-04 | `verify_order` の CAS 2段目と `bind_wallet` の CAS | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない。`bind_wallet` も tx 内で `status` / `expires_at` を読み直し、`status = 'PENDING'` を条件に `wallet_bound = 1` を更新して 0 件更新なら 409 | 実装済み（`server/src/payments.rs`）。`bind_wallet` は競合時に固定文言 `order status changed during wallet binding` を返し、`verify_order` と同じ単一ライター契約を満たす。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。R2-LOGOUT-TOKEN で失効時刻を logout token の `iat` に統一し、UPSERT の `changes() == 0`（再送・古いトークン）ではメモリ更新とリフレッシュ消費をスキップして閾値を前進させない。下記「CAS 2段目と失効閾値レースの検証」を参照 |
-| ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
+| ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析、引数 kid と `kid_from_public_pem` 導出値の整合 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件）。kid 整合は既存アサーション追加のみで検証し、テスト関数数は不変 |
 | ID-08 | 開発用モック経路の所有証明（PoP・opt-in、段階1-2） | `VerifyRequest.proof_of_possession` 省略時は従来どおり200。添付時は nonce に対する RSASSA-PKCS1-v1_5 + SHA-256 署名（base64 STANDARD）を `public_key_der`（SPKI）で検証し、正常署名は200、署名対象 nonce の改ざん・`pop.nonce` 不一致・別鍵署名は401。署名 decoded 512バイト超・公開鍵DER 16 KiB 超も401 | 実装済み。ハンドラ経由4件（`test_auth_verify_pop_valid_signature_is_accepted` / `test_auth_verify_pop_tampered_nonce_is_rejected` / `test_auth_verify_pop_other_key_signature_is_rejected` / `test_auth_verify_pop_is_opt_in`）を `server/src/tests.rs` に追加。純粋関数4件と mock nonce 単回消費テストは維持。E2E 定義数は69件のまま変更なし |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を全レスポンスへ付与する。HTML 配信の CSP は配信側担当。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
 | MET-01 | 中立化URL件数指標とプライバシー | 危険 URL を中和した件数だけを送り、URL 本文・IP・User-Agent を送らず記録しない。`GET /metrics` のカウンタは差分で増える | 実装済み。下記「中立化URL件数指標の検証（MET-01）」を参照。カウンタは参考値であり、単独のアラート判定・請求判断には使わない |
@@ -394,12 +394,15 @@ R5-04 の12表エクスポートを単一時点のスナップショットにす
 
 verify の CAS 更新失敗を「送金の再利用」とみなすのは UNIQUE 違反のみで、
 それ以外の DB エラーは Internal(500) へ写像する（内部詳細はマスク）。
-判別は `is_unique_constraint_violation` がローカル／リモート双方の表現を扱う。
+判別は `is_unique_constraint_violation` がローカル／リモート双方の表現を扱い、
+UNIQUE コード（extended 2067）のときだけ違反カラム名を検査する。
+メッセージ文字列を UNIQUE 判定のフォールバックには使わず、
+`payment_orders(chain_id, tx_hash, log_index)` のときだけ再利用扱いとする。
 
 | テスト関数 | 検証する test oracle |
 | --- | --- |
-| `local_unique_error_is_detected` | ローカル `SqliteFailure(2067, "UNIQUE constraint failed: ...")` は違反と判定。`SqliteFailure(5, "database is locked")` は非違反 |
-| `remote_unique_error_is_detected_by_code_and_extended_code` | リモート `RemoteSqliteFailure` を extended code(2067) / basic code(2067) / メッセージの3経路で検出。`RemoteSqliteFailure(19, 5, "database is locked")` は非違反 |
+| `local_unique_error_is_detected` | ローカル `SqliteFailure(2067, ...)` のうち違反カラムが `payment_orders.chain_id, payment_orders.tx_hash, payment_orders.log_index` なら再利用と判定。`payment_orders.derivation_index` など別インデックスと `SqliteFailure(5, "database is locked")` は非違反 |
+| `remote_unique_error_is_detected_by_code_and_extended_code` | リモート `RemoteSqliteFailure` を extended code(2067) / basic code(2067) で検出。code が UNIQUE でない場合はメッセージが対象カラム列でも非違反（文字列フォールバック廃止）。`RemoteSqliteFailure(19, 5, "database is locked")` は非違反 |
 | `test_payment_verify_maps_non_unique_db_error_to_internal` | CAS 更新に `RAISE(ABORT)` トリガを張り、非 UNIQUE の DB エラーが400（再利用）へ写像されず Internal(500)＋マスク済み本文（`Internal server error`）になることを確認 |
 
 いずれもサーバー側テストであり、E2E 定義数は当時59件のまま変わらず（現在69件）。
@@ -520,6 +523,10 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 各呼び出し側は変数名（doctor は既定値も）を付けるだけである。
 受理値・既定値・既存文言・check23 / doctor53 は不変（新規テスト関数なし）。
 `ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に警告が計上され、`--strict` で exit 1 になる。
+`oidc_cookie_secure` の無効化警告は session Cookie への言及を外し、
+`OIDC_COOKIE_SECURE is disabled; refresh and OIDC state cookies will lack the Secure attribute`
+に変更する（`bin/doctor.rs` の期待値も同じ文言へ更新）。サーバーは session Cookie を発行しないため。
+カテゴリ数（check23）・テスト数（doctor53）・件数は不変。
 
 上表の「設定判定」42件のうち `oidc_max_auth_age` カテゴリは、共通バリデータの固定文言をそのまま警告へ流す。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過
   （固定文言 `OIDC_MAX_AUTH_AGE_SECS must not exceed 2592000 seconds (30 days)`、`u64::MAX` 境界を含む）は既存テスト内のアサーション追加で検証し、
@@ -662,6 +669,15 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 `production_database_url_error` と同一）で起動を拒否する（値・生バイトはエコーしない）。
 各 CLI へ追加した5テスト（計15件）が、両方未設定の拒否、CLI 優先、環境変数のみの受理、
 空/空白拒否、非エコーを検証する。
+
+`JWT_RSA_PRIVATE_KEY_PEM` / `JWT_SECRET` / `JWT_RSA_VERIFICATION_KEYS` と
+`IPFS_GATEWAYS` / `IPFS_TIMEOUT_SECS` / `IPFS_MAX_ATTEMPTS` /
+`PAYMENT_RECEIVING_ADDRESS` / `PAYMENT_RECEIVING_XPRV` も
+`common::env::read_env` で読み、共有分類関数 `env_value_for_use` が
+「未設定 / 非 UTF-8 の固定文言警告 / 有効な UTF-8」を返す。
+`run()` は JWT の非 UTF-8 を起動拒否、IPFS / 決済の非 UTF-8 を固定文言警告へ倒し、
+`doctor` は `common::env::classify(lookup(..))` で同じ分類を共有する。
+新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests136 不変）。
 
 本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
@@ -1621,6 +1637,10 @@ last_success_timestamp）について、公開形式と実際の進捗を下記�
 - `test_finalizer_metrics_increment`: 期限切れリフレッシュトークンを1件置いて finalizer を起動し、
   `finalizer_ticks` と `finalizer_processed` が 1 以上、`finalizer_last_success_secs` が 0 より
   大きくなることをオラクルとする。
+- 自動確定は `BEGIN` / `COMMIT` を一件ごとに回し、途中で失敗しても確定済み件数を失わない。
+  成功件は `COMMIT` ごとに `note_finalizer_success(metrics, 1)` で `finalizer_processed` へ加算し、
+  失敗件は `finalizer_failures` へ分離計上する（成功件と失敗件の混同を防ぐ契約）。
+  既存の finalize_due_reports 系テストのアサーション内でこの部分コミット契約を確認する。
 - `test_client_events_neutralized_url_increments_counter`: `count` 指定7・省略時1・上限1000で
   204（本文なし）を返し、加算は1固定でカウンタが before+1 / +2 / +3 と進むことをオラクルとする。
 - `test_client_events_rejects_invalid_payloads`: 不正 event（固定値以外）・`count` の 0 / 1001 /
@@ -1868,10 +1888,44 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `Novel Decode Failed` の3つの `role=alert` 見出しと、ログイン画面の
   英語パラグラフ2つへ `lang="en"` を付与する。既存固定文言・data-testid は不変。
   `integrity.spec.ts` の既存 ARIA／デコード失敗ケース内へ `lang` アサーションを追加し、
-  新規 `test()` は追加しない（E69件を維持）。
+  新規 `test()` は追加しない（E2E69件を維持）。
 - **公開集計401の分岐**: `/mod/stats/public` が401のときだけ dedicated 固定文言
   `再ログインが必要です。` と `LOG OUT からログアウトし、再度 JPKI でログインしてください。`
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
-  新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
+  新規 `test()` は追加しない（moderation14件・E2E2E69件を維持）。
   check23 / doctor53 / migrations14 / tests136 の数値は不変。
+
+## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
+
+- **投票一覧の取得失敗と投票ボタン**: `/mod/reports` が失敗（`reports_error` 非空）の間は
+  `APPROVE (RESTORE)` / `REJECT (VOTE)` を disabled にし、同期ガードでも受け付けない。
+  `moderation.spec.ts` の REPORTS-ERR-01 内へ「成功 → 500 切替 → 再マウント」フェーズを
+  追加し、古いカードが残っていてもボタンが操作できないことを検証する。
+- **監査タイムラインの再取得**: パネルを開くたびに `GET /content/{cid}/audit` を再取得する。
+  `audit_fetched_cid` は CLOSE / Escape / トグルで閉じたときに戻し、成功時も再オープンで
+  最新のログを反映する。`error-paths.spec.ts` の AUDIT-500 内へ
+  「成功 → ログ追加 → 再オープン」フェーズを追加する。
+- **アップロード送信中のファイル固定**: `loading` 中は file input を disabled、ラベルを
+  非対話（`aria-disabled=true` / `tabindex=-1`）にし、差し替えが届いても `on_file_change`
+  が無視して送信バイト列を変えない。`upload.spec.ts` の既存成功ケース内で検証する。
+- **TOC の goBack 正規化**: popstate で未知 hash（TOC の `#slug`）へ戻ったとき、
+  直前の既知 view（`last_known_view`）があればそれへ正規化して `set_view` する。
+  `search.spec.ts` の既存ケース内へ「小説 → TOC → タブ切替 → goBack」フェーズを追加する。
+- **ログアウト失敗の dedicated 告知**: API 失敗時に
+  `ログアウト処理が完了しませんでした。再試行してください。` を dedicated `role=alert`
+  （`data-testid="logout-error"`）で出し、画面遷移は現行どおり即座にログインへ戻す。
+  `auth.spec.ts` の既存 LOG OUT ケース内へ `/auth/logout` abort フェーズを追加し、
+  auth 3件を維持する。
+- **集計 GENERATED_AT の整形表示**: `format_local_datetime` で整形し、生 ISO は `title`
+  属性へ保持する。運用者・公開の双方の集計カードへ適用し、`moderation.spec.ts` の
+  既存アサーションを整形後文言（生 ISO を含まない `GENERATED_AT:` 行）と title の生 ISO へ更新する。
+- **エクスポートの object URL と aria-label**: revoke を固定10秒から
+  `OBJECT_URL_REVOKE_DELAY_MS`（60秒）へ延長し、失敗時は dedicated な再試行案内
+  （`data-testid="export-download-hint"`）を出す。busy 中は `aria-label` を
+  `エクスポート中` へ切替える。`export.spec.ts` の既存ケース内で revoke 予約遅延の観測と
+  aria-label の idle → busy → idle 遷移を検証する。
+- **CI E2E ゲート**: `README.md` のテスト手順へ `bash e2e/ci-e2e.sh` と前提
+  （本番相当 env・trunk v0.21.14・Google Chrome・Node 22 以上）を追記し、
+  `npm test` は開発用であることを明記する。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests136 は不変。

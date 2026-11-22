@@ -111,6 +111,29 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect.poll(() => logoutAuthHeader).toBe('Bearer mock_jwt_token');
     expect(logoutMethod).toBe('POST');
 
+    // R2-CLIENT-05: /auth/logout が失敗しても画面遷移は現行どおりログインへ戻し、
+    // dedicated role=alert で再試行を案内する（auth 3件は不変）。
+    let abortedLogout = 0;
+    await page.unroute('**/auth/logout');
+    await page.route('**/auth/logout', async route => {
+      abortedLogout += 1;
+      await route.abort();
+    });
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await page.getByTestId('logout-button').click();
+
+    // 失敗時もログイン画面へ戻る（画面遷移の現行契約を維持）。
+    await expect(page.getByRole('button', { name: 'CONNECT WITH JPKI' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveCount(0);
+    const logoutError = page.getByTestId('logout-error');
+    await expect(logoutError).toHaveAttribute('role', 'alert');
+    await expect(logoutError).toHaveText(
+      'ログアウト処理が完了しませんでした。再試行してください。',
+      { timeout: 10000 },
+    );
+    await expect.poll(() => abortedLogout).toBe(1);
+
     // R2-REFRESH-ORIGIN: POST /auth/refresh を明示1回叩き、Origin が API_BASE と
     // 一致することを記録・検証する。Sec-Fetch-Site はブラウザが付与する値に
     // 依存するため、サーバ契約どおり cross-site でないことのみを確認する。

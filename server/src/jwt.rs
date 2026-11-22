@@ -89,7 +89,8 @@ impl JwtKeys {
     }
 
     /// 公開鍵 PEM から短い kid を導出する（SPKI DER の SHA-256 先頭16バイト）。
-    fn kid_from_public_pem(public_pem: &str) -> Result<String, String> {
+    /// 検証鍵登録時に引数 kid との整合検査へ使うためテストからも参照する。
+    pub fn kid_from_public_pem(public_pem: &str) -> Result<String, String> {
         use sha2::{Digest, Sha256};
         let key = rsa::PublicKey::from_public_key_pem(public_pem)
             .map_err(|e| format!("invalid RSA public key PEM: {e}"))?;
@@ -109,7 +110,14 @@ impl JwtKeys {
         if self.verification_keys.contains_key(kid) {
             return Err(format!("duplicate verification key kid: {kid}"));
         }
-        Self::kid_from_public_pem(public_pem)?;
+        // 引数 kid と公開鍵から導出した kid が違えば、ローテーション設定の取り違え。
+        // 登録を拒否し、未知 kid による検証失敗や意図しない鍵の混入を防ぐ。
+        let derived_kid = Self::kid_from_public_pem(public_pem)?;
+        if derived_kid != kid {
+            return Err(format!(
+                "verification key kid mismatch: expected {derived_kid}, got {kid}"
+            ));
+        }
         // 検証用の旧公開鍵にも署名鍵と同じ最小鍵長を要求する。
         // ローテーション経由で 1024 bit 以下の弱鍵が混入するのを防ぐ。
         let public_key = rsa::PublicKey::from_public_key_pem(public_pem)

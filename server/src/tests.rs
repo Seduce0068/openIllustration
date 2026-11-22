@@ -10809,9 +10809,11 @@ fn test_jwt_rs256_additional_verification_key() {
     let new_pem = test_rsa_private_pem();
     let old_pem = test_rsa_private_pem();
     let old_public = test_rsa_public_pem(&old_pem);
+    // 引数 kid は公開鍵から導出した値と一致しなければならない（R2-SERVER）。
+    let old_kid = crate::jwt::JwtKeys::kid_from_public_pem(&old_public).expect("derive old kid");
     let mut keys =
         crate::jwt::JwtKeys::from_rsa_private_key_pem(&new_pem).expect("new signing key");
-    keys.add_verification_key("rotated-old", &old_public)
+    keys.add_verification_key(&old_kid, &old_public)
         .expect("register old public key");
 
     let old_keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&old_pem).expect("old key");
@@ -10822,7 +10824,7 @@ fn test_jwt_rs256_additional_verification_key() {
         iat: None,
     };
     let mut header = old_keys.header();
-    header.kid = Some("rotated-old".to_string());
+    header.kid = Some(old_kid);
     let token = encode(&header, &claims, old_keys.encoding_key()).expect("sign with old key");
     let decoded: Claims = keys.decode(&token).expect("old key must verify").claims;
     assert_eq!(decoded.sub, "during_rotation");
@@ -10965,8 +10967,11 @@ fn test_jwt_keys_from_env_verification_keys_json_accepts_old_kid() {
     let new_pem = test_rsa_private_pem();
     let old_pem = test_rsa_private_pem();
     let old_public = test_rsa_public_pem(&old_pem);
+    // kid は公開鍵から導出した値と一致させる（R2-SERVERの整合検査）。
+    let old_kid = crate::jwt::JwtKeys::kid_from_public_pem(&old_public).expect("derive old kid");
     // 実コードと同じ kid -> SPKI 公開鍵 PEM の JSON オブジェクト。
-    let json = json!({ "legacy-key": old_public }).to_string();
+    let map = std::collections::HashMap::from([(old_kid.clone(), old_public)]);
+    let json = serde_json::to_string(&map).expect("serialize verification keys");
 
     let keys = crate::jwt_keys_from_env(Some(new_pem), None, Some(&json), false)
         .expect("register old public key from JSON");
@@ -10980,7 +10985,7 @@ fn test_jwt_keys_from_env_verification_keys_json_accepts_old_kid() {
         iat: None,
     };
     let mut header = old_keys.header();
-    header.kid = Some("legacy-key".to_string());
+    header.kid = Some(old_kid);
     let token = encode(&header, &claims, old_keys.encoding_key()).expect("sign with old key");
     let decoded: Claims = keys.decode(&token).expect("old kid must verify").claims;
     assert_eq!(decoded.sub, "rotated_user");
@@ -11023,17 +11028,24 @@ fn test_jwt_keys_from_env_verification_keys_json_rejects_invalid_kid() {
             "{label}: {error}"
         );
     }
+    // 長さは有効でも導出値と違う kid も拒否する（R2-SERVER）。
+    let map = std::collections::HashMap::from([("different".to_string(), public_pem)]);
+    let json = serde_json::to_string(&map).expect("serialize kid->PEM map");
+    let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
+        .err()
+        .expect("mismatched kid must be rejected");
+    assert!(error.contains("kid mismatch"), "{error}");
 }
 
 /// verification_keys_json: 不正な PEM は kid 付きエラーで拒否する。
 #[test]
 fn test_jwt_keys_from_env_verification_keys_json_rejects_invalid_pem() {
-    let json = json!({ "bad-pem": "not a PEM" }).to_string();
+    let json = json!({ "0123456789abcdef0123456789abcdef": "not a PEM" }).to_string();
     let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
         .err()
         .expect("invalid PEM must be rejected");
     assert!(
-        error.contains("JWT_RSA_VERIFICATION_KEYS[bad-pem]"),
+        error.contains("JWT_RSA_VERIFICATION_KEYS[0123456789abcdef0123456789abcdef]"),
         "{error}"
     );
     assert!(error.contains("invalid RSA public key PEM"), "{error}");
@@ -11054,18 +11066,24 @@ fn test_jwt_keys_from_env_rejects_verification_keys_json_with_hmac() {
 fn test_jwt_add_verification_key_kid_bounds() {
     let signing_pem = test_rsa_private_pem();
     let old_public = test_rsa_public_pem(&test_rsa_private_pem());
+    // kid は公開鍵から導出した値のみ受理する（導出値は SHA-256 先頭16バイトの hex）。
+    let old_kid = crate::jwt::JwtKeys::kid_from_public_pem(&old_public).expect("derive old kid");
     let mut keys =
         crate::jwt::JwtKeys::from_rsa_private_key_pem(&signing_pem).expect("signing key");
 
     assert!(
-        keys.add_verification_key("k", &old_public).is_ok(),
-        "1 char kid"
+        keys.add_verification_key(&old_kid, &old_public).is_ok(),
+        "derived kid"
     );
-    assert!(
-        keys.add_verification_key(&"k".repeat(128), &old_public)
-            .is_ok(),
-        "128 char kid"
-    );
+    // 1 文字 kid は長さ范围是内だが、導出値と一致しないため拒否する。
+    let error = keys
+        .add_verification_key("k", &old_public)
+        .expect_err("mismatched kid");
+    assert!(error.contains("kid mismatch"), "got: {error}");
+    let error = keys
+        .add_verification_key(&"k".repeat(128), &old_public)
+        .expect_err("128 char kid must not match the derived kid");
+    assert!(error.contains("kid mismatch"), "got: {error}");
 
     let error = keys
         .add_verification_key(&"k".repeat(129), &old_public)
@@ -11082,13 +11100,14 @@ fn test_jwt_add_verification_key_kid_bounds() {
 fn test_jwt_add_verification_key_rejects_duplicate_and_invalid_pem() {
     let signing_pem = test_rsa_private_pem();
     let old_public = test_rsa_public_pem(&test_rsa_private_pem());
+    let old_kid = crate::jwt::JwtKeys::kid_from_public_pem(&old_public).expect("derive old kid");
     let mut keys =
         crate::jwt::JwtKeys::from_rsa_private_key_pem(&signing_pem).expect("signing key");
 
-    keys.add_verification_key("old", &old_public)
+    keys.add_verification_key(&old_kid, &old_public)
         .expect("register once");
     let error = keys
-        .add_verification_key("old", &old_public)
+        .add_verification_key(&old_kid, &old_public)
         .expect_err("duplicate kid must be rejected");
     assert!(
         error.contains("duplicate verification key kid"),
@@ -11111,11 +11130,12 @@ fn test_jwt_add_verification_key_rejects_weak_key() {
         .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
         .expect("encode weak public key")
         .to_string();
+    let weak_kid = crate::jwt::JwtKeys::kid_from_public_pem(&weak_public).expect("derive weak kid");
 
     let mut keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&test_rsa_private_pem())
         .expect("signing key");
     let error = keys
-        .add_verification_key("weak", &weak_public)
+        .add_verification_key(&weak_kid, &weak_public)
         .expect_err("1024-bit verification key must be rejected");
     assert!(error.contains("at least 2048 bits"), "got: {error}");
     assert!(error.contains("1024 bits"), "got: {error}");
@@ -11131,13 +11151,15 @@ fn test_jwt_keys_from_env_verification_keys_json_rejects_weak_key() {
         .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
         .expect("encode weak public key")
         .to_string();
-    let json = json!({ "weak-old": weak_public }).to_string();
+    let weak_kid = crate::jwt::JwtKeys::kid_from_public_pem(&weak_public).expect("derive weak kid");
+    let map = std::collections::HashMap::from([(weak_kid.clone(), weak_public)]);
+    let json = serde_json::to_string(&map).expect("serialize kid->PEM map");
 
     let error = crate::jwt_keys_from_env(Some(test_rsa_private_pem()), None, Some(&json), false)
         .err()
         .expect("weak verification key must fail startup");
     assert!(
-        error.contains("JWT_RSA_VERIFICATION_KEYS[weak-old]"),
+        error.contains(&format!("JWT_RSA_VERIFICATION_KEYS[{weak_kid}]")),
         "got: {error}"
     );
     assert!(error.contains("at least 2048 bits"), "got: {error}");

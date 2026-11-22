@@ -62,6 +62,10 @@ test.describe('R5-04: Export My Data', () => {
       requestCount += 1;
       requestMethod = route.request().method();
       authHeader = route.request().headers()['authorization'];
+      if (!malformedResponse) {
+        // busy 中のアクセシブル名を決定論的に観測するため、応答を短く遅らせる。
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
       if (malformedResponse) {
         await route.fulfill({
           status: 200,
@@ -81,9 +85,38 @@ test.describe('R5-04: Export My Data', () => {
 
     await loginAndOpenDashboard(page);
 
+    // R2-CLIENT-07: object URL の revoke 予約が固定10秒より十分に遅いことを観測する。
+    // web-sys の set_timeout... は setTimeout(fn, timeout) へ写像されるため、
+    // setTimeout をラップして予約された遅延値を記録する（開始直後の失効はしない）。
+    await page.evaluate(() => {
+      const w = window as unknown as { __scheduledTimeouts: number[] };
+      w.__scheduledTimeouts = [];
+      const original = window.setTimeout.bind(window);
+      window.setTimeout = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+        if (typeof timeout === 'number') {
+          w.__scheduledTimeouts.push(timeout);
+        }
+        return original(handler, timeout, ...args);
+      }) as typeof window.setTimeout;
+    });
+
     const downloadPromise = page.waitForEvent('download');
-    await page.getByTestId('export-my-data').click();
+    const exportButton = page.getByTestId('export-my-data');
+    // R2-CLIENT-08: idle → busy → idle で aria-label が切り替わる。
+    await expect(exportButton).toHaveAttribute('aria-label', 'データをエクスポート');
+    await exportButton.click();
+    await expect.poll(() => exportButton.getAttribute('aria-label')).toBe('エクスポート中');
+    await expect(exportButton).toBeDisabled();
     const download = await downloadPromise;
+    await expect.poll(() => exportButton.getAttribute('aria-label')).toBe('データをエクスポート');
+    await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
+
+    const longDelays = await page.evaluate(() =>
+      (window as unknown as { __scheduledTimeouts: number[] }).__scheduledTimeouts.filter(
+        delay => delay >= 10_000,
+      ),
+    );
+    expect(longDelays.some(delay => delay > 10_000)).toBe(true);
 
     expect(requestCount).toBe(1);
     expect(requestMethod).toBe('GET');
@@ -215,5 +248,7 @@ test.describe('R5-04: Export My Data', () => {
     );
     await expect(page.getByTestId('export-error')).toHaveAttribute('role', 'alert');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
+    // R2-CLIENT-07: 失敗時は既存固定文言に加えて dedicated な再試行案内を出す。
+    await expect(page.getByTestId('export-download-hint')).toContainText('再度お試しください');
   });
 });

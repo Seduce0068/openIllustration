@@ -85,10 +85,21 @@ cargo test -p server
 # 共通クレート（年齢検証・チェックサム・監査ログ）
 cargo test -p common
 
-# E2E（初回は cd e2e && npm ci。Google Chrome・trunk・Node 22 以上が必要。
-# 開発サーバーは Playwright が自動起動する）
+# E2E（開発用・ローカル反復向け。初回は cd e2e && npm ci）
+# 前提: Google Chrome・trunk v0.21.14・Node 22 以上。
+# 開発サーバーは Playwright が自動起動する。
 cd e2e && npm test
+
+# CI E2E ゲート（本番相当の環境変数を注入した CI 環境で実行）
+# 前提: 本番相当 env・trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# 共通ワークフロー rust-gates.yml の extra_gates から呼ばれる。
+bash e2e/ci-e2e.sh
 ```
+
+`npm test` は開発用のローカル E2E 実行であり、CI の合否を決めるゲートではない。
+CI では `bash e2e/ci-e2e.sh` を必ず実行し、ブラウザ（chromium / firefox / webkit）
+の導入・型検査・シェル静的検査まで含めてゲートとする。ローカルで再現する場合は
+`cd e2e && npm test` を使い、必要なら `E2E_REUSE=0` でクリーンな DB から起動する。
 
 ### 5. 運用CLI（バックアップ・監査）
 

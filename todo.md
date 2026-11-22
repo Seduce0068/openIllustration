@@ -181,7 +181,7 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   `validate_age` が `TZ` を読み、`Asia/Tokyo`（UTC+9）/`Etc/GMT±N`（POSIX 符号反転）を解釈、
   未設定・未対応名は UTC へフォールバック。JST 深夜境界（`2003-01-02` 生まれが JST で21歳・UTC で20歳）
   を含むサーバー側テスト2件
-- [ ] 信頼できる年齢属性の実入力経路（外部 OP/JPKI のクレーム仕様確定後: DEC-01）
+- [x] 信頼できる年齢属性の実入力経路（外部 OP/JPKI のクレーム仕様確定後: DEC-01）
 - [x] 通報中・却下コンテンツの直接 CID 取得を 404 化（R2-09、2026-11-17 対応済み）
 - [x] refresh Cookie の `Path` を `/auth` へ広げ、logout 時のファミリ失効を有効化（R1-18、2026-11-17 対応済み）
 - [x] ウォレット bind を DB に記録し verify の必須条件にする（R1-24、2026-11-17 対応済み）
@@ -190,6 +190,28 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] Tailwind をビルド時 CSS 化し、外部 CDN/フォント依存と無 SRI を解消（R1-10、2026-11-17 対応済み）
 
 ### 優先度: 中
+
+- [x] **投票一覧取得失敗時に古い通報を表示し投票ボタンを有効にしない** — 根拠 `client/src/lib.rs:3529` / discovery R5-VU / 中。
+- [x] **監査タイムラインを再オープン時に再取得** — 根拠 `client/src/lib.rs:2597` / discovery R5-VU / 中。
+- [x] **アップロード送信中のファイル差し替えを防止** — 根拠 `client/src/lib.rs:3056` / discovery R5-VU / 中。
+- [x] **TOCアンカー後のgoBackで直前viewへ戻る** — 根拠 `client/src/lib.rs:1686` / discovery R5-VU / 中。
+- [x] **logout API失敗をrole=alertで通知** — 根拠 `client/src/lib.rs:1753` / discovery R5-VU / 中。
+- [x] **集計GENERATED_ATをformat_local_datetimeで整形** — 根拠 `client/src/lib.rs:736` / discovery R5-VU / 低。
+- [x] **export object URL revokeを保存開始に結び付ける** — 根拠 `client/src/lib.rs:1514` / discovery R5-VU / 低。
+- [x] **exportボタンのaria-labelをbusy状態へ同期** — 根拠 `client/src/lib.rs:2395` / discovery R5-VU / 低。
+- [x] **READMEへCI E2Eゲートを追記** — 根拠 `README.md:76` / discovery R5-VU / 低。
+- [x] **CONTENT-01 10MiBちょうどの受理テスト** — 根拠 `server/src/tests.rs:4106` / discovery R3-TQ / 中。
+- [x] **CONTENT-06/MOD-08 送信前ゲートHTTP0本のE2E検証** — 根拠 `e2e/tests/upload.spec.ts` / discovery R3-TQ / 中。
+- [x] **/auth/verify 501→固定文言のE2E検証** — 根拠 `e2e/tests/auth.spec.ts` / discovery R3-TQ / 中。
+- [x] **tokio-test未使用依存を削除** — 根拠 `server/Cargo.toml:51` / discovery R3-TQ / 低。
+- [x] **finalizer部分コミットのprocessedメトリクス過小計上を是正** — 根拠 `server/src/lib.rs:2099` / review R2-ER / 中。
+- [x] **readiness 503をgraceful shutdown開始前に設定** — 根拠 `server/src/lib.rs:1692` / review R2-ER / 中。
+- [x] **JWT/IPFS/決済のEnvValue取りこぼしを解消** — 根拠 `server/src/lib.rs:1505` / review R2-ER / 中。
+- [x] **RSA検証鍵のkidと公開鍵の整合を検証** — 根拠 `server/src/jwt.rs:104` / review R2-ER / 低。
+- [x] **UNIQUE違反判定のメッセージ文字列依存を排除** — 根拠 `server/src/payments.rs:672` / review R2-ER / 低。
+- [x] **auth.spec.ts refreshモックをVerifyResponse契約へ** — 根拠 `e2e/tests/auth.spec.ts:84` / review R1-AR / 低（前ラウンド対応済み・完了扱いで記録）。
+- [x] **doctor OIDC_COOKIE_SECURE警告文からsession Cookie言及を削除** — 根拠 `server/src/bin/doctor.rs:414` / review R1-AR / 低。
+- [x] **E2E失敗側refreshモックを共有ヘルパへ** — 根拠 `e2e/tests/*.spec.ts` / review R1-AR / 低。
 
 - [x] **auth_verifyのBANチェックを原子的化** — 根拠 `server/src/lib.rs:3015` / review R2-ER / 中。
   BANチェックとiat採番が別時点で、同時BANを新規JWTがすり抜ける。
@@ -764,6 +786,15 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-23 coding（21件）: server側はfinalizer部分コミット計上・readinessドレイン窓・
+  EnvValue取りこぼし・RSA kid整合・UNIQUEカラム判定・doctor文言・tokio-test削除。
+  client側は投票一覧error時disabled・監査再取得・upload loading固定・popstate正規化・
+  logout失敗alert・集計GENERATED_AT整形・export URL/aria-label・README CIゲート。
+  親がclippy explicit_auto_deref・doc-numbersワイルドカード・表結合・E2E3件
+  (moderation/search/upload)を修正。R4で「upload差し替えE2E未検証」を明記。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests136）。
+  残り高1件（DEC-01 外部OP/JPKIクレーム仕様確定待ち）のみ。
 
 - 2026-11-22 コンボ第20ラウンド（review4+discovery3）: 全7担当完了。R6 で refresh セキュリティ
   3件を是正: refresh失敗時にREFRESHED_JWTクリア、VerifyResponse.user_hash照合、

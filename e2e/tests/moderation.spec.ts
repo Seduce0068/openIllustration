@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 
 test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const mockCID = 'QmVPyxX9eKoR9LaKp2Hgt9rVkAffptArJ3zW5hvPLE713h';
@@ -39,6 +39,20 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   // report-validation-error とは data-testid で区別する。
   const reportFailedText = 'Report failed.';
   const reportSuccessText = 'Report accepted. Content marked Reported.';
+
+  // R2-CLIENT-06: 集計 GENERATED_AT は format_local_datetime で整形表示し、
+  // 生 ISO は title 属性へ保持する。ロケール差に依存しない書式のみを検証する。
+  const generatedAtRaw = '2026-11-18T00:00:00Z';
+  const assertGeneratedAt = async (scope: Locator, testId: string) => {
+    const generatedAt = scope.getByTestId(testId);
+    await expect(generatedAt).toBeVisible();
+    const text = (await generatedAt.textContent())?.trim() ?? '';
+    // ロケール依存の完全一致は避け、生 ISO でないことと年が含まれることのみを確認する。
+    expect(text).toMatch(/^GENERATED_AT: /);
+    expect(text).toContain('2026');
+    expect(text).not.toContain(generatedAtRaw);
+    await expect(generatedAt).toHaveAttribute('title', generatedAtRaw);
+  };
 
   // client/src/lib.rs の stats_error_message(StatsFailure::Parse) を grep して確定した
   // 固定文言。serde の生エラー（フィールド名・解析位置・型情報・レスポンス本文）は
@@ -441,7 +455,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // フェーズ0（公開集計）: オプインを待たず初期表示で 1 本だけ取得し、
     // 一般画面へホワイトリストの指標だけを描画する。
     await expect(page.getByTestId('public-mod-stats')).toBeVisible({ timeout: 10000 });
-    await expect(page.getByTestId('public-mod-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
+    await assertGeneratedAt(page.getByTestId('public-mod-stats'), 'public-mod-stats-generated-at');
     await expect(page.getByTestId('public-mod-stats-totals')).toContainText('Reports');
     await expect(page.getByTestId('public-mod-stats-totals')).toContainText('Quorum Not Met');
     await expect(page.getByTestId('public-mod-stats-monthly')).toContainText('2026-11');
@@ -469,7 +483,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByTestId('moderation-stats-toggle').click();
     await expect(page.getByTestId('moderation-stats')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('moderation-stats-section')).toContainText('TRANSPARENCY DASHBOARD');
-    await expect(page.getByTestId('moderation-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
+    await assertGeneratedAt(page.getByTestId('moderation-stats'), 'moderation-stats-generated-at');
     await expect(page.getByTestId('moderation-stats-totals')).toContainText('Reports');
     await expect(page.getByTestId('moderation-stats-totals')).toContainText('Quorum Not Met');
     await expect(page.getByTestId('moderation-stats-monthly')).toContainText('2026-11');
@@ -496,7 +510,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0);
     expect(statsRequests).toHaveLength(2);
     // 再マウント後の公開集計のロード完了を待ってから本数を確認する（レース回避）。
-    await expect(page.getByTestId('public-mod-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z', { timeout: 10000 });
+    await assertGeneratedAt(page.getByTestId('public-mod-stats'), 'public-mod-stats-generated-at');
     // 公開集計はマウントごとに 1 本増える（初期表示 1 本 + 再マウント 1 本 = 2 本）。
     expect(publicStatsRequests).toHaveLength(2);
 
@@ -511,7 +525,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(publicStatsError).toHaveText(statsParseErrorText);
     await expect(publicStatsError).not.toContainText('RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW');
     await expect(page.getByTestId('public-mod-stats-content')).toHaveCount(0);
-    await expect(page.getByTestId('public-mod-stats')).not.toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
+    await expect(page.getByTestId('public-mod-stats-generated-at')).toHaveCount(0);
     // オプイン押下はしていないので /mod/stats は増えず、公開集計だけ3本目が送られる。
     expect(statsRequests).toHaveLength(2);
     expect(publicStatsRequests).toHaveLength(3);
@@ -701,14 +715,23 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
   test('REPORTS-ERR-01: /mod/reports が 500 のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {
     const reportRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
-    // 後続フェーズでステータス200・壊れたフィールド型の JSON へ差し替えるためのフラグ。
+    // 後続フェーズで成功／壊れたフィールド型の JSON へ差し替えるためのフラグ。
     let brokenPayload = false;
+    let serveSuccess = false;
     await page.route('**/mod/reports', async route => {
       reportRequests.push({
         method: route.request().method(),
         path: new URL(route.request().url()).pathname,
         authorization: route.request().headers()['authorization'],
       });
+      if (serveSuccess) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([reportFixture(summarizedReason)]),
+        });
+        return;
+      }
       if (brokenPayload) {
         await route.fulfill({
           status: 200,
@@ -756,6 +779,41 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(reportsError).toHaveAttribute('role', 'alert');
     await expect(reportsError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
     await expect(page.getByText('NO_PENDING_VOTES')).toHaveCount(0);
+
+    // 追加フェーズ（R2-CLIENT-01）: 成功 → 500 切替 → 再マウント。
+    // 同一マウント内で投票成功をトリガに一覧を再取得させ、失敗後も古いカードが
+    // 残っていても投票ボタンが disabled になることを検証する。
+    serveSuccess = true;
+    brokenPayload = false;
+    await openModeration(page);
+
+    const approve = page.getByRole('button', { name: 'APPROVE (RESTORE)' });
+    const reject = page.getByRole('button', { name: 'REJECT (VOTE)' });
+    await expect(approve).toBeEnabled({ timeout: 10000 });
+    await expect(reject).toBeEnabled();
+    await expect(page.getByText(summarizedReason)).toBeVisible();
+
+    // 投票成功レスポンスを返し、do_vote から fetch_reports を再実行させる。
+    let voteRequests = 0;
+    await page.route('**/mod/vote', async route => {
+      voteRequests += 1;
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    });
+    serveSuccess = false;
+    await approve.click();
+
+    await expect(reportsError).toHaveText(reportsHttpErrorText(500), { timeout: 10000 });
+    // 古いカードは維持されるが、取得失敗中は投票ボタンを操作できない。
+    await expect(page.getByText(summarizedReason)).toBeVisible();
+    await expect(approve).toBeDisabled();
+    await expect(reject).toBeDisabled();
+    expect(voteRequests).toBe(1);
+
+    // 再マウント後は失敗状態が新しいカード／ボタンへ引き継がれない。
+    await openModeration(page);
+    await expect(reportsError).toHaveText(reportsHttpErrorText(500), { timeout: 10000 });
+    await expect(approve).toHaveCount(0);
+    await expect(reject).toHaveCount(0);
   });
 
   test('REPORTS-ERR-02: /mod/reports が network error のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {

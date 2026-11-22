@@ -150,6 +150,19 @@ fn format_local_datetime(iso: &str) -> String {
     }
 }
 
+/// 集計カードの `GENERATED_AT` を表示用のローカル書式へ整形する。
+/// wasm 以外の単体テストでは JS の `Intl` を呼べないため、元の文字列を保持する。
+#[cfg(target_arch = "wasm32")]
+fn format_stats_generated_at(iso: &str) -> String {
+    format_local_datetime(iso)
+}
+
+/// 非 wasm の単体テスト向け。生 ISO をそのまま返し、属性側でエスケープする。
+#[cfg(not(target_arch = "wasm32"))]
+fn format_stats_generated_at(iso: &str) -> String {
+    iso.to_string()
+}
+
 impl std::fmt::Display for ApiOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let origin = API_BASE_ENV.unwrap_or(DEFAULT_API_ORIGIN);
@@ -800,10 +813,13 @@ fn render_content_meta_html(title: &str, description: &str, tags: &[String]) -> 
 /// `inner_html` へ渡す（属性やタグとして解釈されないようにする）。
 fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     let mut html = String::new();
+    // 表示は整形済み日時、生 ISO は title 属性へ保持する（監査日時と同じ契約）。
+    let generated_at = format_stats_generated_at(&stats.generated_at);
     let _ = writeln!(
         html,
-        "<p class=\"mb-4 text-[10px] text-gray-500\">GENERATED_AT: {}</p>",
-        escape_html_text(&stats.generated_at)
+        "<p data-testid=\"moderation-stats-generated-at\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        escape_html_text(&stats.generated_at),
+        escape_html_text(&generated_at)
     );
 
     let totals = [
@@ -873,10 +889,13 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
 /// `inner_html` へ渡す（属性やタグとして解釈されないようにする）。
 fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     let mut html = String::new();
+    // 表示は整形済み日時、生 ISO は title 属性へ保持する（監査日時と同じ契約）。
+    let generated_at = format_stats_generated_at(&stats.generated_at);
     let _ = writeln!(
         html,
-        "<p class=\"mb-4 text-[10px] text-gray-500\">GENERATED_AT: {}</p>",
-        escape_html_text(&stats.generated_at)
+        "<p data-testid=\"public-mod-stats-generated-at\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        escape_html_text(&stats.generated_at),
+        escape_html_text(&generated_at)
     );
 
     let totals = [
@@ -1566,6 +1585,16 @@ fn download_start_error_message() -> &'static str {
     "ダウンロードの開始に失敗しました。"
 }
 
+/// ダウンロード開始失敗時に、既存の固定エラー文言に添えて出す再試行案内。
+/// 既存文言は変更せず、新規 dedicated 文言として追加する。
+const EXPORT_DOWNLOAD_RETRY_HINT: &str =
+    "ダウンロードが始まらない場合は、ブラウザのダウンロード許可を確認して再度お試しください。";
+
+/// object URL を失効させるまでの保留時間（ms）。
+/// 固定10秒では低速ストレージやセキュリティスキャンで保存開始を待ち切れないため、
+/// ダウンロード開始後の余裕を大幅に確保する。失敗時は上記の再試行案内も出す。
+const OBJECT_URL_REVOKE_DELAY_MS: i32 = 60_000;
+
 /// `anchor.click()` が投げる JS 例外を Rust の `Err` へ変換して捕捉する。
 /// web-sys の `click()` は例外を catch できないため、catch 付きの薄い JS ラッパーを介する。
 #[wasm_bindgen(inline_js = r#"
@@ -1623,10 +1652,13 @@ fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(),
         let _ = web_sys::Url::revoke_object_url(&url_to_revoke);
     });
     // 保存が開始される前に revoke するとダウンロードがキャンセルされるため遅延させる。
-    // 1 秒では保存開始が遅いブラウザ（低速ストレージやセキュリティスキャン等）で
-    // object URL が失効し得るため、10 秒に延長する。
-    let _ = window
-        .set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 10_000);
+    // 旧実装の固定10秒では低速ストレージやセキュリティスキャンで保存開始を待ち切れ
+    // なかったため、十分な余裕（OBJECT_URL_REVOKE_DELAY_MS）へ延長する。
+    // 開始自体が失敗した場合は呼び出し側で再試行案内も表示する。
+    let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+        revoke.unchecked_ref(),
+        OBJECT_URL_REVOKE_DELAY_MS,
+    );
 
     click_result?;
     Ok(())
@@ -1685,11 +1717,17 @@ fn is_known_view_hash(hash: &str) -> bool {
     )
 }
 
+/// ログアウト API の失敗時に dedicated role=alert で出す固定文言。
+/// 画面遷移は現行契約どおり即座にログインへ戻す（失敗で戻さないことはしない）。
+const LOGOUT_FAILED_MESSAGE: &str = "ログアウト処理が完了しませんでした。再試行してください。";
+
 #[component]
 pub fn App() -> impl IntoView {
     let (view, set_view) = signal("login".to_string());
     let (user_hash, set_user_hash) = signal(None::<String>);
     let (token, set_token) = signal(None::<String>);
+    // ログアウト API の失敗表示。ログイン画面でも見えるよう main 直下に描画する。
+    let (logout_error, set_logout_error) = signal(String::new());
 
     // api_fetch が試行ごとに現在の JWT を読めるよう、App の signal を共有状態へ登録する。
     register_shared_token(token, set_token);
@@ -1704,6 +1742,12 @@ pub fn App() -> impl IntoView {
             .map(|hash| view_from_hash(&hash))
             .unwrap_or("dashboard"),
     );
+
+    // popstate で未知 hash（TOC の #slug 等）へ戻ったときに正規化する直前の既知 view。
+    // タブ切替（Push）では更新せず、初期化・認証遷移（Replace）と既知 hash の
+    // popstate のときだけ更新する。これにより TOC アンカーの履歴条目は、
+    // その直前の既知 view（dashboard 等）へ正規化できる。
+    let last_known_view: StoredValue<String> = StoredValue::new("dashboard".to_string());
 
     // 全 view 遷移をここへ集約する。タブ切替だけ pushState、ログイン成功・
     // ログアウト・初期化は replaceState。検索条件（query）は current_content_query()
@@ -1739,6 +1783,7 @@ pub fn App() -> impl IntoView {
             // 初期化・ログイン成功・ログアウト（Replace）は履歴の成否にかかわらず
             // set_view を維持し、失敗時だけ警告する。
             NavigateMode::Replace => {
+                last_known_view.set_value(next.to_string());
                 set_view.set(next.to_string());
                 if history_result.is_err() {
                     warn_history_update_once();
@@ -1759,8 +1804,20 @@ pub fn App() -> impl IntoView {
         let Ok(hash) = window.location().hash() else {
             return;
         };
-        // TOC の #slug 等、既知 view 以外の hash では view を書き換えない。
+        // TOC の #slug 等、既知 view 以外の hash では「直前の既知 view」へ正規化する。
+        // 未知 hash のまま view を放置すると、タブ切替後に戻ったときに URL と
+        // 表示が食い違うため、既知 view が記録されていればそれへ戻す。
         if !is_known_view_hash(&hash) {
+            let known = last_known_view.get_value();
+            if known.is_empty() {
+                return;
+            }
+            let next = if token.get_untracked().is_some() {
+                known
+            } else {
+                "login".to_string()
+            };
+            set_view.set(next);
             return;
         }
         let next = if token.get_untracked().is_some() {
@@ -1768,6 +1825,7 @@ pub fn App() -> impl IntoView {
         } else {
             "login"
         };
+        last_known_view.set_value(next.to_string());
         set_view.set(next.to_string());
     });
     if let Some(window) = web_sys::window() {
@@ -1809,6 +1867,7 @@ pub fn App() -> impl IntoView {
     });
 
     let handle_login_success = move |hash: String, jwt: String| {
+        set_logout_error.set(String::new());
         set_user_hash.set(Some(hash));
         // 先に epoch を進め、前回セッションの in-flight refresh を無効化する。
         bump_refresh_epoch();
@@ -1825,6 +1884,8 @@ pub fn App() -> impl IntoView {
     // ログイン画面へ戻す。API の成否にかかわらず画面は必ずログインへ戻し、
     // 未認証（トークン無し／401 済み）でも安全なよう失敗はすべて無視する。
     let handle_logout = move |_| {
+        // 新しい試行では前回の失敗告知を消す。
+        set_logout_error.set(String::new());
         // 進行中の refresh を無効化し、完了後に旧 JWT が書き戻されるのを防ぐ。
         bump_refresh_epoch();
         // refresh 済みなら新 JWT（REFRESHED_JWT）を優先してサーバの新 sid を失効させる。
@@ -1840,13 +1901,19 @@ pub fn App() -> impl IntoView {
         if let Some(jwt) = token {
             spawn_local(async move {
                 // 既存の /auth/logout 契約どおり Bearer でセッションを失効させる。
-                let _ = Request::post(&format!("{API_BASE}/auth/logout"))
+                let result = Request::post(&format!("{API_BASE}/auth/logout"))
                     .header("Authorization", &format!("Bearer {}", jwt))
                     // refresh_token Cookie も送り、サーバ側でファミリを失効させる
                     // （api_fetch と同じ credentials 契約）。
                     .credentials(RequestCredentials::Include)
                     .send()
                     .await;
+                // 画面遷移は成否にかかわらず既にログイン済み。失敗だけ dedicated
+                // role=alert で告知し、生エラーやステータス本文は出さない。
+                match result {
+                    Ok(response) if response.ok() => {}
+                    _ => set_logout_error.set(LOGOUT_FAILED_MESSAGE.to_string()),
+                }
             });
         }
     };
@@ -1906,6 +1973,12 @@ pub fn App() -> impl IntoView {
             </nav>
 
             <main id="main-content" tabindex="-1" class="container mx-auto p-4">
+                // ログアウト API 失敗はログイン画面へ戻った後も dedicated role=alert で告知する。
+                <Show when=move || !logout_error.get().is_empty() fallback=|| ()>
+                    <p role="alert" data-testid="logout-error" class="mb-4 text-xs text-red-500">
+                        {move || logout_error.get()}
+                    </p>
+                </Show>
                 {move || match view.get().as_str() {
                     "login" => view! { <Login on_success=handle_login_success /> }.into_any(),
                     "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_any(),
@@ -2407,12 +2480,15 @@ fn ExportMyData(token: String) -> impl IntoView {
     let (error, set_error) = signal(String::new());
     let (status, set_status) = signal(String::new());
     let (busy, set_busy) = signal(false);
+    // ダウンロード開始失敗のときだけ出す dedicated 案内（既存エラー文言は不変）。
+    let (download_hint, set_download_hint) = signal(String::new());
     let token_stored = StoredValue::new(token);
 
     let on_export = move |_| {
         let token = token_stored.get_value();
         set_error.set(String::new());
         set_status.set(String::new());
+        set_download_hint.set(String::new());
         set_busy.set(true);
         spawn_local(async move {
             let result: Result<String, String> = async {
@@ -2460,7 +2536,13 @@ fn ExportMyData(token: String) -> impl IntoView {
             );
             match result {
                 Ok(message) => set_status.set(message),
-                Err(message) => set_error.set(message),
+                Err(message) => {
+                    // 開始失敗のときだけ、既存固定文言に加えて再試行案内を出す。
+                    if message == download_start_error_message() {
+                        set_download_hint.set(EXPORT_DOWNLOAD_RETRY_HINT.to_string());
+                    }
+                    set_error.set(message);
+                }
             }
         });
     };
@@ -2471,12 +2553,17 @@ fn ExportMyData(token: String) -> impl IntoView {
                 type="button"
                 on:click=on_export
                 disabled=busy
-                aria-label="データをエクスポート"
+                aria-label=move || if busy.get() { "エクスポート中" } else { "データをエクスポート" }
                 data-testid="export-my-data"
                 class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors disabled:opacity-50"
             >
                 {move || if busy.get() { "エクスポート中..." } else { "データをエクスポート" }}
             </button>
+            <Show when=move || !download_hint.get().is_empty() fallback=|| ()>
+                <p data-testid="export-download-hint" class="text-xs text-gray-400">
+                    {move || download_hint.get()}
+                </p>
+            </Show>
             <Show when=move || !error.get().is_empty() fallback=|| ()>
                 <p role="alert" data-testid="export-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500">
                     {move || error.get()}
@@ -2669,9 +2756,9 @@ where
         });
     };
 
-    // 監査ログは本文取得とは独立に、show_audit が true へ遷移した初回だけ取得する。
-    // cid ごとの取得済みフラグで二重取得を防ぐ（成功時は閉じて再オープンしても再取得しない）。
-    // 失敗時はフラグを戻すため、再オープン時に再取得されて再試行できる。
+    // 監査ログは本文取得とは独立に、パネルを開くたびに取得する。
+    // 取得済みフラグは in-flight の二重取得を防ぐためだけに使い、
+    // 失敗時だけでなく close_audit でも戻す（再オープン時に必ず最新を再取得）。
     let audit_cid = cid.clone();
     let audit_fetched_cid: StoredValue<Option<String>> = StoredValue::new(None);
     Effect::new(move |_| {
@@ -2829,15 +2916,24 @@ where
     let audit_controls_id: StoredValue<String> =
         StoredValue::new(audit_panel_id.get_value().clone());
 
+    // パネルを閉じたら取得済みフラグを戻す。次回オープンで必ず再取得し、
+    // 監査ログ追加後の再オープンでも最新のタイムラインを表示する。
+    let close_audit = move || {
+        if show_audit.get_untracked() {
+            set_show_audit.set(false);
+            audit_fetched_cid.set_value(None);
+            if let Some(toggle) = audit_toggle_ref.get() {
+                let _ = toggle.focus();
+            }
+        }
+    };
+
     view! {
         <div data-testid="content-card"
             on:keydown=move |ev: web_sys::KeyboardEvent| {
                 // ダイアログ内（トグル含む）で Escape が押されたら閉じてフォーカスを戻す。
                 if ev.key() == "Escape" && show_audit.get() {
-                    set_show_audit.set(false);
-                    if let Some(toggle) = audit_toggle_ref.get() {
-                        let _ = toggle.focus();
-                    }
+                    close_audit();
                     return;
                 }
                 // パネル表示中の Tab フォーカス制御。パネル内のインタラクティブ要素は
@@ -2865,7 +2961,13 @@ where
                         class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
                         {move || if favorite.get() { "★" } else { "☆" }}
                     </button>
-                    <button on:click=move |_| set_show_audit.update(|v| *v = !*v)
+                    <button on:click=move |_| {
+                            if show_audit.get_untracked() {
+                                close_audit();
+                            } else {
+                                set_show_audit.set(true);
+                            }
+                        }
                         node_ref=audit_toggle_ref
                         aria-expanded=move || if show_audit.get() { "true" } else { "false" }
                         aria-controls=move || audit_controls_id.get_value().to_string()
@@ -2984,11 +3086,9 @@ where
                             />
                         </div>
                         <button on:click=move |_| {
-                                set_show_audit.set(false);
-                                // ダイアログを閉じた後、呼び出し元のトグルへフォーカスを戻す。
-                                if let Some(toggle) = audit_toggle_ref.get() {
-                                    let _ = toggle.focus();
-                                }
+                                // ダイアログを閉じた後、フォーカスをトグルへ戻し、
+                                // 取得済みフラグを戻して次回オープンで再取得する。
+                                close_audit();
                             }
                             node_ref=audit_close_ref
                             class="mt-4 w-full py-2 border border-white/20 text-[8px] hover:bg-white/10">
@@ -3129,6 +3229,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
     let on_file_change = move |ev| {
+        // 送信中はファイル選択を受け付けない。disabled 入力への直接設定や
+        // レースで change が届いても、送信中の File シグナルを差し替えない。
+        if loading.get() {
+            return;
+        }
         let input: HtmlInputElement = event_target(&ev);
         if let Some(files) = input.files()
             && let Some(f) = files.get(0)
@@ -3284,6 +3389,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
                     // 視覚的に隠すがタブ停止点にはしない（ラベル側を唯一のタブ停止点にする）。
                     <input type="file" on:change=on_file_change
+                        disabled=move || loading.get()
                         accept=".jxl,.md,.markdown,.txt,image/jxl,text/markdown"
                         node_ref=file_input_ref
                         tabindex="-1"
@@ -3292,8 +3398,13 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         id="file-upload" />
                     <label for="file-upload"
                         role="button"
-                        tabindex="0"
+                        tabindex=move || if loading.get() { -1 } else { 0 }
+                        aria-disabled=move || if loading.get() { "true" } else { "false" }
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
+                            if loading.get() {
+                                ev.prevent_default();
+                                return;
+                            }
                             if is_file_picker_activation_key(&ev.key()) {
                                 ev.prevent_default();
                                 if let Some(input) = file_input_ref.get() {
@@ -3301,7 +3412,15 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                                 }
                             }
                         }
-                        class="cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
+                        class=move || format!(
+                            "{} {}",
+                            if loading.get() {
+                                "cursor-not-allowed opacity-50 pointer-events-none"
+                            } else {
+                                "cursor-pointer"
+                            },
+                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+                        )>
                         {move || file.get().map(|f| f.name()).unwrap_or_else(|| "SELECT JXL OR MARKDOWN".to_string())}
                     </label>
                 </div>
@@ -3845,6 +3964,10 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     };
 
     let do_vote = move |report_id: i64, result: String| {
+        // 投票一覧の取得失敗中は、古いカードが残っていても投票を受け付けない。
+        if !reports_error.get_untracked().is_empty() {
+            return;
+        }
         // 同期ガード: DOM の disabled 反映前に届く2回目のクリックもここで止める。
         if !claim_submission(vote_busy.get()) {
             return;
@@ -4013,13 +4136,13 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                                     <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
                                     <div class="grid grid-cols-2 gap-4">
                                         <button on:click=move |_| do_vote(rid, "Approve".to_string())
-                                            disabled=move || vote_busy.get()
+                                            disabled=move || vote_busy.get() || !reports_error.get().is_empty()
                                             aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-green-500/50 text-green-500 text-[8px] hover:bg-green-500 hover:text-black transition-colors">
                                             "APPROVE (RESTORE)"
                                         </button>
                                         <button on:click=move |_| do_vote(rid, "Reject".to_string())
-                                            disabled=move || vote_busy.get()
+                                            disabled=move || vote_busy.get() || !reports_error.get().is_empty()
                                             aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-red-500/50 text-red-500 text-[8px] hover:bg-red-500 hover:text-black transition-colors">
                                             "REJECT (VOTE)"

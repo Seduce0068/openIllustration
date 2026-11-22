@@ -10,7 +10,8 @@ test.describe('Content search and filtering (R5-01)', () => {
     crypto.createHash('sha256').update(data).digest('hex');
 
   test('filters the list by q and displays content metadata', async ({ page }) => {
-    const novelBody = 'novel body';
+    // 見出しを含むことで TOC アンカーが描画され、未知 hash の遷移を検証できる。
+    const novelBody = '# Chapter One\n\nnovel body';
     const illustrationBody = 'illustration body';
     const novel = {
       cid: 'QmQX9pNudeUXaYgUxs2tYxXY5ZmWp3HnThR3Q8ZD7GK6Cx',
@@ -137,5 +138,21 @@ test.describe('Content search and filtering (R5-01)', () => {
     await expect(page.getByText('Neon Alley')).toBeVisible();
     await expect(clearFilters).toHaveCount(0);
     await expect.poll(() => new URL(page.url()).search).toBe('');
+
+    // R2-CLIENT-04: 小説 → TOC → タブ切替 → goBack。
+    // TOC の #slug は既知 view ではないため、popstate で直前の既知 view
+    // （ここでは dashboard）へ正規化されることを検証する。
+    await page.getByText('Table of Contents').click();
+    const tocAnchor = page.locator('details nav a').first();
+    await expect(tocAnchor).toBeVisible();
+    await tocAnchor.click();
+    await expect.poll(() => new URL(page.url()).hash).not.toBe('#dashboard');
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveAttribute('aria-current', 'page');
+
+    await page.goBack();
+    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
   });
 });

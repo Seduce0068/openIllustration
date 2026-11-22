@@ -1311,6 +1311,27 @@ pub fn database_token_from_env_value(value: common::env::EnvValue) -> anyhow::Re
     }
 }
 
+/// `EnvValue` を「利用する UTF-8 値」と「非 UTF-8 の固定文言警告」へ分類する共通関数。
+///
+/// `run()` は `common::env::read_env`、`doctor` は `common::env::classify(lookup(..))`
+/// で得た同じ `EnvValue` を渡し、未設定 / 非 UTF-8 / 有効値の扱いを共有する。
+/// 警告にはキー名と理由だけを含め、値・生バイトは一切含めない。
+pub fn env_value_for_use<'a>(
+    name: &str,
+    value: &'a common::env::EnvValue,
+) -> (Option<&'a str>, Option<String>) {
+    match value {
+        common::env::EnvValue::Utf8(value) => (Some(value.as_str()), None),
+        common::env::EnvValue::Missing => (None, None),
+        common::env::EnvValue::NonUtf8 => (
+            None,
+            Some(format!(
+                "{name} is not valid UTF-8; ignoring the value (value redacted)"
+            )),
+        ),
+    }
+}
+
 /// doctor の FK 検査用に `run()` と同じ DSN 解決で DB を開く（接続先はエコーしない）。
 async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
     let db_url = match common::env::read_env("DATABASE_URL") {
@@ -1502,18 +1523,47 @@ pub async fn run() -> anyhow::Result<()> {
         }
     }
 
-    let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
+    // JWT / IPFS / 決済の環境変数は read_env で一度だけ読み、
+    // 「未設定」「非 UTF-8」「有効な UTF-8」を区別する（値・生バイトはエコーしない）。
+    let rsa_pem_env = common::env::read_env("JWT_RSA_PRIVATE_KEY_PEM");
+    let jwt_secret_env = common::env::read_env("JWT_SECRET");
+    let verification_keys_env = common::env::read_env("JWT_RSA_VERIFICATION_KEYS");
+    let ipfs_gateways_env = common::env::read_env("IPFS_GATEWAYS");
+    let ipfs_timeout_env = common::env::read_env("IPFS_TIMEOUT_SECS");
+    let ipfs_attempts_env = common::env::read_env("IPFS_MAX_ATTEMPTS");
+    let payment_address_env = common::env::read_env("PAYMENT_RECEIVING_ADDRESS");
+    let payment_xprv_env = common::env::read_env("PAYMENT_RECEIVING_XPRV");
+
+    // JWT の非 UTF-8 を「未設定」と混同すると RS256 → HS256 へ黙って倒れるため起動拒否する。
+    // 分類は doctor と同じ env_value_for_use を使い、固定文言のみを返す。
+    for (name, value) in [
+        ("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env),
+        ("JWT_SECRET", &jwt_secret_env),
+        ("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env),
+    ] {
+        if let Some(warning) = env_value_for_use(name, value).1 {
+            return Err(anyhow::anyhow!("{warning}; refusing to start"));
+        }
+    }
+    let (rsa_pem, _) = env_value_for_use("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env);
+    let (jwt_secret, _) = env_value_for_use("JWT_SECRET", &jwt_secret_env);
+    let (verification_keys, _) =
+        env_value_for_use("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env);
     let jwt_keys = jwt_keys_from_env(
-        std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
-        std::env::var("JWT_SECRET").ok(),
-        verification_keys_env.as_deref(),
+        rsa_pem.map(ToString::to_string),
+        jwt_secret.map(ToString::to_string),
+        verification_keys,
         require_kid,
     )
     .map_err(|e| anyhow::anyhow!(e))?;
     tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
 
-    let ipfs_gateways_env = std::env::var("IPFS_GATEWAYS").ok();
-    let ipfs_gateways = ipfs_gateways(ipfs_gateways_env.as_deref());
+    // IPFS の非 UTF-8 は固定文言の警告のうえ未設定として扱う（fail-closed）。
+    let (gateways_value, warning) = env_value_for_use("IPFS_GATEWAYS", &ipfs_gateways_env);
+    if let Some(warning) = warning {
+        warn!("{warning}");
+    }
+    let ipfs_gateways = ipfs_gateways(gateways_value);
     if ipfs_gateways.is_empty() {
         warn!("IPFS_GATEWAYS is empty; content retrieval will fail");
     } else {
@@ -1522,13 +1572,24 @@ pub async fn run() -> anyhow::Result<()> {
             ipfs_gateways.len()
         );
     }
-    let ipfs_timeout_env = std::env::var("IPFS_TIMEOUT_SECS").ok();
-    let ipfs_timeout = ipfs_timeout(ipfs_timeout_env.as_deref());
-    let ipfs_attempts_env = std::env::var("IPFS_MAX_ATTEMPTS").ok();
-    let ipfs_max_attempts = ipfs_max_attempts(ipfs_attempts_env.as_deref());
+    let (timeout_value, warning) = env_value_for_use("IPFS_TIMEOUT_SECS", &ipfs_timeout_env);
+    if let Some(warning) = warning {
+        warn!("{warning}");
+    }
+    let ipfs_timeout = ipfs_timeout(timeout_value);
+    let (attempts_value, warning) = env_value_for_use("IPFS_MAX_ATTEMPTS", &ipfs_attempts_env);
+    if let Some(warning) = warning {
+        warn!("{warning}");
+    }
+    let ipfs_max_attempts = ipfs_max_attempts(attempts_value);
 
-    let payment_receiving_address = std::env::var("PAYMENT_RECEIVING_ADDRESS")
-        .ok()
+    // 決済の非 UTF-8 も固定文言の警告へ倒し、未設定と同じく機能を無効化する。
+    let (payment_address, warning) =
+        env_value_for_use("PAYMENT_RECEIVING_ADDRESS", &payment_address_env);
+    if let Some(warning) = warning {
+        warn!("{warning}");
+    }
+    let payment_receiving_address = payment_address
         .filter(|address| {
             if payments::is_valid_eth_address(address) {
                 true
@@ -1536,20 +1597,27 @@ pub async fn run() -> anyhow::Result<()> {
                 warn!("PAYMENT_RECEIVING_ADDRESS is not a valid 0x address; payment orders are disabled");
                 false
             }
-        });
+        })
+        .map(ToString::to_string);
 
     if oidc.is_none() {
         tracing::info!("OIDC is not configured; JPKI OIDC endpoints are disabled");
     }
 
-    let payment_receiving_xprv = std::env::var("PAYMENT_RECEIVING_XPRV").ok().filter(|xprv| {
-        if payments::derive_receiving_address(xprv, 0).is_ok() {
-            true
-        } else {
-            warn!("PAYMENT_RECEIVING_XPRV is invalid; HD derivation is disabled");
-            false
-        }
-    });
+    let (payment_xprv, warning) = env_value_for_use("PAYMENT_RECEIVING_XPRV", &payment_xprv_env);
+    if let Some(warning) = warning {
+        warn!("{warning}");
+    }
+    let payment_receiving_xprv = payment_xprv
+        .filter(|xprv| {
+            if payments::derive_receiving_address(xprv, 0).is_ok() {
+                true
+            } else {
+                warn!("PAYMENT_RECEIVING_XPRV is invalid; HD derivation is disabled");
+                false
+            }
+        })
+        .map(ToString::to_string);
 
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
     // ログも範囲解決と同じ read_env ベースの分類結果を使い、非 UTF-8 は
@@ -1695,8 +1763,11 @@ pub async fn run() -> anyhow::Result<()> {
     )
     .with_graceful_shutdown(async move {
         shutdown_signal().await;
+        // 先に readiness を 503 へ切り替え、LB がヘルスチェックでこのインスタンスを
+        // 除外できる窓を作ってから drain を開始する（新規リクエストの到着を減らす）。
         shutdown_flag.store(true, std::sync::atomic::Ordering::Release);
         let _ = shutdown_tx.send(());
+        tokio::time::sleep(READINESS_DRAIN_WINDOW).await;
     });
 
     match tokio::time::timeout(drain_timeout, server).await {
@@ -1735,6 +1806,10 @@ pub async fn run() -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// 停止シグナル受領後、readiness を先に 503 へ切り替えてから graceful shutdown を
+/// 開始するためのドレイン窓。LB のヘルスチェック間隔を考慮した固定値（値はログへ出さない）。
+const READINESS_DRAIN_WINDOW: Duration = Duration::from_secs(5);
 
 /// SIGINT / SIGTERM を待つ。受信後は `axum::serve` が処理中リクエストの完了を待って停止する。
 async fn shutdown_signal() {
@@ -2069,14 +2144,17 @@ pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
 /// ロック取得は完了まで待つ（呼び出し側で上限を設けたい場合は `finalize_due_reports_with_wait` を使う）。
 pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
     let guard = write_lock(db).lock_owned().await;
-    finalize_due_reports_with_guard(db, guard).await
+    // 手動確定はメトリクスを持たないため None（成功件数の計上は自動ワーカー側で行う）。
+    finalize_due_reports_with_guard(db, guard, None).await
 }
 
 /// 取得済みの write_lock ガードで期限切れ通報を確定する。
 /// 一件ごとの BEGIN/COMMIT はガードを保持したまま回し、SQL はタイムアウトなしで完了まで待つ。
+/// 一件が失敗しても既に COMMIT 済みの件数は失わず、成功件と失敗件を別々に計上する。
 async fn finalize_due_reports_with_guard(
     db: &Connection,
     guard: tokio::sync::OwnedMutexGuard<()>,
+    metrics: Option<&Metrics>,
 ) -> Result<usize, AppError> {
     let mut rows = db
         .query(
@@ -2094,17 +2172,58 @@ async fn finalize_due_reports_with_guard(
         report_ids.push(report_id);
     }
 
-    let mut finalized = 0;
+    let mut finalized = 0usize;
+    let mut failed = 0usize;
     let mut guard = guard;
     for report_id in report_ids {
-        let (next_guard, tx) = begin_write_tx_sql_with_guard(db, guard).await?;
+        let (next_guard, tx) = match begin_write_tx_sql_with_guard(db, guard).await {
+            Ok(pair) => pair,
+            Err(error) => {
+                failed += 1;
+                note_finalizer_failure(metrics);
+                tracing::warn!("Moderation finalization BEGIN failed: {}", error);
+                break;
+            }
+        };
+        if let Err(error) = process_report_conclusion(&tx, report_id).await {
+            // tx は drop されロールバックする。ここまでの COMMIT 済み件数は維持する。
+            failed += 1;
+            note_finalizer_failure(metrics);
+            tracing::warn!(
+                "Moderation finalization failed for report {report_id}: {}",
+                error
+            );
+            guard = next_guard;
+            continue;
+        }
+        match tx.commit().await {
+            Ok(()) => {
+                finalized += 1;
+                // 一件 COMMIT ごとに成功を計上する。失敗件は finalizer_failures へ分離する。
+                if let Some(metrics) = metrics {
+                    note_finalizer_success(metrics, 1);
+                }
+            }
+            Err(error) => {
+                failed += 1;
+                note_finalizer_failure(metrics);
+                tracing::warn!(
+                    "Moderation finalization COMMIT failed for report {report_id}: {}",
+                    error
+                );
+            }
+        }
         guard = next_guard;
-        process_report_conclusion(&tx, report_id).await?;
-        tx.commit().await?;
-        finalized += 1;
         // 多数の通報をまとめて確定する間も executor を譲り、停止通知や
         // タイマーが進めるようにする（ロックガードは保持したまま）。
         tokio::task::yield_now().await;
+    }
+    if failed == 0
+        && finalized == 0
+        && let Some(metrics) = metrics
+    {
+        // 対象 0 件の正常終了も従来どおり「最後の成功」として記録する。
+        note_finalizer_success(metrics, 0);
     }
     Ok(finalized)
 }
@@ -2115,11 +2234,14 @@ async fn finalize_due_reports_with_guard(
 async fn finalize_due_reports_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
+    metrics: &Metrics,
 ) -> Result<Option<usize>, AppError> {
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
-    finalize_due_reports_with_guard(db, guard).await.map(Some)
+    finalize_due_reports_with_guard(db, guard, Some(metrics))
+        .await
+        .map(Some)
 }
 
 /// 周期タスクが書き込みロックの取得で待ち続けると、後続の書き込みも
@@ -2237,6 +2359,15 @@ fn note_finalizer_success(metrics: &Metrics, processed: u64) {
         chrono::Utc::now().timestamp().max(0) as u64,
         std::sync::atomic::Ordering::Relaxed,
     );
+}
+
+/// 一件の自動確定失敗を成功率とは分離して失敗カウンタへ反映する。
+fn note_finalizer_failure(metrics: Option<&Metrics>) {
+    if let Some(metrics) = metrics {
+        metrics
+            .finalizer_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
@@ -2393,12 +2524,14 @@ async fn run_periodic_cleanup(
     // 周期の自動確定も purge 群と同じ 2 段構造:
     // ロック取得だけ PURGE_LOCK_WAIT で待ち、取得後は SELECT/COMMIT を
     // タイムアウトなしで件数分すべて完了させる。
+    // 一件ごとの COMMIT で成功を計上し、失敗件は finalizer_failures へ分離する。
     // "busy" はロック取得を諦めたときだけ警告し、SQL の遅延を誤報しない。
-    match finalize_due_reports_with_wait(db, Some(PURGE_LOCK_WAIT)).await {
-        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+    match finalize_due_reports_with_wait(db, Some(PURGE_LOCK_WAIT), metrics).await {
         Ok(Some(count)) => {
-            note_finalizer_success(metrics, count as u64);
-            tracing::info!("Auto-finalized {} moderation report(s)", count);
+            // 成功件は COMMIT ごとに計上済み。ここでは二重加算しない。
+            if count > 0 {
+                tracing::info!("Auto-finalized {} moderation report(s)", count);
+            }
         }
         Ok(None) => {
             metrics
@@ -2497,11 +2630,12 @@ async fn run_startup_cleanup(
     // 最初の tick まで待つと再起動直後の期限切れ通報が最大 interval のあいだ
     // 未確定のまま残るため、起動時にも一度だけ確定処理を走らせる。
     // ロック待ちは上限付きで、取得後は件数分を完了まで処理する。
-    match finalize_due_reports_with_wait(db, Some(lock_wait)).await {
-        Ok(Some(0)) => note_finalizer_success(metrics, 0),
+    // 成功件は COMMIT ごとに計上済みなので、ここでは加算しない。
+    match finalize_due_reports_with_wait(db, Some(lock_wait), metrics).await {
         Ok(Some(count)) => {
-            note_finalizer_success(metrics, count as u64);
-            tracing::info!("Auto-finalized {} moderation report(s) on startup", count)
+            if count > 0 {
+                tracing::info!("Auto-finalized {} moderation report(s) on startup", count)
+            }
         }
         Ok(None) => {
             metrics
