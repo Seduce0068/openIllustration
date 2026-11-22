@@ -765,6 +765,17 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-22 コンボ第17ラウンド（review4+discovery3）: 全7担当完了。R6 で high3件を是正:
+  revoked_subs purge を refresh TTL(30日)+マージンへ延長、OIDC callback の tx 内 BAN 再読、
+  OIDC 初回登録の public_key_der プレースホルダ（500→401 改善）。UNBAN も失効閾値を削除。
+  即時項目: e2e/package も npm audit 対象へ、cron 起動失敗の終了コード反映、
+  .audit-root の世代同期削除、INFRA_NETWORK/SECURITY_ADVISORIES の内訳是正。
+  R4 指摘で「callback 再読パス未カバー」「UNBAN が sub 全閾値を削除」「401 の方針記述」を
+  実態どおりドキュメントへ明記。
+  設計判断待ち（本人確認の監査対象、通知/再審査、UNPIN手順、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー）は外部仕様・法務待ちのため記録のみで保留。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests136、npm audit ルート+e2e 含む）。残り高2（外部要因）。
+
 - 2026-11-22 coding（中13件）: auth_verifyのBAN原子的化(tx内再読403)、真偽値判定を
   common::env::bool_env_resultへ集約、verify_chainのreasons_masked検査、
   sign_audit_exportのatomic publish、TRUSTED_PROXY_CIDRS/TZのread_env統一、

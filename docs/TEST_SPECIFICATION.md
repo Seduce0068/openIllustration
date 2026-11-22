@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T22:50:00+09:00"
+  at: "2026-11-22T23:15:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T22:50:00+09:00"
+  at: "2026-11-22T23:15:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -236,7 +236,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | AGE-11 | mock 無効時の verified_claims 拒否・OIDC callback の adapter 境界 | `allow_mock_auth` 無効では `verified_claims` を 403。callback は `ensure_age_policy_configured` 直後に adapter 境界を呼び、信頼属性必須モードでは fail closed（認可フローは変更しない） | 実装済み。`test_verified_age_claims_rejected_when_mock_auth_disabled`、`oidc_binding_keeps_self_reported_mode_and_fails_closed_on_trusted_mode` |
 | AGE-12 | verified_claims 経路の user_hash 導出（R2-USERHASH） | `sha256("verified-age:v1:{issuer}:{signed_subject}")`（64-hex）。`birthdate` / `country` / `nonce` は不使用。旧 `sha256("2000-01-01:JP")` とは異なる。signed_subject 変更で hash が変わる。空 subject は 403。OIDC callback の `sub` 生値は別契約で変更なし | 実装済み。`test_verified_age_accepts_valid_signed_attribute_in_mock_path` の (a)(b)(c) と `verify_rejects_missing_or_invalid_age_claim` の empty_subject で検証。旧 hash の開発 DB は作り直し前提 |
 | PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
-| PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
+| PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う方針（未実装） | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
 | AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須。`verify_chain` は `reasons_masked=true` のとき全 entry の `reason` がマスク済み（`reason_is_masked`）であることを検証し、平文が残っていれば拒否する。署名対象 `signature_payload()` はマスク版で entries_json を `masked` 印付きで含むため、この検査は署名対象の整合確認であり既存の verify 期待値は不変 |
 | AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に17テスト（既存10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み。Runbookの手動確認手順も併用する |
@@ -744,6 +744,32 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   `test_backchannel_logout_replay_keeps_revoked_at_and_reauthenticated_session` /
   `test_backchannel_logout_rejects_future_iat_and_nbf` /
   `test_backchannel_logout_stale_iat_does_not_advance_threshold` の3件（新規のみ、固定数値は不変）。
+
+### 失効保持期間・callback BAN 原子性・OIDC 署名フローの検証（R2-BAN）
+
+- 失効保持期間: `revoked_subs` の purge cutoff をセッション TTL（24h）+60 秒から
+  共通の `REVOCATION_RETENTION_SECS`（refresh TTL 30 日 + マージン 60 秒）へ延長した。
+  refresh は `revoked_subs` の存在だけでセッション延長を拒否するため、
+  refresh token が有効な 30 日間は失効閾値を残す必要がある。境界は既存
+  `test_purge_stale_revoked_subs`（期待値を変えず古い側のシード時刻のみ相対関係を
+  維持して更新）と新規 `test_purge_stale_revoked_subs_keeps_refresh_window`
+  （25 時間前は保持、31 日前は回収）で検証する。並行 purge の
+  `test_purge_waits_for_write_lock` のシードも同じ保持期間へ更新した。
+- callback BAN 原子性: `/auth/oidc/callback` は事前 `ensure_user_not_banned` に加え、
+  `write_lock` 配下の tx 内で `users.is_banned` / `ban_until` を再読し、有効 BAN
+  ならコミット前に rollback して 403 `User is banned` を返す。既存
+  `test_oidc_callback_rejects_banned_user` が固定文言・トークン非発行を検証する。
+  同テストは送信前に BAN をコミットするため事前チェックで拒否され、事前チェック通過
+  後の BAN コミットという競合窓の再読パスは未カバー（原子性はコードレビューで担保）。
+- UNBAN の失効解除: `unban_user` は BAN 由来の `revoked_subs` 閾値を同じ tx 内で
+  削除し、コミット後に positive-only キャッシュからも除去する。新規
+  `test_unban_clears_revoked_subs_threshold` が DB 側の削除を検証する。
+- OIDC 署名フロー: callback 初回登録で `public_key_der` に subject 由来の
+  「署名鍵未登録」プレースホルダを保存し、NULL による下流署名検証の 500 を回避する。
+  実鍵登録済みの主体は上書きしない。鍵未登録の固定文言 403/501 は下流の署名検証側
+  で扱う方針とし、upload / vote の既存期待値は不変である。
+- 既存の固定数値（E2E69 / check23 / doctor53 / migrations14）は不変。新規 test 関数は
+  上記2件のみで、既存 test 関数名は変更していない。
 
 ### 暗号検証エラーパスの検証（AUDIT-01）
 

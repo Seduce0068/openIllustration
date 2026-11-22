@@ -1217,6 +1217,19 @@ pub async fn start(State(state): State<Arc<AppState>>) -> Result<Response, AppEr
     Ok(response)
 }
 
+/// OIDC 主体の「署名鍵未登録」プレースホルダ（subject 由来の決定論的バイト列）。
+/// OIDC は認証のみを提供し署名鍵を配布しないため、`public_key_der` を NULL の
+/// まま残すと下流の署名検証が NULL デコードで 500 になる。初回登録時にこの
+/// 値を保存して署名鍵未登録を明示する（下流は固定文言の 403/501 で扱う）。
+/// 実鍵を登録済みの主体は上書きしない（呼び出し側の `WHERE ... IS NULL`）。
+const OIDC_SIGNATURE_FREE_DER_PREFIX: &[u8] = b"oidc-no-signing-key:";
+
+fn oidc_placeholder_public_key(user_hash: &str) -> Vec<u8> {
+    let mut marker = OIDC_SIGNATURE_FREE_DER_PREFIX.to_vec();
+    marker.extend_from_slice(&Sha256::digest(user_hash.as_bytes()));
+    marker
+}
+
 pub async fn callback(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -1273,9 +1286,35 @@ pub async fn callback(
     // 外部 HTTP（token exchange / JWKS 検証）はすべて上述で完了している。
     // 書き込みだけを write_lock 配下の tx で行い、HTTP 待ちでロックを保持しない。
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    // BAN 原子化: 事前チェックから tx 取得の間で BAN がコミットされても
+    // セッションを発行しないよう、write_lock 保持下の tx 内で
+    // users.is_banned / ban_until を再読し、有効 BAN なら rollback して 403。
+    // 判定述語は auth_verify / ensure_user_not_banned と同じ（期限切れ BAN は
+    // 通過、NULL は無期限継続）。コミットはこの再読が通った後だけに行う。
+    let mut ban_rows = tx
+        .query(
+            "SELECT 1 FROM users
+             WHERE user_hash = ?
+               AND is_banned = TRUE
+               AND (ban_until IS NULL OR ban_until > datetime('now'))",
+            [user_hash.clone()],
+        )
+        .await?;
+    if ban_rows.next().await?.is_some() {
+        drop(ban_rows);
+        drop(tx); // 明示 commit せず rollback して BAN 決定を漏らさない。
+        drop(write_guard);
+        return Err(AppError::Forbidden("User is banned".to_string()));
+    }
+    drop(ban_rows);
+    // OIDC は署名鍵を配布しないため、初回登録で public_key_der を NULL にすると
+    // 下流の署名検証が NULL デコードで 500 になる。subject 由来のプレースホルダ
+    // を保存して署名鍵未登録を明示する。既に実鍵が登録済みの場合は上書きしない。
     tx.execute(
-        "INSERT OR IGNORE INTO users (user_hash) VALUES (?)",
-        [user_hash.clone()],
+        "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)
+         ON CONFLICT(user_hash) DO UPDATE SET public_key_der = excluded.public_key_der
+         WHERE users.public_key_der IS NULL",
+        (user_hash.clone(), oidc_placeholder_public_key(&user_hash)),
     )
     .await?;
     tx.commit()

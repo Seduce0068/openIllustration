@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T22:50:00+09:00"
+  at: "2026-11-22T23:15:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -78,6 +78,24 @@ generated:
   回収は認証リクエスト時だけに限らず、`run_moderation_finalizer` が起動時と周期 tick
   （`MODERATION_FINALIZE_INTERVAL_SECS`）にも `sweep_expired_pending` を呼ぶため、
   認証リクエストが来ないアイドル中も期限切れ `pending` は蓄積しない。
+- OIDC callback（`/auth/oidc/callback`）のセッション発行も `/auth/verify` と同じ
+  BAN 原子性を満たす。事前 `ensure_user_not_banned` に加え、`write_lock` 配下の
+  write tx 内で `users.is_banned` / `ban_until` を再読し、有効 BAN ならコミット
+  せずに tx を rollback して 403 `User is banned` を返す。INSERT・JWT 発行前の
+  拒否を担保し、事前チェック通過後に BAN がコミットされてもセッションが発行
+  されない。判定述語・固定文言は既存の `ensure_user_not_banned` と同一で、
+  期限切れ BAN は従来どおり通過する。
+- 失効レコードの保持期間は共通の `REVOCATION_RETENTION_SECS`（refresh TTL 30 日
+  ＋マージン 60 秒）とする。refresh は `revoked_subs` の存在だけでセッション
+  延長を拒否するため、refresh token が有効な 30 日間は失効閾値を残さないと
+  失効が復活する。purge はこの保持期間より古い閾値だけを回収し、セッション TTL
+  （24h）を超えても refresh 有効期間内のエントリは維持する。境界は doctor /
+  dry-run で確認する。
+- OIDC 経由の初回登録では署名鍵を配布しないため、`public_key_der` に subject
+  由来の「署名鍵未登録」プレースホルダを保存する。NULL を残すと下流の署名検証
+  が NULL デコードで 500 になるため、鍵未登録は固定文言の 403/501 として扱う方針（未実装）。
+  既に実鍵が登録済みの主体は上書きせず、upload / vote の既存署名検証の期待値は
+  不変である。
 
 ## 2. コンテンツ・個人データ
 
@@ -109,6 +127,9 @@ generated:
 - BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。BAN と back-channel logo
   ut のどちらも `iat` を更新時刻とみなし、同一トークンの再送や古い `iat` では `revoked_at` を前進させない（UPSERT の `changes() == 0` でメモリ更新とリフレッシュ消費をスキップする）。
   メモリの失効閾値は positive-only キャッシュに留め、書き込みは DB コミットを先に行うため、他インスタンスへ即時に反映される。
+  UNBAN は `users` の BAN フラグ解除に加え、BAN で記録した `revoked_subs` の失効閾値を
+  同じ write tx 内で削除し、コミット後に positive-only キャッシュからも除去する。
+  これにより BAN 解除後に refresh / 再認証が失効閾値で塞がったままにならない。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
   通報一覧は認証必須・Reported 限定・新着順を維持し、運用者限定にはしない。理由は `common::summarize_reason` で要約して返す。
@@ -414,7 +435,7 @@ generated:
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。 |
-| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
+| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、有効な `http(s)://` オリジンのみ、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値も固定文言（値非エコー）のハードエラーで起動拒否（fail-closed）。 |

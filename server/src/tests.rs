@@ -12611,6 +12611,44 @@ async fn test_unban_restores_user_with_audit() {
     assert_eq!(reason, "appeal accepted");
 }
 
+/// UNBAN は BAN で記録した revoked_subs の失効閾値も削除する。
+/// refresh は revoked_subs の存在だけで延長を拒否するため、閾値が残ると
+/// 正当な BAN 解除がセッション更新へ反映されない（DB 正本を検証）。
+#[tokio::test]
+async fn test_unban_clears_revoked_subs_threshold() {
+    let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
+    db.execute(
+        "INSERT INTO users (user_hash, is_banned) VALUES ('target', TRUE)",
+        (),
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('target', ?)",
+        [chrono::Utc::now().timestamp()],
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/unban",
+            "operator",
+            json!({"reason": "appeal accepted"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    let mut rows = db
+        .query("SELECT COUNT(*) FROM revoked_subs WHERE sub = 'target'", ())
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 0, "UNBAN で失効閾値が削除されること");
+}
+
 // ---- BAN 期限（ban_until）: duration_days から期限を設定し、判定側で時刻比較する ----
 
 /// 期限付き BAN の陪審員で投票APIを呼ぶ。`None` は ban_until=NULL（無期限）。
@@ -13476,9 +13514,10 @@ async fn test_purge_stale_revoked_subs() {
     init_schema(&db).await;
 
     let now = chrono::Utc::now().timestamp();
+    // 保持期間は refresh TTL（30 日）+ マージンへ延長済み。
     db.execute(
         "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('old', ?)",
-        [now - 24 * 60 * 60 - 3600],
+        [now - 30 * 24 * 60 * 60 - 3600],
     )
     .await
     .unwrap();
@@ -13498,6 +13537,46 @@ async fn test_purge_stale_revoked_subs() {
         remaining.push(row.get::<String>(0).unwrap());
     }
     assert_eq!(remaining, vec!["recent"]);
+}
+
+/// revoked_subs の保持期間はリフレッシュトークン TTL（30 日）+ マージン。
+/// セッション TTL（24h）を超えても refresh が有効な間は閾値を残し、
+/// 30 日を超えた古い閾値だけを回収する境界を検証する。
+#[tokio::test]
+async fn test_purge_stale_revoked_subs_keeps_refresh_window() {
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+
+    let now = chrono::Utc::now().timestamp();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('within_refresh', ?)",
+        [now - 25 * 60 * 60],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('beyond_retention', ?)",
+        [now - 31 * 24 * 60 * 60],
+    )
+    .await
+    .unwrap();
+
+    let purged = crate::purge_stale_revoked_subs(&db).await.unwrap();
+    assert_eq!(purged, Some(1), "30 日を超えた閾値だけ回収されること");
+
+    let mut rows = db.query("SELECT sub FROM revoked_subs", ()).await.unwrap();
+    let mut remaining = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        remaining.push(row.get::<String>(0).unwrap());
+    }
+    assert_eq!(remaining, vec!["within_refresh"]);
 }
 
 #[tokio::test]
@@ -19279,7 +19358,7 @@ async fn test_purge_waits_for_write_lock() {
     .unwrap();
     db.execute(
         "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('old', ?)",
-        [chrono::Utc::now().timestamp() - 24 * 60 * 60 - 3600],
+        [chrono::Utc::now().timestamp() - 30 * 24 * 60 * 60 - 3600],
     )
     .await
     .unwrap();

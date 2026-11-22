@@ -28,10 +28,10 @@ MAILTO=__SET_ME__
 #   deploy/openillustration-backup.timer + deploy/openillustration-backup-window.service
 # （root の systemd が停止→backup→起動を実行し、バックアップ失敗時も起動を保証）。
 # cron で構成する場合は root の crontab でラッパーの前後に stop/start を置く:
-#   17 3 * * * /usr/bin/systemctl stop openillustration.service && /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; /usr/bin/systemctl start openillustration.service; exit $rc
+#   17 3 * * * /usr/bin/systemctl stop openillustration.service && { /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; } || rc=$?; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}
 #   （BACKUP_DIR 等は backup.env 側へ集約して渡す。start は backup 成否にかかわらず実行する。）
-# MAILTO は wrapper の失敗通知先。アプリ再起動失敗は root 側スケジューラの
-# journald / unit 結果をアラート対象にして検知する。
+# MAILTO は wrapper の失敗通知先。上記の root ジョブはバックアップ失敗と
+# アプリ起動失敗の両方を終了コードへ反映するため、どちらも MAILTO で検知できる。
 # 【配置手順の必須ステップ】このファイル単体のジョブ行は backup-cron-wrapper.sh のみを
 # 実行するため、常時稼働環境では生存 instance.lock により backup_db が拒否される。
 # root 側スケジューラで stop→wrapper→start を併設するまで有効化しないこと。

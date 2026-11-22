@@ -9,10 +9,10 @@ tags:
   - triage
 generated:
   by: dsh
-  at: "2026-11-22T22:25:00+09:00"
+  at: "2026-11-22T23:15:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T22:25:00+09:00"
+  at: "2026-11-22T23:15:00+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
@@ -20,7 +20,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
 ## 1. 結論
 
 - `cargo deny check advisories`（cargo-deny 0.20.2）は 10件の勧告で
-  失敗する（初回は 14 件）。内訳は脆弱性 9 件、unmaintained 1 件。
+  失敗する（初回は 14 件）。内訳は脆弱性 9 件（当時・現在値は TEST_SPECIFICATION の実測を参照）、unmaintained 1 件。
 - 10件は 3 系統に集約できる。
   - libsql 0.10.0 の TLS / gRPC スタック: 8 件
   - chrono の unmaintained 情報勧告: 1 件
@@ -34,14 +34,14 @@ stale_after: "2027-02-15T00:00:00+09:00"
 - 本番は `production_database_url_error` のゲートでリモート DSN
   （`libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を
   固定文言で起動拒否し、`file:` 絶対パスのみ受理する（fail-closed）。
-  libsql 由来の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する
+  libsql 由来の 8 件の受容根拠は、本番がリモート DSN をゲートで禁止する
   点にある（§4.1、§5）。
 - ECDSA は公開鍵検証のみ。RSA は `JWT_RSA_PRIVATE_KEY_PEM` 設定時に
   RS256 本番署名で秘密鍵演算を実行する。受容根拠は「演算なし」ではなく、
   rsa 0.10 の定数時間実装と 2048bit 以上の鍵長要求であり、
   Marvin 攻撃と timing 系勧告は解消済み（§3.2、§4.2）。
 - 本番はリモート DSN をゲートで禁止する。リモート DB を採用する場合は、
-  ゲートの解除と合わせて 3.1 の 10 件の解消を必須とする。
+  ゲートの解除と合わせて 3.1 の 8 件の解消を必須とする。
 
 ## 2. 検出条件
 
@@ -57,7 +57,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ### 3.1 libsql 0.10.0 の TLS / gRPC スタック（10 件）
 
-- `RUSTSEC-2025-0141` bincode 1.3.3（unmaintained）
+- `RUSTSEC-2025-0141`（2026-11-22 解消済み・履歴） bincode 1.3.3（unmaintained）
   - 経路: `libsql 0.10.0` → `bincode 1.3.3`
   - 修正版: なし（代替候補は wincode / postcard 等）
   - 評価: 本リポジトリのコードから直接使用しない。
@@ -73,7 +73,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - 経路: 同上
   - 修正版: `>=0.23.46`
   - 評価: リモート TLS 接続時のみ。PQ 機密性の低下であり鍵漏えいはない。
-- `RUSTSEC-2025-0134` rustls-pemfile 2.2.0（unmaintained）
+- `RUSTSEC-2025-0134`（2026-11-22 解消済み・履歴） rustls-pemfile 2.2.0（unmaintained）
   - 経路: `libsql` → `rustls-native-certs 0.7.3`
   - 修正版: なし（rustls-pki-types の `PemObject` へ移行）
   - 評価: 証明書読み込みの補助。既知の脆弱性はない。
@@ -143,7 +143,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
   `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` は
   同じヘルパで分岐する。
 - 本番で受理される値は `Builder::new_local` を通り、TLS も gRPC も張らない。
-  3.1 の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する点にある。
+  3.1 の 8 件の受容根拠は、本番がリモート DSN をゲートで禁止する点にある。
   開発（`ALLOW_MOCK_AUTH=1`）では従来どおりリモート DSN も許容する。
 
 ### 4.2 暗号検証（RSA / ECDSA）

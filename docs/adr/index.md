@@ -12,3 +12,5 @@
 * [ADR-0010](ADR-0010-foreign-key-startup-fail-closed.md) - 起動時 FK 孤立行の fail-closed 化（Accepted）。
 * [ADR-0011](ADR-0011-performance-measurement.md) - 性能計測の3層と受入値の扱い（Proposed）。
 * [ADR-0012](ADR-0012-compatibility-matrix.md) - ブラウザ互換マトリクスと状態分類（Proposed）。
+
+[ADR 変更ログ](log.md) - 日付順の Status / Decision 変更履歴。

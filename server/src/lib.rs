@@ -2193,9 +2193,17 @@ async fn purge_stale_revoked_sessions(db: &Connection) -> Result<Option<u64>, li
     purge_stale_revoked_sessions_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
+/// 失効レコードの共通保持期間（秒）。リフレッシュトークンの有効期間
+/// （`oidc::REFRESH_TTL_SECS` = 30 日）に 60 秒のマージンを加えた値。
+/// `revoked_subs` は refresh のセッション延長拒否にも使うため、
+/// refresh token が有効な 30 日間は失効閾値を残さないと失効が復活する。
+/// セッション TTL（24h）だけでは refresh の残存期間をカバーできない。
+const REVOCATION_RETENTION_SECS: i64 = 30 * 24 * 60 * 60 + 60;
+
 /// 古い sub 失効閾値を回収する。閾値より前に発行された JWT は最大
-/// SESSION_TTL_SECS で期限切れになるため、それより古い閾値は不要になる。
-/// 新しい JWT は常に現在時刻より後ろの iat を持つため、失効は復活しない。
+/// SESSION_TTL_SECS で期限切れになるが、未使用の refresh token は
+/// REFRESH_TTL_SECS（30 日）残るため、その期間は失効閾値を保持する。
+/// 共通保持期間（REVOCATION_RETENTION_SECS）より古い閾値だけが不要になる。
 async fn purge_stale_revoked_subs_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
@@ -2203,7 +2211,7 @@ async fn purge_stale_revoked_subs_with_wait(
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
-    let cutoff = chrono::Utc::now().timestamp() - oidc::SESSION_TTL_SECS - 60;
+    let cutoff = chrono::Utc::now().timestamp() - REVOCATION_RETENTION_SECS;
     let (_write_guard, tx) = begin_write_tx_sql_with_guard(db, guard).await?;
     tx.execute("DELETE FROM revoked_subs WHERE revoked_at <= ?", [cutoff])
         .await?;
@@ -4252,10 +4260,22 @@ pub async fn unban_user(
         [user_hash],
     )
     .await?;
+    // BAN で記録された sub 失効閾値を削除する。refresh は revoked_subs の
+    // 存在だけでセッション延長を拒否するため、UNBAN 後も閾値が残ると
+    // 正当な BAN 解除が反映されない。DB を正本として users 更新と同じ tx
+    // で確定し、コミット前に戻せばロールバックで閾値も復活する。
+    tx.execute("DELETE FROM revoked_subs WHERE sub = ?", [user_hash])
+        .await?;
     record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    // DB コミットが先に確定した後に positive-only キャッシュも更新する。
+    state
+        .revoked_subs_before
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .remove(user_hash);
     Ok(Json(true))
 }
 

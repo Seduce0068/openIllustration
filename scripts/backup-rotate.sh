@@ -291,6 +291,9 @@ while IFS= read -r -d '' file; do
 	mtime="$(stat -c %Y "$file")"
 	if ((mtime < cutoff)); then
 		rm -f "$file"
+		# 同一世代の監査 root も合わせて削除し、古い世代の root が誤選択されないようにする。
+		# .audit-root はローテーション列挙には含めない（kept/pruned 件数を変えないため）。
+		rm -f -- "${file%.db}.audit-root" "${file%.db.gpg}.audit-root"
 		pruned=$((pruned + 1))
 		echo "pruned: ${file}"
 	fi
