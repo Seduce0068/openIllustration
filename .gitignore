@@ -9,6 +9,10 @@ e2e-artifacts/
 playwright-report/
 test-results/
 .env
+.env.*
+!.env.example
+*.pem
+*.key
 *.db
 *.db-*
 *.instance.lock

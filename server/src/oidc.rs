@@ -1545,7 +1545,54 @@ pub async fn refresh(
     Ok(response)
 }
 
-/// OIDC Back-Channel Logout。`sid` を失効させ、該当セッションを拒否する。
+/// logout token の `sub` 側失効を処理する。
+///
+/// `sid` 側（`revoke_session`）と独立に呼び出すため、ここで返ったエラーは
+/// caller が集約する。再送・古い `iat` は UPSERT の変更件数で冪等にスキップする。
+async fn revoke_sub_from_logout_token(
+    state: &Arc<AppState>,
+    sub: &str,
+    revoked_at: usize,
+) -> Result<(), AppError> {
+    // 更新時刻は受け取った logout token の iat とする。再送や古いトークンは
+    // 閾値を前進させず、冪等に成功応答を返す（DB 側 UPSERT の変更件数で判定）。
+    // プロセス再起動後も失効を維持するため DB 側の閾値を先にコミットする。
+    // logout token の検証（HTTP / JWKS）はすべて上流で完了済みなので、
+    // ロック取得中に外部呼び出しが発生して他書き込みを止めることはない。
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    let changed = tx
+        .execute(
+            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+             ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE revoked_subs.revoked_at < excluded.revoked_at",
+            (sub.to_string(), revoked_at as i64),
+        )
+        .await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
+
+    // 変更0件 = 同一 iat の再送、または閾値を前進させない古いトークン。
+    // この場合はメモリ更新とリフレッシュトークン消費をスキップする。
+    if changed == 0 {
+        return Ok(());
+    }
+
+    state
+        .revoked_subs_before
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+        .insert(sub.to_string(), revoked_at);
+    // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
+    // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
+    revoke_refresh_tokens_for_sub(state, sub).await?;
+    Ok(())
+}
+
+/// OIDC Back-Channel Logout。`sid` と `sub` の失効を独立に試行し、
+/// 片方が失敗してもう一方を必ず実行する。失敗は集約して返す。
 pub async fn backchannel_logout(
     State(state): State<Arc<AppState>>,
     Form(payload): Form<LogoutTokenRequest>,
@@ -1555,47 +1602,29 @@ pub async fn backchannel_logout(
         .as_ref()
         .ok_or_else(|| AppError::NotImplemented("OIDC is not configured".to_string()))?;
     let claims = verify_logout_token(&state.http_client, oidc, &payload.logout_token).await?;
+    // `claims.sid` / `claims.sub` を move しても読めるよう、Copy な iat を先に退避する。
+    let revoked_at = claims.iat;
 
+    let mut failures: Vec<String> = Vec::new();
+
+    // sid 側の DB エラーで sub 側を止めないよう、結果をここで受け止めて次へ進む。
     if let Some(sid) = claims.sid {
-        crate::revoke_session(&state, &sid).await?;
+        if let Err(error) = crate::revoke_session(&state, &sid).await {
+            failures.push(format!("sid revocation failed: {}", error));
+        }
     }
 
     if let Some(sub) = claims.sub {
-        // 更新時刻は受け取った logout token の iat とする。再送や古いトークンは
-        // 閾値を前進させず、冪等に成功応答を返す（DB 側 UPSERT の変更件数で判定）。
-        let revoked_at = claims.iat;
-        // プロセス再起動後も失効を維持するため DB 側の閾値を先にコミットする。
-        // logout token の検証（HTTP / JWKS）はすべて上流で完了済みなので、
-        // ロック取得中に外部呼び出しが発生して他書き込みを止めることはない。
-        let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-        let changed = tx
-            .execute(
-                "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
-             ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE revoked_subs.revoked_at < excluded.revoked_at",
-                (sub.clone(), revoked_at as i64),
-            )
-            .await?;
-        tx.commit()
-            .await
-            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
-        drop(write_guard);
-
-        // 変更0件 = 同一 iat の再送、または閾値を前進させない古いトークン。
-        // この場合はメモリ更新とリフレッシュトークン消費をスキップする。
-        if changed == 0 {
-            return Ok(StatusCode::OK);
+        if let Err(error) = revoke_sub_from_logout_token(&state, &sub, revoked_at).await {
+            failures.push(format!("sub revocation failed: {}", error));
         }
+    }
 
-        state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sub.clone(), revoked_at);
-        // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
-        // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
-        revoke_refresh_tokens_for_sub(&state, &sub).await?;
+    if !failures.is_empty() {
+        return Err(AppError::Internal(format!(
+            "back-channel logout partially failed: {}",
+            failures.join("; ")
+        )));
     }
 
     Ok(StatusCode::OK)

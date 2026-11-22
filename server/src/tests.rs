@@ -17976,6 +17976,45 @@ async fn me_export_returns_only_own_data() {
             "alice-only data leaked: {marker}"
         );
     }
+
+    // 回帰: GET /transactions は claims.sub でスコープし、本人が sender / receiver
+    // である行だけを返す（bob 同士の tx-bob-only は漏えいしない）。
+    let alice_claims = Claims {
+        sub: "alice".to_string(),
+        exp: 10000000000,
+        sid: None,
+        iat: Some(10_000_000),
+    };
+    let alice_token = encode(
+        &Header::default(),
+        &alice_claims,
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_ref()).unwrap(),
+    )
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/transactions")
+                .header("authorization", format!("Bearer {alice_token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(rows.len(), 2, "alice は本人が絡む2件のみ見える");
+    assert!(
+        rows.iter()
+            .all(|row| row["sender_hash"] == "alice" || row["receiver_hash"] == "alice"),
+        "他ユーザー間の取引が返ってはならない"
+    );
+    assert!(
+        rows.iter().all(|row| row["tx_hash"] != "tx-bob-only"),
+        "bob 同士の取引は漏えいしない"
+    );
 }
 
 /// R5-04: データが無いユーザーでは 12 配列すべてが空になる。

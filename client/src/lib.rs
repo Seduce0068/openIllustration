@@ -4620,6 +4620,24 @@ mod tests {
     }
 
     #[test]
+    fn refresh_slot_epoch_mismatch_discards_stale_token() {
+        // claim 後に logout/login で epoch を進めると、完了時の古い JWT は
+        // REFRESHED_JWT へ書き戻されず Failed が配られる（旧セッション復活防止）。
+        super::clear_refreshed_jwt();
+        let mut slot = super::RefreshSlot::new();
+        assert!(slot.claim());
+        super::bump_refresh_epoch();
+        let outcome = slot.complete(super::RefreshOutcome::Token("stale-jwt".to_string()));
+        assert_eq!(outcome, super::RefreshOutcome::Failed);
+        assert_eq!(slot.outcome(), Some(super::RefreshOutcome::Failed));
+        assert!(
+            super::REFRESHED_JWT.with(|slot| slot.borrow().is_none()),
+            "stale token must not be written back"
+        );
+        super::clear_refreshed_jwt();
+    }
+
+    #[test]
     fn refresh_slot_waker_is_registered_once_and_cleared_on_completion() {
         let mut slot = super::RefreshSlot::new();
         // Waker::noop() は will_wake が常に false のため、実際の Wake 実装を使う。

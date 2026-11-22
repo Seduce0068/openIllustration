@@ -2202,3 +2202,28 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 `test_cors_exposes_request_id_header` の2件のみ。doc→code テスト名照合値は
 tests148 → tests150 へ追随し、E2E69件 / check23 / doctor54 / migrations14 は
 不変（履歴記載の数値は変更しない）。
+
+## R2-SERVER（第2次・部分適用）の受け入れ契約（2026-11-23）
+
+1. **back-channel logout の部分適用**: `server/src/oidc.rs` の
+   `backchannel_logout` は `sid` 側と `sub` 側を独立に試行する。
+   `revoke_session(sid)` が DB エラーを返しても `sub` 側の `revoked_subs` UPSERT と
+   `revoke_refresh_tokens_for_sub` を必ず実行し、失敗は `AppError::Internal` へ
+   集約して返す（片方の失敗が他方を止めない）。冪等性は UPSERT の
+   `changes() == 0` 判定を維持する。既存の
+   `test_backchannel_logout_revokes_session_with_sid_and_sub` /
+   `test_backchannel_logout_commits_db_threshold_before_refresh_revocation`
+   で通常経路が不変であることを確認する。
+2. **`GET /transactions` の主体スコープ**: `claims.sub` をバインドし、
+   `sender_hash = ? OR receiver_hash = ?` で絞り込む。全件が不要な設計意図を
+   運用ドキュメントへ明記し、`ORDER BY created_at DESC LIMIT 100` を維持する。
+   回帰は既存 `me_export_returns_only_own_data` 内へ追加し、`alice` トークンで
+   `tx-bob-only` が返らず本人が絡む2件のみ返ることを固定する。
+3. **`finalize_report` の read-then-write 順序**: 存在確認の1行を読んだ直後に
+   `drop(rows)` してから `process_report_conclusion` を呼ぶ。`migration.rs` と
+   同じ順序に統一する。既存の finalize / 自動確定の回帰で連鎖と結果が
+   不変であることを確認する。
+
+新規テスト関数は追加しない（既存テスト内への回帰追加のみ）。doc→code テスト名
+照合値は tests150 のまま、E2E69件 / check23 / doctor54 / migrations14 も不変
+（履歴記載の数値は変更しない）。

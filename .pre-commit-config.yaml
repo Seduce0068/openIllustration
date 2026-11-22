@@ -1,0 +1,8 @@
+# シークレットスキャンは pre-commit を主軸にする（push 後に履歴へ残さないため）。
+# CI の extra_gates でも最終ゲートとして併設する（ローカルフックは回避され得るため）。
+# v1 メンテナンスブランチの安定版にピン留めする（v2 は開発中のため使用しない）。
+repos:
+  - repo: https://github.com/betterleaks/betterleaks
+    rev: v1.10.1
+    hooks:
+      - id: betterleaks

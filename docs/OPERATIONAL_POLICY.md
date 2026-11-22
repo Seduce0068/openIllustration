@@ -861,3 +861,23 @@ apt 導入ステップでインストールされる）。本リポジトリに�
 - 新規サーバー側テスト2件を追加。E2E69件 / check23 / doctor54 / migrations14 は
   不変で、doc→code テスト名照合値のみ tests148 → tests150 へ追随する
   （履歴記載の数値は変更しない）。
+
+### R2-SERVER（第2次・部分適用）追加契約（2026-11-23）
+
+- **back-channel logout の部分適用**: logout token が `sid` と `sub` の両方を
+  持つ場合、`revoke_session(sid)` が DB エラーで失敗しても `sub` 側の
+  `revoked_subs` UPSERT と `revoke_refresh_tokens_for_sub` を必ず実行する。
+  両者は独立に試行し、失敗は `AppError::Internal` へ集約して返すため、
+  片方の失敗が他方を止めない。冪等性は既存の UPSERT `changes() == 0` 判定を維持し、
+  再送・古い `iat` では閾値を前進させない。
+- **`GET /transactions` の主体スコープ**: `claims.sub` をバインドし、
+  `sender_hash` または `receiver_hash` が一致する行のみ返す。全件返却は不要な
+  設計意図であり、他ユーザー間の取引は漏えいさせない。並び順と件数上限は
+  `ORDER BY created_at DESC LIMIT 100` を維持する（`export.rs` と同じ基準）。
+- **`finalize_report` の read-then-write 順序**: 存在確認のため1行読んだ直後に
+  `drop(rows)` してから `process_report_conclusion` を呼ぶ。
+  `migration.rs` / `update_content_status` と同じ順序に統一し、
+  読み取りカーソルを残したまま書き込まない。
+- 新規テスト関数は追加せず、回帰は既存 `me_export_returns_only_own_data`
+  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests150 の
+  各数値は不変。

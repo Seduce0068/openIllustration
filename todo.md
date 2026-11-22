@@ -787,6 +787,33 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第36ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  pre-commitシークレットスキャン導入（Betterleaks v1.10.1ピン・CI併設・.gitignore拡張）、
+  back-channel logoutのsid/sub独立試行+失敗集約、GET /transactionsのclaims.sub主体スコープ、
+  finalize_reportのread-then-write順序、epochガード回帰テスト、tests152追随。
+  R4指摘（tests150→152の記述追随）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests152、npm audit3lockfile、
+  markdownlint39ファイル、betterleaks git staged no leaks）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/chain構築、OIDC署名鍵403/501化+azp検証、
+  第三者監査アンカー、公開ledger意図、起動設定一括Config化、BIND_ADDR/PORT設定化、
+  workspace依存バージョン集約、孤立Pinataピン補償、OnFailure alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict の
+  CIゲート化、GPG復号訓練、Dependabot方針、axe自動スキャン、MSRV下限CI検証、
+  コミット後二次処理の5xx伝播、finalizer異常終了readiness/失敗メトリクス、
+  back-channel logoutのsid/sub別tx完了保証、動的alertアナウンス、401復帰導線共通化、
+  クライアントエラーテレメトリ、.audit-rootオフサイト、CORSスタブOriginエコー、
+  E2E artifact回収/結果分離、Chromeバージョン固定、OIL_MOCK_AUTH=0ビルド検証、
+  BUILD-02負のビルドゲート、retries方針、warn_history1回だけ検証、
+  prepare-distribution親ディレクトリ権限、assert_major_numericデッドコード、
+  公開集計鮮度境界/shorten_export_sub境界テスト、error-paths行番号コメント、
+  warn_history完了記録の実態漂移、投票キュー要約注記/lang、検証待ちrole=status、
+  systemd/cron二重有効化検出、日時UTC明示/ja-JP+UTC不整合、.geminiignore drift、
+  backup-cron-wrapper owner/mode分岐テスト、cargo-deny aarch64/licenses方針、
+  docs/log.md運用、HANDOFF CI記述、TOC scroll-margin、公開集計鮮度の端末時計依存、
+  restore_db safety copy原子性、refresh再利用検知時ファミリ失効失敗）は記録のみで保留。
+
 - 2026-11-23 コンボ第35ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   AGE_COUNTRY_OVERRIDES重複国コードfail-closed拒否、CI concurrencyへevent_name追加

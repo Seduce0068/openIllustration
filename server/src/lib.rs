@@ -3057,14 +3057,18 @@ pub async fn list_reports(
 
 pub async fn list_transactions(
     State(state): State<Arc<AppState>>,
-    _claims: AuthClaims,
+    claims: AuthClaims,
 ) -> Result<Json<Vec<TransactionResponse>>, AppError> {
+    // 全件返却は不要。認証主体自身が sender / receiver である取引だけを返す
+    // （他ユーザー間の取引は漏えいさせない）。export.rs のスコープと同じ基準。
+    let sub = claims.sub.clone();
     let mut rows = state
         .db
         .query(
             "SELECT tx_id, cid, sender_hash, receiver_hash, amount, tx_hash, created_at 
-             FROM transactions ORDER BY created_at DESC LIMIT 100",
-            (),
+             FROM transactions WHERE sender_hash = ? OR receiver_hash = ?
+             ORDER BY created_at DESC LIMIT 100",
+            libsql::params![sub.clone(), sub],
         )
         .await?;
 
@@ -4499,6 +4503,9 @@ pub async fn finalize_report(
     if rows.next().await?.is_none() {
         return Err(AppError::NotFound);
     }
+    // 1 行読んだ時点で Rows を明示的に解放してから process_report_conclusion を発行する。
+    // migration.rs と同じ read-then-write 順序に統一する。
+    drop(rows);
     process_report_conclusion(&tx, report_id).await?;
     tx.commit()
         .await
