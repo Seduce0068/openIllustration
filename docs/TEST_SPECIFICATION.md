@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T11:25:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T11:25:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -94,7 +94,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
-| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証。クライアントは `/auth/login` が 501 のとき固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らず早期 return し、`/auth/verify` が 501 のときも同文言へ変換する（403 / 500 等は既存 `認証に失敗しました (HTTP <status>).` を維持し、サーバー本文は非表示）。ビルド時に `OIL_MOCK_AUTH=0` を指定するとログイン画面のモック認証注記を非表示にする | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
+| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証。クライアントは `/auth/login` が 501 のとき固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らず早期 return し、`/auth/verify` が 501 のときも同文言へ変換する（403 / 500 等は既存 `認証に失敗しました (HTTP <status>).` を維持し、サーバー本文は非表示）。ビルド時に `OIL_MOCK_AUTH=0` を指定するとログイン画面のモック認証注記を非表示にする。リフレッシュは BAN チェックと claims/JWT 事前計算を `BEGIN` 前に済ませ、消費 UPDATE（変更0件なら rollback 後に別tx でファミリ失効）と新トークン INSERT（`issue_refresh_token_in_tx`）を単一 tx で原子的に実行し、`test_refresh_rotates_token_and_issues_new_session` が旧 `used_at` 非NULL・新 `used_at` NULL を検証する。`OIDC_MAX_AUTH_AGE_SECS` は上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過を固定文言ハードエラーで起動拒否（fail-closed・値非エコー）し、`u64::MAX` は拒否される境界テストで確認する | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
@@ -183,13 +183,13 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は当時59件のまま（現在69件） |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
-| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス10件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048`、issuer DN 迂回検知 `rejects_leaf_signed_by_issuer_key_with_different_dn` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
-| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。実JPKIの失効・期限切れは未検証 |
-| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
+| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。`OIDC_MAX_AUTH_AGE_SECS` は上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値（`u64::MAX` 境界を含む）も固定文言のハードエラーで起動拒否し、設定値をエコーしない（fail-closed）。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス10件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048`、issuer DN 迂回検知 `rejects_leaf_signed_by_issuer_key_with_different_dn` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
+| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。リフレッシュトークンの再利用検知は、消費 UPDATE の変更0件を tx ロールバック後に別tx のファミリ失効へつなぐ単一 tx 構成で担保し、`test_refresh_reuse_revokes_family` がファミリ全体の失効を検証する。実JPKIの失効・期限切れは未検証 |
+| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。リフレッシュの原子的回転（`issue_refresh_token_in_tx`）により旧トークンは消費済み・新トークンは未使用で登録され、`test_refresh_rotates_token_and_issues_new_session` が新旧の `used_at` を検証する。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。必須設定値が未充足（`configuration_satisfied() == false`）のときの全経路拒否は AGE-03 で検証 |
-| AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（`default_minimum_age=21` ・`country_minimums` 空・`target_regions` 空）のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
+| AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（`default_minimum_age=21` ・`country_minimums` 空・`target_regions` 空）のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照。リフレッシュの原子化後も年齢ゲート共通ゲートは `BEGIN` より前に実行され、BAN チェックと claims/JWT 事前計算も `BEGIN` 前に配置して write_lock 保持中の待ちを避ける |
 | AGE-04 | 年齢基準日の TZ ローカル化 | `TZ` の `Asia/Tokyo`（UTC+9）/ `Etc/GMT±N`（POSIX 符号反転）/ 未設定・未対応名（UTC フォールバック）で「今日」が変わり、年齢境界が1日ずれる。UTC 2024-01-01T16:00Z の JST は翌日 | 実装済み。`test_today_for_policy_uses_configured_local_timezone` と `test_validate_age_at_uses_local_today_for_age_boundary` の2件。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
 | AGE-05 | 署名付き年齢属性 adapter の正常系（DEC-01 / ADR-0007） | `verify(issuer, claims, nonce, audience)` が許可リスト完全一致・発行者束縛・audience 束縛・nonce 束縛を通した場合のみ `VerifiedAge` を返す。mock 経路では自己申告の成人判定を上書きして検証済み生年月日で判定。`verified_claims` 経路の `user_hash` は issuer + signed_subject 由来 | 実装済み。`verified_age.rs` の `verify_accepts_valid_claims` と `test_verified_age_accepts_valid_signed_attribute_in_mock_path`（hash 契約は AGE-12） |
 | AGE-06 | 自己申告混入拒否 | `birth_date` / `country_code` を `verified_claims` へ混ぜた JSON は `deny_unknown_fields` で拒否。信頼属性必須モードで `verified_claims` 欠落時は自己申告が成人でも 403 | 実装済み。`self_reported_fields_cannot_be_injected_into_claims` と `test_verified_age_rejects_self_reported_fields_and_missing_claims` |
@@ -450,6 +450,10 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 判定は全フラグ共通の `common::age::parse_bool_env` に統一する。
 `ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に警告が計上され、`--strict` で exit 1 になる。
 
+上表の「設定判定」42件のうち `oidc_max_auth_age` カテゴリは、共通バリデータの固定文言をそのまま警告へ流す。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過
+  （固定文言 `OIDC_MAX_AUTH_AGE_SECS must not exceed 2592000 seconds (30 days)`、`u64::MAX` 境界を含む）は既存テスト内のアサーション追加で検証し、
+  設定値はエコーしない（テスト数・件数は不変）。
+
 ##### doctor のネットワーク設定警告（追加4件）
 
 `ipv4_localhost` と `trusted_proxy` の2カテゴリを追加し、その後の `oidc_clock_skew` 追加と
@@ -579,8 +583,12 @@ CLI-01〜03 に加え、`server/src/bin/` 配下の全 bin について実装済
 | `verify_backup` | 19件 | `--database-token` 拒否、サイドカー fail-closed、構造検証 |
 
 DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙の `file:local.db` 既定を撤廃した。
-`resolve_database_url(cli, env)` が `--database-url` と `DATABASE_URL` を解決し、
-両方が未設定または空・空白のみなら固定文言で起動を拒否する（値はエコーしない）。
+`server/src/lib.rs` の共通ヘルパ `resolve_database_url(cli, env)` が `--database-url` と `DATABASE_URL` を解決し、
+`env` は `common::env::read_env("DATABASE_URL")` が返す `common::env::EnvValue` で統一されている。
+両方が未設定または空・空白のみなら `DatabaseUrlError::Required`（固定文言
+`DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used`）で、
+非 UTF-8 なら `DatabaseUrlError::NotUtf8`（固定文言 `DATABASE_URL is not valid UTF-8`、本番の
+`production_database_url_error` と同一）で起動を拒否する（値・生バイトはエコーしない）。
 各 CLI へ追加した5テスト（計15件）が、両方未設定の拒否、CLI 優先、環境変数のみの受理、
 空/空白拒否、非エコーを検証する。
 
@@ -655,6 +663,11 @@ published rollback の5ケースを追加した。実 `repo_root` を壊さな�
   `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?` で古い閾値以下のみ削除する。
   これにより削除前に back-channel logout が登録した新しい失効が残る。既存の関連テストは
   `test_backchannel_logout_for_sub_allows_reauthentication` と `test_purge_stale_revoked_subs`。
+- リフレッシュ回転（R2-REFRESH-MAXAUTH）: `/auth/refresh` は write_lock → `BEGIN` → 消費 `UPDATE` → `changes()` 判定 → `INSER
+  T`（`issue_refresh_token_in_tx`）→ `COMMIT` の単一 tx で実行する。変更0件（競合による再利用）は `tx.rollback()` の後にガードを解放し、別tx の `rev
+  oke_refresh_family` へつなぐ（ガードを保持したまま再取得するとデッドロックするため、refresh 内では別tx を取る `issue_refresh_token` を呼ばない）。BAN チェック
+  と claims/JWT 事前計算は `BEGIN` 前に配置する。`test_refresh_rotates_token_and_issues_new_session`（旧 `used_at` 非NULL・新 `u
+  sed_at` NULL）と `test_refresh_reuse_revokes_family` で検証する。
 - 専用テスト名は確定済みで、PAY-04 は `test_payment_verify_stage2_cas_rejects_race_after_detected`、
   ID-05 は `test_reauthentication_delete_keeps_newer_revocation_threshold` が検証する。
 

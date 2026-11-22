@@ -10,8 +10,8 @@ mod verified_age;
 
 // 設定診断 CLI（bin/doctor.rs）と時刻検証で同じ定数・判定を参照するための再エクスポート。
 pub use oidc::{
-    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, OidcConfigValidation,
-    is_valid_oidc_endpoint, validate_oidc_config_with,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, MAX_AUTH_AGE_MAX_SECS,
+    OidcConfigValidation, is_valid_oidc_endpoint, validate_oidc_config_with,
 };
 
 use axum::{
@@ -803,55 +803,11 @@ fn init_tracing() {
     }
 }
 
-/// ロックファイルの内容から `(PID, プロセス開始時刻)` を取り出す純粋関数。
-///
-/// - 新形式: 1行目が PID、2行目が `/proc/<pid>/stat` の field 22 (starttime)。
-/// - 旧形式: PID のみ（`starttime` は `None`）。後方互換として扱う。
-/// - PID が読めない場合: `(0, None)` を返す。PID 0 は所有者を識別できないため、
-///   呼び出し側は stale として回収せず起動を拒否する（fail-closed）。
-pub(crate) fn parse_instance_lock(contents: &str) -> (u32, Option<u64>) {
-    let mut lines = contents.lines();
-    let pid = lines
-        .next()
-        .and_then(|line| line.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-    let starttime = lines
-        .next()
-        .and_then(|line| line.trim().parse::<u64>().ok());
-    (pid, starttime)
-}
-
-/// `/proc/<pid>/stat` の field 22 (starttime: 起動からの clock ticks) を読む純粋関数。
-/// `/proc` が無い環境・プロセスが消えた場合・形式が読めない場合は `None`。
-pub(crate) fn read_proc_starttime(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // comm (field 2) は空白や ')' を含み得るため、最後の ')' より後だけを解析する。
-    // ')' の直後は field 3 (state) なので field 22 はそこから 19 個先のトークン。
-    let after_comm = stat.rfind(')')?;
-    stat.get(after_comm + 1..)?
-        .split_whitespace()
-        .nth(19)?
-        .parse::<u64>()
-        .ok()
-}
-
-/// ロック所有者が生存中かを判定する。
-/// `/proc` が読めない環境では判定不能のため「生存」として起動を拒否する（fail-closed）。
-fn instance_lock_owner_alive(pid: u32, starttime: Option<u64>) -> bool {
-    if read_proc_starttime(std::process::id()).is_none() {
-        return true;
-    }
-    match starttime {
-        // PID 再利用を防ぐため、開始時刻が一致したときだけ生存とみなす。
-        // /proc/<pid> はあるのに stat が読めない場合は確認不能なので拒否側へ倒す。
-        Some(expected) => match read_proc_starttime(pid) {
-            Some(actual) => actual == expected,
-            None => std::path::Path::new(&format!("/proc/{pid}")).exists(),
-        },
-        // 旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
-        None => std::path::Path::new(&format!("/proc/{pid}")).exists(),
-    }
-}
+// instance.lock の解析・生存判定は common へ集約した単一情報源を再エクスポートする。
+// 既存の `crate::parse_instance_lock` 参照と instance_lock_tests (super::) を壊さない。
+pub use common::instance_lock::{
+    instance_lock_owner_alive, parse_instance_lock, read_proc_starttime,
+};
 
 /// PID と starttime を1回の書き込みでロックファイルへ記録する。
 fn write_instance_lock(file: &mut std::fs::File) -> anyhow::Result<()> {
@@ -958,6 +914,31 @@ mod instance_lock_tests {
     }
 }
 
+/// PINATA_JWT の本番設定エラーを共通判定する単一情報源。
+///
+/// `production_config_errors` と `pinata_jwt_production_like` が同じ判定を共有する。
+/// 未設定・非 UTF-8・空白のみ・開発用 `mock_jwt`（前後空白を含む）を拒否し、
+/// 固定文言のみを返す（値やトークンは保持・出力しない）。`allow_mock_auth` には依存しない。
+fn pinata_jwt_production_error(value: &common::env::EnvValue) -> Option<&'static str> {
+    match value {
+        common::env::EnvValue::Missing => Some("PINATA_JWT is not configured"),
+        // 非 UTF-8 は「未設定」と混同せず、既存固定文言で拒否（生バイトはエコーしない）。
+        common::env::EnvValue::NonUtf8 => Some("PINATA_JWT is empty"),
+        common::env::EnvValue::Utf8(raw) => {
+            // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
+            if raw.trim().is_empty() {
+                Some("PINATA_JWT is empty")
+            }
+            // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
+            else if raw.trim() == "mock_jwt" {
+                Some("PINATA_JWT is the development mock value")
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// 本番相当（モック認証無効）で起動する前に必須設定を検査する。
 /// 開発用のフォールバックがそのまま本番へ持ち込まれないようにする（fail-closed）。
 /// 秘密情報の値は返さず、どの設定が不足しているかだけを返す。
@@ -973,37 +954,20 @@ pub fn production_config_errors(
     if !oidc_configured {
         errors.push("OIDC is not configured (OIDC_* environment variables are required)");
     }
-    match pinata_jwt {
-        common::env::EnvValue::Missing => errors.push("PINATA_JWT is not configured"),
-        // 非 UTF-8 は「未設定」と混同せず、既存固定文言で拒否（生バイトはエコーしない）。
-        common::env::EnvValue::NonUtf8 => errors.push("PINATA_JWT is empty"),
-        common::env::EnvValue::Utf8(raw) => {
-            // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
-            if raw.trim().is_empty() {
-                errors.push("PINATA_JWT is empty");
-            }
-            // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
-            else if raw.trim() == "mock_jwt" {
-                errors.push("PINATA_JWT is the development mock value");
-            }
-        }
+    if let Some(message) = pinata_jwt_production_error(&pinata_jwt) {
+        errors.push(message);
     }
     errors
 }
 
 /// PINATA_JWT が本番相当の実値かを判定する共通ヘルパ。
 ///
-/// `run()` / `doctor` / `pin_to_ipfs` が同じ `common::env::EnvValue` 分類を共有する
-/// 単一情報源。未設定・非 UTF-8・空白のみ・開発用 `mock_jwt`（前後空白を含む）は
-/// 「本番用ではない」とみなす（fail-closed）。値やトークンは保持・出力しない。
+/// `run()` / `doctor` / `pin_to_ipfs` が同じ `common::env::EnvValue` 分類を共有する。
+/// 判定は `pinata_jwt_production_error` へ委譲し、未設定・非 UTF-8・空白のみ・
+/// 開発用 `mock_jwt`（前後空白を含む）は「本番用ではない」とみなす（fail-closed）。
+/// 値やトークンは保持・出力しない。
 pub fn pinata_jwt_production_like(value: common::env::EnvValue) -> bool {
-    match value {
-        common::env::EnvValue::Utf8(raw) => {
-            let trimmed = raw.trim();
-            !trimmed.is_empty() && trimmed != "mock_jwt"
-        }
-        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => false,
-    }
+    pinata_jwt_production_error(&value).is_none()
 }
 
 /// `DATABASE_URL` がリモート DSN かを判定する純粋ヘルパ。
@@ -1059,6 +1023,48 @@ pub fn production_database_url_error(
             }
         }
     }
+}
+
+/// DB 接続先の解決エラー。設定値・生バイト・トークンを一切保持しない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DatabaseUrlError {
+    /// CLI 引数と環境変数の両方が未設定、または空・空白のみ。
+    Required,
+    /// 環境変数が非 UTF-8（生バイトは保持しない）。
+    NotUtf8,
+}
+
+impl std::fmt::Display for DatabaseUrlError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const REQUIRED: &str =
+            "DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used";
+        const NOT_UTF8: &str = "DATABASE_URL is not valid UTF-8";
+        match self {
+            DatabaseUrlError::Required => formatter.write_str(REQUIRED),
+            DatabaseUrlError::NotUtf8 => formatter.write_str(NOT_UTF8),
+        }
+    }
+}
+
+/// DB 接続先を解決する共通ヘルパ。
+///
+/// CLI 引数を環境変数より優先し、空・空白のみは未設定として扱う。非 UTF-8 の
+/// 環境変数は未設定へ潰さず [`DatabaseUrlError::NotUtf8`] として拒否する。
+/// 両方が未設定なら [`DatabaseUrlError::Required`] を返し、暗黙既定値は使わない。
+/// 値も生バイトもトークンも一切エコーしない。
+pub fn resolve_database_url(
+    cli: Option<String>,
+    env: common::env::EnvValue,
+) -> Result<String, DatabaseUrlError> {
+    let cli = cli.filter(|value| !value.trim().is_empty());
+    let env = match env {
+        common::env::EnvValue::Utf8(value) if !value.trim().is_empty() => Some(value),
+        common::env::EnvValue::Utf8(_) | common::env::EnvValue::Missing => None,
+        common::env::EnvValue::NonUtf8 => return Err(DatabaseUrlError::NotUtf8),
+    };
+    cli.map(|value| value.trim().to_string())
+        .or_else(|| env.map(|value| value.trim().to_string()))
+        .ok_or(DatabaseUrlError::Required)
 }
 
 /// `AUDIT_EXPECT_ROOT` の生値が非空かつ全バイト ASCII hex かを判定する純粋ヘルパ。
@@ -1217,9 +1223,11 @@ pub async fn foreign_key_doctor_warnings() -> Vec<String> {
 async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
     let db_url = match common::env::read_env("DATABASE_URL") {
         common::env::EnvValue::Utf8(value) => value.trim().to_string(),
-        // 本番相当なら doctor の production カテゴリで未設定を既に警告済み。
+        // 未設定・非 UTF-8 は `file:local.db` へ黙ってフォールバックしない。
+        // 検査失敗として Err を返し、呼び出し側の (Vec::new(), true) → fail-closed
+        // 警告経路へ倒す（固定文言のみで設定値はエコーしない）。
         common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
-            "file:local.db".to_string()
+            anyhow::bail!("DATABASE_URL is not configured for foreign key check")
         }
     };
     let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();

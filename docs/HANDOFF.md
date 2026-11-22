@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-22T10:30:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -206,6 +206,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - `PINATA_JWT`: 開発（`ALLOW_MOCK_AUTH=1`）のみ模擬動作。本番相当（`ALLOW_MOCK_AUTH` 無効）では
   実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。
   `doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。
+  判定は共有ヘルパ `pinata_jwt_production_error` へ委譲済み（R2-PINATA リファクタ完了、
+  `production_config_errors` と `pinata_jwt_production_like` が同じ単一情報源を共有）。
 
 ### 年齢/地域ポリシー（DEC-02、非秘密・常時公開）
 

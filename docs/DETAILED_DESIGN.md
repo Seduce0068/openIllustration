@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -461,6 +461,12 @@ SQLite の型 affinity に過ぎず、実際の格納値は RFC3339 文字列だ
   stale ロックは続行を許可する。
 - ロック内容の PID とプロセス開始時刻（`/proc/<pid>/stat` の field 22）を照合し、PID 再利用を防ぐ。
   旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
+- ロック内容の解析・starttime 読み取り・所有者生存判定は `common/src/instance_lock.rs` の
+  `parse_instance_lock` / `read_proc_starttime` / `instance_lock_owner_alive` に集約した
+  単一情報源を使う。`parse_instance_lock` は純粋関数として無条件公開し、`/proc` 依存の
+  2関数は `#[cfg(not(target_arch = "wasm32"))]` で分離する（common は wasm クライアントからも
+  依存されるため）。`server/src/lib.rs` はこれを re-export し、`backup_db` / `restore_db` は
+  `common::instance_lock` から直接 import して同じ判定を共有する（bin 内の再実装は削除）。
 - 生存サーバーがロックを保持する場合は `backup_db` は
   `refusing backup: a live server instance holds the instance lock`、`restore_db` は
   `refusing restore: a live server instance holds the <side> instance lock`（`<side>` は
@@ -651,9 +657,13 @@ INSERT を同じトランザクションでコミットする。この原子的�
 | `verify_backup` | `parse_args_from` / `decide_output` / `ensure_no_sidecars` / `verify_backup_at` | 19 | CLI-03 |
 
 上記3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）の `resolve_database_url(cli, env)` は
-CLI 引数を環境変数より優先し、空・空白のみを未設定として扱う。両方が未設定なら
-`DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used` で起動を拒否し、
-いかなる値もエコーしない。`file:local.db` の暗黙既定は撤廃済み（deploy 設定例は明示済みのため変更なし）。
+`server/src/lib.rs` の共通ヘルパへ集約され、`env` は `common::env::read_env("DATABASE_URL")` が返す
+`common::env::EnvValue`（`Utf8` / `Missing` / `NonUtf8`）で統一されている。CLI 引数を環境変数より
+優先し、空・空白のみを未設定として扱う。両方が未設定なら `DatabaseUrlError::Required` に対応する
+固定文言 `DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used` で
+起動を拒否し、非 UTF-8 の環境変数は未設定へ潰さず `DatabaseUrlError::NotUtf8` に対応する固定文言
+`DATABASE_URL is not valid UTF-8`（本番の `production_database_url_error` と同一）で拒否する。
+いかなる値・生バイトもエコーしない。`file:local.db` の暗黙既定は撤廃済み（deploy 設定例は明示済みのため変更なし）。
 
 ### doctor（`server/src/bin/doctor.rs`）
 

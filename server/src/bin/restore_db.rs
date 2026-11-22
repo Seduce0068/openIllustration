@@ -1,4 +1,5 @@
 use anyhow::{Context, anyhow};
+use common::instance_lock::{instance_lock_owner_alive, parse_instance_lock};
 use libsql::Builder;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -109,52 +110,6 @@ fn ensure_no_sidecars(path: &Path, side: &str) -> anyhow::Result<()> {
         }
     }
     Ok(())
-}
-
-/// ロックファイルの内容から `(PID, プロセス開始時刻)` を取り出す。
-/// backup_db / server/src/lib.rs の `parse_instance_lock` と同じ形式。bin から
-/// `pub(crate)` ヘルパーは参照できないため、ここで素直に再実装する。
-fn parse_instance_lock(contents: &str) -> (u32, Option<u64>) {
-    let mut lines = contents.lines();
-    let pid = lines
-        .next()
-        .and_then(|line| line.trim().parse::<u32>().ok())
-        .unwrap_or(0);
-    let starttime = lines
-        .next()
-        .and_then(|line| line.trim().parse::<u64>().ok());
-    (pid, starttime)
-}
-
-/// `/proc/<pid>/stat` の field 22 (starttime) を読む。
-/// `/proc` が無い環境・プロセスが消えた場合・形式が読めない場合は `None`。
-fn read_proc_starttime(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    // comm (field 2) は空白や ')' を含み得るため、最後の ')' より後だけを解析する。
-    let after_comm = stat.rfind(')')?;
-    stat.get(after_comm + 1..)?
-        .split_whitespace()
-        .nth(19)?
-        .parse::<u64>()
-        .ok()
-}
-
-/// ロック所有者が生存中かを判定する。`/proc` が読めず判定不能な場合は
-/// 「生存」として扱い、復元を拒否する（fail-closed）。
-fn instance_lock_owner_alive(pid: u32, starttime: Option<u64>) -> bool {
-    if read_proc_starttime(std::process::id()).is_none() {
-        return true;
-    }
-    match starttime {
-        // PID 再利用を防ぐため、開始時刻が一致したときだけ生存とみなす。
-        Some(expected) => match read_proc_starttime(pid) {
-            Some(actual) => actual == expected,
-            // /proc/<pid> はあるのに stat が読めない場合は確認不能なので拒否側へ倒す。
-            None => Path::new(&format!("/proc/{pid}")).exists(),
-        },
-        // 旧形式（PID のみ）は後方互換のため PID の存在だけで判定する。
-        None => Path::new(&format!("/proc/{pid}")).exists(),
-    }
 }
 
 /// `<db>.instance.lock` が生存中のサーバーに保持されていないか検査する。
@@ -391,6 +346,10 @@ async fn main() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+// read_proc_starttime はテスト専用（本番経路は common の instance_lock_owner_alive が参照）。
+#[cfg(test)]
+use common::instance_lock::read_proc_starttime;
 
 #[cfg(test)]
 mod tests {

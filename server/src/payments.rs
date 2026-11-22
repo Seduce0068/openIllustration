@@ -733,17 +733,26 @@ pub async fn verify_order(
         || normalize_address(&verification.to) != order.recipient_address
         || verified_wei != order_wei
     {
-        tx.execute(
-            "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE order_id = ? AND status = ? AND status <> ?",
-            (
-                STATUS_MISMATCH,
-                order_id.clone(),
-                order.status.clone(),
-                STATUS_FINALIZED,
-            ),
-        )
-        .await?;
+        // 不一致マーキングも CAS 対象。検証中に status が外部書き換えされていた場合は
+        // 0 件更新ならロールバックして 400 を返さず、他 CAS と同様に 409 で拒否する。
+        let mismatch_update = tx
+            .execute(
+                "UPDATE payment_orders SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE order_id = ? AND status = ? AND status <> ?",
+                (
+                    STATUS_MISMATCH,
+                    order_id.clone(),
+                    order.status.clone(),
+                    STATUS_FINALIZED,
+                ),
+            )
+            .await?;
+        if tx.changes() != 1 {
+            return Err(AppError::Conflict(
+                "order status changed during mismatch marking".into(),
+            ));
+        }
+        debug_assert_eq!(mismatch_update, 1);
         tx.commit().await?;
         return Err(AppError::BadRequest(
             "transfer does not match the order".to_string(),

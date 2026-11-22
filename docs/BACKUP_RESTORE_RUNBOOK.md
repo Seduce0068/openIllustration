@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T11:25:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## 目的
@@ -22,7 +22,12 @@ generated:
   空白のみ・旧既定の相対 `file:local.db` を起動拒否し（fail-closed、値はエコーしない）、
   開発（`ALLOW_MOCK_AUTH=1`）のみ `file:local.db` を許容する。
   `backup_db` / `verify_audit_log` は `--database-url` または環境変数での明示設定がなければ
-  起動を拒否する（暗黙の `file:local.db` 既定は撤廃済み、値はエコーしない）。
+  起動を拒否する（暗黙の `file:local.db` 既定は撤廃済み、値はエコーしない）。両者と
+  `sign_audit_export` の DB 接続先解決は `server/src/lib.rs` の `resolve_database_url` へ集約し、
+  環境変数は `common::env::read_env("DATABASE_URL")` の `common::env::EnvValue` で統一した。
+  未設定・空・空白のみは固定文言 `DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used`、
+  非 UTF-8 は未設定へ潰さず固定文言 `DATABASE_URL is not valid UTF-8`（本番の
+  `production_database_url_error` と同一）で拒否する。
 - リモート DB のトークンは `DATABASE_TOKEN` 環境変数からのみ渡す。`verify_backup` は
   `--database-token` を argv で受け付けず、`sign_audit_export` と同じ契約で拒否する
   （下記「バックアップ検証」を参照）。
@@ -197,6 +202,12 @@ refusing backup: a live server instance holds the instance lock (<lock path>, pi
 ロック内容は PID とプロセス開始時刻（`/proc/<pid>/stat` の field 22）で照合し、PID 再利用を防ぐ。
 旧形式（PID のみ）は PID の存在だけで判定する。PID が存在しない stale ロックは続行を許可する。
 `/proc` が読めない等で判定不能な場合も「生存」として扱い拒否する（fail-closed）。
+
+この解析・判定は `common/src/instance_lock.rs` の共通ヘルパ（`parse_instance_lock` /
+`read_proc_starttime` / `instance_lock_owner_alive`）に集約されている。`backup_db` / `restore_db`
+は `common::instance_lock` から直接 import し、`server/src/lib.rs` は同じ関数を re-export して
+起動時検査と判定を共有する（bin 内に同じ判定の再実装は置かない）。`parse_instance_lock` は
+純粋関数として無条件公開し、`/proc` 依存の2関数は `#[cfg(not(target_arch = "wasm32"))]` で分離する。
 
 `restore_db` も同じ PID + 開始時刻の判定を、バックアップ元（`backup`）と復元先（`target`）の
 両方の `<db path>.instance.lock` に適用する。いずれかが生存ロックなら次のエラーで復元を

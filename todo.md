@@ -163,16 +163,16 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 ### 優先度: 中
 
-- [ ] **リフレッシュトークン回転をアトミック化** — 根拠 `server/src/oidc.rs:1384` / review R2-ER / 中。
+- [x] **リフレッシュトークン回転をアトミック化** — 根拠 `server/src/oidc.rs:1384` / review R2-ER / 中。
   消費コミット後にbanチェック・発行が失敗すると旧トークン消費済み・新規未発行でファミリ失効する。
-- [ ] **OIDC_MAX_AUTH_AGE_SECSに上限を設定** — 根拠 `server/src/oidc.rs:42` / review R2-ER / 中。
+- [x] **OIDC_MAX_AUTH_AGE_SECSに上限を設定** — 根拠 `server/src/oidc.rs:42` / review R2-ER / 中。
   u64::MAX等が受理されauth_time検証が実質無効化されるfail-open。
-- [ ] **verify_order MISMATCH更新のCAS影響件数 checking** — 根拠 `server/src/payments.rs:736` / review R2-ER / 中。
-- [ ] **doctor FK検査の未設定/非UTF-8時スキップ** — 根拠 `server/src/lib.rs:1194` / review R1-AR+R2-ER / 中。
+- [x] **verify_order MISMATCH更新のCAS影響件数 checking** — 根拠 `server/src/payments.rs:736` / review R2-ER / 中。
+- [x] **doctor FK検査の未設定/非UTF-8時スキップ** — 根拠 `server/src/lib.rs:1194` / review R1-AR+R2-ER / 中。
   file:local.dbへフォールバックし無関係DBを「production」として報告する。
-- [ ] **PINATA判定を真の単一情報源へ** — 根拠 `server/src/lib.rs:980` / review R1-AR / 中。
+- [x] **PINATA判定を真の単一情報源へ** — 根拠 `server/src/lib.rs:980` / review R1-AR / 中。
   production_config_errorsとpinata_jwt_production_likeが同一比較を再実装している。
-- [ ] **instance.lock/resolve_database_url判定をcommonへ集約** — 根拠 `server/src/bin/backup_db.rs:118` / review R1-AR / 中。
+- [x] **instance.lock/resolve_database_url判定をcommonへ集約** — 根拠 `server/src/bin/backup_db.rs:118` / review R1-AR / 中。
   3CLIで約40行ずつ複製されfail-closed判定がdriftし得る。
 - [ ] **session Cookie未使用の露出を解消** — 根拠 `server/src/oidc.rs:1284` / review R3-AU / 中。
   Path=/ SameSite=Laxで全リクエストに送られ logout時も削除されない。
@@ -719,6 +719,12 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中優先6件）: リフレッシュ回転を単一tx原子化、OIDC_MAX_AUTH_AGEに30日上限、
+  verify_order MISMATCH をCAS検査対象化、doctor FK のUnresolvedフォールバック廃止、
+  PINATA判定を共有ヘルパ化、instance.lockをcommon集約＋resolve_database_urlを3CLI共通化。
+  親がmarkdownlint行長4箇所・MISMATCHコメントを修正。全ゲート green。
+  残り高2（外部要因）・中6・低9。
 
 - 2026-11-22 coding（高優先6件）: AGE_*/ALLOWED_ORIGINSをenv分類器と共有ヘルパで起動ゲート化、
   OIL_MOCK_AUTH=0と501固定文言で本番UIの誤認を解消、shfmt -l を実効ゲートへ。

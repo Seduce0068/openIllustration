@@ -3,11 +3,12 @@
 //! 秘密情報の値は一切出力しない。
 
 use server::{
-    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, graceful_drain_timeout,
-    ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests,
-    moderation_finalize_interval, oidc_http_timeout, pinata_jwt_production_like,
-    policy_utc_offset_hours, production_allowed_origins_error, production_audit_expect_root_error,
-    production_config_errors, rate_limit_per_min, validate_jwt_secret, validate_oidc_config_with,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, MAX_AUTH_AGE_MAX_SECS,
+    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
+    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    pinata_jwt_production_like, policy_utc_offset_hours, production_allowed_origins_error,
+    production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
+    validate_jwt_secret, validate_oidc_config_with,
 };
 
 fn print_help() {
@@ -378,20 +379,28 @@ where
     }
     results.push(("oidc_endpoint_urls", oidc_endpoint_urls_errors));
 
-    // OIDC_MAX_AUTH_AGE_SECS: 共通バリデータが 0 / 負 / 非数値 / オーバーフローを
-    // 起動拒否相当のハードエラーとして返すため、その固定文言を警告化する。値は出力しない。
+    // OIDC_MAX_AUTH_AGE_SECS: 共通バリデータが 0 / 負 / 非数値 / オーバーフロー /
+    // 上限超過を起動拒否相当のハードエラーとして返すため、その固定文言を警告化する。
+    // 設定値は出力しない（上限値は定数なので警告文に示してよい）。
     // 必須 7 変数が揃っていれば mock 有効時も警告する。7 変数未揃いなら from_env_with は
     // Ok(None) を返して max_auth_age を見ないため、mock 有効時は警告しない
     // （本番相当では従来どおり警告する）。
     const MAX_AGE_GREATER: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
     const MAX_AGE_POSITIVE: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+    // 上限超過文言は oidc.rs の固定文言と完全一致させる（値はエコーしない）。
+    let max_age_too_large =
+        format!("OIDC_MAX_AUTH_AGE_SECS must not exceed {MAX_AUTH_AGE_MAX_SECS} seconds (30 days)");
     let oidc_max_auth_age_errors = if allow_mock_auth && !validation.required_present {
         Vec::new()
     } else {
         validation
             .hard_errors
             .iter()
-            .filter(|error| **error == MAX_AGE_GREATER || **error == MAX_AGE_POSITIVE)
+            .filter(|error| {
+                **error == MAX_AGE_GREATER
+                    || **error == MAX_AGE_POSITIVE
+                    || **error == max_age_too_large.as_str()
+            })
             .map(|error| (*error).to_string())
             .collect()
     };
@@ -1214,10 +1223,12 @@ mod tests {
     fn oidc_max_auth_age_invalid_warns_without_disclosing_value() {
         const GREATER: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
         const POSITIVE: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+        const TOO_LARGE: &str = "OIDC_MAX_AUTH_AGE_SECS must not exceed 2592000 seconds (30 days)";
         for (value, expected) in [
             ("0", GREATER),
             ("-1", POSITIVE),
             ("abc", POSITIVE),
+            ("18446744073709551615", TOO_LARGE), // 上限超過
             ("999999999999999999999999999999", POSITIVE),
         ] {
             let results = check_all_with(lookup_from(&[("OIDC_MAX_AUTH_AGE_SECS", value)]));

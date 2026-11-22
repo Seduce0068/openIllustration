@@ -5,6 +5,7 @@ use common::{
     mask_reason, sign_audit_snapshot,
 };
 use libsql::Builder;
+use server::resolve_database_url;
 use std::{fs::OpenOptions, io::Write};
 
 #[derive(Debug, Default)]
@@ -82,27 +83,8 @@ fn parse_args() -> anyhow::Result<Args> {
     parse_args_from(std::env::args())
 }
 
-/// 未設定時に返す固定文言。値を一切エコーしない。
-const DATABASE_URL_REQUIRED: &str =
-    "DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used";
-
 /// DATABASE_TOKEN が非 UTF-8 の場合の固定文言。トークン値を一切エコーしない。
 const DATABASE_TOKEN_INVALID: &str = "DATABASE_TOKEN must be a valid UTF-8 string";
-
-/// DB 接続先を解決する純粋関数。CLI 引数を環境変数より優先し、空・空白のみは
-/// 未設定として扱う。非 UTF-8 の環境変数は不正として固定文言で拒否する。
-/// 両方が未設定なら固定文言で拒否し、暗黙既定値は使わない。
-fn resolve_database_url(cli: Option<String>, env: EnvValue) -> anyhow::Result<String> {
-    let cli = cli.filter(|value| !value.trim().is_empty());
-    let env = match env {
-        EnvValue::Utf8(value) if !value.trim().is_empty() => Some(value),
-        EnvValue::Utf8(_) | EnvValue::Missing => None,
-        EnvValue::NonUtf8 => return Err(anyhow!(DATABASE_URL_REQUIRED)),
-    };
-    cli.map(|value| value.trim().to_string())
-        .or_else(|| env.map(|value| value.trim().to_string()))
-        .ok_or_else(|| anyhow!(DATABASE_URL_REQUIRED))
-}
 
 /// `read_env` の結果から DB トークンを取り出す純粋版。
 /// 未設定は空文字、非 UTF-8 は不正として固定文言で拒否し、生バイトを保持しない。
@@ -224,7 +206,8 @@ async fn main() -> anyhow::Result<()> {
         std::fs::read_to_string(&signing_key_path).context("failed to read signing key")?;
 
     // 暗黙の file:local.db 既定は撤廃。明示設定がなければ起動しない。
-    let database_url = resolve_database_url(args.database_url, read_env("DATABASE_URL"))?;
+    let database_url = resolve_database_url(args.database_url, read_env("DATABASE_URL"))
+        .map_err(|error| anyhow!(error.to_string()))?;
     // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
     let database_token = database_token_from_env_value(read_env("DATABASE_TOKEN"))?;
 
@@ -322,11 +305,12 @@ async fn main() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DATABASE_TOKEN_INVALID, DATABASE_URL_REQUIRED, bool_flag_from_env_value,
-        check_signing_key_permissions, create_snapshot_output, database_token_from_env_value,
-        ensure_include_reasons_allowed, parse_args_from, resolve_database_url,
+        DATABASE_TOKEN_INVALID, bool_flag_from_env_value, check_signing_key_permissions,
+        create_snapshot_output, database_token_from_env_value, ensure_include_reasons_allowed,
+        parse_args_from, resolve_database_url,
     };
     use common::env::{EnvValue, classify};
+    use server::DatabaseUrlError;
     use std::ffi::OsString;
     use std::io::Write;
     #[cfg(unix)]
@@ -598,7 +582,7 @@ mod tests {
     fn database_url_is_required_when_no_source_is_set() {
         let error = resolve_database_url(None, EnvValue::Missing)
             .expect_err("no implicit database URL may be used");
-        assert_eq!(error.to_string(), DATABASE_URL_REQUIRED);
+        assert_eq!(error.to_string(), DatabaseUrlError::Required.to_string());
     }
 
     #[test]
@@ -630,7 +614,7 @@ mod tests {
         ] {
             let error =
                 resolve_database_url(cli, env).expect_err("blank database URL must be rejected");
-            assert_eq!(error.to_string(), DATABASE_URL_REQUIRED);
+            assert_eq!(error.to_string(), DatabaseUrlError::Required.to_string());
         }
     }
 
@@ -647,7 +631,7 @@ mod tests {
                 .to_string();
         // 入力値の有無にかかわらず同じ固定文言で、値や旧既定値をエコーしない。
         assert_eq!(from_blank, from_none);
-        assert_eq!(from_none, DATABASE_URL_REQUIRED);
+        assert_eq!(from_none, DatabaseUrlError::Required.to_string());
         assert!(!from_none.contains("file:local.db"), "{from_none}");
         assert!(!from_none.contains("libsql://"), "{from_none}");
 
@@ -658,7 +642,7 @@ mod tests {
             resolve_database_url(Some("file:valid.db".into()), non_utf8_env_value())
                 .expect_err("non-UTF-8 DATABASE_URL must be rejected even with a valid CLI URL")
                 .to_string();
-        assert_eq!(from_non_utf8, DATABASE_URL_REQUIRED);
+        assert_eq!(from_non_utf8, DatabaseUrlError::NotUtf8.to_string());
         assert!(
             !from_non_utf8.as_bytes().contains(&0xff),
             "{from_non_utf8:?}"

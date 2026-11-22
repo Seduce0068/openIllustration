@@ -2286,6 +2286,42 @@ fn test_production_config_fail_closed() {
         .is_empty()
     );
 
+    // R2-PINATA: 共有ヘルパ pinata_jwt_production_error の直接アサーション。
+    // 3 固定文言・非エコー・実値の受理を production_config_errors と同じ基準で検証する。
+    assert_eq!(
+        crate::pinata_jwt_production_error(&common::env::EnvValue::Missing),
+        Some("PINATA_JWT is not configured")
+    );
+    assert_eq!(
+        crate::pinata_jwt_production_error(&common::env::EnvValue::NonUtf8),
+        Some("PINATA_JWT is empty")
+    );
+    for blank in [" ", "\t", "\n", " \t\n "] {
+        assert_eq!(
+            crate::pinata_jwt_production_error(&common::env::EnvValue::Utf8(blank.to_string())),
+            Some("PINATA_JWT is empty"),
+            "blank={blank:?} must be rejected without echoing the value"
+        );
+    }
+    for mock in ["mock_jwt", " mock_jwt ", "\tmock_jwt"] {
+        assert_eq!(
+            crate::pinata_jwt_production_error(&common::env::EnvValue::Utf8(mock.to_string())),
+            Some("PINATA_JWT is the development mock value"),
+            "mock={mock:?} must be rejected without echoing the value"
+        );
+    }
+    assert_eq!(
+        crate::pinata_jwt_production_error(&common::env::EnvValue::Utf8("real-jwt".to_string())),
+        None
+    );
+    // pinata_jwt_production_like は共有判定の is_none() に委譲済み（実値のみ受理）。
+    assert!(crate::pinata_jwt_production_like(
+        common::env::EnvValue::Utf8("real-jwt".to_string())
+    ));
+    assert!(!crate::pinata_jwt_production_like(
+        common::env::EnvValue::Utf8(" mock_jwt ".to_string())
+    ));
+
     // R2-DBURL-SERVER: 本番相当では DATABASE_URL が必須（既定なし、値はエコーしない）。
     assert_eq!(
         crate::production_database_url_error(false, common::env::EnvValue::Missing),
@@ -6947,6 +6983,101 @@ async fn test_payment_verify_rejects_transfer_mismatch() {
         status,
         crate::payments::STATUS_MISMATCH,
         "mismatched order must be marked as MISMATCH"
+    );
+}
+
+/// MISMATCH マーキングも CAS 検査対象であり、検証中に status が外部書き換えされた
+/// 場合は 409 を返し、書き換え後の値を上書きしない。
+#[tokio::test]
+async fn test_payment_verify_mismatch_cas_conflict() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
+    let verification = PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xmismatchrace".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        // 注文と金額が不一致 → MISMATCH マーキング経路へ入る。
+        amount_wei: "1".to_string(),
+    };
+    // RacingVerifier は load_order の後に status を外部書き換えするため、
+    // 読み取った古い status を期待する MISMATCH 更新は 0 件になる。
+    let verifier = Arc::new(RacingVerifier {
+        db: db.clone(),
+        verification,
+    });
+
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: Some(receiving.to_string()),
+        payment_receiving_xprv: None,
+        payment_verifier: Some(verifier),
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        rate_limit: None,
+        allowed_origins: vec![],
+    });
+    let app = build_router(shared_state);
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("order status changed during mismatch marking"),
+        "client must receive the mismatch CAS conflict: {text}"
+    );
+
+    // 外部書き換え値（MISMATCH）がそのまま残り、400 にも化けないことを確認する。
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status,
+        crate::payments::STATUS_MISMATCH,
+        "externally rewritten status must remain untouched"
     );
 }
 
@@ -13560,6 +13691,28 @@ async fn test_refresh_rotates_token_and_issues_new_session() {
         .unwrap();
     let used: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(used, 1, "the presented refresh token must be consumed");
+
+    // 原子回転: 提示した旧トークンは消費済み、新トークンは未使用で登録される。
+    let old_hash = hex::encode(Sha2Sha256::digest(refresh.as_bytes()));
+    let new_hash = hex::encode(Sha2Sha256::digest(new_refresh.as_bytes()));
+    for (hash, expected_consumed, label) in [
+        (old_hash.as_str(), true, "old"),
+        (new_hash.as_str(), false, "new"),
+    ] {
+        let mut rows = db
+            .query(
+                "SELECT used_at FROM refresh_tokens WHERE token_hash = ?",
+                [hash],
+            )
+            .await
+            .unwrap();
+        let used_at: Option<String> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(
+            used_at.is_some(),
+            expected_consumed,
+            "{label} refresh token used_at consumption state"
+        );
+    }
 }
 
 #[tokio::test]
@@ -18146,8 +18299,9 @@ fn test_oidc_from_env_with_max_auth_age_boundaries() {
         None
     );
 
-    // 正の整数（境界 1 / 通常値 / u64 の上限）はそのまま保持する。
-    for (raw, expected) in [("1", 1), ("900", 900), ("18446744073709551615", u64::MAX)] {
+    // 正の整数（境界 1 / 通常値）はそのまま保持する。
+    // u64::MAX は MAX_AUTH_AGE_MAX_SECS 超過のため下の拒否側へ移す。
+    for (raw, expected) in [("1", 1), ("900", 900)] {
         let state = parse_age(Some(raw))
             .expect("valid OIDC configuration")
             .expect("required variables are present");
@@ -18158,8 +18312,15 @@ fn test_oidc_from_env_with_max_auth_age_boundaries() {
         );
     }
 
-    // 不正値は Err。None にフォールバックして検証を黙って無効化してはならない。
-    for raw in ["0", "-1", "abc", "", "18446744073709551616"] {
+    // 不正値と上限超過は Err。None にフォールバックして検証を黙って無効化してはならない。
+    for raw in [
+        "0",
+        "-1",
+        "abc",
+        "",
+        "18446744073709551615", // u64::MAX: 上限 2592000 秒を超過
+        "18446744073709551616", // オーバーフロー
+    ] {
         let err = parse_age(Some(raw))
             .err()
             .expect("invalid OIDC_MAX_AUTH_AGE_SECS must be rejected");

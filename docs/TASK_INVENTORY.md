@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 status: current
 ---
 
@@ -430,6 +430,10 @@ status: current
 - [対応済み] R4-01 / R4-04: 本番相当（`ALLOW_MOCK_AUTH` 無効）起動時に OIDC 必須設定と実
   `PINATA_JWT` を検査し、不足/開発用 `mock_jwt` なら起動拒否（fail-closed）。秘密値は
   エラーへ出さない。単体テストと実プロセスで確認。
+- [対応済み] R2-PINATA: PINATA 判定を `pinata_jwt_production_error` へ集約（単一情報源）。
+  `production_config_errors` と `pinata_jwt_production_like` が共有し、`allow_mock_auth`
+  には依存しない。固定文言・公開シグネチャ・非エコーは不変。共有ヘルパの直接アサーションを
+  `test_production_config_fail_closed` へ追加（新規 test 関数なし、tests 数は不変）。
 - [対応済み] R1-09 / C1: アップロードの file パートへ MIME を設定（ブラウザ判定＋拡張子
   フォールバック）。実サーバーへモックなしで認証・アップロードするスモーク E2E を追加し、
   MIME 指定を外す mutation で失敗することを確認。

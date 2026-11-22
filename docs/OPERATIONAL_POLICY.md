@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T11:25:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -57,6 +57,10 @@ generated:
   起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
   miss 時に DB 照会、否定結果は非キャッシュ）として残し、判定の根拠には使わない。
   DB エラーは fail-closed（Database / Internal、いずれも HTTP 500）とし、失効なしとして扱わない。
+- リフレッシュトークンの回転も DB を正本とする。消費 `UPDATE` と新トークン `INSERT` は単一 tx で
+  原子的にコミットし、`changes() == 0` の競合はロールバック後に別tx の `revoke_refresh_family`
+  でファミリ失効へつなぐ。BAN チェックと claims/JWT 事前計算は `BEGIN` 前に置き、`refresh` 内では
+  `write_lock` の再取得（デッドロック）を避けるため別tx を取る `issue_refresh_token` を呼ばない。
 - OIDC認証の未完了 `pending`（`state` / `nonce` / `code_verifier`）は10分TTLとし、保持数はコード定数
   `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
   上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
@@ -158,6 +162,10 @@ generated:
   `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy` を含むものとする。
   注文IDのみを署名対象にする旧形式は、送金先・金額・チェーンを確認できない盲署名リスクがあるため
   受理しない（401拒否）。金額は DB の `amount_wei` から円建てへ導出し、アドレスは小文字化して照合する。
+- 送金不一致による `MISMATCH` マーキングも CAS 検査対象とする。検証中に注文 status が
+  外部書き換えされて 0 件更新になった場合は 409（CONFLICT）で拒否し、書き換え後の値を
+  上書きしない。1 件更新時は従来どおり 400（`transfer does not match the order`）を返し、
+  注文を `MISMATCH` にする。
 
 ## 5. 運用準備・未整備事項
 
@@ -194,7 +202,8 @@ generated:
   開発（`ALLOW_MOCK_AUTH=1`）では起動を止めず warn のみとする。`PRAGMA foreign_keys` は
   コネクション設定だが `foreign_key_check` は別に動作するため、リモート DB も対象に含める。
   起動拒否文言には件数と `table(rowid=...) -> parent` のみを含め、秘密値はエコーしない。
-  `doctor` は本番相当で同じ判定を `production` カテゴリ内へ警告としてマージし、
+  `doctor` は本番相当で同じ判定を `production` カテゴリ内へ警告としてマージし、`Unresolved`（未設定・非 UTF-8）時は `file:local.db` へフォールバックせず、検査失
+  敗として fail-closed 警告を出す（値はエコーしない）。リモート DSN は doctor の検査対象なので誤って拒否しない。
   カテゴリ数（check23）は変更しない。是正 CLI や自動修復は提供しないため、
   孤立行の検出時はバックアップからの作り直しで対応する
   （[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)、[ADR-0010](adr/ADR-0010-foreign-key-startup-fail-closed.md)）。
@@ -337,12 +346,12 @@ generated:
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
-| `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。 |
+| `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
-| `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。 |
+| `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値も固定文言（値非エコー）のハードエラーで起動拒否（fail-closed）。 |
 | `OIDC_REQUIRED_AMR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `amr`（カンマ区切り、すべて含まれること）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For`（XFF）を解釈し、追記型（末尾がピア）は末尾のピアを除去して最左のクライアントを、上書き型（末尾がピアでない）は末尾をクライアントIPとして採用する。不正エントリ・解決不能は 403（fail-closed）。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。`doctor --strict` の警告対象。 |
 | `RATE_LIMIT_PER_MIN` | 任意 | `60` | IP 単位のリクエスト上限（1〜600）。本番相当（`ALLOW_MOCK_AUTH` 無効）のみ適用。超出は 429。 |
@@ -394,6 +403,9 @@ generated:
   `file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。
   リモート DSN は `is_remote_database_url`（`file:` で始まらず `://` を含む値）で判定し、
   `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` が同じヘルパを共有する。
+  doctor の FK 検査は `Unresolved`（未設定・非 UTF-8）時に `file:local.db` へフォールバックせず、
+  検査失敗として fail-closed 警告を出す（値はエコーしない）。リモート DSN は doctor の検査対象なので
+  誤って拒否しない。
   開発（`ALLOW_MOCK_AUTH=1`）では従来どおり未設定時に `file:local.db` を使い、
   リモート DSN も許容する。
   DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗黙既定値を撤廃し、
@@ -420,6 +432,9 @@ generated:
   `PINATA_JWT is empty` を返す（生バイトはエコーしない）。`doctor` の `production`
   カテゴリでも同じ判定で警告し、設定値は出力しない
   （[DETAILED_DESIGN.md](DETAILED_DESIGN.md) と整合）。
+  判定は共有ヘルパ `pinata_jwt_production_error` へ集約し（R2-PINATA リファクタ完了）、
+  `production_config_errors` と `pinata_jwt_production_like`（`run()` / `doctor` /
+  `pin_to_ipfs`）が同じ単一情報源を共有する。`allow_mock_auth` の早期 return からは独立。
 - 真偽値は全フラグ共通で `1` / `true`（真）と `0` / `false`（偽）のみ受理する
   （trim・小文字化は維持）。`yes` / `no` / 空文字を含むそれ以外の値は
   拒否し、ランタイムは起動拒否、起動後に read するフラグは安全側（`false` または

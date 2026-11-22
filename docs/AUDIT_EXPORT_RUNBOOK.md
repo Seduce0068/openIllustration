@@ -5,7 +5,7 @@ description: "監査ログの署名付きスナップショット作成と公開
 tags: [runbook, audit, verification, operations]
 generated:
   by: dsh
-  at: "2026-11-22T06:30:00+09:00"
+  at: "2026-11-22T12:32:00+09:00"
 ---
 
 ## 目的
@@ -86,9 +86,11 @@ cargo run -p server --bin sign_audit_export -- \
 環境変数の読取は `common::env::read_env` に統一し、非 UTF-8 のバイト列は「未設定」や空文字と
 区別して不正値として扱い、起動を拒否する。`AUDIT_EXPORT_INCLUDE_REASONS` と `ALLOW_MOCK_AUTH` は
 `bool_env_state` の `Invalid` として fail-closed になり、受理値 `1` / `true` / `0` / `false`
-（trim・小文字化は不変）以外と同様にエラーとなる。`DATABASE_URL` は固定文言の
-`DATABASE_URL_REQUIRED`、`DATABASE_TOKEN` はトークン値を含まない固定文言で拒否し、
-いずれも生バイトをエコーしない。
+（trim・小文字化は不変）以外と同様にエラーとなる。`DATABASE_URL` は `common::env::EnvValue` を
+受け取る `server::resolve_database_url` に統一し、未設定・空・空白のみは `DatabaseUrlError::Required`
+（固定文言 `DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used`）、
+非 UTF-8 は未設定へ潰さず `DatabaseUrlError::NotUtf8`（固定文言 `DATABASE_URL is not valid UTF-8`）で
+拒否する。`DATABASE_TOKEN` はトークン値を含まない固定文言で拒否し、いずれも生バイトをエコーしない。
 
 ### 手動確認手順（Kubuntu / リポジトリルート）
 

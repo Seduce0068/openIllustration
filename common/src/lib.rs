@@ -1,5 +1,6 @@
 pub mod age;
 pub mod env;
+pub mod instance_lock;
 
 use rsa::sha2::Sha256 as RsaSha256;
 use rsa::{

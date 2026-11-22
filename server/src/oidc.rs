@@ -42,6 +42,9 @@ pub(crate) const SESSION_TTL_SECS: i64 = 24 * 60 * 60;
 pub const CLOCK_SKEW_MIN_SECS: u64 = 1;
 pub const CLOCK_SKEW_MAX_SECS: u64 = 300;
 pub const DEFAULT_CLOCK_SKEW_SECS: u64 = 60;
+/// OIDC_MAX_AUTH_AGE_SECS の上限（30日）。これを超える値は auth_time / max_age
+/// 検証の実効性が失われるため、上限超過は起動拒否（fail-closed）にする。
+pub const MAX_AUTH_AGE_MAX_SECS: u64 = 2_592_000;
 /// リフレッシュトークンの有効期間（30日）。
 const REFRESH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// OIDC Back-Channel Logout の events クレームに必須のキー。
@@ -79,6 +82,9 @@ const OIDC_EMPTY_VALUE_ERROR: &str = "OIDC configuration values must not be empt
 const OIDC_NON_UTF8_ERROR: &str = "OIDC configuration values must be valid UTF-8";
 const OIDC_MAX_AUTH_AGE_GREATER_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be greater than 0";
 const OIDC_MAX_AUTH_AGE_POSITIVE_ERROR: &str = "OIDC_MAX_AUTH_AGE_SECS must be a positive integer";
+/// 上限超過の固定文言。上限値（定数）は示しても設定値は一切エコーしない。
+const OIDC_MAX_AUTH_AGE_TOO_LARGE_ERROR: &str =
+    "OIDC_MAX_AUTH_AGE_SECS must not exceed 2592000 seconds (30 days)";
 /// 真偽値フラグは `common::age::parse_bool_env` の受理値のみ。不正値は値をエコーしない。
 const ALLOW_MOCK_AUTH_BOOL_ERROR: &str = "ALLOW_MOCK_AUTH must be one of 1/true/0/false";
 const OIDC_COOKIE_SECURE_BOOL_ERROR: &str = "OIDC_COOKIE_SECURE must be one of 1/true/0/false";
@@ -227,6 +233,13 @@ where
                 hard_errors.push(OIDC_MAX_AUTH_AGE_GREATER_ERROR);
                 None
             }
+            // 上限超過も 0 / 非数値と同じく起動拒否（fail-closed）。上限を超える
+            // max_age は auth_time 検証を実質的に無効化するため、丸めずに拒否する。
+            // 固定文言のみを積み、設定値はエコーしない。
+            Ok(seconds) if seconds > MAX_AUTH_AGE_MAX_SECS => {
+                hard_errors.push(OIDC_MAX_AUTH_AGE_TOO_LARGE_ERROR);
+                None
+            }
             Ok(seconds) => Some(seconds),
             // 負数・非数値・オーバーフローはすべて Err（起動拒否）。
             Err(_) => {
@@ -267,16 +280,19 @@ pub(crate) fn refresh_token_expired(expires_at: &str, now: DateTime<Utc>) -> boo
     }
 }
 
-/// 新しいリフレッシュトークンを生成し、指定ファミリへ登録する。
-async fn issue_refresh_token(
-    state: &AppState,
+/// 新しいリフレッシュトークンを生成し、呼び出し側のトランザクションへ INSERT する。
+///
+/// `refresh` では既に確保した `write_lock` と `BEGIN` を保持したまま呼び出す。
+/// 別途 `begin_write_tx` を取るとガードの再取得でデッドロックするため、
+/// refresh 経路では必ずこのヘルパを使う（コミットは呼び出し側の責務）。
+async fn issue_refresh_token_in_tx(
+    tx: &libsql::Transaction,
     sub: &str,
     family_id: &str,
 ) -> Result<String, AppError> {
     let token = URL_SAFE_NO_PAD.encode(Uuid::new_v4().as_bytes());
     let token_hash = hash_refresh_token(&token);
     let expires_at = (Utc::now() + Duration::seconds(REFRESH_TTL_SECS)).to_rfc3339();
-    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
     tx.execute(
         "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at) VALUES (?, ?, ?, ?)",
         (
@@ -287,6 +303,20 @@ async fn issue_refresh_token(
         ),
     )
     .await?;
+    Ok(token)
+}
+
+/// 新しいリフレッシュトークンを生成し、専用トランザクションで登録する（callback 用ラッパー）。
+///
+/// 既存の単発発行経路はこのラッパーを維持する。`refresh` は `write_lock` を
+/// 保持したままのため、こちらではなく `issue_refresh_token_in_tx` を使うこと。
+async fn issue_refresh_token(
+    state: &AppState,
+    sub: &str,
+    family_id: &str,
+) -> Result<String, AppError> {
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    let token = issue_refresh_token_in_tx(&tx, sub, family_id).await?;
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
@@ -577,8 +607,8 @@ impl OidcState {
     /// 必須変数の欠落は `Ok(None)`（OIDC 無効）だが、値が存在するのに不正な
     /// 場合は `Err` を返す。非 UTF-8 は「未設定」ではなく不正値として扱い、
     /// `enabled=true` のままハードエラーを優先して起動拒否する（防御的）。
-    /// 特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 /
-    /// オーバーフローを捨てると max_age 検証が黙って無効化されるため、
+    /// 特に `OIDC_MAX_AUTH_AGE_SECS` は 0 / 負 / 非数値 / オーバーフロー /
+    /// 上限（30日）超過を捨てると max_age 検証が黙って無効化されるため、
     /// フォールバックせず起動拒否にする（fail-closed）。
     /// 判定は `validate_oidc_config_with` に集約し、ここでは秘密値の読み出しと
     /// `OidcState` の組み立てだけを行う（doctor へは渡さない）。
@@ -1379,28 +1409,12 @@ pub async fn refresh(
         ));
     }
 
-    // 消費済みへ更新（Concurrent な再利用は UPDATE の影響件数で検出する）。
-    // 共有 Connection への書き込みは write_lock 配下の tx に閉じ込める。
-    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-    let updated = tx
-        .execute(
-            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL",
-            [token_hash],
-        )
-        .await?;
-    tx.commit()
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
-    // 直後に別の書き込み tx（ファミリ失効 / 新トークン発行）を開くため明示解放する。
-    drop(write_guard);
-    if updated == 0 {
-        revoke_refresh_family(&state, &family_id).await?;
-        return Err(AppError::Unauthorized(
-            "refresh token reuse detected; token family revoked".to_string(),
-        ));
-    }
+    // (a) BAN チェックは BEGIN より前に移動する。共通ゲートでの拒否を
+    //     write_lock 保持中に行わない（判定順序は従来どおり fail-closed）。
     ensure_user_not_banned(&state.db, &sub).await?;
 
+    // (b) セッション claims / JWT の事前計算も BEGIN より前に済ませる。
+    //     署名や Mutex 取得を tx の外で完了させ、tx 内は DB 操作だけにする。
     let now_ts = Utc::now().timestamp() as usize;
     let expiration = (Utc::now() + Duration::seconds(SESSION_TTL_SECS)).timestamp() as usize;
     let iat = {
@@ -1425,7 +1439,35 @@ pub async fn refresh(
         state.jwt_keys.encoding_key(),
     )
     .map_err(|e| AppError::Internal(format!("JWT generation failed: {e}")))?;
-    let new_refresh = issue_refresh_token(&state, &sub, &family_id).await?;
+
+    // (d) 消費 UPDATE と新トークン INSERT を単一 tx で原子的に実行する。
+    //     write_lock → BEGIN → UPDATE → changes() 判定 → INSERT(in_tx) → COMMIT。
+    let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    let updated = tx
+        .execute(
+            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL",
+            [token_hash],
+        )
+        .await?;
+    if updated == 0 {
+        // 競合して既に消費済み。tx をロールバックし、ガードを解放してから
+        // 別tx でファミリ失効を行う（ガード保持のまま再取得するとデッドロック）。
+        tx.rollback()
+            .await
+            .map_err(|e| AppError::Internal(format!("Transaction rollback failed: {e}")))?;
+        drop(write_guard);
+        revoke_refresh_family(&state, &family_id).await?;
+        return Err(AppError::Unauthorized(
+            "refresh token reuse detected; token family revoked".to_string(),
+        ));
+    }
+    // 既存 tx のまま新トークンを INSERT する。
+    // issue_refresh_token（別tx 取得）を呼ぶと write_lock 再取得でデッドロックする。
+    let new_refresh = issue_refresh_token_in_tx(&tx, &sub, &family_id).await?;
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+    drop(write_guard);
 
     let secure = state
         .oidc
