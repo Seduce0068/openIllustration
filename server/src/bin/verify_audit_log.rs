@@ -30,7 +30,19 @@ const HELP: &str = "Usage: verify_audit_log [--database-url URL] [--cid CID] [--
      variable (argv is public, so secrets are never accepted there).\n\
      DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used.\n\
      DATABASE_TOKEN is read only from the environment (or left empty).\n\
-     Exit code: 0 if valid, 1 if invalid or on error.";
+           An empty audit log is never treated as OK implicitly, with or without --expect-root\n\
+      (the AUDIT_CHAIN_EMPTY dummy root is not accepted as a verified result).\n\
+      Exit code: 0 if valid, 1 if invalid or on error.";
+
+/// 空ログを暗黙 OK としないための固定エラー文言。値・CID は一切エコーしない。
+const AUDIT_LOG_EMPTY: &str = "audit log is empty; empty logs are not implicitly valid";
+
+/// ログ件数が 0 なら固定文言のエラーを返す。
+/// `--expect-root` 未指定でも空ログを暗黙 OK としないための fail-closed ガード。
+/// `compute_audit_chain_digest` の空扱いは変更せず、呼び出し側で判定する。
+fn audit_log_empty_error(total: usize) -> Option<&'static str> {
+    (total == 0).then_some(AUDIT_LOG_EMPTY)
+}
 
 fn print_help() {
     eprintln!("{HELP}");
@@ -200,6 +212,14 @@ async fn main() -> anyhow::Result<()> {
         chain_entries.push((log_id, entry_hash));
     }
 
+    // 空ログは期待 root の有無にかかわらず暗黙 OK としない。
+    // AUDIT_CHAIN_EMPTY ダミールートを期待値として受理する経路を残さない。
+    if let Some(message) = audit_log_empty_error(total) {
+        eprintln!("ERROR: {message}");
+        eprintln!("audit_log_verification: FAILED (empty log)");
+        std::process::exit(1);
+    }
+
     if args.cid.is_some() {
         println!("shown={shown} total={total}");
     } else {
@@ -362,6 +382,13 @@ mod tests {
             }
             other => panic!("expected Mismatched, got {other:?}"),
         }
+
+        // 空ログは期待 root 未指定時も固定文言で拒否し（暗黙 OK にしない）、
+        // AUDIT_CHAIN_EMPTY ダミールートを期待値にしても受理しない。
+        let empty_error = audit_log_empty_error(0).expect("empty log must be rejected");
+        assert!(empty_error.contains("empty"), "{empty_error}");
+        assert!(!empty_error.contains(COMPUTED_ROOT), "{empty_error}");
+        assert!(audit_log_empty_error(1).is_none());
     }
 
     // --- resolve_database_url: 暗黙既定値の撤廃 ---

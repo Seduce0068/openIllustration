@@ -151,6 +151,8 @@ test.describe('Content search and filtering (R5-01)', () => {
 
     await page.getByRole('button', { name: 'UPLOAD' }).click();
     await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveAttribute('aria-current', 'page');
+    // タブタイトルも view と同期する（document.set_title の回帰検証）。
+    await expect(page).toHaveTitle('UPLOAD — OpenIllustration');
 
     await page.goBack();
     await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');

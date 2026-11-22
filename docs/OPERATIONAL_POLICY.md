@@ -240,11 +240,20 @@ generated:
   `0700` でなければ警告する。リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ
   読み、`--database-token` は受け付けない（`argv` 露出対策）。出力先は `create_new` で原子的に
   生成し、既存ファイルの上書きを拒否する。公開は `restore_db` の staging + safety copy と同じ方式で、
-  同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` し、失敗時は一時ファイルを削除する。
+  同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `hard_link` で原子的に公開し、
+  失敗時は一時ファイルを残す（詳細は直下の監査エクスポートの項目を参照）。
    手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
    `verify_chain` は `reasons_masked=true` のとき全 entry の `reason` がマスク済みであることを検証する。
    署名対象 `signature_payload()` は `reasons_masked=true` のとき entries_json を `masked` 印付きで含むため、
    この検査は署名対象フィールドの整合確認であり、署名検証結果と矛盾しない。
+- 監査エクスポートの公開経路は `hard_link` による create_new 相当の原子的公開へ変更し、既存ファイルは
+  競合として拒否する（存在チェックと公開の TOCTOU を解消）。hard_link が使えない環境
+  （クロスデバイス等）は `rename` フォールバックで最終パスの存在を再確認する。公開失敗時は
+  ステージングを残し、値や CID をエコーしない。ステージング名は PID と unix_millis
+  （`.tmp-<pid>-<unix_millis>`）を含め、クラッシュ残骸による再実行ブロックを防ぐ。
+  `content_audit_log` / `governance_audit_log` が両方 0 件のときは `--allow-empty` の明示が無い限り
+  エクスポートを拒否し、`verify_audit_log` も空ログを `--expect-root` 未指定時を含め固定文言で拒否する
+  （`AUDIT_CHAIN_EMPTY` ダミールートを期待値として暗黙受理しない）。
 - 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト17件を追加済み
   （TEST_SPECIFICATION AUDIT-02）。Runbook の手動確認（鍵権限・親ディレクトリ権限・
   `DATABASE_TOKEN` 設定・既存出力の有無）は補助的な確認として扱う。

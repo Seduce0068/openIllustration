@@ -44,7 +44,8 @@ generated:
       └─────────────► [Pinata API / IPFS gateways]
 ```
 
-現行コードは固定mock login、DB内投票・監査記録、無効化済み支援APIを含む。
+現行コードは開発時のみ有効な mock 認証（`ALLOW_MOCK_AUTH=1`）、本番向け OIDC/JPKI 経路
+（state/nonce/PKCE、acr/amr、refresh）、DB内投票・監査記録、無効化済み支援APIを含む。
 実JPKI認証、JPYC送金・確認、第三者検証可能な監査は完成していない。
 
 ## 3. 目標データフロー

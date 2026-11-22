@@ -15,12 +15,13 @@ struct Args {
     signing_key: Option<String>,
     output: Option<String>,
     include_reasons: bool,
+    allow_empty: bool,
     help: bool,
 }
 
 fn print_help() {
     eprintln!(
-        "Usage: sign_audit_export --signing-key PEM_PATH --output PATH [--database-url URL] [--include-reasons]\n\
+        "Usage: sign_audit_export --signing-key PEM_PATH --output PATH [--database-url URL] [--include-reasons] [--allow-empty]\n\
          \n\
          Creates a signed snapshot of content_audit_log and governance_audit_log. The signing key is a\n\
          PKCS#8 RSA private key PEM file. Never pass the key itself on the CLI.\n\
@@ -28,6 +29,7 @@ fn print_help() {
          (0700 recommended). The remote libSQL token is read only from the DATABASE_TOKEN\n\
          environment variable; --database-token is intentionally not accepted (argv is public).\n\
          Reasons/details are redacted by default; --include-reasons exposes them (opt-in).\n\
+         An empty result in both audit logs is rejected unless --allow-empty is passed explicitly.\n\
          DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used.\n\
          DATABASE_TOKEN is read only from the environment (or left empty).\n\
          Exit code: 0 on success, 1 on error."
@@ -63,6 +65,10 @@ fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
         }
         "--include-reasons" => {
             args.include_reasons = true;
+            Ok(true)
+        }
+        "--allow-empty" => {
+            args.allow_empty = true;
             Ok(true)
         }
         _ => Ok(false),
@@ -144,16 +150,16 @@ fn create_snapshot_output(path: &str) -> anyhow::Result<std::fs::File> {
 }
 
 /// `restore_db` の staging + safety copy と同じ方式で、スナップショットを
-/// 0600 の一時ファイルへ書き、fsync のうえ rename で最終パスへ公開する。
-/// 書き込み・fsync・rename のいずれかが失敗した場合は一時ファイルを削除する。
-/// 最終パスが既に存在する場合は公開前に拒否し、既存ファイルを上書きしない。
+/// 0600 の一時ファイルへ書き、fsync のうえ最終パスへ公開する。
+/// 公開は `hard_link` で create_new 相当の原子的処理を行い、既存ファイルを
+/// 上書きしない（存在チェックと公開の間の競合ウィンドウをなくす）。
+/// hard_link が使えない環境（クロスデバイス等）では rename へフォールバックし、
+/// その際も最終パスの存在を再確認して競合を検出する。
+/// 公開失敗時は一時ファイルを残し、値や CID をエコーせず固定文言でエラーを返す。
 fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let target = std::path::Path::new(path);
-    if std::fs::symlink_metadata(target).is_ok() {
-        return Err(anyhow!("snapshot output must not already exist: {path}"));
-    }
     let parent = target
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -162,8 +168,17 @@ fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
         .file_name()
         .ok_or_else(|| anyhow!("snapshot output path has no file name: {path}"))?
         .to_string_lossy();
-    let tmp = parent.join(format!(".{name}.tmp-{}", std::process::id()));
-    let publish = (|| -> anyhow::Result<()> {
+    // PID だけではクラッシュ残骸と衝突し得るため unix_millis も付ける
+    // （restore_db のタイムスタンプ付き一時ファイルと同じ考え方）。
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let tmp = parent.join(format!(".{name}.tmp-{}-{millis}", std::process::id()));
+
+    // ステージングの作成・書き込み・fsync。途中で失敗しても一時ファイルは残す
+    // （公開失敗と同様に、値や CID をエコーせず固定文言のエラーを返す）。
+    {
         let mut opts = OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -175,15 +190,33 @@ fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
             .with_context(|| format!("failed to write staging snapshot: {}", tmp.display()))?;
         file.sync_all()
             .with_context(|| format!("failed to fsync staging snapshot: {}", tmp.display()))?;
-        drop(file);
-        std::fs::rename(&tmp, target)
-            .with_context(|| format!("failed to publish snapshot: {path}"))?;
-        Ok(())
-    })();
-    if publish.is_err() {
-        let _ = std::fs::remove_file(&tmp);
     }
-    publish
+
+    // hard_link は既存の最終パスに対して EEXIST で失敗するため、
+    // 存在チェックと公開の間の TOCTOU ウィンドウが無い（create_new 相当）。
+    match std::fs::hard_link(&tmp, target) {
+        Ok(()) => {
+            // 公開後に staging を削除する（ハードリンクを残さない）。
+            std::fs::remove_file(&tmp).with_context(|| {
+                format!(
+                    "failed to remove staging snapshot after publish: {}",
+                    tmp.display()
+                )
+            })?;
+            Ok(())
+        }
+        Err(_) => {
+            // hard_link が失敗したら最終パスの存在を再確認して競合を検出する。
+            // 既存ファイルがあれば上書きせず拒否する（値や CID はエコーしない）。
+            // 無ければクロスデバイス等で hard_link が使えない環境とみなし、
+            // rename 直前の存在確認を兼ねて旧 rename へフォールバックする。
+            if std::fs::symlink_metadata(target).is_ok() {
+                return Err(anyhow!("snapshot output must not already exist: {path}"));
+            }
+            std::fs::rename(&tmp, target)
+                .with_context(|| format!("failed to publish snapshot via rename fallback: {path}"))
+        }
+    }
 }
 
 /// 本番相当（`ALLOW_MOCK_AUTH` 無効）では平文理由のエクスポートを既定で拒否する。
@@ -200,6 +233,23 @@ fn ensure_include_reasons_allowed(
     }
     Err(anyhow!(
         "--include-reasons is not allowed in production without explicit opt-in; keep reasons masked or set AUDIT_EXPORT_INCLUDE_REASONS=1 deliberately"
+    ))
+}
+
+/// content_audit_log / governance_audit_log が両方とも0件の場合は、
+/// 明示オプトイン（`--allow-empty`）が無い限り拒否する。
+/// 空ログから `AUDIT_CHAIN_EMPTY` ダミールートが作られるのを呼び出し側で防ぐ
+/// （`compute_audit_chain_digest` の空扱いは変更しない）。
+fn ensure_audit_not_empty(
+    content_count: usize,
+    governance_count: usize,
+    allow_empty: bool,
+) -> anyhow::Result<()> {
+    if allow_empty || content_count > 0 || governance_count > 0 {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "both audit logs are empty; pass --allow-empty to export an empty snapshot deliberately"
     ))
 }
 
@@ -278,14 +328,6 @@ async fn main() -> anyhow::Result<()> {
             entry_hash: row.get(7)?,
         });
     }
-    let digest = compute_audit_chain_digest(
-        &entries
-            .iter()
-            .map(|entry| (entry.log_id, entry.entry_hash.clone()))
-            .collect::<Vec<_>>(),
-    )
-    .map_err(anyhow::Error::msg)?;
-
     // ADR-0004 §10: BAN / UNBAN / ピン解除の運用判断も署名対象に含める。
     let mut gov_rows = db
         .query(
@@ -314,6 +356,18 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // 両ログが空なら明示オプトインが無い限り拒否する（空ログの暗黙成功を防ぐ）。
+    // 空扱いの判定は呼び出し側で行い、ダミールートの算出より前に置く。
+    ensure_audit_not_empty(entries.len(), governance_entries.len(), args.allow_empty)?;
+
+    let digest = compute_audit_chain_digest(
+        &entries
+            .iter()
+            .map(|entry| (entry.log_id, entry.entry_hash.clone()))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+
     let mut snapshot = SignedAuditSnapshot {
         version: common::AUDIT_SNAPSHOT_VERSION,
         reasons_masked: !args.include_reasons,
@@ -326,8 +380,9 @@ async fn main() -> anyhow::Result<()> {
         sign_audit_snapshot(&snapshot, &private_key_pem).map_err(|error| anyhow!("{error}"))?;
     let json = serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
     // restore_db の staging + safety copy と同じ方式: 0600 一時ファイルへ書き
-    // fsync してから rename で公開する。途中で失敗すれば一時ファイルを削除し、
-    // 既存の最終パスは上書きしない。
+    // fsync してから hard_link で原子的に公開する。既存の最終パスは上書きせず、
+    // hard_link が使えない環境のみ rename フォールバックで存在を再確認する。
+    // 公開失敗時は一時ファイルを残し、値や CID はエコーしない。
     publish_snapshot_atomic(&output, json.as_bytes())?;
     println!(
         "audit_export_signed: output={output} entries={}",
@@ -340,8 +395,9 @@ async fn main() -> anyhow::Result<()> {
 mod tests {
     use super::{
         DATABASE_TOKEN_INVALID, bool_flag_from_env_value, check_signing_key_permissions,
-        create_snapshot_output, database_token_from_env_value, ensure_include_reasons_allowed,
-        parse_args_from, publish_snapshot_atomic, resolve_database_url,
+        create_snapshot_output, database_token_from_env_value, ensure_audit_not_empty,
+        ensure_include_reasons_allowed, parse_args_from, publish_snapshot_atomic,
+        resolve_database_url,
     };
     use common::env::{EnvValue, classify};
     use server::DatabaseUrlError;
@@ -547,6 +603,28 @@ mod tests {
         assert_eq!(args.database_url.as_deref(), Some("file:test.db"));
         assert!(args.include_reasons);
         assert!(!args.help);
+        assert!(!args.allow_empty);
+
+        // --allow-empty は空ログの明示オプトインとしてパースされる。
+        let with_allow_empty = parse_args_from(
+            [
+                "sign_audit_export",
+                "--signing-key",
+                "key.pem",
+                "--output",
+                "snapshot.json",
+                "--allow-empty",
+            ]
+            .map(String::from),
+        )
+        .expect("--allow-empty must parse");
+        assert!(with_allow_empty.allow_empty);
+
+        // 両ログが空なら明示オプトイン無しで拒否し、片方でもあれば受理する。
+        ensure_audit_not_empty(0, 0, false).expect_err("empty logs must be rejected");
+        ensure_audit_not_empty(1, 0, false).expect("non-empty content log must be accepted");
+        ensure_audit_not_empty(0, 1, false).expect("non-empty governance log must be accepted");
+        ensure_audit_not_empty(0, 0, true).expect("--allow-empty must permit empty logs");
     }
 
     // --- include_reasons: 本番相当での平文理由エクスポート拒否 ---
@@ -606,6 +684,29 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(std::fs::read(&output).expect("read output"), b"original");
+        // 公開失敗時はステージングを残す。命名は .tmp-<pid>-<unix_millis>。
+        let staging: Vec<_> = std::fs::read_dir(&dir.0)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".snapshot.json.tmp-"))
+            .collect();
+        assert_eq!(
+            staging.len(),
+            1,
+            "staging must be kept on failure: {staging:?}"
+        );
+        assert!(
+            staging[0].contains(format!("-{}", std::process::id()).as_str()),
+            "staging name must include pid: {}",
+            staging[0]
+        );
+        let millis = staging[0].rsplit('-').next().unwrap_or("");
+        assert!(
+            !millis.is_empty() && millis.chars().all(|c| c.is_ascii_digit()),
+            "staging name must include unix_millis: {}",
+            staging[0]
+        );
     }
 
     #[test]

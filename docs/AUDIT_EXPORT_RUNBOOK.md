@@ -24,7 +24,10 @@ generated:
 - リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数でのみ渡す。`--database-token` は
   廃止され、指定するとエラーになる（`argv` は `ps` 等で公開されるため）。
 - スナップショット JSON の出力先は既存ファイルであってはならない（上書き拒否）。
-  CLI は `create_new` で存在チェックと生成を原子的に行う。
+  CLI は `hard_link` で create_new 相当の原子的公開を行い、既存ファイルを競合として拒否する。
+- `content_audit_log` / `governance_audit_log` が両方とも 0 件のときは、
+  `--allow-empty` の明示オプトインが無い限りエクスポートを拒否する。空ログを
+  「監査対象なしの成功」として扱わず、`AUDIT_CHAIN_EMPTY` ダミールートを暗黙に受理しない。
 
 ## 鍵ペアの準備（初期設定）
 
@@ -82,6 +85,9 @@ cargo run -p server --bin sign_audit_export -- \
 | 親ディレクトリ権限 | group/other 書き込み可能（`mode & 0o022 != 0`）なら拒否。`0700` でない（`mode & 0o055 != 0`）場合は警告を出力 | 鍵ファイルのすり替え・追加を防ぐ |
 | リモート DB トークン | `DATABASE_TOKEN` 環境変数からのみ読む。`--database-token` は渡された時点でエラー | argv はプロセス一覧へ公開されるため |
 | 出力の上書き | `OpenOptions::create_new(true)` で存在チェックと生成を原子的に行い、既存ファイルを拒否 | 存在チェックと生成の TOCTOU を防ぐ |
+| 公開の原子性 | ステージングから `hard_link` で create_new 相当の原子的公開を行い、既存ファイルは競合として拒否。hard_link が使えない環境（クロスデバイス等）は `rename` へフォールバックし、直前に最終パスの存在を再確認 | 存在チェックと公開の間の競合ウィンドウをなくし、上書きを防ぐ |
+| 一時ファイル名 | `.tmp-<pid>-<unix_millis>` のように PID とタイムスタンプを含める | クラッシュ残骸による再実行ブロックを防ぐ（restore_db と同じ考え方） |
+| 空ログの拒否 | 両ログ 0 件は `--allow-empty` が無い限りエラー。公開失敗時はステージングを残し、値・CID をエコーしない | 空ログの暗黙成功とダミールートの受理を防ぐ |
 
 環境変数の読取は `common::env::read_env` に統一し、非 UTF-8 のバイト列は「未設定」や空文字と
 区別して不正値として扱い、起動を拒否する。`AUDIT_EXPORT_INCLUDE_REASONS` と `ALLOW_MOCK_AUTH` は
@@ -91,6 +97,11 @@ cargo run -p server --bin sign_audit_export -- \
 （固定文言 `DATABASE_URL is required: pass --database-url or set DATABASE_URL; no default is used`）、
 非 UTF-8 は未設定へ潰さず `DatabaseUrlError::NotUtf8`（固定文言 `DATABASE_URL is not valid UTF-8`）で
 拒否する。`DATABASE_TOKEN` はトークン値を含まない固定文言で拒否し、いずれも生バイトをエコーしない。
+
+`verify_audit_log` も件数 0 のログを暗黙 OK としない。`--expect-root` 未指定でも固定文言
+`audit log is empty; empty logs are not implicitly valid` を stderr へ出し、終了コード 1 とする。
+期待 root に `AUDIT_CHAIN_EMPTY` のダミールートを渡しても空ログは受理されない。
+既存の `--expect-root` 照合契約（大小文字非区別・不一致時の非エコー）は変更しない。
 
 ### 手動確認手順（Kubuntu / リポジトリルート）
 

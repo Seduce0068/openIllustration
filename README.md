@@ -27,7 +27,8 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 - 模擬支援APIは501で無効化済みです。JPYC送金検証の実装まで支援・有償サービスを提供しません。
 - 高速・軽量・低手数料は設計目標です。数値目標と達成状況は未決定です。
   ADR は [ADR-0011](docs/adr/ADR-0011-performance-measurement.md) の Status: Proposed（文書作成済み・合意待ち）です。
-- クロスプラットフォーム性は設計目標です。対応OS・ブラウザ・端末、最小バージョンは未決定で、JXL/JPKI/ウォレット対応を含む実機検証が必要です。
+- クロスプラットフォーム性は設計目標です。対応ブラウザは Chrome・Edge・Brave・Firefox・Safari に決定済みですが、
+  最小バージョンとOS・端末、JXL/JPKI/ウォレット対応の実機検証範囲は未決定です。
   ADR は [ADR-0012](docs/adr/ADR-0012-compatibility-matrix.md) の Status: Proposed（文書作成済み・合意待ち）です。
 
 ## 🛠 技術スタック
