@@ -1676,8 +1676,18 @@ pub async fn run() -> anyhow::Result<()> {
         Arc::new(Mutex::new(set))
     };
 
-    let moderation_operators_env = std::env::var("MODERATION_OPERATOR_HASHES").ok();
-    let moderation_operators = Arc::new(moderation_operators(moderation_operators_env.as_deref()));
+    // MODERATION_OPERATOR_HASHES は common::env::read_env で分類する（値・生バイトは保持しない）。
+    // 非 UTF-8 は固定文言警告のうえ未設定扱い（fail-closed）とし、BAN/UNBAN/UNPIN が
+    // 全拒否になる設定ミスを明示する。doctor の production 診断と同じ文言を共有する。
+    let moderation_operators_env = common::env::read_env("MODERATION_OPERATOR_HASHES");
+    let moderation_operators_value = match &moderation_operators_env {
+        common::env::EnvValue::Utf8(value) => Some(value.as_str()),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+    };
+    if matches!(&moderation_operators_env, common::env::EnvValue::NonUtf8) {
+        warn!("{MODERATION_OPERATORS_NON_UTF8_WARNING}");
+    }
+    let moderation_operators = Arc::new(moderation_operators(moderation_operators_value));
     if moderation_operators.is_empty() {
         warn!("MODERATION_OPERATOR_HASHES is not set: BAN/unban/unpin endpoints are disabled");
     }
@@ -2103,6 +2113,11 @@ pub fn ipfs_max_attempts(env_value: Option<&str>) -> usize {
         .filter(|attempts| (1..=MAX).contains(attempts))
         .unwrap_or(DEFAULT)
 }
+
+/// `MODERATION_OPERATOR_HASHES` が非 UTF-8 の場合の固定文言。値・生バイトはエコーしない。
+/// `read_env` の分類結果を未設定扱い（fail-closed）へ倒し、BAN/UNBAN/UNPIN は全拒否される。
+/// `run()` の起動時警告と `doctor` の `production` 診断が同じ文言を共有する。
+pub const MODERATION_OPERATORS_NON_UTF8_WARNING: &str = "MODERATION_OPERATOR_HASHES is not valid UTF-8; treating as unset (BAN/UNBAN/UNPIN are all rejected; value redacted)";
 
 /// ADR-0004: カンマ区切りの運用者 user_hash を読み込む。
 /// 空要素・重複は除去する。未設定時は空集合とし、特権操作をフェイルクローズする。

@@ -4,8 +4,9 @@
 
 use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, MAX_AUTH_AGE_MAX_SECS,
-    env_value_for_use, graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout,
-    jwt_keys_from_env, max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    MODERATION_OPERATORS_NON_UTF8_WARNING, database_token_from_env_value, env_value_for_use,
+    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
+    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
     pinata_jwt_production_like, policy_utc_offset_hours, production_allowed_origins_error,
     production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
     validate_jwt_secret, validate_oidc_config_with,
@@ -209,6 +210,25 @@ where
         if let Some(warning) = env_value_for_use(name, &value).1 {
             production.push(warning);
         }
+    }
+    // DATABASE_TOKEN の非 UTF-8 は run() と同じ database_token_from_env_value の判定で
+    // 固定文言の警告へ倒す（値・生バイトはエコーしない）。run() は mock 有効時も
+    // 起動拒否するため、production カテゴリ内で常に診断する（check23 維持）。
+    // 旧挙動では起動拒否なのに doctor が 23 check OK を返す false pass だった。
+    if let Err(error) =
+        database_token_from_env_value(common::env::classify(lookup("DATABASE_TOKEN")))
+    {
+        production.push(error.to_string());
+    }
+    // MODERATION_OPERATOR_HASHES は run() と同じ read_env 分類を doctor 側でも
+    // classify で再現し、非 UTF-8 を固定文言警告のうえ未設定扱い（fail-closed）として
+    // 診断する。これで BAN/UNBAN/UNPIN が全拒否になる設定ミスを --strict で検出できる。
+    // 生バイトはエコーせず、results.push を増やさず production 内へマージする。
+    if matches!(
+        common::env::classify(lookup("MODERATION_OPERATOR_HASHES")),
+        common::env::EnvValue::NonUtf8
+    ) {
+        production.push(MODERATION_OPERATORS_NON_UTF8_WARNING.to_string());
     }
     results.push(("production", production));
 
@@ -1039,6 +1059,41 @@ mod tests {
                     "非 UTF-8 バイトが漏洩: {error}"
                 );
                 assert!(!error.contains(OIDC), "OIDC_CLIENT_SECRET が漏洩: {error}");
+            }
+        }
+
+        // DATABASE_TOKEN と MODERATION_OPERATOR_HASHES の非 UTF-8 も run() と同じ
+        // 固定文言で production カテゴリへ警告化する（新規テスト関数なし・53件維持）。
+        // 生バイトは一切エコーせず、値の有無だけを診断する。
+        for (name, expected) in [
+            (
+                "DATABASE_TOKEN",
+                "DATABASE_TOKEN must be a valid UTF-8 string",
+            ),
+            (
+                "MODERATION_OPERATOR_HASHES",
+                MODERATION_OPERATORS_NON_UTF8_WARNING,
+            ),
+        ] {
+            let results = check_all_with(|key: &str| {
+                if key == name {
+                    Err(std::env::VarError::NotUnicode(
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    ))
+                } else {
+                    Err(std::env::VarError::NotPresent)
+                }
+            });
+            let errors = errors_for(&results, "production");
+            assert!(
+                errors.iter().any(|error| error.as_str() == expected),
+                "非 UTF-8 {name} は固定文言で警告する: {errors:?}"
+            );
+            for error in errors {
+                assert!(
+                    !error.contains('\u{fffd}') && !error.as_bytes().contains(&0xff),
+                    "生バイトが漏洩: {error}"
+                );
             }
         }
     }

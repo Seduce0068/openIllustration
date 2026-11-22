@@ -787,6 +787,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第24ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  doctor --strict へ DATABASE_TOKEN 非UTF-8 と MODERATION_OPERATOR_HASHES の production 診断
+  追加（check23不変・値非エコー）、MSRV1.85 を workspace 一元化、
+  doc-numbers のクライアント走査を client/src/**/*.rs へ拡張（jxl.rs3テストを仕様へ追記）、
+  ADR log へ2026-11-23 異議認可エントリ追加。
+  子の「MISMATCH→FINALIZED 上書き」指摘は既存2段目CASが0行更新で409を返すため誤検知と
+  判定し却下（試行した早期リターンは既存テストを壊したため取り消し）。
+  R4 指摘で doc-numbers のコメント/FAIL文言を全モジュール走査へ合わせ、
+  shellcheck の引用警告を mapfile で解消。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests142、npm audit3lockfile）。
+  初回 npm audit は ECONNRESET で失敗したが再実行で green（ネットワーク要因）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化、公開ledger意図、
+  OIL_API_BASE未設定fail-open、起動設定一括Config化、BIND_ADDR/PORT設定化）は記録のみで保留。
+
 - 2026-11-23 コンボ第23ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で high2件+medium2件を是正:
   sid-only Logout Token を sub必須でfail-closed拒否（refresh復活防止）、

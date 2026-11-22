@@ -3,6 +3,7 @@ name = "server"
 version = "0.1.0"
 edition = "2024"
 license.workspace = true
+rust-version.workspace = true
 # src/bin/verify_audit_log.rs も auto-discover されるため、`cargo run` の既定を明示する。
 default-run = "server"
 

@@ -576,7 +576,7 @@ done <<<"$sign_audit_doc_lines"
 
 # --- 10. クライアント単体テスト一覧表の fn 名照合 -------------------------
 # TEST_SPECIFICATION の「クライアント単体テスト（一覧表）」節のバッククォート名を
-# 抽出し、client/src/lib.rs の #[cfg(test)] mod tests 配下の #[test] fn 名と
+# 抽出し、client/src 配下の .rs の #[cfg(test)] mod の #[test] fn 名と
 # doc→code の一方向で照合する（逆方向は要求しない）。
 # 表が無い・抽出0件・実コード側の #[test] fn が0件は fail-closed で FAIL。
 # 誤検知除外は既存の doc_test_exclusions（1行1根拠）を流用する。
@@ -623,6 +623,7 @@ done
 
 # 実コード側は #[cfg(test)] mod tests 直下の #[test] fn 名のみを集合にする。
 # 属性行・空行・コメント・他属性を飛ばし、直後の fn を awk で拾う（ヘルパー fn は除外）。
+mapfile -t client_rs_files < <(find client/src -name '*.rs' -type f | sort)
 client_code_test_names="$(
 	awk '
 		/^#\[cfg\(test\)\]/ { cfg = 1; next }
@@ -639,7 +640,7 @@ client_code_test_names="$(
 			next
 		}
 		{ pending = 0 }
-	' client/src/lib.rs | sort -u || true
+	' "${client_rs_files[@]}" | sort -u || true
 )"
 declare -A client_code_set=()
 while IFS= read -r name; do
@@ -647,7 +648,7 @@ while IFS= read -r name; do
 	client_code_set["$name"]=1
 done <<<"$client_code_test_names"
 if ((${#client_code_set[@]} == 0)); then
-	echo "FAIL client #[test] names: no #[test] fn in client/src/lib.rs mod tests" >&2
+	echo "FAIL client #[test] names: no #[test] fn in client/src/**/*.rs" >&2
 	failures=$((failures + 1))
 fi
 
@@ -655,7 +656,7 @@ if ((${#client_doc_test_names[@]} > 0 && ${#client_code_set[@]} > 0)); then
 	for name in "${client_doc_test_names[@]}"; do
 		[[ -z "$name" ]] && continue
 		if [[ -z "${client_code_set[$name]:-}" ]]; then
-			echo "FAIL client unit test name: '${name}' in ${spec} table but no #[test] fn in client/src/lib.rs" >&2
+			echo "FAIL client unit test name: '${name}' in ${spec} table but no #[test] fn in client/src/**/*.rs" >&2
 			failures=$((failures + 1))
 		fi
 	done

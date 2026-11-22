@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T02:15:00+09:00"
+  at: "2026-11-23T02:35:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T02:15:00+09:00"
+  at: "2026-11-23T02:35:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -476,6 +476,29 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 `should_fail(strict, problems)` に委譲される。P4 の jwt 警告はダミー PEM が無効なことに
 よるもので、mock 警告とは独立している。別途 `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
 の実出力で `23 check(s), 2 problem(s)`（`JWT_SECRET` 未設定による `jwt` 警告を含む）を確認した。
+
+R2-CONFIG で次を追加した。いずれも `results.push` を増やさず既存 `production`
+カテゴリへマージするため check23 は不変で、新規テスト関数も追加していないため
+doctor53 も不変である。
+
+1. `DATABASE_TOKEN`: `run()` と同じ `database_token_from_env_value` の判定を
+   `production` カテゴリへ反映し、非 UTF-8 なら固定文言
+   `DATABASE_TOKEN must be a valid UTF-8 string` の警告を出す。起動は拒否するのに
+   doctor が `23 check(s), 0 problem(s)` を返す false pass を解消する。
+   値・生バイトは一切エコーしない。
+2. `MODERATION_OPERATOR_HASHES`: 読取を `common::env::read_env` へ移し、非 UTF-8 を
+   共有固定文言 `MODERATION_OPERATOR_HASHES is not valid UTF-8; treating as unset
+   (BAN/UNBAN/UNPIN are all rejected; value redacted)` の警告のうえ未設定扱い
+   （fail-closed）とする。`doctor --strict` は同じ共有文言を `production` カテゴリで
+   検出し、BAN/UNBAN/UNPIN が全拒否になる設定ミスを失敗させられる。
+   未設定自体の警告は従来どおり `run()` の起動ログが担う。
+3. Rust toolchain: `[workspace.package] rust-version = "1.85"`（edition 2024 の下限）を
+   追加し、`common` / `server` / `client` へ `rust-version.workspace = true` で継承した。
+   `rust-toolchain.toml` も CI の `toolchain` 指定も存在しないため、追加時は 1.85 に
+   合わせる。doctor / CI の toolchain 指定変更は不要（不一致なし）。
+
+1・2 のアサーションは既存 `secret_values_are_never_printed_in_problems` 内へ追加し、
+テスト関数数は変更していない（doctor53 / tests142 / E2E69 / migrations14 不変）。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
@@ -1688,6 +1711,14 @@ last_success_timestamp）について、公開形式と実際の進捗を下記�
 - `neutralized_report_is_sent_once_per_render_source`: 描画ソース（markdown 本文）の
   ハッシュをページ全体の `REPORTED` 集合へ記録し、同一ソースの再描画・再マウントでは
   送信せず、別ソースのみ新たに1回送信する（`client/src/lib.rs:358-369,400-425,2615`）。
+- `jxl_dimension_limits`（`client/src/jxl.rs`）: JXL 寸法上限ガード（デコンプレッション
+  ボーム対策）を確認する。
+- `jxl_dimension_fuzz_property`（`client/src/jxl.rs`）: 疑似乱数入力で寸法ガードの
+  プロパティを確認する。
+- `jxl_channel_conversion`（`client/src/jxl.rs`）: チャンネル数別 RGBA 変換の境界を確認する。
+
+`test-doc-numbers.sh` のクライアント走査は `client/src/**/*.rs` の `#[cfg(test)] mod` を
+対象とし、上記テスト名が実コードに存在することを照合する。
 
 #### E2E シナリオ（MET-01 / NEUT-URL-02 / NEUT-URL-03）
 
@@ -1792,7 +1823,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 ## 6. クライアント単体テスト（一覧表）
 
-対象は client/src/lib.rs の `#[cfg(test)] mod tests` 配下 `#[test] fn`。
+対象は client/src 配下の `#[cfg(test)] mod` の `#[test] fn`（lib.rs と jxl.rs を含む）。
 本表の名前は `test_` 接頭辞を持たない。scripts/test-doc-numbers.sh は下表の
 バッククォート名を抽出し、実コードの `#[test] fn` 名と doc→code の一方向で照合する
 （実コード側の全テストを表へ載せることは要求しない）。
