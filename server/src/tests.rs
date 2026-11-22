@@ -241,7 +241,7 @@ async fn setup_app_with_jwt_keys(
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys,
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -383,7 +383,7 @@ async fn setup_app_with_payments(
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -430,7 +430,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -781,7 +781,7 @@ async fn setup_app_with_oidc_age_policy_and_cookie_secure(
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -913,7 +913,7 @@ async fn test_rate_limit_ignores_preflight() {
     init_schema(&db).await;
     let state = Arc::new(AppState {
         db,
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -979,7 +979,7 @@ async fn test_rate_limit_rejects_excess_requests() {
     init_schema(&db).await;
     let state = Arc::new(AppState {
         db,
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -1108,7 +1108,7 @@ async fn rate_limit_test_state_with_concurrency(
     init_schema(&db).await;
     Arc::new(AppState {
         db,
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -4448,7 +4448,7 @@ async fn test_vote_consensus_rejects_content() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -4631,7 +4631,7 @@ async fn test_duplicate_vote_rejected() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -4848,7 +4848,7 @@ async fn test_vote_after_conclusion_rejected() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -4931,7 +4931,7 @@ async fn test_vote_for_missing_report_returns_404() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -5020,7 +5020,7 @@ async fn setup_vote_signature_test() -> (Router, libsql::Connection) {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -5140,7 +5140,7 @@ async fn test_vote_with_invalid_signature_rejected() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -5320,7 +5320,7 @@ async fn test_vote_with_invalid_payload_rejected() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -5389,7 +5389,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
 
     let shared_state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -6790,7 +6790,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -6875,7 +6875,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -7130,7 +7130,7 @@ async fn test_payment_verify_mismatch_cas_conflict() {
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -9370,7 +9370,7 @@ async fn test_logout_revokes_session() {
     // 同じ JWT は 401 になる（他インスタンスの logout が即時に反映される）。
     let second_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -12007,7 +12007,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
 
     let state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -12707,7 +12707,7 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
 
     let state = Arc::new(AppState {
         db: Arc::new(db.clone()),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -13970,7 +13970,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
     let shutting_down = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),
@@ -14538,7 +14538,7 @@ async fn test_refresh_rejects_revoked_sub_with_empty_in_memory_state() {
     // プロセス再起動相当: メモリの失効表は空だが DB は同じものを共有する。
     let state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: false,
         ipfs_gateways: Vec::new(),
@@ -17705,7 +17705,7 @@ async fn setup_me_export_app() -> Router {
 
     let shared_state = Arc::new(AppState {
         db: db.clone(),
-        http_client: reqwest::Client::new(),
+        http_client: test_http_client(),
         jwt_keys: test_jwt_keys(),
         allow_mock_auth: true,
         ipfs_gateways: Vec::new(),

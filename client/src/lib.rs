@@ -3201,7 +3201,7 @@ where
 
             <Show when=move || verified.get() == Some(true) && ct_toc == "Novel" && !novel_toc.get().is_empty() fallback=|| ()>
                 <details class="border border-white/10 bg-white/5 p-3">
-                    <summary class="text-[10px] tracking-widest uppercase text-gray-400 hover:text-white cursor-pointer">
+                    <summary lang="en" class="text-[10px] tracking-widest uppercase text-gray-400 hover:text-white cursor-pointer">
                         "Table of Contents"
                     </summary>
                     <nav class="mt-3 space-y-1 max-h-40 overflow-y-auto" inner_html=move || novel_toc.get() />
@@ -3259,8 +3259,8 @@ where
                                 </p>
                             </Show>
                             <Show when=move || content_load_error.get().is_empty() && !decode_error.get() && !novel_decode_error.get() fallback=|| ()>
-                                <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
-                                <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
+                                <p role="alert" data-testid="integrity-breach" lang="en" class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
+                                <p lang="en" class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
                             </Show>
                         </div>
                     }.into_any(),

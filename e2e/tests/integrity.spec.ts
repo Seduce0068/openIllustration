@@ -184,6 +184,9 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     
     // 詳細メッセージの確認
     await expect(page.locator('text=Integrity Breach Detected')).toBeVisible();
+    // 改ざん検知は dedicated role=alert + lang=en で支援技術へ告知する。
+    await expect(page.getByTestId('integrity-breach')).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('integrity-breach')).toHaveAttribute('lang', 'en');
     await expect(page.locator('text=Wasm checksum does not match forensic registry.')).toBeVisible();
   });
 

@@ -32,7 +32,9 @@ MAILTO=__SET_ME__
 # root crontab にも MAILTO=<実宛先> を明示すること（cron の MAILTO は crontab 単位で、
 # /etc/cron.d 側の指定は root ジョブへは適用されない）。
 #   17 3 * * * /usr/bin/systemctl stop openillustration.service && { /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; } || rc=$?; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}
-#   （BACKUP_DIR 等は backup.env 側へ集約して渡す。start は backup 成否にかかわらず実行する。）
+#   （DATABASE_URL / BACKUP_DIR 等は backup.env 側へ集約して渡す。wrapper の allowlist
+#     に DATABASE_URL / DATABASE_TOKEN が含まれるため env ファイル経由で伝播する。
+#     start は backup 成否にかかわらず実行する。）
 # /etc/cron.d 側の MAILTO は wrapper の失敗通知先。root ジョブには別途 MAILTO を
 # 明記すること。どちらも終了コードへ失敗を反映するため、設定すれば検知できる。
 # 【配置手順の必須ステップ】このファイル単体のジョブ行は backup-cron-wrapper.sh のみを
