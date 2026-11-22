@@ -787,6 +787,20 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第28ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  再アップロード既存CIDで補償unpinが正当ピンを解除する回帰を修正（自前変更の修正）、
+  backup-cron-wrapper へ env キー allowlist 導入（BASH_ENV/PATH/LD_* 等の搬入を拒否、
+  case8 追加）、鍵ローテーション Runbook の fail-closed 矛盾と XFF プローブ手順、
+  HANDOFF の advisory 内訳を SECURITY_ADVISORIES 現行値へ更新。
+  設計判断待ち（OIDC callback の閾値削除とセッション発行の原子化、refresh の BAN 再読、
+  監査エクスポート2表の単一スナップショット、ban/unban 冪等キー、logout の部分失敗継続、
+  doctor --strict の CI ゲート化、alert unit テンプレート、.audit-root のオフサイト対象、
+  E2E epoch ガード/JXL寸法ガードのテスト、jxl.rs/fuzz_test.rs の仕様一覧、
+  CORSプリフライトテスト、 keluaran lang、README /metrics 注意、favorites コメント）は記録のみで保留。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests145、npm audit3lockfile、
+  markdownlint 39ファイル、backup-cron-wrapper case1-8）。
+
 - 2026-11-23 コンボ第27ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   doc-numbers へ test.describe.only/skip/fixme 検出を追加（親が実測で fail 確認）、

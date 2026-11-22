@@ -9,7 +9,7 @@ tags:
   - operations
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-23T03:35:00+09:00"
 ---
 
 ## 目的
@@ -69,7 +69,9 @@ export JWT_RSA_VERIFICATION_KEYS="$(jq -n --arg kid "$OLD_KID" --rawfile pem old
 ```
 
 1. `/health` と `/ready` が 200 であることを確認し、既存トークンで
-   保護 API が通ることを確認する。
+   保護 API が通ることを確認する。XFF fail-closed 下では信頼済みプロキシ経由、
+   または `TRUSTED_PROXY_CIDRS` に合致する XFF 付与（値は非秘密）でアクセスする。
+   信頼範囲外からの 403 は設定不具合ではなくゲートの正常動作である。
 
 ### 段階2: 署名鍵を切り替える
 
@@ -115,7 +117,7 @@ cut -d. -f1 <<<"$TOKEN" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .kid
 | 全トークンが 401 | `JWT_RSA_PRIVATE_KEY_PEM` の PEM 形式とビット長（2048以上） | 起動ログの `JWT_RSA_PRIVATE_KEY_PEM is invalid` を確認し鍵を修正 |
 | 旧トークンのみ 401 | `JWT_RSA_VERIFICATION_KEYS` に旧 `kid` が登録されているか | 段階1の手順で旧公開鍵を再登録 |
 | 未知 `kid` のエラー | トークンの `kid` と登録済み `kid` の一致 | 署名鍵の導出 `kid` を再計算し登録 |
-| `/auth/oidc/callback` が 401 | `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` と ID トークンのクレーム | 設定値を OP の実際のクレームに合わせる（本番では設定必須） |
+| `/auth/oidc/callback` が 401 | `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` と ID トークンのクレーム | OP が要求保証を提供しない場合は本番有効化せず、OP 側のクレーム提供を確認する。設定を下げて回避しない（fail-closed 方針、[DOCUMENT_STATUS](DOCUMENT_STATUS.md) 参照） |
 | 再起動後にスケジュール障害 | バックアップは `ALERT_CMD` が通知しているか | [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照 |
 
 ## 検証済み事項

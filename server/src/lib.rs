@@ -5142,7 +5142,14 @@ pub async fn upload_content(
         Ok(Json(cid.clone()))
     }
     .await;
-    if result.is_err() {
+    // 既存CIDによる「Content already exists」は新規ピンを作っていないため、
+    // 補償 unpin を走らせると登録済みの正当なピンまで解除してしまう。
+    // この場合のみ補償をスキップする（値・CID はログへ出さない）。
+    let skip_compensation = match &result {
+        Err(AppError::BadRequest(message)) => message == "Content already exists",
+        _ => false,
+    };
+    if result.is_err() && !skip_compensation {
         compensate_unpin(&state, &cid).await;
     }
     result

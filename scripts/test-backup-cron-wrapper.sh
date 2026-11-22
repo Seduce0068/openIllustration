@@ -25,7 +25,7 @@ set -euo pipefail
 {
 	printf 'INVOKED=1\n'
 	printf 'RECIPIENT=%s\n' "${BACKUP_GPG_RECIPIENT:-<unset>}"
-	printf 'MARKER=%s\n' "${INJECTION_MARKER:-<unset>}"
+	printf 'MARKER=%s\n' "${BACKUP_PREFIX:-<unset>}"
 	printf 'ARGC=%s\n' "$#"
 	printf 'ARGS=%s\n' "$*"
 } >>"${WRAPPER_CAPTURE}"
@@ -140,7 +140,7 @@ echo "=== ケース3: 制限付きパーサではシェル記法が評価され�
 {
 	printf 'BACKUP_GPG_RECIPIENT=test@example.com\n'
 	# shellcheck disable=SC2016 # コマンド置換として評価されないことを検証するためリテラル。
-	printf 'INJECTION_MARKER="$(printf injected > %s/pwned)"\n' "$work"
+	printf 'BACKUP_PREFIX="$(printf injected > %s/pwned)"\n' "$work"
 } >"$env_file"
 chmod 600 "$env_file"
 rm -f "${WRAPPER_CAPTURE}" "${work}/pwned"
@@ -207,6 +207,20 @@ assert_log_contains "case7 line number and fixed message" \
 	'Invalid key #3 in backup env file' "${work}/case7.err"
 assert_log_absent "case7 key name absent" 'BAD-KEY' "${work}/case7.err"
 assert_log_absent "case7 value absent" 'placeholder-value' "${work}/case7.err"
+
+echo "=== ケース8: allowlist 外のキー（BASH_ENV 等）は拒否 ==="
+rm -f "$env_file" "${WRAPPER_CAPTURE}"
+printf 'BASH_ENV=/tmp/evil.sh\n' >"$env_file"
+chmod 600 "$env_file"
+if env -u BACKUP_ENV_FILE "$wrapper" >"${work}/case8.out" 2>"${work}/case8.err"; then
+	echo "FAIL case8 disallowed key: expected failure but succeeded"
+	failures=$((failures + 1))
+else
+	echo "PASS case8 disallowed key: rejected"
+fi
+assert_capture_absent "case8 disallowed key"
+assert_log_contains "case8 fixed message" 'Disallowed key #1 in backup env file' "${work}/case8.err"
+assert_log_absent "case8 value absent" '/tmp/evil.sh' "${work}/case8.err"
 
 if ((failures > 0)); then
 	echo "backup-cron-wrapper tests FAILED (${failures})" >&2
