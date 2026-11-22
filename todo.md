@@ -116,7 +116,7 @@ status: current
 - [x] **cron 配布テンプレートの MAILTO をプレースホルダ化** — 根拠 `deploy/openillustration-backup.cron:5` / review R4-DR / 重大度 high。
   `admin@example.com` が残っており、そのまま導入するとバックアップ失敗通知が届かない。
   `__SET_ME__` 等へ変更し、Runbook に差し替え手順と ALERT_CMD 必須化を追記。
-- [ ] **JWT 期限切れ (401) の自動 refresh を有効化（基盤は実装済み・既定無効）**
+- [x] **JWT 期限切れ (401) の自動 refresh を有効化（基盤は実装済み・既定無効）**
   2026-11-22: 共有トークン signal・api_fetch/api_fetch_request（再試行・単一フライト）・
   CORS allow_credentials を実装済み。ただし全 fetch に波及させると既存の 401 固定文言
   ビューと一覧フェッチの再描画が競合し E2E が不安定になったため、
@@ -764,6 +764,16 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（高1件・JWT refresh 有効化）: ENABLE_AUTO_REFRESH=true へ反転。
+  単一フライト＋refresh失敗時に元の401を返す契約で旧競合を解消。
+  さらに refresh 成功時の新JWTを App の token signal ではなく api_fetch 専用
+  REFRESHED_JWT スロットへ保持し、一覧 Effect 再加熱によるビュー再マウントで
+  export-status が消える問題を根本解消。ログイン/ログアウトでクリア。
+  既存export 401ケース内へ「失敗側401→固定文言→成功側refresh→新JWT再送→200」の
+  回復フェーズを統合（新規 test() なし・69件維持）。R4 指摘でデバッグログ削除・
+  旧コメント修正・docs/tests136 追随。全ゲート green。
+  残り高1件（DEC-01 外部OP/JPKIのクレーム仕様確定待ち）のみ。
 
 - 2026-11-22 コンボ第17ラウンド（review4+discovery3）: 全7担当完了。R6 で high3件を是正:
   revoked_subs purge を refresh TTL(30日)+マージンへ延長、OIDC callback の tx 内 BAN 再読、

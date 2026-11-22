@@ -383,6 +383,14 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
   });
 
   test('401 shows re-login guidance in favorite-error', async ({ page }) => {
+    // R2-REFRESH-ENABLE: refresh は失敗側でモックする。失敗時は元の 401 を返す契約を維持する。
+    await page.route('**/auth/refresh', async route => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'unauthorized' }),
+      });
+    });
     const { favoriteCalls, contentRequests, toggle, card } =
       await setupFavoriteGuardPage(page, async route => {
         await route.fulfill({

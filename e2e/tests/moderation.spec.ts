@@ -357,6 +357,14 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' })
       });
     });
+    // R2-REFRESH-ENABLE: refresh は失敗側でモックする。失敗時は元の 401 を返す契約を維持する。
+    await page.route('**/auth/refresh', async route => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'unauthorized' }),
+      });
+    });
     await page.route('**/mod/reports', async route => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
     });

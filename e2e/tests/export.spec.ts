@@ -104,11 +104,45 @@ test.describe('R5-04: Export My Data', () => {
   });
 
   test('R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること', async ({ page }) => {
+    // R2-REFRESH-RECOVERY 段C: 失敗フェーズ後に成功側へ差し替えるためのフラグと記録用カウンタ。
+    let refreshSucceeds = false;
+    let refreshAttempts = 0;
+    const exportAuthHeaders: string[] = [];
+
     await page.route('**/me/export', async route => {
+      const authorization = route.request().headers()['authorization'];
+      exportAuthHeaders.push(authorization);
+      // refresh 成功後の新トークンによる再送（2回目の試行）だけ 200 を返す。
+      if (authorization === 'Bearer refreshed_jwt_token') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify(exportFixture),
+        });
+        return;
+      }
       await route.fulfill({
         status: 401,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'unauthorized' }),
+      });
+    });
+    // R2-REFRESH-ENABLE: 最初のクリックは失敗側で、元の 401 を返す契約を維持する。
+    // R2-REFRESH-RECOVERY: 既存アサーション完了後にハンドラ内フラグで成功側へ差し替える。
+    await page.route('**/auth/refresh', async route => {
+      refreshAttempts += 1;
+      if (!refreshSucceeds) {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'unauthorized' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'refreshed_jwt_token' })
       });
     });
     await loginAndOpenDashboard(page);
@@ -117,6 +151,15 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByTestId('export-error')).toHaveText('ログインが必要です', { timeout: 10000 });
     await expect(page.getByRole('alert')).toHaveText('ログインが必要です');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
+
+    // 回復フェーズ: 成功する refresh → 1回再送 → 200 を同じケース内で検証する。
+    refreshSucceeds = true;
+    await page.getByTestId('export-my-data').click();
+
+    await expect(page.getByTestId('export-error')).toHaveCount(0);
+    await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
+    expect(refreshAttempts).toBeGreaterThanOrEqual(1);
+    expect(exportAuthHeaders).toContain('Bearer refreshed_jwt_token');
   });
 
   test('R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと', async ({ page }) => {

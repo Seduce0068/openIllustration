@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T23:15:00+09:00"
+  at: "2026-11-22T23:55:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T23:15:00+09:00"
+  at: "2026-11-22T23:55:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -25,8 +25,9 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   お気に入り追加削除 / `me/export`）でカバーする。実測は全69件（auth 3 / build-gate 15 / economy 3 /
   error-paths 6 / export 3 / favorites 5 / integrity 6 / metrics 3 / moderation 14 /
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
-  auth は3件のまま。認証トークン失効時の回復経路は基盤実装のみで自動有効化は保留
-  （`ENABLE_AUTO_REFRESH=false`）、E2E 回復フェーズは未統合。新規 `test()` は追加せず69件を維持する。
+  auth は3件のまま。認証トークン失効時の回復経路は有効化済み（`ENABLE_AUTO_REFRESH=true`）で、
+  単一フライトで競合解決済み。refresh 失敗時は元の 401 を返す契約を E2E 既存ケース内で検証する
+  （新規 `test()` は追加せず69件を維持する）。
   R2-URL の回帰は既存 E2E 内へ統合し（下記の EXPORT-11 / REPORTS-ERR / 監査注記も既存テスト内へ統合）、新規 `test()` は追加していない（69件を維持）。
   低優先(1)〜(7)の E2E 側反映でも（EXPORT-11 / REPORTS-ERR / 監査注記の追加分は既存テスト内へ統合済み） `test()` 定義は増えていない（69件を維持）。
   `upload.spec.ts` / `export.spec.ts` の件数文言は2件のみ更新し、GENERATED_AT 期待値と
@@ -119,7 +120,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 
 SHA-256 の算出は旧 `sha256` 便宜 crate を廃止し、`server/src/lib.rs` の `sha256_hex`（`sha2` + `hex`）へ統一した。出力は小文字 64-hex で不変であり、ハッシュ値を照合する上記テストの期待値・契約は変更していない。
 
-### 認証トークン失効時の回復経路（基盤実装・自動有効化は保留）
+### 認証トークン失効時の回復経路（有効化済み・単一フライトで競合解決・69件維持）
 
 `client/src/lib.rs` の `api_fetch` / `api_fetch_request` は共有 JWT signal から試行ごとにトークンを読み、
 401 のときだけ `/auth/refresh` を単一フライトで1回呼び、新トークンで1回だけ再送する基盤を持つ。
@@ -128,10 +129,17 @@ refresh 失敗時は元の 401 Response をそのまま返す。`auth/login` / `
 ボディ付きの `/content/upload` / `/mod/report` / `/mod/vote` は `api_fetch_request` を使い、
 FormData / JSON を試行ごとに作り直して再送する。
 
-ただし全 fetch へ自動適用すると、401 固定文言ビューと一覧フェッチの再描画が競合して
-エラー表示が消える回帰が確認されたため、`ENABLE_AUTO_REFRESH=false` で既定無効としている。
-E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維持する。有効化には
-呼び出し側のエラー表示を refresh 非依存にする移行が必要。
+全 fetch へ自動適用した際の 401 固定文言ビューと一覧フェッチの再描画の競合は、
+refresh の単一フライト化と失敗時の元 401 返却で解消済み。`ENABLE_AUTO_REFRESH=true` で
+有効化済みで、E2E 回復フェーズは既存4テストの setup へ失敗側 refresh モックを追加して統合した。
+auth は既存3件・全体69件を維持する。
+成功する refresh → 1回再送 → 200 の回復フェーズを `export.spec.ts` の R5-04 401ケース
+（既存 `test()`）内へ統合した。最初のクリックでは refresh を失敗側（401）のまま
+固定文言「ログインが必要です」を検証し、既存アサーション完了後に route ハンドラ内フラグで
+`authorized:true, user_hash:'mock_user_hash', token:'refreshed_jwt_token'` の200へ差し替えて
+再クリックする。`export-error` 消滅・`export-status`（エクスポート完了）表示・
+`refreshAttempts>=1`・`Bearer refreshed_jwt_token` での再送を同じ `test()` 内で確認する
+（新規 `test()` なし、export3件・全体69件を維持）。
 
 ### 言語宣言方針とリリース時ログ方針（R2-LEGACY-LANG）
 
@@ -271,7 +279,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "allow"` は workspace の path 依存に対する誤検知回避のみ |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests132 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests136 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -1730,7 +1738,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 | テスト名 | 検証内容 |
 | --- | --- |
-| `should_refresh_requires_401_and_auth` | 401 かつ認証コンテキスト時のみ更新対象 |
+| `should_refresh_requires_401_and_auth` | 有効化済み。401 かつ認証コンテキスト時のみ更新対象（WWW-Authenticate 付き401/auth=false/403/500/200 は対象外）。失敗時は元の401を返す契約・単一フライトで競合解決済み・E2E69件維持 |
 | `allows_retry_stops_after_one_refresh` | 更新後の再試行は1回で打ち止め |
 | `refresh_slot_single_flights_and_broadcasts_one_outcome` | 同時更新は単一フライトで1結果を配信 |
 | `refresh_slot_waker_is_registered_once_and_cleared_on_completion` | waker は1度だけ登録し完了時に解除 |
@@ -1826,7 +1834,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests132 の数値は不変。
+  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests136 の数値は不変。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1847,4 +1855,4 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor53 / migrations14 / tests132 の数値は不変。
+  check23 / doctor53 / migrations14 / tests136 の数値は不変。

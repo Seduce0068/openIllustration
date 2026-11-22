@@ -234,6 +234,9 @@ thread_local! {
     static SHARED_TOKEN: RefCell<Option<ReadSignal<Option<String>>>> = const { RefCell::new(None) };
     /// App が登録する JWT 書き込み側。refresh 成功とログイン成功で同じ値を set する。
     static SHARED_TOKEN_WRITE: RefCell<Option<WriteSignal<Option<String>>>> = const { RefCell::new(None) };
+    /// refresh 成功で得た新 JWT。App の token signal を更新すると一覧フェッチ Effect
+    /// が再加熱されビューが再マウントされるため、api_fetch 専用に別スロットで保持する。
+    static REFRESHED_JWT: RefCell<Option<String>> = const { RefCell::new(None) };
     /// 401 を拾った最初の呼び出しだけが refresh を開始するための完了スロット。
     static REFRESH_SLOT: Rc<RefCell<RefreshSlot>> = Rc::new(RefCell::new(RefreshSlot::new()));
 }
@@ -247,11 +250,25 @@ fn register_shared_token(read: ReadSignal<Option<String>>, write: WriteSignal<Op
 /// 現在の JWT を共有 signal から読む。signal の borrow をまたいで副作用を呼ばないよう
 /// 先に値を取り出してから返す。
 fn current_jwt() -> Option<String> {
+    if let Some(jwt) = REFRESHED_JWT.with(|slot| slot.borrow().clone()) {
+        return Some(jwt);
+    }
     SHARED_TOKEN.with(|slot| {
         slot.borrow()
             .as_ref()
             .and_then(|signal| signal.get_untracked())
     })
+}
+
+/// refresh 成功で得た JWT を api_fetch 専用スロットへ保持する。
+/// App の signal は更新しない（Effect 再加熱による再マウントを避けるため）。
+fn set_refreshed_jwt(jwt: String) {
+    REFRESHED_JWT.with(|slot| *slot.borrow_mut() = Some(jwt));
+}
+
+/// ログイン／ログアウト時に api_fetch 専用スロットをクリアする。
+fn clear_refreshed_jwt() {
+    REFRESHED_JWT.with(|slot| *slot.borrow_mut() = None);
 }
 
 /// 共有 signal へ JWT を書き込む。handle_login_success と refresh 成功の両方が
@@ -374,7 +391,7 @@ async fn join_refresh() -> RefreshOutcome {
 
     let outcome = perform_refresh().await;
     if let RefreshOutcome::Token(token) = &outcome {
-        set_shared_jwt(Some(token.clone()));
+        set_refreshed_jwt(token.clone());
     }
     // refresh 失敗時はここで画面遷移しない。元の 401 を呼び出し側へ返し、
     // 各ビューの既存固定文言（「再ログインが必要です」等）で復帰を案内する。
@@ -405,20 +422,19 @@ where
                 jwt = new_jwt;
                 refreshed = true;
             }
-            // refresh 失敗は全待機者へ同じ 401 を返す。セッション破棄はリーダーが
-            // join_refresh 側で 1 回だけ実行済み（/auth/logout の API 呼び出しはしない）。
+            // refresh 失敗時はセッションを破棄せず、元の 401 を呼び出し側へ返して
+            // 各ビューの固定文言（「再ログインが必要です」等）に委ねる。
             RefreshOutcome::Failed => return Ok(response),
         }
     }
 }
 
-/// 自動 refresh の有効フラグ。既定は無効（明示的な有効化を待つ）。
+/// 自動 refresh の有効フラグ（現在は有効）。
 ///
-/// 全 fetch に波及させると、401 を固定文言へ変換する既存ビューと一覧フェッチの
-/// 再描画が競合し、エラー表示が消える回帰が確認された。基盤（共有トークン・
-/// 単一フライト・再試行ループ）は維持し、呼び出し側の移行が完了してから
-/// このフラグを true にして段階的に有効化する。
-const ENABLE_AUTO_REFRESH: bool = false;
+/// かつて全 fetch への適用で 401 固定文言ビューとの再描画競合が起きたが、
+/// 単一フライト化と refresh 失敗時に元の 401 を呼び出し側へ返す契約で解消した。
+/// 成功時のみ新 JWT で1回再送し、WWW-Authenticate 付き 401 は対象外。
+const ENABLE_AUTO_REFRESH: bool = true;
 
 /// 401 かつ `auth` のときだけ refresh を試す。403 / ネットワークエラーは対象外。
 ///
@@ -1727,6 +1743,7 @@ pub fn App() -> impl IntoView {
         set_user_hash.set(Some(hash));
         // 共有 signal へ set する。refresh 成功時も同じ signal を通るため
         // api_fetch は常に最新の JWT を読める。
+        clear_refreshed_jwt();
         set_shared_jwt(Some(jwt));
         // 保留しておいた直接リンクの hash を適用する（未認証では login のまま）。
         let target = pending_view.get_value();
@@ -1738,6 +1755,7 @@ pub fn App() -> impl IntoView {
     // 未認証（トークン無し／401 済み）でも安全なよう失敗はすべて無視する。
     let handle_logout = move |_| {
         let token = token.get_untracked();
+        clear_refreshed_jwt();
         set_token.set(None);
         set_user_hash.set(None);
         // hash を #login へ replaceState（navigate 経由で履歴を汚さない）。
@@ -3977,8 +3995,8 @@ mod tests {
 
     #[test]
     fn should_refresh_requires_401_and_auth() {
-        // 既定では自動 refresh は無効（段階的有効化まで固定文言契約を維持）。
-        assert!(!super::should_refresh(401, true, false));
+        // 有効化済み: 401 かつ認証コンテキスト時のみ更新対象。
+        assert!(super::should_refresh(401, true, false));
         // WWW-Authenticate が付いた 401 は refresh 対象外（固定文言へ委ねる）。
         assert!(!super::should_refresh(401, true, true));
         assert!(!super::should_refresh(401, false, false));

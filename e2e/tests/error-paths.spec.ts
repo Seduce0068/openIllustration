@@ -46,6 +46,14 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     let contentAborted = false;
     // 同じケース内で network error → 401 へ切り替える（再ログイン導線の回帰）。
     let unauthorized = false;
+    // R2-REFRESH-ENABLE: refresh は失敗側でモックする。失敗時は元の 401 を返す契約を維持する。
+    await page.route('**/auth/refresh', async route => {
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'unauthorized' }),
+      });
+    });
     await page.route('**/content', async route => {
       if (unauthorized) {
         await route.fulfill({
