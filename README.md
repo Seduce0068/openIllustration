@@ -126,7 +126,10 @@ CI では `bash e2e/ci-e2e.sh` を必ず実行し、ブラウザ（chromium / fi
 
 ### 5. 運用CLI（バックアップ・監査）
 
-サーバー起動前に `doctor --strict` で設定を診断し、バックアップ取得・検証・リストア・
+サーバー起動前に `doctor --strict` で設定を診断します。本番相当の環境変数
+（`ALLOW_MOCK_AUTH` 無効・OIDC/PINATA/`AUDIT_EXPECT_ROOT` 等の必須値を秘密管理基盤から注入）
+を渡して実行してください。開発用の `ALLOW_MOCK_AUTH=1` のままでは本番チェックが
+スキップされ、適合判定になりません。バックアップ取得・検証・リストア・
 監査エクスポートの各CLIを Runbook の手順で実行します。トークン値や署名鍵の内容は
 argv に渡さず、`DATABASE_TOKEN` 環境変数または権限を制限したファイルで渡します。
 DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は

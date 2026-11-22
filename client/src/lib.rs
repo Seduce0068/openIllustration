@@ -3702,7 +3702,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     />
                 </div>
 
+                // Leptos 0.8 の bool 属性は true で属性付与 / false で削除になるため、
+                // 送信中の aria-busy は属性の有無で遷移する（E2E も付与・解除を検証）。
                 <button on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
+                    aria-busy=move || loading.get()
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
                     {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
@@ -4286,7 +4289,9 @@ where
                 </Show>
                 // GENERATED_AT が閾値を超えて古いときだけ出す鮮度警告（オプイン集計には触れない）。
                 <Show when=move || public_stats_stale.get() fallback=|| ()>
-                    <p data-testid="public-mod-stats-stale" class="text-[10px] text-yellow-500">
+                    <p role="status" data-testid="public-mod-stats-stale" class="text-[10px] text-yellow-500">
+                        // 色に依存しない手がかり。既存固定文言は変更せず dedicated 要素を前置する。
+                        <span data-testid="public-mod-stats-stale-icon" aria-hidden="true">"⚠ "</span>
                         "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。"
                     </p>
                 </Show>
@@ -4320,7 +4325,13 @@ where
                 <p class="text-[10px] text-gray-500">
                     "Reporter: " {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
                 </p>
+                // aria-label は補助技術向けの既定名として維持し、<label for> で明示的に関連付ける。
+                // placeholder は例示のみでありラベル代わりには使わない。
+                <label for="report-target-cid" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                    "TARGET CID"
+                </label>
                 <input
+                    id="report-target-cid"
                     type="text"
                     lang="en"
                     aria-label="TARGET CID"
@@ -4331,7 +4342,11 @@ where
                     prop:value=cid
                     class="w-full bg-black border border-white/20 p-3 text-sm"
                 />
+                <label for="report-reason" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                    "REASON"
+                </label>
                 <textarea
+                    id="report-reason"
                     lang="en"
                     aria-label="REASON"
                     placeholder="REASON"

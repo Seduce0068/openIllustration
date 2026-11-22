@@ -255,8 +255,20 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'MODERATION' }).click();
     await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
 
-    await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
-    await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
+    // A11Y: 通報フォームは既存 aria-label を維持したうえで <label for> でも関連付ける。
+    const cidInput = page.locator('input[placeholder="TARGET CID"]');
+    const reasonInput = page.locator('textarea[placeholder="REASON"]');
+    await expect(page.locator('label[for="report-target-cid"]')).toHaveText('TARGET CID');
+    await expect(cidInput).toHaveAttribute('id', 'report-target-cid');
+    await expect(cidInput).toHaveAttribute('aria-label', 'TARGET CID');
+    await expect(page.getByLabel('TARGET CID', { exact: true })).toHaveAttribute('id', 'report-target-cid');
+    await expect(page.locator('label[for="report-reason"]')).toHaveText('REASON');
+    await expect(reasonInput).toHaveAttribute('id', 'report-reason');
+    await expect(reasonInput).toHaveAttribute('aria-label', 'REASON');
+    await expect(page.getByLabel('REASON', { exact: true })).toHaveAttribute('id', 'report-reason');
+
+    await cidInput.fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
+    await reasonInput.fill('Illegal content detected');
 
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
@@ -638,7 +650,12 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'BROWSE' }).click();
     await page.getByRole('button', { name: 'MODERATION' }).click();
     await assertGeneratedAt(page.getByTestId('public-mod-stats'), 'public-mod-stats-generated-at');
-    await expect(page.getByTestId('public-mod-stats-stale')).toBeVisible({ timeout: 10000 });
+    const staleWarning = page.getByTestId('public-mod-stats-stale');
+    await expect(staleWarning).toBeVisible({ timeout: 10000 });
+    // A11Y: 鮮度警告は色だけに依存せず role=status と ⚠ の dedicated 要素で告知する。
+    await expect(staleWarning).toHaveAttribute('role', 'status');
+    await expect(staleWarning.locator('[data-testid="public-mod-stats-stale-icon"]')).toHaveAttribute('aria-hidden', 'true');
+    await expect(staleWarning.locator('[data-testid="public-mod-stats-stale-icon"]')).toContainText('⚠');
     const statsCountBeforeRefresh = statsRequests.length;
     const publicCountBeforeRefresh = publicStatsRequests.length;
     await page.getByTestId('public-mod-stats-refresh').click();
@@ -647,7 +664,9 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 生成時刻を現在へ差し替えて更新すると鮮度警告が消える。
     freshPublicStats = true;
     await page.getByTestId('public-mod-stats-refresh').click();
-    await expect(page.getByTestId('public-mod-stats-stale')).toHaveCount(0, { timeout: 10000 });
+    await expect(staleWarning).toHaveCount(0, { timeout: 10000 });
+    // 属性セレクタでも role=status の警告が消えたことを確認する。
+    await expect(page.locator('p[role="status"][data-testid="public-mod-stats-stale"]')).toHaveCount(0);
     expect(statsRequests).toHaveLength(statsCountBeforeRefresh);
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので

@@ -389,7 +389,8 @@ async fn request_id_and_access_log(
         .extensions()
         .get::<MatchedPath>()
         .map(|matched| matched.as_str().to_owned())
-        .unwrap_or_else(|| request.uri().path().to_owned());
+        // 未マッチ経路（404 等）は攻撃者が制御する生パスをログへ流さない。
+        .unwrap_or_else(|| "unmatched".to_owned());
 
     request.extensions_mut().insert(RequestId(request_id));
     // extensions に格納した値をヘッダの正規ソースとして使う（task-local との不一致を検出）。
@@ -2829,7 +2830,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                 .extensions()
                 .get::<MatchedPath>()
                 .map(|matched| matched.as_str())
-                .unwrap_or_else(|| request.uri().path());
+                // 未マッチ経路は生パスを記録せず固定値へ（ログ注入・属性カーディナリティ抑制）。
+                .unwrap_or("unmatched");
             tracing::info_span!(
                 "http_request",
                 method = %request.method(),

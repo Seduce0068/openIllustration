@@ -37,7 +37,11 @@ test.describe('Content Upload Flow', () => {
       buffer: mockFile,
     });
 
+    // 送信中フェーズを観測するため、レスポンスを明示的に解放するまで保留する。
+    let releaseUpload: () => void = () => {};
+    const uploadHeld = new Promise<void>(resolve => { releaseUpload = resolve; });
     await page.route('**/content/upload', async route => {
+      await uploadHeld;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -46,8 +50,20 @@ test.describe('Content Upload Flow', () => {
     });
 
     const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
+    // 送信前は aria-busy なし（UPLOAD ビューで唯一の aria-busy 標的になる）。
+    await expect(page.locator('button[aria-busy]')).toHaveCount(0);
     await submitButton.click();
 
+    // 送信中: aria-busy が付与され、ボタンは disabled になる。
+    const busyButton = page.locator('button[aria-busy]');
+    await expect(busyButton).toHaveCount(1, { timeout: 10000 });
+    await expect(busyButton).toHaveAttribute('aria-busy', '');
+    await expect(busyButton).toBeDisabled();
+    releaseUpload();
+
+    // 完了: aria-busy が外れ、ボタンが再活性化する。
+    await expect(page.locator('button[aria-busy]')).toHaveCount(0, { timeout: 10000 });
+    await expect(submitButton).toBeEnabled({ timeout: 10000 });
     await expect(page.locator('text=SUCCESS: Content registered')).toBeVisible({ timeout: 15000 });
   });
 

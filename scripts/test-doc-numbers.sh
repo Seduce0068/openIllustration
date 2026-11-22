@@ -235,7 +235,7 @@ doc_bin_counts() {
 	local bin="$1"
 	local doc token match num total
 	{
-		for doc in "$spec" docs/BACKUP_RESTORE_RUNBOOK.md docs/AUDIT_EXPORT_RUNBOOK.md; do
+		for doc in "$spec" docs/BACKUP_RESTORE_RUNBOOK.md docs/AUDIT_EXPORT_RUNBOOK.md docs/TASK_INVENTORY.md; do
 			[[ -f "$doc" ]] || continue
 			while IFS= read -r token; do
 				[[ -z "$token" ]] && continue

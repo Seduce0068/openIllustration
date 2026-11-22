@@ -2051,6 +2051,18 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `public-mod-stats-stale` に日本語の鮮度警告を出し、`public-mod-stats-refresh` で
   公開集計のみ再取得する。認証付きオプイン集計 `/mod/stats` の状態は変更しない。
   `moderation.spec.ts` の R5-09 内で警告・更新・オプイン集計の本数不変を検証する。
+- **R2-A11Y 公開集計鮮度警告**: `public-mod-stats-stale` の `<p>` へ `role="status"` を付け、
+  既存固定文言は変更せず dedicated な `<span aria-hidden="true">"⚠ "</span>` を前置して
+  色に依存しない手がかりを加える。`moderation.spec.ts` の R5-09 既存ケース内で
+  `role` 属性と ⚠ 要素の出現、更新後の属性セレクタによる消滅を検証する。
+- **R2-A11Y 通報フォームのラベル関連付け**: `TARGET CID` input と `REASON` textarea へ
+  `id`（`report-target-cid` / `report-reason`）と `<label for>` を追加し、既存の
+  `aria-label` は残す。`placeholder` は例示のみでラベル代わりにしない。
+  `integrity.spec.ts` ではなく `moderation.spec.ts` の GOV-01 既存ケース内で
+  `label[for]` と `id` / `aria-label` の対応、`getByLabel` による解決を検証する。
+- **R2-A11Y アップロード送信中の busy 告知**: `Sign & Submit to Evidence Ledger` ボタンへ
+  `aria-busy=move || loading.get()` を付け、送信中フェーズの属性の付与・解除を
+  `upload.spec.ts` の既存成功ケース内で検証する。新規 `test()` は追加しない。
 - 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests147 は不変。
 
 ## R2-ENV の受け入れ契約（2026-11-23）

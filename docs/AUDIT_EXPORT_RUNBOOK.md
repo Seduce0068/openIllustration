@@ -97,12 +97,15 @@ cargo run -p server --bin sign_audit_export -- \
 鍵権限・トークン・上書き拒否は下記で確認できる。いずれも既存の署名鍵・DB を変更しないこと。
 
 ```bash
+# 秘密鍵の緩い権限コピーは専用ディレクトリへ置き、成功・失敗いずれでも確実に削除する。
+check_dir="$(mktemp -d)"
+trap 'rm -rf -- "$check_dir"' EXIT
 echo "== 1. 鍵が 0600 でない場合は拒否されること =="
-cp /secure/path/audit-signing-key.pem /tmp/loose-key.pem
-chmod 644 /tmp/loose-key.pem
+cp /secure/path/audit-signing-key.pem "${check_dir}/loose-key.pem"
+chmod 644 "${check_dir}/loose-key.pem"
 cargo run -q -p server --bin sign_audit_export -- \
-  --signing-key /tmp/loose-key.pem \
-  --output /tmp/should-not-exist.json; echo "exit_code=$?"   # 1 (require owner-only 0600)
+  --signing-key "${check_dir}/loose-key.pem" \
+  --output "${check_dir}/should-not-exist.json"; echo "exit_code=$?"   # 1 (require owner-only 0600)
 
 echo "== 2. --database-token が拒否されること =="
 cargo run -q -p server --bin sign_audit_export -- \
@@ -119,6 +122,7 @@ cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされてい
 ```
 
 期待結果: いずれも終了コード 1 となり、3 の出力ファイルは元の内容を保持する。
+`trap` により一時ディレクトリ（緩い権限の鍵コピーを含む）は手順終了時に削除される。
 正常系（鍵 0600・親 0700・新規出力・`DATABASE_TOKEN` 環境変数）は
 「スナップショット作成」の手順に従って実行する。上記はコード上の契約から導いた確認手順であり、
 本ドキュメント更新時点でこの手順の実行は行っていない。

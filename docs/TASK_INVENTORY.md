@@ -150,7 +150,8 @@ status: current
     `register` / `take` / `sweep` で共有。`run_moderation_finalizer` へ `OidcState` を配線し
     起動時と周期 tick で回収。3テスト追加、配線 mutation で検出を確認
     （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知10件＝脆弱性9/unmaintained1、libsql系10・paste1・chrono1を理由付き ignore
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知10件＝脆弱性9/unmaintained1
+  、libsql系8・chrono1・url1（paste は解消済み）を理由付き ignore
   `unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、

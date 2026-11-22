@@ -787,6 +787,25 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第30ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  監査Runbookの秘密鍵コピーをmktemp+trapで確実削除、未マッチ経路の生パスをアクセスログ/
+  トレースから除外（"unmatched"固定値）、README doctor --strictへ本番env注入明記、
+  doc-numbersのbin件数照合へTASK_INVENTORY追加、公開集計鮮度警告へrole=status+⚠、
+  通報フォームへlabel for、uploadボタンへaria-busy、TASK_INVENTORY advisory内訳修正。
+  R4 指摘（advisory内訳）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests147、npm audit3lockfile、
+  markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化、公開ledger意図、
+  起動設定一括Config化、BIND_ADDR/PORT設定化、E2E_SERVER_PORT設定化、
+  監査エクスポート自動スケジューラ、doctor --strict の CI ゲート化、GPG復号訓練、
+  Dependabot方針、MSRV下限CI検証、コミット後二次処理の5xx伝播、
+  finalizer異常終了のreadiness反映、back-channel logoutのsid/sub別tx、
+  動的alertのアナウンス、401復帰導線の全ビュー共通化、a11y自動スキャン、
+  クライアントエラーテレメトリ、.audit-rootオフサイト、Persistent補完と窓の矛盾、
+  alert unitテンプレート、CORSスタブのOriginエコー、base障害メトリクス過小報告）は記録のみで保留。
+
 - 2026-11-23 コンボ第29ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   instance lock の PID=0 を backup_db/restore_db でも fail-closed 拒否（共有 owner_unknown）、
