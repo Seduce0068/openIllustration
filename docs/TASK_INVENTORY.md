@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T14:12:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T14:12:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 status: current
 ---
 
@@ -150,7 +150,7 @@ status: current
     `register` / `take` / `sweep` で共有。`run_moderation_finalizer` へ `OidcState` を配線し
     起動時と周期 tick で回収。3テスト追加、配線 mutation で検出を確認
     （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知12件＝脆弱性8/unmaintained4、libsql系10・paste1・chrono1を理由付き ignore
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知10件＝脆弱性9/unmaintained1、libsql系10・paste1・chrono1を理由付き ignore
   `unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、
@@ -496,7 +496,7 @@ status: current
 - [対応済み] バックアップ環境ファイルのデプロイ反映: fail-closed 化により既存の systemd/cron サンプルが
   即失敗する問題を修正。`EnvironmentFile=-/etc/openillustration/backup.env` と cron 用
   `backup-cron-wrapper.sh`（600 権限・fail-closed）を追加し Runbook へ準備手順を記載。
-- [対応済み] バックアップ暗号化の fail-closed: `BACKUP_GPG_RECIPIENT` 未設定時に平文作成を拒否（ローカル開発は `ALLOW_UNENCRYPTED_BACKUP=1` で明示オプトアウト、オフサイト保存時は不可）。シェル回帰テスト12件で確認。
+- [対応済み] バックアップ暗号化の fail-closed: `BACKUP_GPG_RECIPIENT` 未設定時に平文作成を拒否（ローカル開発は `ALLOW_UNENCRYPTED_BACKUP=1` で明示オプトアウト、オフサイト保存時は不可）。シェル回帰テスト10件で確認。
 - [対応済み] バックアップ暗号化: `BACKUP_GPG_RECIPIENT` 設定時に GPG 暗号化（gpg 不在時は fail-closed）、平文は検証・暗号化成功後に削除。復号→verify_backup まで実確認（
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] オフサイト保存: `OFFSITE_COPY_CMD` + `OFFSITE_DEST` で汎用コピーコマンドを呼び出し（eval 不使用）。設定不整合・コピー失敗は fail-closed。暗号化成果物の送信にも対応（
@@ -575,7 +575,7 @@ status: current
 
 ### 3.8 依存・セキュリティ衛生
 
-- [中] **既知の脆弱性勧告（受容中・12件）**: `libsql 0.10` 由来 10 件、`paste` 1 件（RUSTSEC-2024-0436）、
+- [中] **既知の脆弱性勧告（受容中・10件）**: `libsql 0.10` 由来 10 件、`paste` 1 件（RUSTSEC-2024-0436）、
   `chrono` 1 件（RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）。CI で
   `cargo deny check advisories` を通過させつつ四半期/更新時に再評価。chrono は
   jiff/time への移行を計画（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
@@ -658,7 +658,7 @@ status: current
   [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
 - [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
 - [対応済み] `docs/index.md` の索引を全文書（Runbook 含む）へ反映。
-- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17 時点は11件、現在は12件）。
+- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17 時点は11件、現在は10件）。
 - [対応済み R2-oidc-doc] [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) の `OIDC_MAX_AUTH_AGE_SECS`
   説明を実装へ整合: 「未設定は `auth_time` / `max_age` 検証を行わず、不正値は起動拒否」へ修正し
   [HANDOFF.md](HANDOFF.md) の表現へ揃えた（`docs/OPERATIONAL_POLICY.md`）。

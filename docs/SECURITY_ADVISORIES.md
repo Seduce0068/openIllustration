@@ -9,27 +9,27 @@ tags:
   - triage
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
 
 ## 1. 結論
 
-- `cargo deny check advisories`（cargo-deny 0.20.2）は 12 件の勧告で
-  失敗する（初回は 14 件）。内訳は vulnerability 8 件、unmaintained 4 件。
-- 12 件は 3 系統に集約できる。
-  - libsql 0.10.0 の TLS / gRPC スタック: 10 件
+- `cargo deny check advisories`（cargo-deny 0.20.2）は 10件の勧告で
+  失敗する（初回は 14 件）。内訳は脆弱性 9 件、unmaintained 1 件。
+- 10件は 3 系統に集約できる。
+  - libsql 0.10.0 の TLS / gRPC スタック: 8 件
   - leptos 経由のビルド時依存 paste: 1 件
   - chrono の unmaintained 情報勧告: 1 件
 - RustCrypto 0.13 系（RUSTSEC-2023-0071、RUSTSEC-2026-0387）は
   2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
   解消済み（§3.3、§8）。
-- `cargo deny check advisories` は既知の 12 件を理由付きで ignore して
+- `cargo deny check advisories` は既知の 10件を理由付きで ignore して
   CI に導入済み。新しい勧告は CI を失敗させる（§5）。
 - 本番は `production_database_url_error` のゲートでリモート DSN
   （`libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を
@@ -193,14 +193,14 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - chrono: 2026-11-17 発行の RUSTSEC-2026-0543 は unmaintained（情報区分）で、
     修正版なし。一次情報 [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)
     で確認。`common`/`server`/`libsql` 経由で使用。jiff / time への移行を
-    別タスクとして計画し、現状は理由付きで受容（12 件目）。
+    別タスクとして計画し、現状は理由付きで受容（10件目）。
 - D3: `cargo deny check advisories` を ignore リスト付きで CI に導入した。
   新しい勧告は CI を失敗させ、不要になった ignore も検出する。
 - D4: 再評価のトリガーは、依存更新時、四半期ごと、本番化判断時。
 
 ### CI ゲートと ignore 運用
 
-- `deny.toml` の `[advisories].ignore` に既知の 12 件を理由付きで列挙する。
+- `deny.toml` の `[advisories].ignore` に既知の 10件を理由付きで列挙する。
   理由は「経路」と「受容の根拠（本番はリモート DSN をゲートで禁止する）」を
   1 行で示す。
 - `unused-ignored-advisory = "deny"` により、依存から消えた勧告の
@@ -236,7 +236,8 @@ cargo deny check advisories
   CI に導入。paste は上流修正がないため受容した。
 - 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
   受容 11 件（2026-11-17 時点は11件）に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
-- 2026-11-17: 11→12 件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
-  受容。脆弱性ではなく情報区分で修正版なし。内訳は脆弱性 8 件 /
-  unmaintained 4 件（libsql 系 10 件 + paste 1 件 + chrono 1 件）。
-  jiff/time 移行を計画。
+- 2026-11-17: 11→12件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
+  受容。脆弱性ではなく情報区分で修正版なし。jiff/time 移行を計画。
+- 2026-11-22: 12→10件。RUSTSEC-2025-0141 / 2025-0134 / 2024-0436 が DB 上検出されなく
+  なったため ignore を削除し、新規 RUSTSEC-2026-0592（url 2.5.8）を理由付きで追加。
+  現行内訳は脆弱性 9 件 / unmaintained 1 件（libsql 系 8 件 + chrono 1 件 + url 1 件）。

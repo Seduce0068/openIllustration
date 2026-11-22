@@ -312,15 +312,25 @@ detect_browser_executable() {
 
 # 実行対象プロジェクトを選択する。
 # E2E_PROJECTS の明示値がある場合は指定を厳守（未知値は拒否）。
-# 未指定時は firefox/webkit の実行可能性を検出し、両方実行可能なら
-# 3 プロジェクト、片方でも不可なら chromium へ警告付きでフォールバックする
-# （共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は chromium 維持）。
+# CI では未指定でも chromium,firefox,webkit を明示指定として扱い、
+# firefox/webkit の導入と実行を必須化する。キャッシュ走査による実行可能性判定が
+# npm ci / playwright install より前に行われると、コールド CI ではバイナリが
+# 未導入のまま chromium 単一へ黙ってフォールバックするためである。
+# ローカルの未指定時は従来どおり検出結果に基づき選択する。
 e2e_projects_explicit="${E2E_PROJECTS:-}"
+if [[ -n "${CI:-}" && -z "$e2e_projects_explicit" ]]; then
+	e2e_projects_explicit="chromium,firefox,webkit"
+fi
 firefox_executable=0
 webkit_executable=0
 if [[ -z "$e2e_projects_explicit" ]]; then
 	if detect_browser_executable firefox; then firefox_executable=1; fi
 	if detect_browser_executable webkit; then webkit_executable=1; fi
+else
+	# 明示指定時は実行可能性に依存せず指定を厳守する。未知値の拒否は
+	# select_e2e_projects のルールをそのまま使う（判定ロジックは変更しない）。
+	firefox_executable=1
+	webkit_executable=1
 fi
 declare -a selected_projects=()
 declare warn_fallback=0
@@ -329,19 +339,16 @@ if ! select_e2e_projects \
 	selected_projects warn_fallback; then
 	exit 1
 fi
+# CI で chromium 単一へのフォールバックが発生した場合は fail-closed で失敗させる
+# （SKIP 扱いにせず、選択が導入より先行する回帰を検知できるようにする）。
+if ((warn_fallback)) && [[ -n "${CI:-}" ]]; then
+	echo "::error::E2E browser fallback to chromium is not allowed in CI (E2E_PROJECTS=${e2e_projects_explicit})" >&2
+	exit 1
+fi
 if ((warn_fallback)); then
 	echo "warning: firefox=${firefox_executable} webkit=${webkit_executable};" \
 		"chromium へフォールバックします。" >&2
 fi
-
-# ブラウザ選択を annotation / step summary へ可視化する（writer はここでのみ呼ぶ）。
-# 判定ロジック（select_e2e_projects / detect_browser_executable）は変更しない。
-declare annotation_e2e_browser=""
-declare summary_e2e_browser=""
-format_e2e_browser_selection \
-	selected_projects "$firefox_executable" "$webkit_executable" "$warn_fallback" \
-	annotation_e2e_browser summary_e2e_browser
-write_e2e_browser_selection "$annotation_e2e_browser" "$summary_e2e_browser"
 
 # --project 引数と、導入が必要なブラウザバイナリを組み立てる。
 # chromium は channel: chrome（システム Chrome）を使うため取得不要。
@@ -353,6 +360,35 @@ for project in "${selected_projects[@]}"; do
 	firefox | webkit) install_browsers+=("$project") ;;
 	esac
 done
+
+# ブラウザ導入は選定の後・実行の前に行う（CI では firefox/webkit を必ず導入）。
+echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
+# npm ci の引数はクライアント側（上の `(cd client && npm ci ...)`）と完全一致させ、
+# 両者を同一の依存導入契約として扱う（lifecycle script を --ignore-scripts で抑制）。
+# ブラウザ導入は下の install_browsers / `npx playwright install` の明示実行であり
+# lifecycle script ではないため、--ignore-scripts でも従来どおり動作する。
+(cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund)
+if ((${#install_browsers[@]} > 0)); then
+	# --with-deps は root 権限が必要なため CI では使わない。
+	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
+	echo "==> Playwright ブラウザ導入: ${install_browsers[*]}"
+	(cd e2e && npx playwright install "${install_browsers[@]}")
+fi
+
+# 導入後に実行可能性を再検出し、annotation / step summary へ可視化する。
+# ここでの再検出は表示用であり、選択（selected_projects）は変更しない。
+if [[ -n "$e2e_projects_explicit" ]]; then
+	firefox_executable=0
+	webkit_executable=0
+	if detect_browser_executable firefox; then firefox_executable=1; fi
+	if detect_browser_executable webkit; then webkit_executable=1; fi
+fi
+declare annotation_e2e_browser=""
+declare summary_e2e_browser=""
+format_e2e_browser_selection \
+	selected_projects "$firefox_executable" "$webkit_executable" "$warn_fallback" \
+	annotation_e2e_browser summary_e2e_browser
+write_e2e_browser_selection "$annotation_e2e_browser" "$summary_e2e_browser"
 
 echo "==> サーバーとクライアントを事前ビルド"
 cargo build -p server --locked
@@ -413,19 +449,6 @@ done <"$generated_css_list"
 for css_file in "${external_css_files[@]}"; do
 	assert_no_external_asset_reference "$css_file"
 done
-
-echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
-# npm ci の引数はクライアント側（上の `(cd client && npm ci ...)`）と完全一致させ、
-# 両者を同一の依存導入契約として扱う（lifecycle script を --ignore-scripts で抑制）。
-# ブラウザ導入は下の install_browsers / `npx playwright install` の明示実行であり
-# lifecycle script ではないため、--ignore-scripts でも従来どおり動作する。
-(cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund)
-if ((${#install_browsers[@]} > 0)); then
-	# --with-deps は root 権限が必要なため CI では使わない。
-	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
-	echo "==> Playwright ブラウザ導入: ${install_browsers[*]}"
-	(cd e2e && npx playwright install "${install_browsers[@]}")
-fi
 
 echo "==> 型チェック"
 (cd e2e && npm run typecheck)

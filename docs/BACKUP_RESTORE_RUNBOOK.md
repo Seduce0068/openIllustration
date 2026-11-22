@@ -475,6 +475,18 @@ rm -- /path/to/local.db.pre-restore-<timestamp>
   で拒否されることを検証した。上位ゲートは
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) の CLI-03 を参照。
 
+## テスト前提条件の扱い（数値不変）
+
+- `scripts/test-backup-rotate.sh` のケース8は実 gpg による暗号化→復号→バイト一致を検証する。
+  gpg 不在・使い捨て鍵生成失敗・fingerprint 取得失敗時、ローカルは `SKIP case 8: <理由>`
+  （PASS とは別の専用出力）とし、CI（`CI` 設定時）は `FAIL case 8: required precondition
+  missing in CI (<理由>)` として失敗させる。CI runner には `.github/workflows/ci.yml` の
+  `apt_packages` で `gpg` を導入する（`shellcheck` / `shfmt` は維持）。
+  既存 `expect_failure` / `expect_success` 件数は不変。
+- リストア時に IPFS コンテンツを再取得する場合、`IPFS_GATEWAYS` は本番相当
+  （`ALLOW_MOCK_AUTH` 無効）では `https` のみが受理され、`http` は mock 有効時のみ受理される。
+  暗号化バックアップの復元は `<stamp>.db.gpg` を `gpg --decrypt` で戻す手順を維持する。
+
 ## 未解決事項
 
 - 複数インスタンス同時起動は `<DB path>.instance.lock` で拒否する（単一ライター前提は継続）。

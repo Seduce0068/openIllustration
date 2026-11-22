@@ -573,15 +573,26 @@ impl MockOidcServer {
 
     fn logout_token_for_sub(&self, sub: &str) -> String {
         let now = chrono::Utc::now().timestamp() as usize;
-        let claims = json!({
+        self.logout_token_for_sub_with_times(sub, now, None)
+    }
+
+    /// iat / nbf を明示して logout token を署名する（新鮮性・再送冪等テスト用）。
+    /// `nbf` が None のときは nbf クレームを付与しない。
+    fn logout_token_for_sub_with_times(&self, sub: &str, iat: usize, nbf: Option<usize>) -> String {
+        let now = chrono::Utc::now().timestamp() as usize;
+        let exp = iat.max(now) + 300;
+        let mut claims = json!({
             "iss": self.state.base_url,
             "aud": self.state.client_id,
-            "exp": now + 300,
-            "iat": now,
+            "exp": exp,
+            "iat": iat,
             "jti": uuid::Uuid::new_v4().to_string(),
             "sub": sub,
             "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
         });
+        if let (Some(base), Some(nbf)) = (claims.as_object_mut(), nbf) {
+            base.insert("nbf".to_string(), json!(nbf));
+        }
         let mut header = Header::new(Algorithm::ES256);
         header.kid = Some("test-kid".to_string());
         encode(&header, &claims, &self.state.encoding_key).unwrap()
@@ -9849,6 +9860,135 @@ async fn test_backchannel_logout_revokes_session_with_sid_and_sub() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// R2-LOGOUT-TOKEN: 同一 logout token の再送は revoked_at を変えず、再認証セッションを維持する。
+#[tokio::test]
+async fn test_backchannel_logout_replay_keeps_revoked_at_and_reauthenticated_session() {
+    let (app, oidc, mock, db) = setup_app_with_oidc().await;
+    let body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let token = body["token"].as_str().unwrap().to_string();
+    let claims = jsonwebtoken::decode::<common::Claims>(
+        &token,
+        &jsonwebtoken::DecodingKey::from_secret(TEST_JWT_SECRET.as_bytes()).unwrap(),
+        &jsonwebtoken::Validation::default(),
+    )
+    .unwrap()
+    .claims;
+    let issued_at = chrono::Utc::now().timestamp() as usize;
+    let logout_token = mock.logout_token_for_sub_with_times(&claims.sub, issued_at, None);
+
+    for _ in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/backchannel-logout")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={logout_token}")))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    let read_revoked_at = || async {
+        let mut rows = db
+            .query(
+                "SELECT revoked_at FROM revoked_subs WHERE sub = ?",
+                [claims.sub.clone()],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+    let first_threshold = read_revoked_at().await;
+    assert_eq!(first_threshold, issued_at as i64);
+
+    let new_body = oidc_login(&app, oidc.as_ref(), &mock).await;
+    let new_token = new_body["token"].as_str().unwrap().to_string();
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(read_revoked_at().await, first_threshold);
+
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/content")
+                .header("authorization", format!("Bearer {new_token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+/// R2-LOGOUT-TOKEN: 未来の iat / nbf を持つ logout token は401で拒否する。
+#[tokio::test]
+async fn test_backchannel_logout_rejects_future_iat_and_nbf() {
+    let (app, _oidc, mock, _db) = setup_app_with_oidc().await;
+    let now = chrono::Utc::now().timestamp() as usize;
+    for logout_token in [
+        mock.logout_token_for_sub_with_times("future-iat", now + 600, None),
+        mock.logout_token_for_sub_with_times("future-nbf", now, Some(now + 600)),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/backchannel-logout")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={logout_token}")))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+}
+
+/// R2-LOGOUT-TOKEN: 古い iat の再送は DB の失効閾値を前進させない。
+#[tokio::test]
+async fn test_backchannel_logout_stale_iat_does_not_advance_threshold() {
+    let (app, _oidc, mock, db) = setup_app_with_oidc().await;
+    let now = chrono::Utc::now().timestamp() as usize;
+    let fresh = mock.logout_token_for_sub_with_times("stale-sub", now, None);
+    let stale = mock.logout_token_for_sub_with_times("stale-sub", now - 120, None);
+    for logout_token in [fresh, stale] {
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                Request::post("/auth/backchannel-logout")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("logout_token={logout_token}")))
+                    .unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = 'stale-sub'",
+            (),
+        )
+        .await
+        .unwrap();
+    let threshold: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(threshold, now as i64);
 }
 
 /// JPYC: EVM アドレスの大小文字は区別せず、混在ケースも小文字化して照合する。

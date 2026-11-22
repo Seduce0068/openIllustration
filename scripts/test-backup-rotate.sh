@@ -686,11 +686,23 @@ fi
 rm -f "${work}/backups/linktest-"*.db
 
 echo "=== ケース8: 実 gpg による暗号化→復号→バイト一致 ==="
-# gpg 未インストール／使い捨て鍵の生成失敗時はスキップ（PASS 扱い）し、CI を壊さない。
+# gpg 未インストール／使い捨て鍵の生成失敗時はローカルでは SKIP（PASS とは区別する
+# 専用出力）として扱う。CI（CI 環境変数が設定されている時）は gpg の導入を前提とし、
+# 前提条件を満たせない場合は黙ってスキップせず FAIL として失敗させる（黙スキップ防止）。
 # 判定は command -v gpg と鍵生成コマンドの終了コードのみに基づく。
+# expect_failure / expect_success の件数は増やさない（専用出力は独立したオラクル）。
+case8_skip() {
+	local reason="$1"
+	if [[ -n "${CI:-}" ]]; then
+		echo "FAIL case 8: required precondition missing in CI (${reason})" >&2
+		failures=$((failures + 1))
+	else
+		echo "SKIP case 8: ${reason}"
+	fi
+}
 real_gpg="$(command -v gpg || true)"
 if [[ -z "$real_gpg" ]]; then
-	echo "PASS case 8: skipped (gpg not found via command -v)"
+	case8_skip "gpg not found via command -v"
 else
 	# 一時 GNUPGHOME は work 配下に作り、既存の EXIT trap で削除する（リポジトリへ鍵を置かない）。
 	gnupg_home="$(mktemp -d "${work}/gnupg.XXXXXX")"
@@ -716,7 +728,7 @@ Expire-Date: 0
 EOF
 	if ! GNUPGHOME="$gnupg_home" "$real_gpg" --batch --generate-key \
 		"${work}/case8-key.params" >"${work}/case8-keygen.log" 2>&1; then
-		echo "PASS case 8: skipped (disposable GPG key generation failed)"
+		case8_skip "disposable GPG key generation failed"
 	else
 		recipient="$(
 			GNUPGHOME="$gnupg_home" "$real_gpg" --batch --list-keys --with-colons \
@@ -724,7 +736,7 @@ EOF
 				awk -F: '$1 == "fpr" { print $10; exit }' || true
 		)"
 		if [[ -z "$recipient" ]]; then
-			echo "PASS case 8: skipped (generated key fingerprint unavailable)"
+			case8_skip "generated key fingerprint unavailable"
 		else
 			gpg_backup_dir="${work}/gpg-roundtrip-backups"
 			new_backup_dir "$gpg_backup_dir"
@@ -815,6 +827,7 @@ EOF
 		chmod +x "${stub_bin}/systemctl" "${stub_bin}/backup-step"
 
 		run_unit_cmd() {
+			# shellcheck disable=SC2016
 			local cmd="$1" token='${APP_UNIT}'
 			local -a argv=()
 			cmd="${cmd//"$token"/$app_unit_value}"

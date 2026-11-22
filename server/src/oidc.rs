@@ -859,13 +859,14 @@ struct IdTokenClaims {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 struct LogoutTokenClaims {
     iss: String,
     #[serde(deserialize_with = "deserialize_audience")]
     aud: Vec<String>,
     exp: usize,
     iat: usize,
+    /// nbf は任意クレームとして受理する（必須化しない）。
+    nbf: Option<usize>,
     sub: Option<String>,
     sid: Option<String>,
     events: serde_json::Value,
@@ -1117,10 +1118,23 @@ async fn verify_logout_token(
     validation.set_audience(std::slice::from_ref(&oidc.config.client_id));
     validation.set_required_spec_claims(&["exp", "iss", "aud"]);
     validation.leeway = oidc.config.clock_skew_secs;
+    // nbf が付いている場合は有効開始時刻として検証する（欠落は受理）。
+    validation.validate_nbf = true;
 
     let data = decode::<LogoutTokenClaims>(logout_token, &key, &validation)
         .map_err(|_| AppError::Unauthorized("logout token validation failed".to_string()))?;
     let claims = data.claims;
+
+    // nbf / iss / aud / exp は Validation が検証し、必須化せずに欠落を受理するため、
+    // 構造体側の dead_code 解析を明示的に回避する（値自体は使わない）。
+    let _ = (&claims.nbf, &claims.iss, &claims.aud, claims.exp);
+
+    let now = Utc::now().timestamp() as usize;
+    if claims.iat > now.saturating_add(oidc.config.clock_skew_secs as usize) {
+        return Err(AppError::Unauthorized(
+            "logout token iat is in the future".to_string(),
+        ));
+    }
 
     // 仕様では events の値は空 object でなければならない。
     // キーの存在だけを見ると {"...": {"foo": "bar"}} のような不正な値を通してしまう。
@@ -1490,23 +1504,32 @@ pub async fn backchannel_logout(
     }
 
     if let Some(sub) = claims.sub {
-        let revoked_at = Utc::now().timestamp() as usize;
+        // 更新時刻は受け取った logout token の iat とする。再送や古いトークンは
+        // 閾値を前進させず、冪等に成功応答を返す（DB 側 UPSERT の変更件数で判定）。
+        let revoked_at = claims.iat;
         // プロセス再起動後も失効を維持するため DB 側の閾値を先にコミットする。
         // logout token の検証（HTTP / JWKS）はすべて上流で完了済みなので、
         // ロック取得中に外部呼び出しが発生して他書き込みを止めることはない。
         let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-        tx.execute(
-            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
+        let changed = tx
+            .execute(
+                "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)
              ON CONFLICT(sub) DO UPDATE SET revoked_at = excluded.revoked_at,
                  updated_at = CURRENT_TIMESTAMP
              WHERE revoked_subs.revoked_at < excluded.revoked_at",
-            (sub.clone(), revoked_at as i64),
-        )
-        .await?;
+                (sub.clone(), revoked_at as i64),
+            )
+            .await?;
         tx.commit()
             .await
             .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
         drop(write_guard);
+
+        // 変更0件 = 同一 iat の再送、または閾値を前進させない古いトークン。
+        // この場合はメモリ更新とリフレッシュトークン消費をスキップする。
+        if changed == 0 {
+            return Ok(StatusCode::OK);
+        }
 
         state
             .revoked_subs_before

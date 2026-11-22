@@ -12,10 +12,10 @@ tags:
   - agent-team
 generated:
   by: dsh (agent team)
-  at: "2026-11-22T10:30:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:30:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 status: historical
 ---
 
@@ -300,5 +300,5 @@ P2 — 品質・保守・プロダクト拡張:
 
 ### 6.5 脆弱性勧告の受容件数（現行値）
 
-- 既知の12件の RUSTSEC 勧告（脆弱性8件 / unmaintained4件 = libsql 由来10件・paste 1件・chrono 1件）を理由付きで ignore している（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md)、[deny.toml](../deny.toml)）。
-- 2026-11-17 時点は11件だったが、RUSTSEC-2026-0543（chrono unmaintained）を受容して12件になった（履歴）。
+- 既知の10件の RUSTSEC 勧告（脆弱性8件 / unmaintained4件 = libsql 由来10件・paste 1件・chrono 1件）を理由付きで ignore している（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md)、[deny.toml](../deny.toml)）。
+- 2026-11-17 時点は11件だったが、RUSTSEC-2026-0543（chrono unmaintained）を受容して10件になった（履歴）。

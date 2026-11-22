@@ -6,6 +6,8 @@
 # cargo-deny の4ゲート（licenses / advisories / bans / sources）と
 # E2E（Playwright）は extra_gates で追加する。
 # E2E の JWT シークレットは e2e/ci-e2e.sh が実行ごとに生成する。
+# Dependabot は外部サービス設定（.github/dependabot.yml）のため本タスクでは追加しない。
+# 週次 schedule と cargo deny / npm audit により検出はゲート側で担保する。
 name: CI
 
 on:
@@ -14,6 +16,10 @@ on:
       - master
   pull_request:
   workflow_dispatch:
+  # 週次の依存監査（cargo deny check advisories は extra_gates で定期実行）。
+  # 既存の push / pull_request / workflow_dispatch トリガは維持する。
+  schedule:
+    - cron: '0 3 * * 1'
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -29,7 +35,7 @@ jobs:
       timeout_minutes: 30
       # シェル静的ゲート（extra_gates）で shellcheck / shfmt を使うため、
       # 共通ワークフローの apt 導入ステップでインストールする。
-      apt_packages: shellcheck shfmt
+      apt_packages: shellcheck shfmt gpg
       env_vars: |
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
@@ -39,7 +45,9 @@ jobs:
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
-        npm ci --ignore-scripts --no-audit --no-fund && npx markdownlint-cli2 "docs/**/*.md" "todo.md" "README.md" "index.md"
+        npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" "todo.md" "README.md" "index.md"
+        # npm 監査をゲートへ追加（既存 --no-audit は除去）。対象は e2e の devDependency のみであり、本番ランタイムへはインストールしない。
+        npm audit --audit-level=high
         bash scripts/test-doc-numbers.sh
         cargo install cargo-deny --version 0.20.2 --locked
         cargo deny check licenses
@@ -52,7 +60,7 @@ jobs:
         # シェル静的ゲート（既存行は維持し、以下3行を追加）。対象は glob で明示する。
         # shellcheck / shfmt は共通ワークフローの apt_packages（呼び出し側 ci.yml）で導入する。
         for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done
-        # SC2016 は systemd unit へのリテラル '${APP_UNIT}' を許容するためファイル単位で除外。
         # SC2034 は ci-e2e.sh の nameref 関数のみで関数単位の disable コメントとして除外する。
-        for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016 "$f"; done
+        # SC2016 は test-backup-rotate.sh の systemd 契約検証用リテラルのみで行単位除外する。
+        for f in scripts/*.sh e2e/*.sh; do shellcheck "$f"; done
         shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi

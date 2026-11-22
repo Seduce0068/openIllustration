@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T15:00:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T15:00:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -148,6 +148,26 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
   リリース wasm のコンソールへ出さない方針であり、詳細設計のメトリクス方針（機微データ非送出）と整合する。
   あわせてサーバー側の旧プロジェクト名（コメント・起動ログ）を `openIllustration` へ統一し、
   意味の無いマーカーを削除する。いずれもテスト件数（E2E69件ほか）は不変である。
+   `warn_history_update_once` は履歴警告オラクル（economy.spec.ts）維持のため
+   リリース wasm でも固定文言 `HISTORY_UPDATE_WARNING` を1回だけ出力する
+   （`EXPORT_RESULT` の dev-console ゲートとは方針が異なる）。
+- **エラー文言の言語宣言**: 既存固定文言（`CONTENT_INDEX_*` / `Report failed.` /
+  `認証に失敗しました (HTTP 500).` / `Network error updating favorite.` 等）は変更せず、
+  英語文言を出す `role=alert` / `role=status` 要素へ `lang="en"` を、
+  日本語文言へ `lang="ja"` を付与する。`client/src/lib.rs` の共通ヘルパ `error_lang`
+  が favorite / upload / vote / content のエラー表示で判定を共有し、
+  日本語文字（ひらがな・カタカナ・漢字）の有無で分類するため個別文言の追加でも drift しない。
+  ユニットテストで英語・日本語それぞれの分類を確認する。
+- **アクセシビリティの件数告知**: ダッシュボードの `role=status aria-live=polite` は
+  `error.get().is_empty()` をゲートにし、成功時は従来の件数文言、エラー時は
+  「コンテンツを取得できませんでした」を読み上げる。
+  `e2e/tests/error-paths.spec.ts` の DASH-ERR 既存ケース内へ、
+  エラー時に古い件数（`件のコンテンツを表示中`）が残らないアサーションを追加した
+  （新規 `test()` なし、error-paths 6件・全体69件を維持）。
+- **ファイル選択のタブ停止点**: `#file-upload` へ `tabindex="-1"` / `aria-hidden="true"`
+  を付け、`label[for="file-upload"]` を唯一のタブ停止点として `focus-visible` 枠を付与する。
+  `e2e/tests/upload.spec.ts` の既存キーボードケース内へ、ラベルから Tab 1回で価格入力へ
+  移ることを統合検証した（新規 `test()` なし、upload 6件を維持）。
 
 ## 3. 必須要件のリリースゲート
 
@@ -200,8 +220,8 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。`OIDC_MAX_AUTH_AGE_SECS` は上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値（`u64::MAX` 境界を含む）も固定文言のハードエラーで起動拒否し、設定値をエコーしない（fail-closed）。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス10件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048`、issuer DN 迂回検知 `rejects_leaf_signed_by_issuer_key_with_different_dn` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
-| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。リフレッシュトークンの再利用検知は、消費 UPDATE の変更0件を tx ロールバック後に別tx のファミリ失効へつなぐ単一 tx 構成で担保し、`test_refresh_reuse_revokes_family` がファミリ全体の失効を検証する。実JPKIの失効・期限切れは未検証 |
-| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。リフレッシュの原子的回転（`issue_refresh_token_in_tx`）により旧トークンは消費済み・新トークンは未使用で登録され、`test_refresh_rotates_token_and_issues_new_session` が新旧の `used_at` を検証する。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
+| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R2-LOGOUT-TOKEN では logout token の新鮮性（`validate_nbf = true` で未来 nbf を401拒否、`iat > now + clock_skew_secs` も401拒否、nbf 欠落は受理）を `test_backchannel_logout_rejects_future_iat_and_nbf` で検証する。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。リフレッシュトークンの再利用検知は、消費 UPDATE の変更0件を tx ロールバック後に別tx のファミリ失効へつなぐ単一 tx 構成で担保し、`test_refresh_reuse_revokes_family` がファミリ全体の失効を検証する。実JPKIの失効・期限切れは未検証 |
+| ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` は logout token の `iat` を閾値として DB とメモリへ記録し、再認証で新セッション発行可）を検証。R2-LOGOUT-TOKEN の再送冪等は `test_backchannel_logout_replay_keeps_revoked_at_and_reauthenticated_session`（同一 token の再送で `revoked_at` 不変・再認証セッション200維持）と `test_backchannel_logout_stale_iat_does_not_advance_threshold`（古い `iat` の再送で閾値を前進させない）で検証する。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。リフレッシュの原子的回転（`issue_refresh_token_in_tx`）により旧トークンは消費済み・新トークンは未使用で登録され、`test_refresh_rotates_token_and_issues_new_session` が新旧の `used_at` を検証する。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。必須設定値が未充足（`configuration_satisfied() == false`）のときの全経路拒否は AGE-03 で検証 |
@@ -230,7 +250,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | NET-06 | XFF複数値解釈と IPv4-compatible 形式の拒否 | 追記型は末尾ピアを除去して最左クライアントを採用、上書き型は末尾を採用、不正エントリは fail-closed。`::a.b.c.d` は IPv4 として拒否、`::` / `::1` は IPv6 を維持 | 実装済み。サーバー側テスト11件（`server/src/network.rs` 6件 + `server/src/tests.rs` 5件）。下記「XFF 複数値・IPv4互換形式の検証（NET-06）」を参照 |
 | PAY-04 | `verify_order` の CAS 2段目と `bind_wallet` の CAS | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない。`bind_wallet` も tx 内で `status` / `expires_at` を読み直し、`status = 'PENDING'` を条件に `wallet_bound = 1` を更新して 0 件更新なら 409 | 実装済み（`server/src/payments.rs`）。`bind_wallet` は競合時に固定文言 `order status changed during wallet binding` を返し、`verify_order` と同じ単一ライター契約を満たす。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
-| ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。R2-LOGOUT-TOKEN で失効時刻を logout token の `iat` に統一し、UPSERT の `changes() == 0`（再送・古いトークン）ではメモリ更新とリフレッシュ消費をスキップして閾値を前進させない。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
 | ID-08 | 開発用モック経路の所有証明（PoP・opt-in、段階1-2） | `VerifyRequest.proof_of_possession` 省略時は従来どおり200。添付時は nonce に対する RSASSA-PKCS1-v1_5 + SHA-256 署名（base64 STANDARD）を `public_key_der`（SPKI）で検証し、正常署名は200、署名対象 nonce の改ざん・`pop.nonce` 不一致・別鍵署名は401。署名 decoded 512バイト超・公開鍵DER 16 KiB 超も401 | 実装済み。ハンドラ経由4件（`test_auth_verify_pop_valid_signature_is_accepted` / `test_auth_verify_pop_tampered_nonce_is_rejected` / `test_auth_verify_pop_other_key_signature_is_rejected` / `test_auth_verify_pop_is_opt_in`）を `server/src/tests.rs` に追加。純粋関数4件と mock nonce 単回消費テストは維持。E2E 定義数は69件のまま変更なし |
 | ID-06 | 全レスポンスのセキュリティヘッダ（SEC-01） | `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を全レスポンスへ付与する。HTML 配信の CSP は配信側担当。CorsLayer が短絡する CORS プリフライト（OPTIONS の 200/204 成功レスポンスを含む）にも最外側の `security_headers` で付与し、本文なしの 204 でも欠落させない | 実装済み。`assert_security_headers` で検証: 403（`test_security_headers_on_error_response`）、OPTIONS プリフライト（`test_security_headers_on_cors_preflight`）、429（`test_security_headers_on_rate_limited_response`）、500（`test_security_headers_on_internal_error_response`）、204（`test_security_headers_on_no_content_response`）、通常 200（既存アサーション）。下記「全レスポンスのセキュリティヘッダの検証（ID-06）」を参照。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
@@ -705,6 +725,13 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   sed_at` NULL）と `test_refresh_reuse_revokes_family` で検証する。
 - 専用テスト名は確定済みで、PAY-04 は `test_payment_verify_stage2_cas_rejects_race_after_detected`、
   ID-05 は `test_reauthentication_delete_keeps_newer_revocation_threshold` が検証する。
+- R2-LOGOUT-TOKEN: logout token の `iat` を失効閾値 `revoked_subs.revoked_at` として扱い、UPSERT の
+  `changes()` が0件（同一 `iat` の再送、または古いトークン）ならメモリ更新と
+  `revoke_refresh_tokens_for_sub` をスキップして200を返す。新鮮性は `validate_nbf = true` と
+  `iat > now + clock_skew_secs` の401拒否で担保し、nbf 欠落は受理する。検証は
+  `test_backchannel_logout_replay_keeps_revoked_at_and_reauthenticated_session` /
+  `test_backchannel_logout_rejects_future_iat_and_nbf` /
+  `test_backchannel_logout_stale_iat_does_not_advance_threshold` の3件（新規のみ、固定数値は不変）。
 
 ### 暗号検証エラーパスの検証（AUDIT-01）
 
@@ -975,6 +1002,7 @@ cargo test --workspace
 cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（10件）
 cargo test -p server auth_verify_pop   # ID-08 PoP opt-in ハンドラ回帰（4件）
 cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
+cargo test -p server backchannel_logout   # ID-02/03/05 back-channel logout（新鮮性・再送冪等を含む既存＋新規3件）
 cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
 cargo test -p server metrics_count   # MET-02 最外側メトリクス4件（429 / IPv4 403 / 413 / OPTIONS）
 cargo test -p server redirect   # NET-05 SSRF リダイレクト2件
@@ -1022,9 +1050,13 @@ cd e2e && npm test -- upload.spec.ts   # R1-14 / INT-02 / CONTENT-01 / R2 a11y U
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
 実行対象は条件付きで選択する。`E2E_PROJECTS=chromium,firefox,webkit` の明示指定は
-厳守し、未知値は拒否する。未指定時は firefox / webkit のバイナリ導入と共有ライブラリの
+厳守し、未知値は拒否する。ブラウザ導入は選定（キャッシュ走査）より前に実行する。
+CI（`CI` 設定時）では未指定でも3プロジェクトを明示指定として扱い、firefox / webkit を
+必ず導入・実行する。chromium 単一へフォールバックした場合は CI 限定で
+`::error::E2E browser fallback to chromium is not allowed in CI ...` を出して失敗とし、
+黙って SKIP しない。ローカル未指定時は firefox / webkit のバイナリ導入と共有ライブラリの
 解決可否を検出し、両方実行可能なら3プロジェクトを実行する。片方でも不可なら
-`chromium` へフォールバックし、CI では固定形の
+`chromium` へフォールバックし、固定形の
 `::warning::E2E browser fallback: firefox=<0|1> webkit=<0|1>; running <projects>`
 annotation を出す。GitHub Actions の step summary には firefox / webkit の可否と
 選択プロジェクトを記録し、フォールバック時も選択プロジェクトを残す。
@@ -1740,3 +1772,19 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `client_metrics_enabled_only_disabled_by_zero` | 0 のみクライアントメトリクスを無効化 |
 | `client_metrics_gate_controls_payload` | ゲートがペイロード送信を制御 |
 | `mock_auth_enabled_only_disabled_by_zero` | 0 のみモック認証を無効化（未設定は有効） |
+
+## CI 前提条件の検証契約（数値不変）
+
+- バックアップローテーションのケース8（実 gpg の暗号化→復号→バイト一致）は、
+  gpg 不在・鍵生成失敗・fingerprint 取得失敗をローカルでは `SKIP case 8: <理由>`
+  （PASS と区別する専用出力）として扱う。CI（`CI` 設定時）では同じ条件を
+  `FAIL case 8: required precondition missing in CI (<理由>)` として失敗させ、
+  黙スキップを禁止する。runner には `apt_packages` で `gpg` を導入し、
+  `shellcheck` / `shfmt` は維持する。既存 `expect_failure` / `expect_success` 件数は不変。
+- E2E はブラウザ導入を選定より前に実行し、CI では未指定時も
+  `chromium,firefox,webkit` を明示指定として扱う。chromium 単一へのフォールバックは
+  CI ではエラー終了とし、選択の明示厳守・未知値拒否のルールは不変。
+  E2E69件、フルスイートの内訳は不変。
+- IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
+  `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
+  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests131 の数値は不変。

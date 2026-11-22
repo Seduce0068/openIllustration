@@ -140,6 +140,16 @@ test.describe('Content Upload Flow', () => {
     const label = page.locator('label[for="file-upload"]');
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute('tabindex', '0');
+    // R2-CLIENT-UX: ファイル選択はラベル側だけをタブ停止点にする（新規ケースなし）。
+    await expect(page.locator('#file-upload')).toHaveAttribute('tabindex', '-1');
+    await expect(page.locator('#file-upload')).toHaveAttribute('aria-hidden', 'true');
+    await expect(label).toHaveClass(/focus-visible:outline/);
+    // ラベルへフォーカスして Tab を1回押すと次の停止点（価格入力）へ移ること。
+    // すなわち input がタブ停止点として介在しないことをオラクルにする。
+    await label.focus();
+    await expect(label).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('#upload-price')).toBeFocused();
 
     // ラベルの keydown ハンドラが input.click() を呼び、filechooser が発火する（Enter ケースは維持）。
     // 待機自体は waitForEvent のタイムアウトで失敗するため、ここでは発火した chooser が

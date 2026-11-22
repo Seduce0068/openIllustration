@@ -217,6 +217,8 @@ const CONTENT_INDEX_LOAD_ERROR: &str = "Failed to load content index.";
 const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
 /// `/content` が 401 のときだけ出す再ログイン案内。他のエラー文言は変更しない。
 const CONTENT_INDEX_UNAUTHORIZED: &str = "再ログインが必要です。";
+/// 一覧取得失敗時に `role=status` が読み上げる文言（既存固定文言は変更しない）。
+const DASHBOARD_LOAD_FAILED_ANNOUNCEMENT: &str = "コンテンツを取得できませんでした";
 
 /// 本番認証が未実装であることを示す固定文言。
 /// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
@@ -1569,6 +1571,8 @@ fn warn_history_update_once() {
         if warned.replace(true) {
             return;
         }
+        // 履歴更新失敗は E2E のオラクル（economy.spec.ts）で警告を検証しているため、
+        // リリースビルドでも固定文言の警告のみを出す（値・URL・JsValue はエコーしない）。
         #[cfg(target_arch = "wasm32")]
         web_sys::console::warn_1(&JsValue::from_str(HISTORY_UPDATE_WARNING));
         #[cfg(not(target_arch = "wasm32"))]
@@ -1920,7 +1924,7 @@ where
                 {move || if loading.get() { "VERIFYING..." } else { "CONNECT WITH JPKI" }}
             </button>
             <Show when=move || !error.get().is_empty() fallback=|| ()>
-                <p role="alert" data-testid="login-error" class="text-xs text-red-500">
+                <p role="alert" data-testid="login-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500">
                     {move || error.get()}
                 </p>
             </Show>
@@ -2233,13 +2237,19 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                     </button>
                 </form>
             </search>
+            // エラー時は前回成功時の件数を読み上げない（古い件数が残るため）。
+            // 成功時は従来どおり件数を告知し、失敗時は取得失敗を dedicated に告知する。
             <p role="status" aria-live="polite" class="sr-only">
-                {move || format!("{}件のコンテンツを表示中", items.get().len())}
+                {move || if error.get().is_empty() {
+                    format!("{}件のコンテンツを表示中", items.get().len())
+                } else {
+                    DASHBOARD_LOAD_FAILED_ANNOUNCEMENT.to_string()
+                }}
             </p>
             // 一覧取得の失敗は items が前回成功値を保持していても常に表示する。
             // （空状態の中に出すと items が残っているときにエラーが消えていた。）
             <Show when=move || !error.get().is_empty() fallback=|| ()>
-                <p role="alert" data-testid="dashboard-error" class="text-xs text-red-500 mb-4">
+                <p role="alert" data-testid="dashboard-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500 mb-4">
                     {move || error.get()}
                 </p>
             </Show>
@@ -2375,7 +2385,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 {move || if busy.get() { "エクスポート中..." } else { "データをエクスポート" }}
             </button>
             <Show when=move || !error.get().is_empty() fallback=|| ()>
-                <p role="alert" data-testid="export-error" class="text-xs text-red-500">
+                <p role="alert" data-testid="export-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500">
                     {move || error.get()}
                 </p>
             </Show>
@@ -2389,6 +2399,23 @@ fn ExportMyData(token: String) -> impl IntoView {
 }
 
 mod jxl;
+
+/// エラー文言の言語を判定し、要素の `lang` 属性に渡す共通ヘルパ。
+///
+/// 既存固定文言は一切変更せず、英語の文言を描画する `role=alert` / `role=status`
+/// 要素だけへ `lang="en"` を付与する。日本語（既定）は `lang="ja"` を明示する。
+/// 判定は文言に日本語文字（ひらがな・カタカナ・漢字）が含まれるかだけを見るため、
+/// 個々の文言追加・変更で drift しない。HTTP ステータス番号は判定に影響しない。
+fn error_lang(message: &str) -> &'static str {
+    if message
+        .chars()
+        .any(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9faf}'))
+    {
+        "ja"
+    } else {
+        "en"
+    }
+}
 
 /// コンテンツ本文の取得失敗時に表示する固定文言を HTTP ステータスから選ぶ。
 /// `None` はバイナリ読取失敗や通信エラー（ステータスが無い）を表す。
@@ -2755,7 +2782,7 @@ where
                 </div>
             </div>
             <Show when=move || !favorite_error.get().is_empty() fallback=|| ()>
-                <p role="alert" data-testid="favorite-error" class="text-[8px] text-red-500">{move || favorite_error.get()}</p>
+                <p role="alert" data-testid="favorite-error" lang=move || error_lang(&favorite_error.get()) class="text-[8px] text-red-500">{move || favorite_error.get()}</p>
             </Show>
             <div class="border-b border-white/10 pb-3" inner_html=meta_html />
 
@@ -2797,7 +2824,7 @@ where
                                 <p role="alert" data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Content Load Failed"
                                 </p>
-                                <p data-testid="content-load-error-detail" class="text-gray-500 text-[8px]">
+                                <p data-testid="content-load-error-detail" lang=move || error_lang(&content_load_error.get()) class="text-gray-500 text-[8px]">
                                     {move || content_load_error.get()}
                                 </p>
                             </Show>
@@ -3151,9 +3178,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             <h2 class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine"</h2>
             <div class="space-y-6">
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
-                    // display:none の代わりに 1px + clip で隠し、フォーカス可能なままにする。
+                    // 視覚的に隠すがタブ停止点にはしない（ラベル側を唯一のタブ停止点にする）。
                     <input type="file" on:change=on_file_change
                         node_ref=file_input_ref
+                        tabindex="-1"
+                        aria-hidden="true"
                         class="absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0 clip-[rect(0,0,0,0)]"
                         id="file-upload" />
                     <label for="file-upload"
@@ -3167,7 +3196,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                                 }
                             }
                         }
-                        class="cursor-pointer">
+                        class="cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white">
                         {move || file.get().map(|f| f.name()).unwrap_or_else(|| "SELECT JXL OR MARKDOWN".to_string())}
                     </label>
                 </div>
@@ -3255,7 +3284,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     </div>
                 </Show>
                 <Show when=move || !failed.get().is_empty() fallback=|| ()>
-                    <div data-testid="upload-failed" role="alert" class="p-4 bg-white/5 border border-red-500/40 text-xs">
+                    <div data-testid="upload-failed" role="alert" lang=move || error_lang(&failed.get()) class="p-4 bg-white/5 border border-red-500/40 text-xs">
                         <span class="text-gray-500 mr-2">"[FAILED]"</span> {move || failed.get()}
                     </div>
                 </Show>
@@ -3821,7 +3850,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     </p>
                 </Show>
                 <Show when=move || !report_failed.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="report-failed" class="text-xs text-red-500">
+                    <p role="alert" data-testid="report-failed" lang=move || error_lang(&report_failed.get()) class="text-xs text-red-500">
                         {move || report_failed.get()}
                     </p>
                 </Show>
@@ -3833,12 +3862,12 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
             <div class="border border-white/10 p-8 space-y-6">
                 <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
                 <Show when=move || !reports_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="reports-error" class="text-xs text-red-500">
+                    <p role="alert" data-testid="reports-error" lang=move || error_lang(&reports_error.get()) class="text-xs text-red-500">
                         {move || reports_error.get()}
                     </p>
                 </Show>
                 <Show when=move || !vote_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="vote-error" class="text-xs text-red-500">
+                    <p role="alert" data-testid="vote-error" lang=move || error_lang(&vote_error.get()) class="text-xs text-red-500">
                         {move || vote_error.get()}
                     </p>
                 </Show>
@@ -4010,6 +4039,27 @@ mod tests {
 
     #[test]
     fn favorite_error_message_uses_dedicated_401_text() {
+        // R2-CLIENT-UX: lang 判定ヘルパの分類も既存テスト内で確認（tests131 不変）。
+        for message in [
+            "Network error updating favorite.",
+            "Failed to update favorite (HTTP 500).",
+            "Network error uploading content.",
+            "Failed to upload content (HTTP 400).",
+            "Network error submitting vote.",
+            "Network error loading reports.",
+            "Report failed.",
+        ] {
+            assert_eq!(super::error_lang(message), "en", "{message}");
+        }
+        for message in [
+            "認証に失敗しました (HTTP 500).",
+            "再ログインが必要です。",
+            "コンテンツの取得に失敗しました (HTTP 500).",
+            "投票に失敗しました (HTTP 500).",
+            "投票一覧の取得に失敗しました。",
+        ] {
+            assert_eq!(super::error_lang(message), "ja", "{message}");
+        }
         assert_eq!(
             super::favorite_error_message(Some(401)),
             "再ログインが必要です。"

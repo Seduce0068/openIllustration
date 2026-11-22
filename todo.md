@@ -19,7 +19,7 @@ status: current
 - [x] **OIDC エンドポイントの https 要件を doctor 診断へ反映** — 根拠
   `server/src/bin/doctor.rs:91-100` / `server/src/oidc.rs:249-314` / 発掘 R9 / 中。
   `oidc.rs` と同様に `doctor` も `oidc_endpoint_urls` で5エンドポイントURLの https を検証
-  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は43テスト。
+  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は53テスト。
 - [x] **エクスポート応答の value（機微値）漏洩を精査・是正** — 根拠
   `server/src/lib.rs:4486-4511` / `client/src/lib.rs:811-818` / 発掘 R9 / 中。
   エクスポートのレスポンス値・表示値に機微情報が混ざらないことを確認し是正済み。
@@ -47,23 +47,23 @@ status: current
 - [x] **6 CLIのargvパーサを共通化** — 根拠 `server/src/bin/*` / review R1-AR / 中。
 - [x] **cargo deny bansを実効ゲート化** — 根拠 `deny.toml:74` / review R1-AR+R3-TQ / 中。warn+ワイルドカードskipで実質無効。
 - [x] **APIオリジンの平文HTTPを本番fail-closed化** — 根拠 `client/src/lib.rs:39` / review R3-AU / 中。
-- [ ] **Back-Channel Logoutトークンにiat/nbf新鮮性検証** — 根拠 `server/src/oidc.rs:861` / review R3-AU / 中。再送で後続セッションを失効させない。
-- [ ] **IPFSゲートウェイのhttpを本番拒否** — 根拠 `server/src/lib.rs:1818` / review R3-AU / 低。
-- [ ] **gpg実暗号化テストの黙スキップを防止** — 根拠 `scripts/test-backup-rotate.sh:690` / discovery R3-TQ / 中。
-- [ ] **CIクロスブラウザ選定を導入前に修正** — 根拠 `e2e/ci-e2e.sh:315` / discovery R3-TQ / 中。検出がinstall前に走りchromiumへ自己完結フォールバック。
-- [ ] **依存監査の定期実行とnpm audit** — 根拠 `.github/workflows/ci.yml:10` / discovery R3-TQ / 中。
-- [ ] **deny.toml先頭コメントを4ゲート実態へ** — 根拠 `deny.toml:1` / review R1-AR / 低。
-- [ ] **todo.md doctor件数43→53** — 根拠 `todo.md:22` / review R1-AR / 低。
-- [ ] **OPERATIONAL_POLICYのALLOW_MOCK_AUTH改行損壊を修正** — 根拠 `docs/OPERATIONAL_POLICY.md:20` / review R1-AR / 低。
-- [ ] **ADR-0001へStatus/Accepted表示を付与** — 根拠 `docs/adr/index.md:3` / review R4 / 低。
-- [ ] **SC2016除外を行単位へ縮小** — 根拠 `.github/workflows/ci.yml:54` / review R4 / 低。
-- [ ] **wasm-bindgen-test未使用依存を整理** — 根拠 `client/Cargo.toml:41` / review R1-AR / 低。
-- [ ] **Runbook/TASK_INVENTORYのmigration件数を履歴明示** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:459` / discovery R5-VU / 低。
-- [ ] **E2Eエラーパスの行番号コメントをシンボル参照へ** — 根拠 `e2e/tests/error-paths.spec.ts:8` / discovery R5-VU / 低。
-- [ ] **aria-live件数をエラー時にゲート** — 根拠 `client/src/lib.rs:2168` / discovery R5-VU / 中。
-- [ ] **ファイル選択のタブ停止を1つへ** — 根拠 `client/src/lib.rs:3086` / discovery R5-VU / 中。
-- [ ] **warn_history_update_onceをdev-consoleゲートへ** — 根拠 `client/src/lib.rs:1502` / discovery R5-VU / 中。
-- [ ] **エラー文言の日英混在を統一方針化** — 根拠 `client/src/lib.rs:2328` / discovery R5-VU / 中。
+- [x] **Back-Channel Logoutトークンにiat/nbf新鮮性検証** — 根拠 `server/src/oidc.rs:861` / review R3-AU / 中。再送で後続セッションを失効させない。
+- [x] **IPFSゲートウェイのhttpを本番拒否** — 根拠 `server/src/lib.rs:1818` / review R3-AU / 低。
+- [x] **gpg実暗号化テストの黙スキップを防止** — 根拠 `scripts/test-backup-rotate.sh:690` / discovery R3-TQ / 中。
+- [x] **CIクロスブラウザ選定を導入前に修正** — 根拠 `e2e/ci-e2e.sh:315` / discovery R3-TQ / 中。検出がinstall前に走りchromiumへ自己完結フォールバック。
+- [x] **依存監査の定期実行とnpm audit** — 根拠 `.github/workflows/ci.yml:10` / discovery R3-TQ / 中。
+- [x] **deny.toml先頭コメントを4ゲート実態へ** — 根拠 `deny.toml:1` / review R1-AR / 低。
+- [x] **todo.md doctor件数43→53** — 根拠 `todo.md:22` / review R1-AR / 低。
+- [x] **OPERATIONAL_POLICYのALLOW_MOCK_AUTH改行損壊を修正** — 根拠 `docs/OPERATIONAL_POLICY.md:20` / review R1-AR / 低。
+- [x] **ADR-0001へStatus/Accepted表示を付与** — 根拠 `docs/adr/index.md:3` / review R4 / 低。
+- [x] **SC2016除外を行単位へ縮小** — 根拠 `.github/workflows/ci.yml:54` / review R4 / 低。
+- [x] **wasm-bindgen-test未使用依存を整理** — 根拠 `client/Cargo.toml:41` / review R1-AR / 低。
+- [x] **Runbook/TASK_INVENTORYのmigration件数を履歴明示** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:459` / discovery R5-VU / 低。
+- [x] **E2Eエラーパスの行番号コメントをシンボル参照へ** — 根拠 `e2e/tests/error-paths.spec.ts:8` / discovery R5-VU / 低。
+- [x] **aria-live件数をエラー時にゲート** — 根拠 `client/src/lib.rs:2168` / discovery R5-VU / 中。
+- [x] **ファイル選択のタブ停止を1つへ** — 根拠 `client/src/lib.rs:3086` / discovery R5-VU / 中。
+- [x] **warn_history_update_onceをdev-consoleゲートへ** — 根拠 `client/src/lib.rs:1502` / discovery R5-VU / 中。
+- [x] **エラー文言の日英混在を統一方針化** — 根拠 `client/src/lib.rs:2328` / discovery R5-VU / 中。
 
 - [x] **AGE_* 非UTF-8をfail-closed化（env分類器へ統一）**
   — 根拠 `common/src/age.rs:110` / `server/src/bin/doctor.rs:440` / review R1-AR+R2-ER / high。
@@ -749,6 +749,14 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中1+低16）: back-channel logout の iat/nbf 新鮮性と再送冪等、
+  gpg CI FAIL化、CIクロスブラウザ選定、IPFS http本番拒否、週次監査+npm audit、
+  aria-live件数ゲート、ファイル選択タブ統合、error_lang一方針化、warn_historyは
+  E2Eオラクル維持のためリリースでも警告（他担当のdev-consoleゲート化は親が差し戻し）。
+  RustSec DB更新でadvisory受容が12→10件（ignore3削除+url1追加）へ追随。
+  親が未使用変数/dead_code・SC2016構文・doc-numbersコメント・markdownlint・advisory内訳を修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests131）。残り高2（外部要因のみ）。
 
 - 2026-11-22 coding（高2+中6）: migrationのdrop(rows)→BEGIN、空migrations拒否、
   auth_verify DB正本先行、DATABASE_TOKEN NonUtf8拒否、bind_wallet PENDING CAS、

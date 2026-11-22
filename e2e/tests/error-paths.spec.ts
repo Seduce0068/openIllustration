@@ -67,6 +67,11 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await expect(dashboardError).toBeVisible({ timeout: 10000 });
     await expect(dashboardError).toHaveText('Network error loading content.', { timeout: 10000 });
     await expect(dashboardError).toHaveAttribute('role', 'alert');
+    // R2-CLIENT-UX: エラー時は role=status が古い件数を読み上げず、
+    // 取得失敗の告知へ切り替わる（既存ケース内へ統合、新規ケースなし）。
+    const liveStatus = page.locator('[role="status"][aria-live="polite"]');
+    await expect(liveStatus).toContainText('コンテンツを取得できませんでした');
+    await expect(liveStatus).not.toContainText('件のコンテンツを表示中');
     expect(contentAborted).toBe(true);
 
     // 追加フェーズ: 401 のときだけ専用文言と LOG OUT 経由の再ログイン案内を出す。

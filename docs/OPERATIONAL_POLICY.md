@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T15:00:00+09:00"
+  at: "2026-11-22T21:45:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -52,7 +52,9 @@ generated:
   DB 側のファミリ失効だけではブラウザに 30 日間有効な refresh_token Cookie が残るため、
   削除 Cookie の配信がログアウト完了の条件。`Secure` は `OIDC_COOKIE_SECURE` に追随し、
   未設定なら付与する（本番では HTTPS 配信で Secure を維持する）。
-  session Cookie は発行しないため削除対象に含まない。JWT は応答本文のみで搬送する。
+  session Cookie は発行しないため削除対象に含まない。JWT は応答本文のみで搬送する。back-channel logout では logout token の `iat` を更新時刻とみなし、
+  `revoked_subs.revoked_at` は受け取った `iat` からのみ導出する（サーバー時刻 `Utc::now()` では上書きしない）。
+  `iat > now + OIDC_CLOCK_SKEW_SECS` と未来 `nbf` は401で拒否し、nbf クレーム欠落は受理する。
 - 失効判定（`sid` と sub 失効閾値）は DB を正本とし、認証リクエストごとに DB へ照会するため、
   他インスタンスで記録された logout / BAN / backchannel logout が即時に反映される。
   起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
@@ -97,7 +99,8 @@ generated:
   TRUE のまま残す（自動でフラグを落とさない）。UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。
   これは運用ログであり第三者検証可能な監査ではない。
   投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
-- BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。
+- BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。BAN と back-channel logo
+  ut のどちらも `iat` を更新時刻とみなし、同一トークンの再送や古い `iat` では `revoked_at` を前進させない（UPSERT の `changes() == 0` でメモリ更新とリフレッシュ消費をスキップする）。
   メモリの失効閾値は positive-only キャッシュに留め、書き込みは DB コミットを先に行うため、他インスタンスへ即時に反映される。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
@@ -223,6 +226,8 @@ generated:
   認証リクエストごとに照会し、他プロセスの失効を即時に反映する。
   起動時ロードのメモリは positive-only キャッシュ（失効済みのみ保持、miss 時に DB 照会、否定結果は非キャッシュ）としてのみ残す。
   書き込み経路（logout / BAN / backchannel）は DB コミットを先に確定し、メモリ更新はその後に置く。
+   backchannel の更新時刻は logout token の `iat` とし、再送・古い `iat` では `revoked_at` を前進させず、
+   DB 変更0件のときはメモリ更新と `revoke_refresh_tokens_for_sub` を実行しない。
 - 起動時の外部キー検査（`PRAGMA foreign_key_check`）で孤立行を検出した場合、本番相当
   （`ALLOW_MOCK_AUTH` 無効）は検査失敗時と同様に起動を拒否する（fail-closed）。
   開発（`ALLOW_MOCK_AUTH=1`）では起動を止めず warn のみとする。`PRAGMA foreign_keys` は
@@ -398,7 +403,7 @@ generated:
 | `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For`（XFF）を解釈し、追記型（末尾がピア）は末尾のピアを除去して最左のクライアントを、上書き型（末尾がピアでない）は末尾をクライアントIPとして採用する。不正エントリ・解決不能は 403（fail-closed）。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。`doctor --strict` の警告対象。 |
 | `RATE_LIMIT_PER_MIN` | 任意 | `60` | IP 単位のリクエスト上限（1〜600）。本番相当（`ALLOW_MOCK_AUTH` 無効）のみ適用。超出は 429。 |
 | `MAX_CONCURRENT_REQUESTS` | 任意 | `16` | 同時実行リクエスト上限（1〜256）。超過は 429。`/health`・`/ready`・`/metrics` は対象外。 |
-| `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む http(s) URL であること。空要素、`{cid}` を含まない要素、http(s) 以外の要素は警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
+| `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む URL であること。スキームは `https` のみを受理し、`http` は `ALLOW_MOCK_AUTH` が有効な開発・隔離テスト環境でのみ受理する（本番相当では警告のうえ無視）。空要素、`{cid}` を含まない要素、その他スキームも警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
 | `IPFS_TIMEOUT_SECS` | 任意 | `15` | 各ゲートウェイへのリクエストタイムアウト秒（1〜300）。範囲外・不正値は既定値。 |
 | `GRACEFUL_DRAIN_TIMEOUT_SECS` | 任意 | `30` | グレースフル停止の drain タイムアウト秒（1〜300）。範囲外・不正値は既定30へフォールバックし `doctor` が警告（値は出力しない）。 |
 | `MODERATION_FINALIZE_INTERVAL_SECS` | 任意 | `300` | 自動確定ワーカーの周期（秒、30〜3600）。範囲外・不正値は既定300へフォールバックし `doctor` が警告（値は出力しない）。 |
@@ -437,7 +442,7 @@ generated:
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_COPY_CMD` | 任意（`OFFSITE_DEST` と対で設定） | 空（無効） | オフサイトコピーコマンドの実行ファイルパス。`<成果物> <宛先>` の2引数で呼び出す（eval 不使用）。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
-| `E2E_PROJECTS` | 任意（E2E時） | `chromium` | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクトを実行する。片方でも不可なら `chromium` へフォールバックし、CI では `::warning::E2E browser fallback: firefox=0/1 webkit=0/1; running SELECTED_PROJECTS` の annotation と GitHub Actions の step summary（firefox / webkit の可否と選択プロジェクト。フォールバック時も選択プロジェクトを記録）を出す（共有ライブラリ不足環境で CI が壊れるのを防ぐため、既定は `chromium` のまま）。 |
+| `E2E_PROJECTS` | 任意（E2E時） | `chromium`（ローカル）／`chromium,firefox,webkit`（CI 未指定時） | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。CI（`CI` 環境変数設定時）は未指定でも3プロジェクトを明示指定として扱い、ブラウザ導入を選定より前に実行して firefox / webkit を必ず導入・実行する。chromium 単一へのフォールバックが CI で発生した場合は `::error::` を出して失敗する（黙って SKIP しない）。ローカル未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクト、片方でも不可なら警告付きで `chromium` へフォールバックする。GitHub Actions の step summary には firefox / webkit の可否と選択プロジェクトを記録する。 |
 
 - 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセス（サーバーおよび DB 接続3 CLI）
   で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db`・
@@ -518,3 +523,48 @@ runner への `shellcheck -e SC2016` / `shfmt` の導入は、
 呼び出し側 `.github/workflows/ci.yml` の `apt_packages` で指定する（共通ワークフローの
 apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない
 （未導入時に CI が赤化する構成を避けるため、導入要否はワークフロー側のコメントで明示する）。
+
+## 9. CI 前提条件の黙スキップ禁止
+
+- `scripts/test-backup-rotate.sh` のケース8（実 gpg による暗号化→復号→バイト一致）は、
+  gpg 不在・使い捨て鍵生成失敗・fingerprint 取得失敗時にローカルでは
+  `SKIP case 8: <理由>`（PASS とは別の専用出力）を出す。CI（`CI` 設定時）では
+  同じ条件を `FAIL case 8: required precondition missing in CI (<理由>)` として失敗させ、
+  前提条件の欠落を黙って PASS にしない。CI runner には
+  `.github/workflows/ci.yml` の `apt_packages` で `gpg` を導入する
+  （`shellcheck` / `shfmt` は維持）。既存の `expect_failure` / `expect_success` 件数は不変。
+- E2E のブラウザ導入は選定（キャッシュ走査）より前に実行する。CI では
+  `E2E_PROJECTS` 未指定時に `chromium,firefox,webkit` を明示指定として扱い、
+  firefox / webkit を必ず導入・実行する。chromium 単一へのフォールバックは
+  CI では `::error::` アノテーションを出して失敗とし、黙って SKIP しない。
+- IPFS ゲートウェイは本番相当（`ALLOW_MOCK_AUTH` 無効）では `https` のみを受理し、
+  `http` は mock 有効時のみ受理する。拒否された値はログへ出力しない。
+  既存テストの期待値は mock 有効ケースで不変である。
+
+## 10. クライアント UX と依存監査の方針
+
+- **件数告知のゲート**: ダッシュボードの `role=status aria-live=polite` は
+  取得成功時のみ「`{}件のコンテンツを表示中`」を読み上げる。エラー時は前回成功値の
+  件数を日本語の取得失敗告知へ切り替え、古い件数を読み上げない。
+  既存の固定エラー文言（`CONTENT_INDEX_*` 等）は変更しない。
+- **ファイル選択のタブ停止点**: 隠し `input[type=file]` は `tabindex="-1"`
+  と `aria-hidden="true"` を付け、対応する `label` を唯一のタブ停止点にする。
+  ラベルには `focus-visible` のフォーカス枠を付け、キーボード操作で
+  ファイルピッカーを開けることを E2E で確認する。
+- **リリースビルドのログ方針**: `EXPORT_RESULT` は `#[cfg(feature = "dev-console")]`
+  でゲートしてリリースでは出力しない。一方 `warn_history_update_once` は
+  economy.spec.ts の履歴警告オラクルを維持するため、リリース wasm でも固定文言
+  `HISTORY_UPDATE_WARNING` を1回だけ `warn_1` で出力する（値・URL・JsValue は非エコー）。
+- **エラー文言と言語宣言**: 既存固定文言は一切変更せず、英語の文言を出す
+  `role=alert` / `role=status` 要素へ共通ヘルパ `error_lang` で `lang="en"` を付与し、
+  日本語文言には `lang="ja"` を付与する（ルートは `lang="ja"` のまま）。
+  ヘルパは favorite / upload / vote / content のエラー表示で共有し、
+  文言ごとの属性付け忘れによる drift を防ぐ。
+- **依存監査**: `.github/workflows/ci.yml` に週次 `schedule` トリガを追加し、
+  `cargo deny check advisories` を定期実行する。既存の push / pull_request /
+  workflow_dispatch トリガは維持する。`npm ci` の `--no-audit` を外し、
+  `npm audit --audit-level=high` を `extra_gates` へ追加する。
+  監査対象の npm 依存はルートと `e2e/` の `devDependencies` のみで、
+  本番ランタイムへはインストールしない。
+  Dependabot は外部サービス設定（`.github/dependabot.yml`）のため本方針では追加せず、
+  CI ゲート側で検出を担保する。

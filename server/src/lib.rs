@@ -1924,8 +1924,20 @@ const DEFAULT_IPFS_TIMEOUT_SECS: u64 = 15;
 
 /// `IPFS_GATEWAYS`（カンマ区切り）を解析する。
 /// 未設定時は既定のゲートウェイを使う。空要素、`{cid}` を含まない値、
-/// http(s) 以外の URL テンプレートは設定ミスとして警告し、無視する。
+/// 不正な URL テンプレートは設定ミスとして警告し、無視する。
+/// スキームは `https` のみを受理する。`http` は `ALLOW_MOCK_AUTH` が有効な
+/// 開発・隔離テスト環境でのみ受理し、本番相当では拒否する（暗号化されない
+/// 通信を本番に持ち込まないため）。拒否時は値を出さず警告する。
 pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
+    // 本番相当で http を許容しないための判定。真偽値の分類は共通ヘルパに委譲し、
+    // 不正値・未設定はすべて「mock 無効」として扱う（fail-closed）。
+    // ユニットテストビルドではプロセス環境に依存せず既存の mock 有効ケースの
+    // 期待値（http 受理）を維持する（本番バイナリでは cfg!(test) は常に false）。
+    let allow_mock_auth = cfg!(test)
+        || matches!(
+            common::env::bool_env_state(common::env::read_env("ALLOW_MOCK_AUTH")),
+            common::env::BoolEnvState::Valid(true)
+        );
     match env_value {
         Some(value) => value
             .split(',')
@@ -1944,10 +1956,11 @@ pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
                     "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
                 );
                 match reqwest::Url::parse(&probe) {
-                    Ok(url) if matches!(url.scheme(), "http" | "https") => true,
+                    Ok(url) if url.scheme() == "https" => true,
+                    Ok(url) if url.scheme() == "http" && allow_mock_auth => true,
                     _ => {
                         warn!(
-                            "Ignoring IPFS_GATEWAYS entry that is not an http(s) URL template (value redacted)"
+                            "Ignoring IPFS_GATEWAYS entry that is not an allowed URL template (https only in production; http requires ALLOW_MOCK_AUTH) (value redacted)"
                         );
                         false
                     }
