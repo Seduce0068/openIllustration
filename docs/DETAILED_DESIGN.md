@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T09:20:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -233,6 +233,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 ロック取得失敗時は best-effort として 0 を返す。
 認証リクエストが来ないアイドル中でも古い `pending` が残らないことを
 起動時 sweep・周期 sweep・フロー維持の3テストで確認済み（配線の mutation で検出）。
+
+SHA-256 ハッシュの算出は旧 `sha256` 便宜 crate を廃止し、`server/src/lib.rs` の
+`sha256_hex`（`sha2` + `hex`）へ統一した。user_hash・リフレッシュトークンハッシュ・
+コンテンツチェックサムの出力は小文字 64-hex で不変である。
 
 ## 3. コンテンツ処理
 

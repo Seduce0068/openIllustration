@@ -416,6 +416,29 @@ pub fn refresh_cookie_from_headers(headers: &HeaderMap) -> Option<&str> {
     found
 }
 
+/// `/auth/refresh` の Origin 検証。Cookie を読む前に呼ぶ。
+///
+/// `Origin` は `ALLOWED_ORIGINS` のいずれかと完全一致でなければならない。
+/// `Sec-Fetch-Site: cross-site` は明示拒否するが、`same-origin` / `same-site` /
+/// ヘッダ欠損は許可する（`app.example.com` → `api.example.com` の
+/// same-site cross-origin 契約を維持するため）。
+fn refresh_origin_allowed(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        return false;
+    };
+    if !state
+        .allowed_origins
+        .iter()
+        .any(|allowed| allowed == origin)
+    {
+        return false;
+    }
+    !headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("cross-site"))
+}
+
 /// 再認証で不要になった古い失効閾値だけを DB から削除する。
 /// 新しい閾値が back-channel logout で登録された場合は残す。
 pub(crate) async fn delete_superseded_revocation(
@@ -1298,6 +1321,12 @@ pub async fn refresh(
 ) -> Result<Response, AppError> {
     // R1-17: refresh も callback と同じ共通ゲートを通し、年齢判定を迂回できないようにする。
     crate::ensure_age_policy_configured(&state.age_policy)?;
+    // R2-REFRESH-ORIGIN: Cookie を読む前に Origin を完全一致で検証する。
+    if !refresh_origin_allowed(&state, &headers) {
+        return Err(AppError::Unauthorized(
+            "refresh origin is not allowed".to_string(),
+        ));
+    }
     let token = refresh_cookie_from_headers(&headers)
         .ok_or_else(|| AppError::Unauthorized("refresh token is missing".to_string()))?;
 

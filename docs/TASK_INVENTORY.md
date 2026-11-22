@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 status: current
 ---
 
@@ -579,6 +579,8 @@ status: current
 - [対応済み] ライセンス監査ドキュメントの数字を定義別に整理（2026-11-18 再計算）: 実行時和集合 457 / `cargo deny list` 全行 822 / 取得ライセンス本文 467。旧スナップショットは明示して現在値と混同しないようにした（
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 
+- [対応済み] 旧 `sha256` 便宜 crate を削除し `sha2` + `hex` の `sha256_hex` へ統一。
+
 ### 3.9 将来検討（必要性・方式未決定）
 
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu 等の必要性・方式（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
@@ -643,7 +645,7 @@ status: current
   [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
 - [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
 - [対応済み] `docs/index.md` の索引を全文書（Runbook 含む）へ反映。
-- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17）。
+- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17 時点は11件、現在は12件）。
 - [対応済み R2-oidc-doc] [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) の `OIDC_MAX_AUTH_AGE_SECS`
   説明を実装へ整合: 「未設定は `auth_time` / `max_age` 検証を行わず、不正値は起動拒否」へ修正し
   [HANDOFF.md](HANDOFF.md) の表現へ揃えた（`docs/OPERATIONAL_POLICY.md`）。

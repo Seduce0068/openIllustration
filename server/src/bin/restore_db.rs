@@ -1,5 +1,7 @@
 use anyhow::{Context, anyhow};
 use libsql::Builder;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
@@ -17,6 +19,8 @@ fn print_help() {
          Restores a backup produced by backup_db. The server must be stopped\n\
          (WAL/SHM/journal sidecars and a live <db>.instance.lock cause an immediate refusal). By default an existing\n\
          target is never overwritten; --force keeps a timestamped safety copy.\n\
+         The safety copy, staging tmp and restored target are created with mode 0600\n\
+         (owner-only, plaintext) regardless of umask.\n\
          Exit code: 0 on success, 1 on error."
     );
 }
@@ -228,6 +232,26 @@ async fn validate_backup(path: &Path) -> anyhow::Result<(i64, i64)> {
     Ok((tables, migrations))
 }
 
+/// 平文 DB のコピーを生成時から 0600 で作る（safety copy / staging tmp 共用）。
+///
+/// `write(true).create_new(true)` で既存ファイルの上書きを拒否し、`mode(0o600)`
+/// で umask に依存せず所有者のみ読み書きできる権限に固定する。生成後に
+/// chmod する隙間を作らないため、OpenOptions の時点で権限を指定する。
+fn create_safety_copy(src: &Path, dst: &Path, label: &str) -> anyhow::Result<()> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    let mut source = std::fs::File::open(src)
+        .with_context(|| format!("failed to open source for {label}: {}", src.display()))?;
+    let mut dest = opts
+        .open(dst)
+        .with_context(|| format!("failed to create {label}: {}", dst.display()))?;
+    std::io::copy(&mut source, &mut dest)
+        .with_context(|| format!("failed to write {label}: {}", dst.display()))?;
+    Ok(())
+}
+
 /// rename 失敗時に safety copy を target へ書き戻す。
 /// 復元に成功した場合は元の rename エラーへ「safety copy から復元できた」旨と
 /// safety_copy のパスを併記し、失敗した場合は握り潰さずパスと rename エラーを
@@ -241,11 +265,27 @@ fn rollback_safety_copy(
         return anyhow::Error::new(rename_error).context("failed to replace target database");
     };
     match std::fs::copy(copy, target) {
-        Ok(_) => anyhow::Error::new(rename_error).context(format!(
-            "failed to replace target database; \
-             safety copy was restored successfully from {}",
-            copy.display()
-        )),
+        Ok(_) => {
+            // 書き戻し後も 0600 を維持（平文 DB の権限緩和を防ぐ）。
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(chmod_error) =
+                    std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o600))
+                {
+                    return anyhow!(
+                        "failed to replace target database ({rename_error}); \
+                         safety copy was restored from {} but failed to set 0600: {chmod_error}",
+                        copy.display()
+                    );
+                }
+            }
+            anyhow::Error::new(rename_error).context(format!(
+                "failed to replace target database; \
+                 safety copy was restored successfully from {}",
+                copy.display()
+            ))
+        }
         Err(copy_error) => anyhow!(
             "failed to replace target database ({rename_error}); \
              additionally failed to restore safety copy from {}: {copy_error}",
@@ -325,7 +365,8 @@ async fn main() -> anyhow::Result<()> {
         let mut name = target.as_os_str().to_os_string();
         name.push(format!(".pre-restore-{stamp}"));
         let copy = PathBuf::from(name);
-        std::fs::copy(&target, &copy).context("failed to create safety copy")?;
+        create_safety_copy(&target, &copy, "safety copy")
+            .context("failed to create safety copy")?;
         println!("safety_copy: {}", copy.display());
         Some(copy)
     } else {
@@ -340,7 +381,7 @@ async fn main() -> anyhow::Result<()> {
     if tmp.exists() {
         return Err(anyhow!("staging file already exists: {}", tmp.display()));
     }
-    std::fs::copy(&backup, &tmp).context("failed to stage backup")?;
+    create_safety_copy(&backup, &tmp, "staging file").context("failed to stage backup")?;
     replace_target(&tmp, &target, safety_copy.as_deref())?;
 
     let (t, m) = validate_backup(&target).await?;

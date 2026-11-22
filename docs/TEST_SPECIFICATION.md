@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T09:20:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T09:20:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -89,7 +89,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
-| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス9件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
+| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
@@ -111,6 +111,8 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 監査一覧API | `GET /content/{cid}/audit` が最新 MAX_AUDIT_LIST(500) 件を `log_id DESC` で返すこと、FORENSIC_TIMELINE がその順序で描画されることを仕様化（AUDIT-04） | 実装済み。サーバー側 `get_content_audit_caps_at_max_audit_list`（501件投入で先頭501・末尾2・降順）。`previous_log_hash` 非含有・`reason` マスクのためレスポンス単体の連鎖検証は不可。完全検証は署名付きエクスポート/DB（AUDIT-01） |
 | 性質テスト（proptest） | `server` の `property_tests` 4件（金額換算・CID 形式・理由要約の境界と冪等・Unicode 文字境界）、各128ケース。`proptest` は `server/Cargo.toml` の dev-dependencies（1.12）。年齢判定の proptest は認証行を参照 | 実JPKI実機・実チェーンとの突き合わせは未実施 |
 | 直近の未コミット変更の反映（2026-11-18） | 監査タイムラインの `reason` 要約と `entry_hash` 生値維持1件、投票署名 v2 の4件（全フィールド束縛・正常系受理・旧 v1 署名拒否・別投票者向け署名の転用拒否）、一覧の `price` NULL を0として返す1件、エクスポート解析失敗時の固定文言表示1件 | サーバー側6件は `server/src/tests.rs`、クライアント側1件は `client/src/lib.rs`。E2E 定義数は当時59件のまま（現在69件）。対応ゲートは AUDIT-03 / MOD-12 / CONTENT-10 / EXPORT-11 |
+
+SHA-256 の算出は旧 `sha256` 便宜 crate を廃止し、`server/src/lib.rs` の `sha256_hex`（`sha2` + `hex`）へ統一した。出力は小文字 64-hex で不変であり、ハッシュ値を照合する上記テストの期待値・契約は変更していない。
 
 ### 認証トークン失効時の回復経路（基盤実装・自動有効化は保留）
 
@@ -176,7 +178,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | EXPORT-10 | 並行 BAN 書き込み下の単一時点スナップショット | 別接続が `BEGIN IMMEDIATE` で BAN 更新と監査ログ挿入を未コミットのまま保持しても、エクスポートは書き込み前の `users` / `governance_audit_log` を一貫して返す | 実装済み。`me_export_snapshot_consistent_under_concurrent_ban_write`（一時 SQLite ファイル・2接続）。E2E 定義数は当時59件のまま（現在69件） |
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
-| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス9件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
+| ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス10件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048`、issuer DN 迂回検知 `rejects_leaf_signed_by_issuer_key_with_different_dn` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
 | ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。実JPKIの失効・期限切れは未検証 |
 | ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` はインメモリ `iat` 閾値方式、再認証で新セッション発行可）を検証。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
@@ -876,7 +878,7 @@ LIMIT 追加の影響を受けず、署名付きエクスポートの改ざん�
 
 ```bash
 cargo test --workspace
-cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（9件）
+cargo test -p server jpki   # ID-01 JPKI 証明書エラーパス（10件）
 cargo test -p server auth_verify_pop   # ID-08 PoP opt-in ハンドラ回帰（4件）
 cargo test -p server logout_clears_refresh_cookie   # ID-03 ログアウト削除 Cookie
 cargo test -p server security_headers   # ID-06 nosniff/DENY（OPTIONS 204 含む）
@@ -906,6 +908,9 @@ cargo test -p server test_vote_rejects_signature_bound_to_other_juror   # MOD-12
 cargo test -p server test_list_contents_null_price_is_returned_as_zero   # CONTENT-10 価格 NULL の0扱い
 cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_status   # EXPORT-11 クライアント側
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
+for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done    # シェル構文検査（対象を glob で明示）
+for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016,SC2034 "$f"; done # シェル静的解析（apt_packages で導入）
+for f in scripts/*.sh e2e/*.sh; do shfmt -d "$f"; done   # シェル書式差分（apt_packages で導入）
 cd e2e && npm test
 cd e2e && npm test -- auth.spec.ts   # 認証 E2E（3件: モックJPKIログイン / 年齢ゲート拒否 / LOG OUT 回帰）のみ
 cd e2e && npm test -- build-gate.spec.ts   # ビルドゲート E2E（trunk archive 検証 3件 + version gate 9件 + E2E_PROJECTS選択 3件の計15件）のみ
@@ -949,6 +954,10 @@ CI では共通ワークフロー `rust-gates.yml` の追加ゲートとして
 （sha256 検証。更新時は version・sha256・資産名の 3 点を同時に変更）、
 E2E 用 JWT シークレットは実行ごとに生成する。型検査
 （`npm run typecheck`）も同じゲートで実行する。
+シェル静的ゲート（`bash -n` / `shellcheck` / `shfmt -d`）も同じ `extra_gates` に追加し、
+対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示する（上記「4. 実行コマンド」参照）。
+`shellcheck -e SC2016,SC2034` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
+本リポジトリ側の追加導入は不要とする（本リポジトリに install 手順は置かない）。
 
 CI では HTML レポート・trace をアップロードしない（追加ゲートの制約）。
 失敗時は追加ゲートのログ（`::error::` アノテーションと error-context）で
@@ -1485,3 +1494,93 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 ## 5. リリース証跡
 
 リリースごとにテスト結果・ビルド成果物・依存ロックファイルを保存する。Nix再現可能ビルド、オンチェーン記録、バイナリ同一性の証明は別途設計・実装するまでリリース保証として主張しない。
+
+## 6. クライアント単体テスト（一覧表）
+
+対象は client/src/lib.rs の `#[cfg(test)] mod tests` 配下 `#[test] fn`。
+本表の名前は `test_` 接頭辞を持たない。scripts/test-doc-numbers.sh は下表の
+バッククォート名を抽出し、実コードの `#[test] fn` 名と doc→code の一方向で照合する
+（実コード側の全テストを表へ載せることは要求しない）。
+
+| テスト名 | 検証内容 |
+| --- | --- |
+| `should_refresh_requires_401_and_auth` | 401 かつ認証コンテキスト時のみ更新対象 |
+| `allows_retry_stops_after_one_refresh` | 更新後の再試行は1回で打ち止め |
+| `refresh_slot_single_flights_and_broadcasts_one_outcome` | 同時更新は単一フライトで1結果を配信 |
+| `refresh_slot_waker_is_registered_once_and_cleared_on_completion` | waker は1度だけ登録し完了時に解除 |
+| `claim_submission_rejects_clicks_while_busy_and_recovers_after_release` | ビジー中の二重送信を拒否し解除で復帰 |
+| `file_picker_activates_only_on_enter_or_space` | ファイル選択は Enter/Space のみ活性化 |
+| `favorite_error_message_uses_dedicated_401_text` | お気に入り401は専用固定文言 |
+| `favorite_error_message_keeps_existing_http_and_network_text` | HTTP/ネットワーク文言は既存を維持 |
+| `upload_error_message_uses_dedicated_401_and_413_text` | アップロード401/413は専用固定文言 |
+| `upload_error_message_uses_http_status_and_network_text` | HTTP ステータスとネットワーク文言を使用 |
+| `upload_error_message_never_leaks_raw_error_or_server_body` | 生エラー・サーバー本文を一切出さない |
+| `price_parse_failure_keeps_previous_valid_value` | 解析失敗時は直前の有効値を保持 |
+| `price_range_error_is_fixed_text_without_raw_input` | 範囲外は生入力を含まない固定文言 |
+| `markdown_headings_get_ids_for_h1_h2_h3` | h1/h2/h3 へ見出し id を付与 |
+| `toc_anchors_match_body_heading_ids` | 目次アンカーが本文 id と一致 |
+| `cid_prefix_namespaces_heading_ids_and_toc_anchors` | CID 接頭辞が id とアンカーを名前空間化 |
+| `cid_scope_token_is_attribute_safe_and_stable` | CID スコープトークンは属性安全で安定 |
+| `forensic_panel_id_is_unique_per_cid` | CID ごとに forensic パネル id が一意 |
+| `duplicate_headings_get_sequential_slugs` | 重複見出しへ連番スラッグを付与 |
+| `heading_slugs_are_sanitized_against_injection` | 見出しスラッグを注入に対して無害化 |
+| `prefixed_render_with_xss_cid_cannot_break_html_attributes` | XSS CID でも属性を破壊できない |
+| `unicode_heading_slugs_are_identifiable_and_attribute_safe` | Unicode 見出しスラッグは識別可能で属性安全 |
+| `japanese_slug_does_not_collide_with_cid_prefixed_slug` | 日本語スラッグと CID 接頭辞が衝突しない |
+| `symbol_only_headings_fall_back_to_unique_section_slugs` | 記号のみ見出しは一意セクションスラッグへ退避 |
+| `assign_unique_slug_records_next_suffix_per_base` | 基底ごとの次サフィックスを記録 |
+| `ten_thousand_identical_headings_get_unique_sequential_slugs` | 1万件の同一見出しへ一意連番を付与 |
+| `upload_media_type_prefers_browser_type_then_extension` | MIME はブラウザ種別→拡張子の優先順 |
+| `markdown_raw_html_is_escaped` | 生 HTML をエスケープ |
+| `markdown_unsafe_link_and_image_schemes_are_neutralized` | 危険なリンク/画像スキームを中立化 |
+| `markdown_protocol_relative_and_unc_urls_are_neutralized` | プロトコル相対/UNC URL を中立化 |
+| `api_origin_has_no_trailing_slash` | API オリジンは末尾スラッシュなし |
+| `client_event_payload_is_minimal_and_clamped` | ペイロードは最小項目・0送料・上限クランプ |
+| `neutralized_report_is_sent_once_per_render_source` | 中和報告は描画ソースごとに1回 |
+| `render_markdown_counts_neutralized_urls` | 中和 URL 件数を1描画1回で集計 |
+| `markdown_safe_link_schemes_and_relative_urls_are_preserved` | 安全スキームと相対 URL は維持 |
+| `markdown_reference_autolink_and_entity_schemes_are_neutralized` | 参照/オートリンク/実体参照の危険スキームを中立化 |
+| `content_query_is_built_from_optional_filters` | 任意フィルタから検索クエリを構築 |
+| `content_query_roundtrip_preserves_japanese_ampersand_and_favorite_only` | 日本語・&・お気に入りの往復保存 |
+| `content_query_parse_ignores_unknown_keys_and_accepts_valueless_flag` | 未知キーを無視し値なしフラグを受理 |
+| `canonical_content_query_is_idempotent` | 正規化クエリは冪等 |
+| `canonical_content_query_keeps_last_value_for_duplicate_keys` | 重複キーは最後の値を保持 |
+| `canonical_content_query_drops_unknown_keys_and_normalizes_order` | 未知キーを破棄し順序を正規化 |
+| `canonical_content_query_decodes_plus_and_percent_before_reencoding` | 再符号化前に plus/percent を復号 |
+| `cid_is_percent_encoded_for_url_paths` | CID は URL パス用にパーセント符号化 |
+| `only_latest_generation_response_is_applied` | 最新世代のレスポンスのみ適用 |
+| `search_debounce_delay_is_within_expected_range` | 検索デバウンス遅延は想定範囲内 |
+| `dashboard_error_uses_only_fixed_phrases` | ダッシュボードエラーは固定文言のみ |
+| `content_meta_html_escapes_user_supplied_fields` | メタ HTML は利用者入力をエスケープ |
+| `content_meta_accepts_legacy_json_without_new_fields` | 新フィールド無しの旧 JSON を受理 |
+| `content_meta_reads_is_favorite_from_current_json` | 現行 JSON から is_favorite を読む |
+| `moderation_stats_json_matches_server_interface` | 集計 JSON がサーバー契約と一致 |
+| `moderation_stats_html_escapes_server_supplied_strings` | 集計 HTML がサーバー文字列をエスケープ |
+| `public_mod_stats_json_matches_server_interface` | 公開集計 JSON がサーバー契約と一致 |
+| `public_mod_stats_html_omits_moderation_actions_and_private_fields` | 公開 HTML に操作・非公開項目を含まない |
+| `public_mod_stats_html_escapes_server_supplied_strings` | 公開 HTML がサーバー文字列をエスケープ |
+| `vote_feedback_uses_only_fixed_phrases` | 投票フィードバックは固定文言のみ |
+| `reports_error_uses_only_fixed_phrases` | 一覧エラーは固定文言のみ |
+| `stats_error_uses_only_fixed_phrases` | 集計エラーは固定文言のみ |
+| `stats_forbidden_phrase_is_preserved_but_never_rendered_on_general_screen` | 禁止文言は保持するが一般画面へ描画しない |
+| `verification_badge_distinguishes_decode_failure_from_checksum_mismatch` | デコード失敗と checksum 不一致を区別 |
+| `content_load_error_uses_only_fixed_phrases` | 本文読込エラーは固定文言のみ |
+| `wasm_checksum_matches_common_crate` | WASM checksum が common クレートと一致 |
+| `wasm_detects_tampered_content` | 改ざん本文を WASM が検出 |
+| `export_parse_failure_uses_fixed_phrase_without_success_status` | 解析失敗は固定文言・成功文言なし |
+| `data_export_deserializes_all_agreed_fields` | 合意済み全フィールドを復元 |
+| `data_export_defaults_missing_fields` | 欠落フィールドは既定値 |
+| `download_start_error_message_is_fixed_phrase` | ダウンロード開始失敗は固定文言 |
+| `export_filename_is_fixed_constant` | ファイル名は固定定数 |
+| `report_validation_rejects_blank_cid_and_reason` | 空 CID/理由を拒否 |
+| `report_input_maxlength_matches_server_limits` | maxlength がサーバー上限と一致 |
+| `upload_maxlength_constants_match_common_byte_limits` | アップロード上限が common のバイト制限と一致 |
+| `metadata_byte_error_enforces_utf8_title_boundary` | タイトルの UTF-8 境界を検査 |
+| `metadata_byte_error_enforces_utf8_description_boundary` | 説明の UTF-8 境界を検査 |
+| `metadata_byte_error_enforces_utf8_tag_boundary` | タグの UTF-8 境界を検査 |
+| `metadata_byte_error_counts_tags_like_server_parser` | タグ数をサーバーパーサと同じに計数 |
+| `report_reason_byte_error_enforces_utf8_boundary` | 通報理由の UTF-8 境界を検査 |
+| `content_empty_state_message_switches_on_active_filters` | 空状態文言が絞り込みで切り替わる |
+| `illustration_aria_label_uses_cid_prefix_when_title_blank` | 無題時に CID 接頭辞を aria ラベルへ使用 |
+| `client_metrics_enabled_only_disabled_by_zero` | 0 のみクライアントメトリクスを無効化 |
+| `client_metrics_gate_controls_payload` | ゲートがペイロード送信を制御 |

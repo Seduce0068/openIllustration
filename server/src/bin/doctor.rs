@@ -552,7 +552,7 @@ where
             .unwrap_or(true);
         if no_valid_origin {
             vec![
-                "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected"
+                "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected"
                     .to_string(),
             ]
         } else {
@@ -1378,7 +1378,7 @@ mod tests {
 
     #[test]
     fn allowed_origins_missing_or_empty_warns_without_disclosing_value() {
-        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
         let scenarios: [&[(&str, &str)]; 3] = [
             &[],
             &[("ALLOWED_ORIGINS", "")],
@@ -1405,7 +1405,7 @@ mod tests {
 
     #[test]
     fn allowed_origins_uses_real_parser_result_without_disclosing_value() {
-        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s)/null origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+        const EXPECTED: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
 
         // http(s) scheme のない不正要素は実パーサで全て捨てられ、空ベクタ→警告。
         // 旧「非空」判定では見逃していたケース。値はエコーしない。
@@ -1416,14 +1416,19 @@ mod tests {
         assert_eq!(errors[0], EXPECTED);
         assert!(!errors[0].contains(INVALID), "オリジン値が漏洩: {errors:?}");
 
-        // 有効なオリジン（複数指定・null）は警告なし。
-        for value in ["https://a.example,https://b.example", "null"] {
-            let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", value)]));
-            assert!(
-                errors_for(&results, "allowed_origins").is_empty(),
-                "value={value}"
-            );
-        }
+        // 有効なオリジン（複数指定）は警告なし。null opaque origin は受け付けない。
+        let value = "https://a.example,https://b.example";
+        let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", value)]));
+        assert!(
+            errors_for(&results, "allowed_origins").is_empty(),
+            "value={value}"
+        );
+        let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", "null")]));
+        assert_eq!(
+            errors_for(&results, "allowed_origins").len(),
+            1,
+            "null origin must be rejected"
+        );
 
         // 未設定（mock 偽）は警告、mock 有効時は警告なし（既存挙動を維持）。
         let results = check_all_with(lookup_from(&[]));

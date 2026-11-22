@@ -158,18 +158,18 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **TZ判定・PINATA_JWT分類の単一情報源化**
   — 根拠 `server/src/bin/doctor.rs` policy_fixed_offset再実装 / `server/src/lib.rs` production_config_errors / review R1-CF
     中。
-- [ ] **/auth/refreshのOrigin検証とnullオリジン拒否**
+- [x] **/auth/refreshのOrigin検証とnullオリジン拒否**
   — 根拠 `server/src/oidc.rs` refresh / `server/src/lib.rs` is_origin_shape / review R3-AU / 中。
   credentialed CORSと組み合わせ別オリジンからJWT再発行の余地。Sec-Fetch-Site/Origin照合、null明示拒否。
-- [ ] **XFFデコード不能ヘッダのfail-closed化とsafety copy権限**
+- [x] **XFFデコード不能ヘッダのfail-closed化とsafety copy権限**
   — 根拠 `server/src/network.rs` forwarded_client_ip / `server/src/bin/restore_db.rs` / review R2-ER + R5-VU / 中。
-- [ ] **systemd/cronバックアップの排他と通知経路**
+- [x] **systemd/cronバックアップの排他と通知経路**
   — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md` / `deploy/openillustration-backup.service` / review R5-VU + R5-DR / 中。
-- [ ] **sha256便宜crate削除とwasm-bindgen-test整理** — 根拠 `server/Cargo.toml:29` / `client/Cargo.toml` / discovery R4-DP / 中。
+- [x] **sha256便宜crate削除とwasm-bindgen-test整理** — 根拠 `server/Cargo.toml:29` / `client/Cargo.toml` / discovery R4-DP / 中。
   sha2+hexへ置換し重複バージョンskipを外す。未使用のwasm-bindgen-testは削除または実ゲート追加。
-- [ ] **doc-numbersへクライアント単体テスト名とJPKI件数照合を追加** — 根拠 `scripts/test-doc-numbers.sh` / discovery R4-DP / 中。
-- [ ] **CIへシェル静的ゲート(bash -n/shellcheck/shfmt)を追加** — 根拠 `.github/workflows/ci.yml:47` / review R5-CI / 中。
-- [ ] **脆弱性受容件数11/12不一致とADR状態記述を是正**
+- [x] **doc-numbersへクライアント単体テスト名とJPKI件数照合を追加** — 根拠 `scripts/test-doc-numbers.sh` / discovery R4-DP / 中。
+- [x] **CIへシェル静的ゲート(bash -n/shellcheck/shfmt)を追加** — 根拠 `.github/workflows/ci.yml:47` / review R5-CI / 中。
+- [x] **脆弱性受容件数11/12不一致とADR状態記述を是正**
   — 根拠 `docs/SECURITY_ADVISORIES.md:22` / `docs/DOCUMENT_STATUS.md:39` / `README.md:26` / review R5-DC + discovery R5
     中。
 - [x] **/mod/reports と finalize へ運用者認可を追加** — 根拠 `server/src/lib.rs` list_reports / finalize_report / review R3-AU / 中。
@@ -672,6 +672,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中優先7件）: /auth/refreshへOrigin完全一致＋cross-site拒否、
+  nullオリジン拒否。XFF非UTF-8 fail-closed、safety copy 0600、systemd/cron排他明記。
+  sha256便宜crate削除(sha2+hex)、doc-numbersへclientテスト/JPKI10件/advisory12件照合、
+  CIへシェル静的ゲート（apt_packages導入・誤検知除外）。
+  親がAppState上書き・doctor null期待・E2E Sec-Fetch-Site欠損・shellcheck誤検知を修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests123）。残り中0・低5・高2。
 
 - 2026-11-22 coding（中優先4件）: AUDIT_EXPECT_ROOTを共有hexバリデータで起動ゲートへ昇格、
   JWT_REQUIRE_KID検証をDB接触前へ移動、公開/運用者集計をbegin_write_tx単一スナップショット化、

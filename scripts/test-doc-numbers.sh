@@ -150,10 +150,15 @@ fi
 # - test_state: `rate_limit_test_state(...)` から `test_state` が部分一致する（L990）
 # - test_jwt_verification_keys_json_: `test_jwt_verification_keys_json_*` の
 #   ワイルドカード抽出尾（L147）。実コード側の `..._keys_from_env_verification_keys_json_*` とは別物。
+# - test_: セクション6のクライアント一覧表の説明文 "`test_` 接頭辞" トークン。fn 名ではない。
+# - test_generation_response_is_applied: セクション6の `only_latest_generation_response_is_applied`
+#   からセクション4の部分一致抽出が生むトークン。実 fn 名は only_latest_... 側。
 declare -A doc_test_exclusions=(
 	[test_config]=1
 	[test_state]=1
 	[test_jwt_verification_keys_json_]=1
+	[test_]=1
+	[test_generation_response_is_applied]=1
 )
 
 mapfile -t doc_test_names < <(
@@ -563,6 +568,215 @@ while IFS= read -r sign_line; do
 	fi
 	assert_numbers_match "sign_audit_export bin tests @ ${inventory}:${loc}" "$sign_audit_actual" "$documented"
 done <<<"$sign_audit_doc_lines"
+
+# --- 10. クライアント単体テスト一覧表の fn 名照合 -------------------------
+# TEST_SPECIFICATION の「クライアント単体テスト（一覧表）」節のバッククォート名を
+# 抽出し、client/src/lib.rs の #[cfg(test)] mod tests 配下の #[test] fn 名と
+# doc→code の一方向で照合する（逆方向は要求しない）。
+# 表が無い・抽出0件・実コード側の #[test] fn が0件は fail-closed で FAIL。
+# 誤検知除外は既存の doc_test_exclusions（1行1根拠）を流用する。
+client_section_heading='^## 6\. クライアント単体テスト（一覧表）'
+client_section_present="$(grep -cE "$client_section_heading" "$spec" || true)"
+if [[ "$client_section_present" -lt 1 ]]; then
+	echo "FAIL client unit test table: no '## 6. クライアント単体テスト（一覧表）' heading in ${spec}" >&2
+	failures=$((failures + 1))
+fi
+
+client_section="$(
+	awk '
+		/^## 6\. クライアント単体テスト（一覧表）/ { inside = 1; next }
+		inside && /^## / { exit }
+		inside { print }
+	' "$spec" || true
+)"
+
+mapfile -t client_doc_test_names < <(
+	printf '%s\n' "$client_section" |
+		grep -oE $'\x60[A-Za-z0-9_]+\x60' |
+		tr -d '`' |
+		while IFS= read -r name; do
+			[[ -z "$name" ]] && continue
+			[[ -n "${doc_test_exclusions[$name]:-}" ]] && continue
+			printf '%s\n' "$name"
+		done || true
+)
+if ((${#client_doc_test_names[@]} == 0)); then
+	echo "FAIL client unit test table: no backtick fn name extracted from ${spec}" >&2
+	failures=$((failures + 1))
+fi
+
+# 同名が2回以上載ると一意名が減るため、抽出件数と一意件数を比較して FAIL とする。
+declare -A client_doc_seen=()
+for name in "${client_doc_test_names[@]}"; do
+	[[ -z "$name" ]] && continue
+	if [[ -n "${client_doc_seen[$name]:-}" ]]; then
+		echo "FAIL client unit test table: duplicate '${name}'" >&2
+		failures=$((failures + 1))
+	fi
+	client_doc_seen["$name"]=1
+done
+
+# 実コード側は #[cfg(test)] mod tests 直下の #[test] fn 名のみを集合にする。
+# 属性行・空行・コメント・他属性を飛ばし、直後の fn を awk で拾う（ヘルパー fn は除外）。
+client_code_test_names="$(
+	awk '
+		/^#\[cfg\(test\)\]/ { cfg = 1; next }
+		cfg && /^mod tests[[:space:]]*\{/ { inside = 1; next }
+		inside && /^[[:space:]]*#\[test\]/ { pending = 1; next }
+		pending && /^[[:space:]]*$/ { next }
+		pending && /^[[:space:]]*#\[/ { next }
+		pending && /^[[:space:]]*\/\// { next }
+		pending && /^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]/ {
+			line = $0
+			sub(/^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+/, "", line)
+			sub(/[^A-Za-z0-9_].*$/, "", line)
+			if (line != "") { print line; pending = 0 }
+			next
+		}
+		{ pending = 0 }
+	' client/src/lib.rs | sort -u || true
+)"
+declare -A client_code_set=()
+while IFS= read -r name; do
+	[[ -z "$name" ]] && continue
+	client_code_set["$name"]=1
+done <<<"$client_code_test_names"
+if ((${#client_code_set[@]} == 0)); then
+	echo "FAIL client #[test] names: no #[test] fn in client/src/lib.rs mod tests" >&2
+	failures=$((failures + 1))
+fi
+
+if ((${#client_doc_test_names[@]} > 0 && ${#client_code_set[@]} > 0)); then
+	for name in "${client_doc_test_names[@]}"; do
+		[[ -z "$name" ]] && continue
+		if [[ -z "${client_code_set[$name]:-}" ]]; then
+			echo "FAIL client unit test name: '${name}' in ${spec} table but no #[test] fn in client/src/lib.rs" >&2
+			failures=$((failures + 1))
+		fi
+	done
+fi
+
+# --- 11. JPKI 証明書エラーパス件数の照合 ----------------------------------
+# 「JPKI 証明書エラーパスの検証（ID-01）」の詳細表データ行数と、
+# 「JPKI 証明書エラーパス（N件）」注記の N を照合する。
+# 古い件数は当時 / 旧 / 履歴 / 当初の注記を必須化する（fail-closed）。
+jpki_rows="$(
+	awk -F'|' '
+		/^### JPKI 証明書エラーパスの検証（ID-01）/ { inside = 1; next }
+		inside && /^### / { exit }
+		inside && /^\|/ {
+			cell = $2
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+			if (cell ~ /^`[A-Za-z0-9_]+`$/) { n++ }
+		}
+		END { print n + 0 }
+	' "$spec" || true
+)"
+if [[ ! "$jpki_rows" =~ ^[0-9]+$ ]] || ((jpki_rows == 0)); then
+	echo "FAIL jpki error path table: no data row under 'JPKI 証明書エラーパスの検証（ID-01）' in ${spec}" >&2
+	failures=$((failures + 1))
+fi
+
+jpki_note_pattern='JPKI 証明書エラーパス（[0-9]+件）'
+jpki_note_lines="$(grep -nE "$jpki_note_pattern" "$spec" || true)"
+if [[ -z "$jpki_note_lines" ]]; then
+	echo "FAIL jpki error path count: no 'JPKI 証明書エラーパス（N件）' note in ${spec}" >&2
+	failures=$((failures + 1))
+fi
+while IFS= read -r jpki_line; do
+	[[ -z "$jpki_line" ]] && continue
+	loc="${jpki_line%%:*}"
+	body="${jpki_line#*:}"
+	n="$(grep -oE "$jpki_note_pattern" <<<"$body" | grep -oE '[0-9]+' | head -n1 || true)"
+	[[ -z "$n" ]] && continue
+	[[ "$n" == "$jpki_rows" ]] && continue
+	if grep -qE '当時|旧|履歴|当初' <<<"$body"; then
+		continue
+	fi
+	echo "FAIL jpki error path count @ ${spec}:${loc}: note=${n} table_rows=${jpki_rows} without annotation" >&2
+	failures=$((failures + 1))
+done <<<"$jpki_note_lines"
+
+# 本文の「エラーパスN件」表記も JPKI 行に限り、古い件数なら注記を必須化する。
+# （AUDIT-01 の「暗号エラーパス12件」は JPKI ではないため対象外）。
+jpki_prose_pattern='エラーパス[0-9]+件'
+while IFS= read -r jpki_line; do
+	[[ -z "$jpki_line" ]] && continue
+	loc="${jpki_line%%:*}"
+	body="${jpki_line#*:}"
+	while IFS= read -r jpki_match; do
+		[[ -z "$jpki_match" ]] && continue
+		n="$(grep -oE '[0-9]+' <<<"$jpki_match" | head -n1 || true)"
+		[[ -z "$n" ]] && continue
+		[[ "$n" == "$jpki_rows" ]] && continue
+		if grep -qE '当時|旧|履歴|当初' <<<"$body"; then
+			continue
+		fi
+		echo "FAIL jpki error path prose @ ${spec}:${loc}: ${jpki_match} vs table_rows=${jpki_rows} without annotation" >&2
+		failures=$((failures + 1))
+	done < <(grep -oE "$jpki_prose_pattern" <<<"$body" || true)
+done < <(grep -nE "$jpki_prose_pattern" "$spec" | grep 'JPKI' || true)
+
+# --- 12. 脆弱性勧告 ignore ID 数とドキュメント記載数の照合 ----------------
+# deny.toml の [advisories].ignore に列挙した RUSTSEC ID 数を実測し、
+# 4 ドキュメントの現行「受容件数」と照合する。
+# 履歴上の 11 件は「2026-11-17 時点は11件」の注記を必須化する。
+ignore_ids="$(grep -cE '^[[:space:]]*\{[[:space:]]*id[[:space:]]*=[[:space:]]*"RUSTSEC-[0-9]{4}-[0-9]{4}"' deny.toml || true)"
+if [[ ! "$ignore_ids" =~ ^[0-9]+$ ]] || ((ignore_ids == 0)); then
+	echo "FAIL advisory ignore ids: no 'id = \"RUSTSEC-...\"' entry in deny.toml" >&2
+	failures=$((failures + 1))
+fi
+
+advisory_docs=(
+	docs/SECURITY_ADVISORIES.md
+	docs/HANDOFF.md
+	docs/TASK_INVENTORY.md
+	docs/UNKNOWN_TASKS_INVESTIGATION.md
+)
+advisory_context_re='RUSTSEC|勧告|ignore|受容|脆弱性|libsql|paste|chrono'
+# 総数を示す語（既知/受容/計/ignore）直後の N件、または「N件の勧告」のみを採る。
+# 内訳（libsql 10 件 / paste 1 件 / chrono 1 件）やテスト件数は総数ではないため除外。
+advisory_total_pattern='(既知|受容|計|ignore して)[^0-9]{0,8}[0-9]+[[:space:]]*件|[0-9]+[[:space:]]*件の(勧告|脆弱性|RUSTSEC)'
+
+for advisory_doc in "${advisory_docs[@]}"; do
+	if [[ ! -f "$advisory_doc" ]]; then
+		echo "FAIL advisory count: missing ${advisory_doc}" >&2
+		failures=$((failures + 1))
+		continue
+	fi
+	current_total_found=0
+	while IFS= read -r ad_line; do
+		[[ -z "$ad_line" ]] && continue
+		loc="${ad_line%%:*}"
+		body="${ad_line#*:}"
+		# 履歴上の 11 件は注記語（「2026-11-17 時点は11件」を含む）を必須化する。
+		if grep -qE '(^|[^0-9])11[[:space:]]*件' <<<"$body"; then
+			if grep -qE '当時|旧|履歴|当初|2026-11-17 時点は11件' <<<"$body"; then
+				continue
+			fi
+			if grep -qE "$advisory_context_re" <<<"$body"; then
+				echo "FAIL advisory stale count @ ${advisory_doc}:${loc}: 11件 without '2026-11-17 時点は11件' annotation" >&2
+				failures=$((failures + 1))
+				continue
+			fi
+		fi
+		# 履歴行は現行件数として照合しない。
+		if grep -qE '当時|旧|履歴|当初|2026-11-17 時点は11件' <<<"$body"; then
+			continue
+		fi
+		while IFS= read -r ad_match; do
+			[[ -z "$ad_match" ]] && continue
+			n="$(grep -oE '[0-9]+' <<<"$ad_match" | head -n1 || true)"
+			[[ -z "$n" ]] && continue
+			current_total_found=1
+			assert_numbers_match "advisory ignore count @ ${advisory_doc}:${loc}" "$ignore_ids" "$n"
+		done < <(grep -oE "$advisory_total_pattern" <<<"$body" || true)
+	done < <(grep -nE "$advisory_total_pattern|11[[:space:]]*件" "$advisory_doc" | grep -E "$advisory_context_re" || true)
+	if ((current_total_found == 0)); then
+		echo "FAIL advisory count: no current total 'N件' statement in ${advisory_doc}" >&2
+		failures=$((failures + 1))
+	fi
+done
 
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then

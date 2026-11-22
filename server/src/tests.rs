@@ -8,7 +8,7 @@ use crate::{
     build_router, ensure_user_not_banned, escape_like, parse_content_query, parse_pagination,
     parse_tags_field,
     payments::{MAX_ORDER_JPY, PaymentOrder, PaymentVerification, PaymentVerifier},
-    process_report_conclusion, today_for_policy, update_content_status, validate_age,
+    process_report_conclusion, sha256_hex, today_for_policy, update_content_status, validate_age,
     validate_age_at, validate_content_metadata, validate_jwt_secret, validate_upload_content,
     validate_upload_content_type,
 };
@@ -208,6 +208,7 @@ async fn setup_app_with_options(
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 
     let router = build_router(shared_state);
@@ -257,6 +258,7 @@ async fn setup_app_with_jwt_keys(
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     (build_router(shared_state), db)
 }
@@ -398,6 +400,7 @@ async fn setup_app_with_payments(
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
 
     let router = build_router(shared_state);
@@ -444,6 +447,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
 
     (build_router(shared_state), db)
@@ -783,6 +787,7 @@ async fn setup_app_with_oidc_age_policy_and_cookie_secure(
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 
     (build_router(shared_state), oidc, mock, db)
@@ -896,6 +901,7 @@ async fn test_rate_limit_ignores_preflight() {
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
         })),
+        allowed_origins: vec![],
     });
     let app = build_router(state);
     let peer = test_ipv6_peer();
@@ -961,6 +967,7 @@ async fn test_rate_limit_rejects_excess_requests() {
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
         })),
+        allowed_origins: vec![],
     });
     let app = build_router(state);
 
@@ -1089,6 +1096,7 @@ async fn rate_limit_test_state_with_concurrency(
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(concurrency)),
         })),
+        allowed_origins: vec![],
     })
 }
 
@@ -2170,9 +2178,12 @@ fn test_allowed_origins_ignores_invalid_entries() {
 #[test]
 fn test_allowed_origins_requires_scheme() {
     let origins = allowed_origins(Some("localhost:8080, https://ok.example.com, null"), true);
-    assert_eq!(origins.len(), 2);
+    assert_eq!(origins.len(), 1);
     assert_eq!(origins[0], "https://ok.example.com");
-    assert_eq!(origins[1], "null");
+    assert!(
+        origins.iter().all(|origin| origin != "null"),
+        "`null` must never enter ALLOWED_ORIGINS"
+    );
 }
 
 /// SEC-03: 末尾スラッシュはブラウザが送らないため除去する
@@ -4310,6 +4321,7 @@ async fn test_vote_consensus_rejects_content() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -4324,7 +4336,7 @@ async fn test_vote_consensus_rejects_content() {
             .to_public_key_der()
             .unwrap()
             .to_vec();
-        let juror_hash = sha256::digest(&public_der);
+        let juror_hash = sha256_hex(&public_der);
         db.execute(
             "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
             (juror_hash.clone(), public_der),
@@ -4492,6 +4504,7 @@ async fn test_duplicate_vote_rejected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -4505,7 +4518,7 @@ async fn test_duplicate_vote_rejected() {
         .to_public_key_der()
         .unwrap()
         .to_vec();
-    let juror_hash = sha256::digest(&public_der);
+    let juror_hash = sha256_hex(&public_der);
     db.execute(
         "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
         (juror_hash.clone(), public_der),
@@ -4574,7 +4587,7 @@ async fn insert_juror(db: &libsql::Connection) -> (String, PrivateKey) {
         .to_public_key_der()
         .unwrap()
         .to_vec();
-    let juror_hash = sha256::digest(&public_der);
+    let juror_hash = sha256_hex(&public_der);
     db.execute(
         "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?)",
         (juror_hash.clone(), public_der),
@@ -4708,6 +4721,7 @@ async fn test_vote_after_conclusion_rejected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -4790,6 +4804,7 @@ async fn test_vote_for_missing_report_returns_404() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -4878,6 +4893,7 @@ async fn setup_vote_signature_test() -> (Router, libsql::Connection) {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
     (app, db)
@@ -4997,6 +5013,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -5176,6 +5193,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -5244,6 +5262,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -5445,7 +5464,7 @@ async fn test_content_checksum_verification_fails_on_tamper() {
 #[tokio::test]
 async fn test_get_content_rejects_truncated_stream() {
     let body = b"partial content".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let gateway = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -5494,7 +5513,7 @@ async fn test_get_content_rejects_truncated_stream() {
 #[tokio::test]
 async fn test_get_content_returns_verified_bytes() {
     let body = b"valid jxl codestream".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let gateway = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -5648,7 +5667,7 @@ async fn test_get_content_falls_back_to_next_gateway() {
     })
     .await;
     let body = b"fallback content".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let healthy = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -5707,7 +5726,7 @@ async fn test_get_content_chunk_error_falls_back_to_next_gateway() {
     })
     .await;
     let body = b"content from healthy gateway".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let healthy = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -5825,7 +5844,7 @@ async fn test_get_content_all_gateways_chunk_error_returns_error() {
 async fn test_get_content_does_not_follow_gateway_redirect() {
     let target_body = b"metadata from internal service".to_vec();
     let scenario = RedirectScenario::start(target_body.clone()).await;
-    let checksum = sha256::digest(&target_body);
+    let checksum = sha256_hex(&target_body);
     let cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111K";
     let (app, db) = setup_app_with_options(
         vec![scenario.gateway_template.clone()],
@@ -5879,7 +5898,7 @@ async fn test_get_content_does_not_follow_gateway_redirect() {
 async fn test_get_content_redirect_falls_back_to_next_gateway() {
     let scenario = RedirectScenario::start(b"internal metadata".to_vec()).await;
     let body = b"content from healthy gateway".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let healthy = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -5931,7 +5950,7 @@ async fn test_get_content_redirect_falls_back_to_next_gateway() {
 #[tokio::test]
 async fn test_get_content_accepts_exact_size_limit() {
     let body = vec![0u8; 10 * 1024 * 1024];
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let gateway = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -6067,7 +6086,7 @@ async fn test_get_content_all_gateways_fail() {
 #[tokio::test]
 async fn test_get_content_novel_returns_markdown_mime() {
     let body = b"novel markdown".to_vec();
-    let checksum = sha256::digest(&body);
+    let checksum = sha256_hex(&body);
     let gateway = MockGateway::start(MockResponse {
         status: StatusCode::OK,
         body: body.clone(),
@@ -6613,6 +6632,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
@@ -6697,6 +6717,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
@@ -9028,6 +9049,7 @@ async fn test_logout_revokes_session() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let second_app = crate::build_router(second_state);
     let response = second_app
@@ -10974,6 +10996,7 @@ async fn setup_verified_age_app(
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     (build_router(state), db)
 }
@@ -11049,7 +11072,7 @@ async fn test_verified_age_accepts_valid_signed_attribute_in_mock_path() {
         user_hash.bytes().all(|b| b.is_ascii_hexdigit()),
         "user_hash must be hex only"
     );
-    let legacy_hash = sha256::digest("2000-01-01:JP".as_bytes());
+    let legacy_hash = sha256_hex("2000-01-01:JP".as_bytes());
     assert_ne!(
         user_hash, legacy_hash,
         "legacy birthdate:country hash must not be reused"
@@ -11160,6 +11183,7 @@ async fn test_verified_age_claims_rejected_when_mock_auth_disabled() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(state);
     let nonce = crate::issue_mock_nonce_for_test();
@@ -11408,6 +11432,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     (build_router(state), db)
 }
@@ -12014,6 +12039,7 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
     // AuthClaims extractor は revoked_subs_before ではなく DB を読むため、
     // poison でハンドラへの到達が塞がることはない。ここでは ban_user を直接
@@ -13162,6 +13188,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         shutting_down,
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(state);
 
@@ -13311,6 +13338,7 @@ async fn test_refresh_rejects_duplicate_refresh_cookies() {
             .oneshot(with_peer(
                 Request::post("/auth/refresh")
                     .header(header::COOKIE, cookies.as_str())
+                    .header(header::ORIGIN, "http://localhost:8080")
                     .body(Body::empty())
                     .unwrap(),
                 test_ipv6_peer(),
@@ -13351,6 +13379,7 @@ async fn test_refresh_rejects_duplicate_refresh_cookie_headers() {
             Request::post("/auth/refresh")
                 .header(header::COOKIE, format!("refresh_token={refresh}"))
                 .header(header::COOKIE, "refresh_token=attacker-controlled-refresh")
+                .header(header::ORIGIN, "http://localhost:8080")
                 .body(Body::empty())
                 .unwrap(),
             test_ipv6_peer(),
@@ -13367,6 +13396,7 @@ async fn post_refresh(app: &Router, token: &str) -> (StatusCode, String, serde_j
         .oneshot(with_peer(
             Request::post("/auth/refresh")
                 .header(header::COOKIE, format!("refresh_token={token}"))
+                .header(header::ORIGIN, "http://localhost:8080")
                 .body(Body::empty())
                 .unwrap(),
             test_ipv6_peer(),
@@ -13395,11 +13425,36 @@ async fn post_refresh(app: &Router, token: &str) -> (StatusCode, String, serde_j
 async fn test_refresh_cookie_path_covers_logout() {
     let (app, oidc, mock, _db) = setup_app_with_oidc().await;
     let (_login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
+
+    // R2-REFRESH-ORIGIN: 許可外 Origin / cross-site は Cookie より先に 401。
+    // どちらも拒否段階なので refresh トークンは消費されず、後の成功経路に影響しない。
+    for (origin, fetch_site) in [
+        ("https://evil.example.com", None),
+        ("http://localhost:8080", Some("cross-site")),
+    ] {
+        let mut request = Request::post("/auth/refresh")
+            .header(header::COOKIE, format!("refresh_token={refresh}"))
+            .header(header::ORIGIN, origin);
+        if let Some(site) = fetch_site {
+            request = request.header("sec-fetch-site", site);
+        }
+        let response = app
+            .clone()
+            .oneshot(with_peer(
+                request.body(Body::empty()).unwrap(),
+                test_ipv6_peer(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
     let response = app
         .clone()
         .oneshot(with_peer(
             Request::post("/auth/refresh")
                 .header(header::COOKIE, format!("refresh_token={refresh}"))
+                .header(header::ORIGIN, "http://localhost:8080")
                 .body(Body::empty())
                 .unwrap(),
             test_ipv6_peer(),
@@ -13679,6 +13734,7 @@ async fn test_refresh_rejects_revoked_sub_with_empty_in_memory_state() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
     let restarted = build_router(state);
 
@@ -13695,7 +13751,10 @@ async fn test_refresh_rejects_missing_cookie() {
     let (app, _oidc, _mock, _db) = setup_app_with_oidc().await;
     let response = app
         .oneshot(with_peer(
-            Request::post("/auth/refresh").body(Body::empty()).unwrap(),
+            Request::post("/auth/refresh")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
             test_ipv6_peer(),
         ))
         .await
@@ -16828,6 +16887,7 @@ async fn setup_me_export_app() -> Router {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     build_router(shared_state)
 }
@@ -17256,6 +17316,7 @@ async fn me_export_snapshot_consistent_under_concurrent_ban_write() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -17336,6 +17397,7 @@ async fn me_export_waits_for_concurrent_write_transaction() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![],
     });
     let app = build_router(shared_state);
 
@@ -19015,7 +19077,7 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
     // public_key_der 無しのモック認証では user_hash = sha256("birth_date:country_code")。
     let birth_date = "2000-01-01";
     let country_code = "JP";
-    let sub = sha256::digest(format!("{birth_date}:{country_code}").as_bytes());
+    let sub = sha256_hex(format!("{birth_date}:{country_code}").as_bytes());
     let old_threshold = chrono::Utc::now().timestamp() as usize;
 
     // back-channel logout 相当: 閾値を DB と in-memory の両方へ記録する。
@@ -19048,6 +19110,7 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit: None,
+        allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 
     // 再認証: 新しい iat を発行し、メモリの旧閾値を remove する。
@@ -19087,6 +19150,10 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
     headers.insert(
         header::COOKIE,
         HeaderValue::from_str(&format!("refresh_token={refresh_token}")).unwrap(),
+    );
+    headers.insert(
+        header::ORIGIN,
+        HeaderValue::from_static("http://localhost:8080"),
     );
     let response = crate::oidc::refresh(State(Arc::clone(&state)), headers)
         .await

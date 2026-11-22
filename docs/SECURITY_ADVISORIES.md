@@ -9,10 +9,10 @@ tags:
   - triage
 generated:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
@@ -231,11 +231,11 @@ cargo deny check advisories
 - 2026-11-15: 初版。`master` `8fb989c` 時点の 14 件を記録。
 - 2026-11-15: 未使用の image 依存を削除し、ttf-parser を解消（14 → 13 件）。
 - 2026-11-15: RustCrypto 系を更新し、rsa と crypto-bigint の勧告を解消
-  （13 → 11 件）。
-- 2026-11-15: 既知 11 件を ignore して `cargo deny check advisories` を
+  （13 → 11 件、2026-11-17 時点は11件）。
+- 2026-11-15: 既知 11 件（2026-11-17 時点は11件、履歴）を ignore して `cargo deny check advisories` を
   CI に導入。paste は上流修正がないため受容した。
 - 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
-  受容 11 件に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
+  受容 11 件（2026-11-17 時点は11件）に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
 - 2026-11-17: 11→12 件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
   受容。脆弱性ではなく情報区分で修正版なし。内訳は脆弱性 8 件 /
   unmaintained 4 件（libsql 系 10 件 + paste 1 件 + chrono 1 件）。

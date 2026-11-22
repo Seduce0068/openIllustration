@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T09:20:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 ---
 
 ## 目的
@@ -108,6 +108,11 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
   オーケストレーション無しの単体実行用として残す。
 - cron: `deploy/openillustration-backup.cron`（`/etc/cron.d/` に配置）。
   このジョブはラッパーのみを実行し、停止/起動は行わない（root 側スケジューラで行う）。
+
+定期実行スケジューラは systemd timer＋window unit と cron の**二者択一**であり、
+両方を有効にしないこと（二重バックアップ・停止/起動の競合を防ぐ）。
+cron を選ぶ場合は `systemctl disable --now openillustration-backup.timer` で
+タイマーを無効化し、systemd を選ぶ場合は cron ジョブを配置しない。
 
 導入前に `/etc/openillustration/backup.env`（所有者 `openillustration`、権限 600）へ
 `BACKUP_GPG_RECIPIENT=<GPG 公開鍵のメール/ID>` を設定する。未設定なら
@@ -342,6 +347,35 @@ cargo run -p server --bin restore_db -- \
    自動取得時は同じ照合を `AUDIT_EXPECT_ROOT` で行う（本番では設定必須、
    上記「バックアップ取得」を参照）。
 1. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
+
+### safety copy の取り扱い
+
+`--force` 時に作られる `<target>.pre-restore-<timestamp>` は**平文**の DB コピーである。
+`restore_db` は `OpenOptions` の `create_new` と `mode(0o600)` により、生成時から
+権限 `0600`（所有者のみ読み書き）で作成する。staging tmp も `0600` で生成し、
+safety copy を target へ書き戻すロールバック時も `0600` を維持する（umask 非依存）。
+
+- **GPG / RETENTION の対象外**: safety copy は暗号化されず、`backup-rotate.sh` の
+  ローテーション対象（`.db` / `.db.gpg`）にも含まれない。平文のまま残るため、
+  バックアップ先以外へコピーしたり共有したりしないこと。
+- **保持期間の目安**: 7 日。復元結果の確認が終わり、以降の使用見込みがなければ
+  速やかに削除する。やむを得ず長期保存する場合は保管場所とアクセス権限を
+  見直し、平文であることを前提にリスクを評価する。
+- **復元先の推奨権限**: 親ディレクトリは `0700` を推奨する。DB ファイル自体は
+  `0600` でも、親が group/other から読めるとメタデータや一時ファイルが
+  露出し得る。staging tmp は置換時に rename されるため、復元後の DB も
+  `0600` が維持される。
+- **削除手順**: 上記の復元確認を終えたうえで、所有者が対象パスを明示して削除する。
+  ワイルドカード指定で他の世代を誤削除しないこと。
+
+```bash
+echo "== safety copy の特定と権限確認（0600 であること） =="
+ls -l /path/to/local.db.pre-restore-*
+stat -c '%a %n' /path/to/local.db.pre-restore-*
+
+echo "== 不要になった safety copy の削除（対象を明示） =="
+rm -- /path/to/local.db.pre-restore-<timestamp>
+```
 
 ## マイグレーション失敗時のロールバック判断
 

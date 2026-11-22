@@ -66,6 +66,16 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
       await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
     });
 
+    // R2-REFRESH-ORIGIN: /auth/refresh はモック200で通し、Origin / Sec-Fetch-Site を記録する。
+    let refreshOrigin: string | undefined;
+    let refreshFetchSite: string | undefined;
+    await page.route('**/auth/refresh', async route => {
+      const headers = route.request().headers();
+      refreshOrigin = headers['origin'];
+      refreshFetchSite = headers['sec-fetch-site'];
+      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+    });
+
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
@@ -81,5 +91,18 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     // リクエストは spawn_local で飛ぶため、到達までポールで待つ。
     await expect.poll(() => logoutAuthHeader).toBe('Bearer mock_jwt_token');
     expect(logoutMethod).toBe('POST');
+
+    // R2-REFRESH-ORIGIN: POST /auth/refresh を明示1回叩き、Origin が API_BASE と
+    // 一致することを記録・検証する。Sec-Fetch-Site はブラウザが付与する値に
+    // 依存するため、サーバ契約どおり cross-site でないことのみを確認する。
+    const probe = await page.evaluate(async () => {
+      const API_BASE = window.location.origin;
+      const response = await fetch('/auth/refresh', { method: 'POST' });
+      return { API_BASE, status: response.status };
+    });
+    expect(probe.status).toBe(200);
+    await expect.poll(() => refreshOrigin).toBe(probe.API_BASE);
+    // ヘッダ欠損はサーバ契約で許可のため、cross-site でなければよい。
+    expect(refreshFetchSite).not.toBe('cross-site');
   });
 });

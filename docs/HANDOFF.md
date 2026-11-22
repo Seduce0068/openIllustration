@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -76,7 +76,12 @@ cargo test --workspace
 ### 依存更新（2026-11-15）
 
 - `jsonwebtoken` 12.0.0、`rsa` 0.10.0、`k256` 0.14.0、`p256` 0.14.0 へ更新。
-- Marvin 攻撃と crypto-bigint の timing 勧告を解消（RUSTSEC 13 → 11 件）。
+- Marvin 攻撃と crypto-bigint の timing 勧告を解消（RUSTSEC 13 → 11 件、2026-11-17 時点は11件）。
+
+### 依存更新（2026-11-22）
+
+- 旧 `sha256` 便宜 crate を削除し、`server/src/lib.rs` の `sha256_hex`（`sha2` + `hex`）へ置換。出力は小文字 64-hex で不変。
+- `deny.toml` の `sha2` / `digest` skip は leptos 経由で重複が残るため維持（skip 自体は削除しない）。
 
 ### 設計
 
@@ -312,7 +317,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（
   `MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
-- 依存: 残る RUSTSEC は `libsql 0.10` 由来の 10 件と `paste` 1 件。
+- 依存: 残る RUSTSEC は既知の12件（脆弱性8件 / unmaintained4件 = `libsql 0.10` 由来 10 件＋`paste` 1 件＋`chrono` 1 件）。
   到達可能性と更新案は
   [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
 - E2E: ブラウザ別の URL 解釈、モデレーションの期限・異議。

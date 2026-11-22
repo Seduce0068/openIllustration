@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T09:20:00+09:00"
+  at: "2026-11-22T10:10:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -37,6 +37,12 @@ generated:
   設定ゲートは state / Cookie の消費より前に適用し、年齢数値判定は `/auth/verify` に委ねる。
 - 指定マイナアプリ/JPKI認証を本番利用資格の必須条件とする。未認証者には利用させない。
 - 実JPKI/マイナアプリの信頼検証が未完成の現行プロトタイプは、本番利用資格判定に使わない。
+- `/auth/refresh` は Cookie を読む前に `Origin` を `ALLOWED_ORIGINS` のいずれかと
+  バイト単位で完全一致照合し、不一致は 401 で拒否する。`Sec-Fetch-Site: cross-site` も
+  明示拒否するが、`same-origin` / `same-site` / ヘッダ欠損は許可し、
+  `app.example.com` → `api.example.com` の same-site cross-origin 契約を維持する。
+  `ALLOWED_ORIGINS` に `null` は設定不可（設定しても無視される）。信頼できない
+  サブドメインを許可リストへ入れず、ブラウザが送るオリジンのみを列挙する。
 - ログアウト時は `sid` とリフレッシュファミリの失効に加え、`/auth/logout` が
   `refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0` の `Set-Cookie` を返すことを確認する。
   DB 側のファミリ失効だけではブラウザに 30 日間有効な refresh_token Cookie が残るため、
@@ -194,6 +200,12 @@ generated:
   を確認し、再起動失敗は unit 結果をアラート対象にする。`scripts/backup-rotate.sh` 単体は
   サーバーを停止しないため、オーケストレーション無しの稼働中実行は拒否されて失敗する。
   詳細は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+- 定期実行スケジューラは systemd timer＋window unit
+  （`deploy/openillustration-backup.timer` ＋ `deploy/openillustration-backup-window.service`）
+  と cron（`deploy/openillustration-backup.cron`）の**二者択一**とし、両方を有効にしない。
+  二重バックアップや停止/起動の競合を防ぐため、cron を選ぶ場合は
+  `systemctl disable --now openillustration-backup.timer` でタイマーを無効化し、
+  systemd を選ぶ場合は cron ジョブを配置しない。
 - `payment_orders.derivation_index` には migration 003 の部分 UNIQUE インデックス
   （`WHERE derivation_index IS NOT NULL`）が適用済みである。固定受取アドレスの注文
   （`derivation_index IS NULL`）は制約対象外とし、xprv 設定時は注文ごとの受取先
@@ -318,7 +330,7 @@ generated:
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
-| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
+| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。 |
@@ -421,3 +433,15 @@ generated:
   出す。いずれも生バイトはログ・エラー文言へエコーしない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।
+
+## 8. CI 静的ゲート
+
+CI は共通ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` の `extra_gates` へ
+シェル静的ゲートを追加する。対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示し、
+`bash -n`（構文検査）、`shellcheck`（静的解析）、`shfmt -d`（書式差分）の3 command を
+既存ゲートに追加する。既存のゲート行は削除・意味変更せず維持し、
+E2E69件 / check23 / doctor53 / migrations14 の各数値は不変である。
+runner への `shellcheck -e SC2016,SC2034` / `shfmt` の導入は、
+呼び出し側 `.github/workflows/ci.yml` の `apt_packages` で指定する（共通ワークフローの
+apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない
+（未導入時に CI が赤化する構成を避けるため、導入要否はワークフロー側のコメントで明示する）。

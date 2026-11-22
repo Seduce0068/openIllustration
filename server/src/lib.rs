@@ -39,6 +39,12 @@ use uuid::Uuid;
 /// `/metrics/client-events` が受け付けるリクエストボディの上限（1 KiB）。
 const MAX_CLIENT_EVENT_BODY_BYTES: usize = 1024;
 
+/// SHA-256 を小文字 64-hex 文字列へ変換する。
+/// 旧 `sha256` 便宜 crate を削除し、`sha2` + `hex` の直接利用へ置換する。
+pub(crate) fn sha256_hex(data: impl AsRef<[u8]>) -> String {
+    hex::encode(<sha2::Sha256 as sha2::Digest>::digest(data))
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Connection>,
@@ -78,6 +84,9 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     /// レート制限状態。未設定時は制限を適用しない（開発・テスト用）。
     pub rate_limit: Option<Arc<RateLimitState>>,
+    /// `/auth/refresh` の Origin 完全一致検証に使う許可オリジン。
+    /// `build_router` が `allowed_origins()` の結果を格納する。
+    pub allowed_origins: Vec<HeaderValue>,
 }
 
 /// `Content-Length` が上限を超えるリクエストを拒否する。
@@ -1503,6 +1512,7 @@ pub async fn run() -> anyhow::Result<()> {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit,
+        allowed_origins: Vec::new(),
     });
 
     let worker_db = Arc::clone(&shared_state.db);
@@ -1626,10 +1636,11 @@ const DEV_ALLOWED_ORIGINS: [&str; 3] = [
     "http://[::1]:8080",
 ];
 
-/// ブラウザの `Origin` は `scheme://host[:port]` 形式か `null` のみ送られる。
-/// scheme のない設定値はどのリクエストにも一致しないため、設定ミスとして無視する。
+/// ブラウザの `Origin` は `scheme://host[:port]` 形式で送られる。
+/// `null` はどの実オリジンとも完全一致せず、設定ミスとして無視する。
+/// scheme のない設定値もどのリクエストにも一致しないため無視する。
 fn is_origin_shape(origin: &str) -> bool {
-    origin == "null" || origin.starts_with("http://") || origin.starts_with("https://")
+    origin.starts_with("http://") || origin.starts_with("https://")
 }
 
 /// 起動時警告へ出す ALLOWED_ORIGINS エントリのマスク表現。
@@ -2396,6 +2407,17 @@ pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<PublicAg
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     let allowed_origins_env = std::env::var("ALLOWED_ORIGINS").ok();
+    // CORS と refresh の Origin 検証で同じ許可リストを使う（片方だけ緩い設定にしない）。
+    // AppState に明示的な許可リストが入っていれば（テスト／埋め込み利用）尊重し、
+    // 空のときだけ環境変数／開発既定から埋める。本番は run() が空で渡すため
+    // これまでどおり ALLOWED_ORIGINS が唯一の情報源となる。
+    let allowed_origin_values = if state.allowed_origins.is_empty() {
+        allowed_origins(allowed_origins_env.as_deref(), state.allow_mock_auth)
+    } else {
+        state.allowed_origins.clone()
+    };
+    let mut state = state;
+    Arc::make_mut(&mut state).allowed_origins = allowed_origin_values.clone();
 
     // TraceLayer のスパン属性は method / path / status のみ。path はルーティングの
     // テンプレートパスを使い、生 CID やクエリは積まない。既定のイベントは
@@ -2476,10 +2498,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // 応答にも ACAO が付き、プリフライトは内側のミドルウェアを通過しない。
         .layer(
             CorsLayer::new()
-                .allow_origin(allowed_origins(
-                    allowed_origins_env.as_deref(),
-                    state.allow_mock_auth,
-                ))
+                .allow_origin(allowed_origin_values)
                 // refresh Cookie を cross-origin fetch で送るため。許可オリジンは
                 // 上の明示リストのまま（wildcard は絶対に使わない）。
                 .allow_credentials(true)
@@ -2677,7 +2696,7 @@ fn verified_age_user_hash(verified: &verified_age::VerifiedAge) -> Result<String
             common::age::AgeValidationError::TrustedAttributeRequired,
         ));
     }
-    Ok(sha256::digest(format!(
+    Ok(sha256_hex(format!(
         "verified-age:v1:{}:{}",
         verified.issuer, verified.signed_subject
     )))
@@ -2839,12 +2858,12 @@ pub async fn auth_verify(
     };
 
     let user_hash = if let Some(ref der) = verified_key {
-        sha256::digest(&der[..])
+        sha256_hex(&der[..])
     } else if let Some(ref verified) = verified_age {
         // 信頼属性経路は issuer + signed_subject 由来（R2-USERHASH）。
         verified_age_user_hash(verified)?
     } else {
-        sha256::digest(format!("{}:{}", birth_date, country_code).as_bytes())
+        sha256_hex(format!("{}:{}", birth_date, country_code).as_bytes())
     };
 
     ensure_user_not_banned(&state.db, &user_hash).await?;
@@ -3030,7 +3049,7 @@ pub async fn logout(
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
     // state Cookie と同じ基準で重複を拒否する（先勝ちで攻撃者の値を選ばない）。
     if let Some(token) = oidc::refresh_cookie_from_headers(&headers) {
-        let token_hash = sha256::digest(token.as_bytes());
+        let token_hash = sha256_hex(token.as_bytes());
         // 読み取りカーソルを先に閉じてから BEGIN する。
         let family_id = {
             let mut rows = state
@@ -3259,7 +3278,7 @@ pub async fn get_content(
                 continue;
             }
 
-            let actual_checksum = sha256::digest(&bytes[..]);
+            let actual_checksum = sha256_hex(&bytes[..]);
             if actual_checksum != expected_checksum {
                 // 本文・チェックサム値は出さず、どの CID / ゲートウェイで
                 // 不整合が起きたかだけを記録する（運用監視用）。
@@ -4509,7 +4528,7 @@ pub async fn upload_content(
         ));
     }
 
-    let checksum = sha256::digest(&data[..]);
+    let checksum = sha256_hex(&data[..]);
 
     // 2. Pin to IPFS with a filename that matches the declared kind
     let filename = if content_kind == "Novel" {

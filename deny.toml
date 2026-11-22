@@ -74,6 +74,8 @@ ignore = [
 multiple-versions = "warn"
 wildcards = "allow"  # workspace の path 依存を wildcard と誤検知しないため
 # 新規の重複が出たときは理由を添えて skip を追加すること。
+# sha256 便宜 crate は sha2+hex へ置換して削除済み。sha2 / digest の skip は
+# leptos 経由で重複が残るため維持する（削除すると cargo deny が失敗するため残す）。
 skip = [
   { name = "axum", version = "*" },
   { name = "axum-core", version = "*" },

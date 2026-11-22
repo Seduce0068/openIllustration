@@ -244,12 +244,17 @@ pub fn client_ip_from_request(
 /// - 上書き型: 末尾がピアと一致しない。従来どおり末尾を採用する。
 ///
 /// カンマ区切り・前後の空白は正規化し、1 つでも IP として解釈できない
-/// エントリがある場合は None（fail-closed）とする。
+/// エントリがある場合は None（fail-closed）とする。**非 UTF-8 も None** とし、
+/// 読み取れた値だけを残す fail-open を避ける（NET-02）。
 fn forwarded_client_ip(headers: &HeaderMap, connect_ip: Option<IpAddr>) -> Option<IpAddr> {
-    let mut entries: Vec<IpAddr> = headers
+    // 非UTF-8もNone: 1 つでも to_str() が失敗したら全体を None として拒否する。
+    let values: Vec<&str> = headers
         .get_all("x-forwarded-for")
         .iter()
-        .filter_map(|value| value.to_str().ok())
+        .map(|value| value.to_str().ok())
+        .collect::<Option<Vec<_>>>()?;
+    let mut entries: Vec<IpAddr> = values
+        .into_iter()
         .flat_map(|value| value.split(','))
         .map(|entry| entry.trim().parse::<IpAddr>().ok().map(canonical_ip))
         .collect::<Option<Vec<_>>>()?;
@@ -300,6 +305,18 @@ mod tests {
     fn xff_headers(value: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", value.parse::<HeaderValue>().unwrap());
+        headers
+    }
+
+    /// 非 UTF-8 の生バイト（0xff）を含む XFF ヘッダを作る（fail-closed 検証用）。
+    fn xff_raw_headers(values: &[&[u8]]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for value in values {
+            headers.append(
+                "x-forwarded-for",
+                HeaderValue::from_bytes(value).expect("raw header value"),
+            );
+        }
         headers
     }
 
@@ -417,6 +434,30 @@ mod tests {
                 "{value} must be rejected"
             );
         }
+
+        // 非 UTF-8 が混在すると、有効な値があっても解決しない（非UTF-8もNone）。
+        let mixed = xff_raw_headers(&[b"2001:db8::a", &[0xff]]);
+        assert_eq!(
+            client_ip_from_request(&mixed, Some(peer), true),
+            None,
+            "non-UTF-8 value mixed with a valid value must be rejected"
+        );
+
+        // 非 UTF-8 のみでも解決しない。
+        let non_utf8_only = xff_raw_headers(&[&[0xff]]);
+        assert_eq!(
+            client_ip_from_request(&non_utf8_only, Some(peer), true),
+            None,
+            "non-UTF-8-only value must be rejected"
+        );
+
+        // 有効な値のみなら解決できる（fail-open への回帰防止）。
+        let valid_only = xff_raw_headers(&[b"2001:db8::a"]);
+        assert_eq!(
+            client_ip_from_request(&valid_only, Some(peer), true),
+            Some("2001:db8::a".parse::<IpAddr>().unwrap()),
+            "valid UTF-8 value must still resolve"
+        );
     }
 
     /// NET-02: 信頼済みプロキシで `X-Forwarded-For` を解決できない場合は拒否（fail-closed）
