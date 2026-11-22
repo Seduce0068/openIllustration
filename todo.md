@@ -765,6 +765,18 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-22 コンボ第20ラウンド（review4+discovery3）: 全7担当完了。R6 で refresh セキュリティ
+  3件を是正: refresh失敗時にREFRESHED_JWTクリア、VerifyResponse.user_hash照合、
+  REFRESH_SLOT epochガード（logout/login時にインクリメント）。auth.spec.tsのrefreshモックを
+  VerifyResponse契約へ統一。doc陳腐化（UNKNOWN_TASKSのrefresh有効化/R3-10根拠/
+  cron MAILTO/R1-17,R1-18/OPERATIONAL_POLICYのtests136/重複語）も修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests136、npm audit ルート+e2e 含む）。
+  残タスク候補（投票一覧取得失敗時の古い通報、監査タイムライン再取得、アップロード送信中差し替え、
+  TOCのgoBack、logout失敗通知、集計GENERATED_AT整形、export object URL、aria-label、
+  README CIゲート、CONTENT-01/06/MOD-08/AUTH/E2Eテストギャップ、tokio-test未使用、
+  finalizer部分コミットメトリクス、readinessドレイン、EnvValue取りこぼし、RSA kid整合 等）は
+  次ラウンドでタスク化して処理する。DEC-01は外部OP/JPKIクレーム仕様確定待ちで保留継続。
+
 - 2026-11-22 coding（高1件・JWT refresh 有効化）: ENABLE_AUTO_REFRESH=true へ反転。
   単一フライト＋refresh失敗時に元の401を返す契約で旧競合を解消。
   さらに refresh 成功時の新JWTを App の token signal ではなく api_fetch 専用

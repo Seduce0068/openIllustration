@@ -108,12 +108,16 @@ test.describe('R5-04: Export My Data', () => {
     let refreshSucceeds = false;
     let refreshAttempts = 0;
     const exportAuthHeaders: string[] = [];
+    // R2-REFRESH-SEC: 新 JWT の失効フェーズと user_hash 不一致フェーズ用のフラグ。
+    let refreshedTokenRevoked = false;
+    let refreshUserHash = 'mock_user_hash';
 
     await page.route('**/me/export', async route => {
       const authorization = route.request().headers()['authorization'];
       exportAuthHeaders.push(authorization);
       // refresh 成功後の新トークンによる再送（2回目の試行）だけ 200 を返す。
-      if (authorization === 'Bearer refreshed_jwt_token') {
+      // R2-REFRESH-SEC: 失効フェーズでは同じトークンにも 401 を返す。
+      if (authorization === 'Bearer refreshed_jwt_token' && !refreshedTokenRevoked) {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
@@ -142,7 +146,7 @@ test.describe('R5-04: Export My Data', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'refreshed_jwt_token' })
+        body: JSON.stringify({ authorized: true, user_hash: refreshUserHash, token: 'refreshed_jwt_token' })
       });
     });
     await loginAndOpenDashboard(page);
@@ -160,6 +164,29 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
     expect(refreshAttempts).toBeGreaterThanOrEqual(1);
     expect(exportAuthHeaders).toContain('Bearer refreshed_jwt_token');
+
+    // R2-REFRESH-SEC-1: refresh 失敗で REFRESHED_JWT がクリアされる回帰。
+    // 成功フェーズの新 JWT を失効させ、refresh を失敗側へ戻す。
+    refreshedTokenRevoked = true;
+    refreshSucceeds = false;
+    await page.getByTestId('export-my-data').click();
+    await expect(page.getByTestId('export-error')).toHaveText('ログインが必要です', { timeout: 10000 });
+    // クリア前は保持中の新 JWT が送られる（元の 401 は呼び出し側へ返る）。
+    expect(exportAuthHeaders[exportAuthHeaders.length - 1]).toBe('Bearer refreshed_jwt_token');
+
+    // 次の試行では REFRESHED_JWT が消え、ログイン時のトークンへ戻る。
+    await page.getByTestId('export-my-data').click();
+    await expect(page.getByTestId('export-error')).toHaveText('ログインが必要です', { timeout: 10000 });
+    expect(exportAuthHeaders[exportAuthHeaders.length - 1]).toBe('Bearer mock_jwt_token');
+
+    // R2-REFRESH-SEC-2: user_hash 不一致の refresh 応答から得た JWT は採用しない。
+    const beforeMismatch = exportAuthHeaders.length;
+    refreshSucceeds = true;
+    refreshUserHash = 'other_user_hash';
+    await page.getByTestId('export-my-data').click();
+    await expect(page.getByTestId('export-error')).toHaveText('ログインが必要です', { timeout: 10000 });
+    expect(exportAuthHeaders.slice(beforeMismatch)).not.toContain('Bearer refreshed_jwt_token');
+    expect(exportAuthHeaders[exportAuthHeaders.length - 1]).toBe('Bearer mock_jwt_token');
   });
 
   test('R5-04: click が例外を投げた場合は固定文言のエラーを表示し、完了文言を出さないこと', async ({ page }) => {

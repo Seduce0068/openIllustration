@@ -234,9 +234,15 @@ thread_local! {
     static SHARED_TOKEN: RefCell<Option<ReadSignal<Option<String>>>> = const { RefCell::new(None) };
     /// App が登録する JWT 書き込み側。refresh 成功とログイン成功で同じ値を set する。
     static SHARED_TOKEN_WRITE: RefCell<Option<WriteSignal<Option<String>>>> = const { RefCell::new(None) };
+    /// App が登録する現在の user_hash signal。refresh 応答の user_hash と突き合わせ、
+    /// 別ユーザー Cookie の JWT を採用しないための照合元にする。
+    static SHARED_USER_HASH: RefCell<Option<ReadSignal<Option<String>>>> = const { RefCell::new(None) };
     /// refresh 成功で得た新 JWT。App の token signal を更新すると一覧フェッチ Effect
     /// が再加熱されビューが再マウントされるため、api_fetch 専用に別スロットで保持する。
     static REFRESHED_JWT: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// logout/login でインクリメントする epoch。in-flight の refresh が古いセッションの
+    /// JWT を書き戻すのを防ぐ（claim 時に捕捉した値と完了時に照合する）。
+    static REFRESH_EPOCH: Cell<u64> = const { Cell::new(0) };
     /// 401 を拾った最初の呼び出しだけが refresh を開始するための完了スロット。
     static REFRESH_SLOT: Rc<RefCell<RefreshSlot>> = Rc::new(RefCell::new(RefreshSlot::new()));
 }
@@ -245,6 +251,31 @@ thread_local! {
 fn register_shared_token(read: ReadSignal<Option<String>>, write: WriteSignal<Option<String>>) {
     SHARED_TOKEN.with(|slot| *slot.borrow_mut() = Some(read));
     SHARED_TOKEN_WRITE.with(|slot| *slot.borrow_mut() = Some(write));
+}
+
+/// App の user_hash signal を共有状態へ登録する（マウント前に一度だけ呼ぶ）。
+fn register_user_hash(read: ReadSignal<Option<String>>) {
+    SHARED_USER_HASH.with(|slot| *slot.borrow_mut() = Some(read));
+}
+
+/// 現在ログイン中の user_hash を共有 signal から読む。signal の borrow をまたいで
+/// 副作用を呼ばないよう、先に値を取り出してから返す（current_jwt と同じ契約）。
+fn current_user_hash() -> Option<String> {
+    SHARED_USER_HASH.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .and_then(|signal| signal.get_untracked())
+    })
+}
+
+/// 現在の refresh epoch を読む。
+fn current_refresh_epoch() -> u64 {
+    REFRESH_EPOCH.with(|epoch| epoch.get())
+}
+
+/// logout/login で epoch を進め、進行中の refresh を無効化する。
+fn bump_refresh_epoch() {
+    REFRESH_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
 }
 
 /// 現在の JWT を共有 signal から読む。signal の borrow をまたいで副作用を呼ばないよう
@@ -290,12 +321,14 @@ enum RefreshOutcome {
 }
 
 /// 単一フライトの状態。`in_flight` の間は後続の 401 を待機させ、完了結果を
-/// すべての待機者へ同じ値で渡す。
+/// すべての待機者へ同じ値で渡す。`epoch` は claim 時に捕捉した refresh epoch で、
+/// logout/login が挟まった場合は完了時の JWT 書き戻しを拒否する。
 #[derive(Default)]
 struct RefreshSlot {
     in_flight: bool,
     result: Option<RefreshOutcome>,
     waiters: Vec<Waker>,
+    epoch: u64,
 }
 
 impl RefreshSlot {
@@ -304,24 +337,36 @@ impl RefreshSlot {
     }
 
     /// フライトを開始できれば `true`（リーダー）。既に進行中なら `false`（待機者）。
-    /// 新しいフライトでは前回の完了結果を必ずクリアする。
+    /// 新しいフライトでは前回の完了結果を必ずクリアし、現在の epoch を捕捉する。
     fn claim(&mut self) -> bool {
         if self.in_flight {
             return false;
         }
         self.in_flight = true;
         self.result = None;
+        self.epoch = current_refresh_epoch();
         true
     }
 
     /// 完了を記録し、待機中のタスクをすべて起こす。
-    fn complete(&mut self, outcome: RefreshOutcome) {
-        self.result = Some(outcome);
+    /// epoch が一致するときだけ JWT を書き戻す。logout/login が挟まって
+    /// 不一致なら古い JWT は書き戻さず、待機者へ `Failed` を配る。
+    fn complete(&mut self, outcome: RefreshOutcome) -> RefreshOutcome {
+        let outcome = if self.epoch == current_refresh_epoch() {
+            if let RefreshOutcome::Token(token) = &outcome {
+                set_refreshed_jwt(token.clone());
+            }
+            outcome
+        } else {
+            RefreshOutcome::Failed
+        };
+        self.result = Some(outcome.clone());
         self.in_flight = false;
         let waiters = std::mem::take(&mut self.waiters);
         for waker in waiters {
             waker.wake();
         }
+        outcome
     }
 
     /// 完了済みなら結果を返す。
@@ -359,25 +404,34 @@ impl std::future::Future for RefreshWaiter {
 }
 
 /// `/auth/refresh` へ Cookie 付きで POST する。Authorization ヘッダもボディも送らない。
-async fn perform_refresh() -> RefreshOutcome {
+/// VerifyResponse の `user_hash` も返し、呼び出し側で現在のログインユーザーと照合する。
+async fn perform_refresh() -> (RefreshOutcome, Option<String>) {
     let request = Request::post(&format!("{API_BASE}/auth/refresh"))
         .credentials(RequestCredentials::Include)
         .build();
     let Ok(request) = request else {
-        return RefreshOutcome::Failed;
+        return (RefreshOutcome::Failed, None);
     };
     let Ok(response) = request.send().await else {
-        return RefreshOutcome::Failed;
+        return (RefreshOutcome::Failed, None);
     };
     if !response.ok() {
-        return RefreshOutcome::Failed;
+        return (RefreshOutcome::Failed, None);
     }
     match response.json::<VerifyResponse>().await {
-        Ok(data) if data.authorized => match data.token {
-            Some(token) if !token.is_empty() => RefreshOutcome::Token(token),
-            _ => RefreshOutcome::Failed,
-        },
-        _ => RefreshOutcome::Failed,
+        Ok(data) => {
+            let user_hash = data.user_hash;
+            let outcome = if data.authorized {
+                match data.token {
+                    Some(token) if !token.is_empty() => RefreshOutcome::Token(token),
+                    _ => RefreshOutcome::Failed,
+                }
+            } else {
+                RefreshOutcome::Failed
+            };
+            (outcome, user_hash)
+        }
+        Err(_) => (RefreshOutcome::Failed, None),
     }
 }
 
@@ -389,15 +443,28 @@ async fn join_refresh() -> RefreshOutcome {
         return RefreshWaiter { slot }.await;
     }
 
-    let outcome = perform_refresh().await;
-    if let RefreshOutcome::Token(token) = &outcome {
-        set_refreshed_jwt(token.clone());
+    let (outcome, refresh_user_hash) = perform_refresh().await;
+    // 別ユーザー Cookie の JWT を採用しない。VerifyResponse の user_hash が
+    // 現在の user_hash signal と一致しなければ Failed に落とす（fail-closed）。
+    let outcome = match (outcome, refresh_user_hash) {
+        (RefreshOutcome::Token(token), Some(hash))
+            if current_user_hash().as_deref() == Some(hash.as_str()) =>
+        {
+            RefreshOutcome::Token(token)
+        }
+        _ => RefreshOutcome::Failed,
+    };
+    // complete が claim 時の epoch を検証し、不一致なら JWT を書き戻さず
+    // 待機者へ Failed を配る。待機者を起こす前に結果を確定させる。
+    let outcome = slot.borrow_mut().complete(outcome);
+    if outcome == RefreshOutcome::Failed {
+        // 失効済み JWT を送り続けないよう REFRESHED_JWT をクリアする。
+        // 元の 401 は api_fetch_loop 側でそのまま呼び出し側へ返す契約は維持。
+        clear_refreshed_jwt();
     }
-    // refresh 失敗時はここで画面遷移しない。元の 401 を呼び出し側へ返し、
-    // 各ビューの既存固定文言（「再ログインが必要です」等）で復帰を案内する。
-    // 画面遷移はユーザーが LOG OUT を押したとき（handle_logout）だけ行う。
-    // 待機者を起こす前に結果を確定させ、全員が同じ値を読めるようにする。
-    slot.borrow_mut().complete(outcome.clone());
+    // refresh 失敗時はここで画面遷移しない。各ビューの既存固定文言
+    // （「再ログインが必要です」等）で復帰を案内する。画面遷移はユーザーが
+    // LOG OUT を押したとき（handle_logout）だけ行う。
     outcome
 }
 
@@ -1626,6 +1693,8 @@ pub fn App() -> impl IntoView {
 
     // api_fetch が試行ごとに現在の JWT を読めるよう、App の signal を共有状態へ登録する。
     register_shared_token(token, set_token);
+    // refresh 応答の user_hash を現在のログインユーザーと照合するためにも登録する。
+    register_user_hash(user_hash);
 
     // 直接リンクの hash は「保留値」としてだけ保持する。未認証では従来どおり
     // login を表示し、認証成功後にこの値を適用する。
@@ -1741,6 +1810,8 @@ pub fn App() -> impl IntoView {
 
     let handle_login_success = move |hash: String, jwt: String| {
         set_user_hash.set(Some(hash));
+        // 先に epoch を進め、前回セッションの in-flight refresh を無効化する。
+        bump_refresh_epoch();
         // 共有 signal へ set する。refresh 成功時も同じ signal を通るため
         // api_fetch は常に最新の JWT を読める。
         clear_refreshed_jwt();
@@ -1754,7 +1825,11 @@ pub fn App() -> impl IntoView {
     // ログイン画面へ戻す。API の成否にかかわらず画面は必ずログインへ戻し、
     // 未認証（トークン無し／401 済み）でも安全なよう失敗はすべて無視する。
     let handle_logout = move |_| {
-        let token = token.get_untracked();
+        // 進行中の refresh を無効化し、完了後に旧 JWT が書き戻されるのを防ぐ。
+        bump_refresh_epoch();
+        // refresh 済みなら新 JWT（REFRESHED_JWT）を優先してサーバの新 sid を失効させる。
+        // 旧 token signal を読むと refresh 後のログアウトで新セッションが残る。
+        let token = current_jwt();
         clear_refreshed_jwt();
         set_token.set(None);
         set_user_hash.set(None);

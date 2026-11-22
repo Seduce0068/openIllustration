@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T23:55:00+09:00"
+  at: "2026-11-23T00:20:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T23:55:00+09:00"
+  at: "2026-11-23T00:20:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -140,6 +140,25 @@ auth は既存3件・全体69件を維持する。
 再クリックする。`export-error` 消滅・`export-status`（エクスポート完了）表示・
 `refreshAttempts>=1`・`Bearer refreshed_jwt_token` での再送を同じ `test()` 内で確認する
 （新規 `test()` なし、export3件・全体69件を維持）。
+
+R2-REFRESH-SEC では、上記の回復経路へ次の3契約を追加した（既存の数値は不変）。
+
+- **失敗時のクリア**: `join_refresh` は `RefreshOutcome::Failed` のとき
+  `clear_refreshed_jwt()` を呼ぶ。失効済み JWT を後続の試行へ渡さず、元の 401
+  レスポンスをそのまま呼び出し側へ返す契約と 401 固定文言ビューは維持する。
+- **user_hash 照合**: `perform_refresh` は `VerifyResponse` の `user_hash` も返し、
+  `join_refresh` が App の `user_hash` signal（thread_local 共有スロットへ登録）と
+  照合する。不一致または欠落なら `REFRESHED_JWT` をクリアして `Failed` とし、
+  別ユーザー Cookie の JWT を採用しない。
+- **epoch ガード**: `REFRESH_SLOT` が `epoch: u64` を保持し、`claim` で現在 epoch を
+  捕捉、`complete` で一致したときだけ `set_refreshed_jwt` を実行する。ログイン成功・
+  ログアウトで epoch をインクリメントし、in-flight 完了後の旧 JWT 書き戻しを防ぐ。
+  不一致なら待機者へ `Failed` を配る。
+
+E2E の回帰は既存ケース内のみ。`auth.spec.ts` の refresh モックを `authorized` /
+`user_hash` / `token` 付きの `VerifyResponse` 契約へ揃え、`export.spec.ts` の401ケースへ
+失敗時クリアと user_hash 不一致のアサーションを追加した。新規 `test()` は追加せず、
+auth 3件・export 3件・全体69件を維持する。
 
 ### 言語宣言方針とリリース時ログ方針（R2-LEGACY-LANG）
 

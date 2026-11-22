@@ -78,14 +78,21 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
       });
     });
 
-    // R2-REFRESH-ORIGIN: /auth/refresh はモック200で通し、Origin / Sec-Fetch-Site を記録する。
+    // R2-REFRESH-SEC: /auth/refresh モックは VerifyResponse 契約
+    // （authorized / user_hash / token）を満たす200応答へ揃える。
+    // R2-REFRESH-ORIGIN: Origin / Sec-Fetch-Site も従来どおり記録する。
     let refreshOrigin: string | undefined;
     let refreshFetchSite: string | undefined;
+    const refreshBody = { authorized: true, user_hash: 'mock_user_hash', token: 'refreshed_jwt_token' };
     await page.route('**/auth/refresh', async route => {
       const headers = route.request().headers();
       refreshOrigin = headers['origin'];
       refreshFetchSite = headers['sec-fetch-site'];
-      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(refreshBody),
+      });
     });
 
     await page.goto('/');
@@ -110,9 +117,11 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     const probe = await page.evaluate(async () => {
       const API_BASE = window.location.origin;
       const response = await fetch('/auth/refresh', { method: 'POST' });
-      return { API_BASE, status: response.status };
+      return { API_BASE, status: response.status, body: await response.json() };
     });
     expect(probe.status).toBe(200);
+    // R2-REFRESH-SEC: モック本文が VerifyResponse 契約どおりであることを検証する。
+    expect(probe.body).toEqual(refreshBody);
     await expect.poll(() => refreshOrigin).toBe(probe.API_BASE);
     // ヘッダ欠損はサーバ契約で許可のため、cross-site でなければよい。
     expect(refreshFetchSite).not.toBe('cross-site');

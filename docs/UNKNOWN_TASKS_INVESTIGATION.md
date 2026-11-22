@@ -12,10 +12,10 @@ tags:
   - agent-team
 generated:
   by: dsh (agent team)
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-23T00:20:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-23T00:20:00+09:00"
 status: historical
 ---
 
@@ -54,7 +54,7 @@ status: historical
 | R1-02 | E2E がほぼ全テストで API をモックし、実サーバーとの結合が未検証 | 中 | `e2e/tests/economy.spec.ts:17-83` 他 — 実 API を通すのは `auth.spec.ts:4-18` のみ | 0.80 |
 | R1-03 | バックアップのローテーション本体（保持期間・MIN_KEEP 削除）が自動テスト未カバー | 中 | `scripts/test-backup-rotate.sh:55-133`、`scripts/backup-rotate.sh:116-133` | 0.90 |
 | R1-04 | clippy の警告ポリシーがローカルと CI で逆方向に差分 | 中 | `.github/workflows/ci.yml:31` vs `AGENTS.md:47` | 0.70 |
-| R1-05 | cron 例の `MAILTO` プレースホルダ（対応済み: 現在は `__SET_ME__`、Runbook で差し替え手順を記載） | 低 | `deploy/openillustration-backup.cron:11` | 0.75 |
+| R1-05 | cron 例の `MAILTO` はテンプレートとして `__SET_ME__` を維持（配置時に実宛先へ差し替え必須、Runbook :145 依存） | 低 | `deploy/openillustration-backup.cron:11` | 0.75 |
 | R1-06 | markdownlint ゲートが `docs/` 配下のみでルート直下 Markdown を検査しない | 低 | `.github/workflows/ci.yml:34` の glob が `"docs/**/*.md"` | 0.80 |
 | R1-07 | `test-backup-rotate.sh` のテスト名が実際の検証内容と一致しない | 低 | `scripts/test-backup-rotate.sh:83` | 0.95 |
 | R1-08 | Playwright の並列度が CI（workers=1）とローカル（CPU数）で異なる | 低 | `e2e/playwright.config.ts:31-34` | 0.65 |
@@ -76,10 +76,12 @@ status: historical
 | R1-16 | ファイル選択 input が `display:none` でキーボード操作不能 | 中 | `client/src/lib.rs:561-564` | 0.90 |
 
 **未確認（r1-client）**: 1件目は静的推論で実 multipart バイト列は未実行。見送り候補のうち
-「セッション期限切れ時の自動 refresh/logout 欠如」は**基盤のみ実装 2026-11-22**: 共有 JWT signal と
-`api_fetch` / `api_fetch_request` による 401 の1回 refresh 再試行・単一フライトの基盤を追加したが、
-全 fetch への波及で既存の 401 固定文言ビューと一覧フェッチの再描画が競合したため
-`ENABLE_AUTO_REFRESH=false` で自動有効化は保留。E2E 回復フェーズも未統合のまま（69件維持）。
+「セッション期限切れ時の自動 refresh/logout 欠如」は**解消済み 2026-11-22**: 共有 JWT signal と
+`api_fetch` / `api_fetch_request` による 401 の1回 refresh 再試行・単一フライトを実装し、
+`ENABLE_AUTO_REFRESH=true` で有効化済み。refresh 成功時の新 JWT は api_fetch 専用
+REFRESHED_JWT スロットで保持してビュー再マウントを回避し、失敗時は元の401を返す。
+E2E 回復フェーズは export.spec.ts の既存 test 内へ統合済み（69件維持）。
+詳細は TEST_SPECIFICATION.md の「認証トークン失効時の回復経路」を参照。
 「バイト単位のハッシュ接頭辞スライス」は未対応のまま候補として残す。
 price 入力の `min`/`max` 未指定は**対応済み 2026-11-21**: `min="0"` /
 `max="1000000"` を指定し、送信前ゲート（`client/src/lib.rs` の `price_range_error`）を
@@ -177,7 +179,7 @@ Reported/Rejected でも CID を知っていれば配信されることは**コ�
 | # | finding | 重要度 | 根拠 | 信頼度 |
 | --- | --- | --- | --- | --- |
 | R3-09 | E2E が Chrome 1 ブラウザ固定で Edge/Brave/Firefox/Safari のカバレッジが皆無 | **高** | `e2e/playwright.config.ts:42-50`、`e2e/ci-e2e.sh:60-69,102-103` | 0.97 |
-| R3-10 | ログイン→失効（logout/401/トークン更新）の UI journey に E2E が無い（**解消済み 2026-11-22**: `e2e/tests/auth.spec.ts` の既存 logout テスト内へ 401 → `/auth/refresh` 1回 → 再試行200 のフェーズを統合。新規 `test()` なしで69件維持） | **高** | `e2e/tests/auth.spec.ts:3-41`、`client/src/lib.rs:144-152,267-283` | 0.90 |
+| R3-10 | ログイン→失効（logout/401/トークン更新）の UI journey に E2E が無い（**解消済み 2026-11-22**: `e2e/tests/export.spec.ts:106-163` の既存 401 ケース内へ 401 → `/auth/refresh` → 再試行200 の回復フェーズ（Origin 検証は auth.spec.ts:81-118 の別観点）を既存 test 内へ統合。新規 `test()` なしで69件維持） | **高** | `e2e/tests/auth.spec.ts:3-41`、`client/src/lib.rs:144-152,267-283` | 0.90 |
 | R3-11 | 通報→投票→確定の「投票」区間に E2E が無く UI はゼロ署名 | **高** | `e2e/tests/moderation.spec.ts:6-116`、`client/src/lib.rs:710-732,777-784` | 0.88 |
 | R3-12 | E2E の 8/10 テストが `/auth/verify` をスタブし実 JWT 経路を通らない（分母10件は2026-11-18当時で未更新。現在値は TEST_SPECIFICATION を参照） | **高** | `e2e/tests/economy.spec.ts:17-26` 他 | 0.93 |
 | R3-13 | 空状態・エラー状態・ローディング状態の UI が E2E で未検証 | 中 | `client/src/lib.rs:304-312,645-647,790-792,423,253` | 0.95 |
@@ -264,9 +266,9 @@ Reported/Rejected でも CID を知っていれば配信されることは**コ�
 
 P0 — 本番公開前に解消すべきセキュリティ／データ完全性の穴（確定項目が中心）:
 
-1. R1-17 年齢ゲートを OIDC callback / refresh へ配線し、信頼属性必須でフェイルクローズ。
+1. R1-17 年齢ゲート（既対応 2026-11-22: AGE-03 で検証済み、履歴）。
 2. R2-09 `get_content` へ status 条件を追加し、Reported/Rejected を 404/403 にする。
-3. R1-18 refresh Cookie の `Path` を `/auth` へ広げ、logout 時のファミリ失効を有効化。
+3. R1-18 refresh Cookie の `Path=/auth`（既対応 2026-11-22: TASK_INVENTORY:451 / ADR-0002:113、履歴）。
 4. R1-24 ウォレット bind を DB に記録し verify の必須条件にする。
 5. R4-01 / R4-04 本番起動時に OIDC 必須設定と `PINATA_JWT` を検査し fail-closed 化。
 6. R1-09 アップロード UI の file パートへ MIME を設定（実サーバーで1件送信確認）。

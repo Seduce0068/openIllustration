@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T23:15:00+09:00"
+  at: "2026-11-23T00:20:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -55,6 +55,15 @@ generated:
   session Cookie は発行しないため削除対象に含まない。JWT は応答本文のみで搬送する。back-channel logout では logout token の `iat` を更新時刻とみなし、
   `revoked_subs.revoked_at` は受け取った `iat` からのみ導出する（サーバー時刻 `Utc::now()` では上書きしない）。
   `iat > now + OIDC_CLOCK_SKEW_SECS` と未来 `nbf` は401で拒否し、nbf クレーム欠落は受理する。
+- クライアントの自動 refresh は単一フライトの完了値を無批判に採用しない。`/auth/refresh` の
+  `VerifyResponse` は `authorized` / `user_hash` / `token` を契約とし、`user_hash` が
+  現在のログインユーザーと不一致なら JWT を採用せず `Failed` として元の 401 を返す。
+  refresh 失敗時は api_fetch 専用の `REFRESHED_JWT` をクリアし、失効済み JWT を
+  送り続けない。さらに refresh フライトは `claim` 時に epoch を捕捉し、logout/login で
+  進めた epoch と `complete` 時に照合して、不一致なら旧 JWT を書き戻さず待機者へ
+  `Failed` を配る。いずれもクライアント側の fail-closed 契約であり、サーバーの
+  Cookie ファミリ失効や Origin 検査を置き換えるものではない。既存の固定文言・
+  data-testid・E2E69件 / check23 / doctor53 / migrations14 の数値は不変。
 - 失効判定（`sid` と sub 失効閾値）は DB を正本とし、認証リクエストごとに DB へ照会するため、
   他インスタンスで記録された logout / BAN / backchannel logout が即時に反映される。
   起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
@@ -633,4 +642,4 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
-  tests132 の数値は不変。
+  tests136 の数値は不変。
