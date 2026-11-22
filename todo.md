@@ -37,6 +37,21 @@ status: current
 
 ### 優先度: 高
 
+- [ ] **AGE_* 非UTF-8をfail-closed化（env分類器へ統一）**
+  — 根拠 `common/src/age.rs:110` / `server/src/bin/doctor.rs:440` / review R1-AR+R2-ER / high。
+  std::env::var(key).ok() が NotUnicode を None 化し明示設定必須・信頼属性必須を解除し得る。
+- [ ] **ALLOWED_ORIGINSを本番起動ゲートへ**
+  — 根拠 `docs/OPERATIONAL_POLICY.md:333` / `server/src/lib.rs:1268` / review R1-AR / high。
+  doctor は必須とするが run() の config_errors に無く、未設定でも起動して CORS/refresh が全拒否になる。
+- [ ] **本番UIのモック認証表示を整備** — 根拠 `client/src/lib.rs:1774` / `README.md:22` / discovery R5-VU / high。
+  「CONNECT WITH JPKI」と表示しつつ mock_token を送信。501時に「本番認証は未実装」文言へ。
+- [ ] **shfmt -d を実効ゲートへ** — 根拠 `.github/workflows/ci.yml:57` / review R4-OPS / high。
+  差分があっても終了コード0で書式ゲートが無効。shfmt -l の出力非空を失敗にする。
+- [ ] **AUDIT_EXPECT_ROOTの更新ライフサイクルを定義** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:75` / discovery R5-VU / high。
+  監査ログ追加以後の root 再取得・世代保存・リストア時選択の手順が無く毎日のバックアップが失敗し得る。
+- [ ] **prepare-distribution.shの出力先検証を回帰テストへ** — 根拠 `scripts/test-prepare-distribution.sh` / discovery R3-TQ / high。
+  '..'成分・repo_root置換・jq/cargo欠落・INT/TERMrollback・旧成果物削除失敗が未検証。
+
 - [x] **リモートDBでJWT失効がメモリに閉じ込められる問題を是正** — 根拠 `server/src/lib.rs` AuthClaims抽出器 / review R1-AR / 重大度 high。
   revoked_sessions/revoked_subs_before がプロセス内のみで、複数インスタンス構成では logout/BAN が他インスタンスへ波及しない。
   DB照会または単一インスタンス強制でfail-closedにする。
@@ -147,6 +162,35 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] Tailwind をビルド時 CSS 化し、外部 CDN/フォント依存と無 SRI を解消（R1-10、2026-11-17 対応済み）
 
 ### 優先度: 中
+
+- [ ] **リフレッシュトークン回転をアトミック化** — 根拠 `server/src/oidc.rs:1384` / review R2-ER / 中。
+  消費コミット後にbanチェック・発行が失敗すると旧トークン消費済み・新規未発行でファミリ失効する。
+- [ ] **OIDC_MAX_AUTH_AGE_SECSに上限を設定** — 根拠 `server/src/oidc.rs:42` / review R2-ER / 中。
+  u64::MAX等が受理されauth_time検証が実質無効化されるfail-open。
+- [ ] **verify_order MISMATCH更新のCAS影響件数 checking** — 根拠 `server/src/payments.rs:736` / review R2-ER / 中。
+- [ ] **doctor FK検査の未設定/非UTF-8時スキップ** — 根拠 `server/src/lib.rs:1194` / review R1-AR+R2-ER / 中。
+  file:local.dbへフォールバックし無関係DBを「production」として報告する。
+- [ ] **PINATA判定を真の単一情報源へ** — 根拠 `server/src/lib.rs:980` / review R1-AR / 中。
+  production_config_errorsとpinata_jwt_production_likeが同一比較を再実装している。
+- [ ] **instance.lock/resolve_database_url判定をcommonへ集約** — 根拠 `server/src/bin/backup_db.rs:118` / review R1-AR / 中。
+  3CLIで約40行ずつ複製されfail-closed判定がdriftし得る。
+- [ ] **session Cookie未使用の露出を解消** — 根拠 `server/src/oidc.rs:1284` / review R3-AU / 中。
+  Path=/ SameSite=Laxで全リクエストに送られ logout時も削除されない。
+- [ ] **/metrics/client-eventsのcount改ざん防止** — 根拠 `server/src/lib.rs:429` / review R3-AU / 中。
+  匿名でcount=1000まで加算できメトリクスを押し上げられる。
+- [ ] **通報失敗時に進捗文言をクリア** — 根拠 `client/src/lib.rs:3525` / discovery R5-VU / 中。
+- [ ] **小説本文の不正UTF-8をDECODE FAILEDへ** — 根拠 `client/src/lib.rs:2514` / discovery R5-VU / 中。
+- [ ] **/content 401に再ログイン導線を追加** — 根拠 `client/src/lib.rs:2000` / discovery R5-VU / 中。
+- [ ] **公開集計の解析失敗をStatsFailure::Parseへ** — 根拠 `client/src/lib.rs:3414` / discovery R5-VU / 低。
+- [ ] **暗号化バックアップの復元パスを統一** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:155` / discovery R5-VU / 中。
+- [ ] **cron版にオーケストレーション完成例を同梱** — 根拠 `deploy/openillustration-backup.cron:24` / discovery R5-VU / 中。
+- [ ] **SC2034除外を関数単位へ限定** — 根拠 `.github/workflows/ci.yml:54` / review R4-OPS / 低。
+- [ ] **README/REVIEW_REPORTのADR状態記述を是正** — 根拠 `README.md:26` / `docs/REVIEW_REPORT.md:507` / discovery+review / 低。
+- [ ] **旧プロジェクト名とconsole.logを整理** — 根拠 `server/src/lib.rs:1` / `client/src/lib.rs:2233` / review+discovery / 低。
+- [ ] **lang=jaと英語ラベルの不一致を解消** — 根拠 `client/index.html:2` / discovery R5-VU / 低。
+- [ ] **全文検索/sha3保留/iss-aud要件を棚卸しへ追記**
+  — 根拠 `docs/DETAILED_DESIGN.md:587` / `docs/HANDOFF.md:341` / `todo.md:872` / discovery / 低。
+- [ ] **request_idと4xx本文のオラクルを仕様へ** — 根拠 `docs/TEST_SPECIFICATION.md` / discovery R3-TQ / 低。
 
 - [x] **AUDIT_EXPECT_ROOTをサーバ起動ゲートへ**
   — 根拠 `server/src/bin/doctor.rs` / `server/src/lib.rs` production_config_errors / review R1-CF / 中。
@@ -277,6 +321,9 @@ P1（本番運用の健全性）:
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
+
+- [ ] **k-匿名性の要否を裁定** — 根拠 `todo.md:709` / discovery R5-VU / 保留(speculative)。
+  公開集計の小セル推論（review R3-AU medium）と同一課題。ADR-0008と照らして採用/却下を決定。
 
 - [x] **E2E解析失敗フェーズを既存2件へ統合** — 根拠 `e2e/tests/export.spec.ts` / `e2e/tests/moderation.spec.ts` / discovery R4 / 低。
   EXPORT-11(不正JSON)とREPORTS-ERR(型壊れJSON)を既存test内へ。69件維持。
@@ -672,6 +719,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 コンボ第8ラウンド（review 4 + discovery 3 担当）: 全7担当完了。
+  R6 で重複排除・Runtime Proof 確認のうえ新規28件（高6/中20/低2＋保留1）を追記。
+  高優先は AGE_* 非UTF-8 fail-open、ALLOWED_ORIGINS 起動ゲート欠落、本番UIのモック認証、
+  shfmt -d の実効性欠如、AUDIT_EXPECT_ROOT 更新ライフサイクル、prepare-distribution 破壊範囲検証。
+  k-匿名性は speculative のまま保留、国別しきい値は DEC-02 法務待ちで却下せず据え置き。
+  次は高優先から coding。残り高8・中20・低9。
 
 - 2026-11-22 coding（低優先5件）: EXPORT-11/REPORTS-ERRの解析失敗フェーズを既存E2E内へ、
   監査Reason注記を到達可能な表現へ。ADR-0011/0012を実装実態へ同期（Proposed維持）、
