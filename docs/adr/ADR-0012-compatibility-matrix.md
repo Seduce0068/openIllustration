@@ -5,7 +5,7 @@ description: "ブラウザ×OS×主要フローのマトリクスと verified/pr
 tags: [adr, compatibility, browser, proposed]
 generated:
   by: dsh
-  at: "2026-11-22T07:00:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 ---
 
 ## ADR-0012: ブラウザ互換マトリクスと状態分類
@@ -49,6 +49,29 @@ R1 分析に従い、状態を明示して未検証を可視化する。
 8. 本 ADR が Accepted へ進み最小バージョンと受入フローが合意されるまで、
    COMPAT-01 / COMPAT-02 は `not_evaluated` を維持し、
    本番移行ゲートの Level 1 をブロッカーとして扱う。
+
+## 現状の互換マトリクス（Level 0 観測）
+
+Decision の3軸（ブラウザ × OS × 主要フロー）を、ADR 時点の観測で埋めた表を以下に示す。
+状態は Decision 2 の4値（`verified` / `proxy_only` / `not_verified` / `blocked`）に従う。
+認証・決済のセルは `functional_only` を記録する。これは実接続なき確認を示す修飾子であり、
+`verified` へ昇格させない。表中に無い組み合わせは `not_verified` として扱い、
+暗黙に除外しない（Decision 6）。最小バージョンは未決定のため、
+特定バージョンを「対応」と書かない。入力は `e2e/tests/build-gate.spec.ts` の
+`compat-selection` 添付（選択プロジェクトと firefox / webkit の可否）とする。
+
+| ブラウザ | OS | 閲覧 | 投稿 | 認証 | 決済 | 根拠・備考 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Chrome | Linux (Kubuntu 2026.04) | `verified` | `verified` | `functional_only` | `functional_only` | E2E の `chrome` チャンネルで実行。JPKI / JPYC はモック |
+| Chrome | Android 16 / その他 | `not_verified` | `not_verified` | `not_verified` | `not_verified` | 実機未検証。暗黙除外しない |
+| Edge | Linux (Kubuntu 2026.04) | `proxy_only` | `proxy_only` | `functional_only` | `functional_only` | `same_engine_proxy`（Chromium 系の代替確認） |
+| Edge | Android 16 / その他 | `not_verified` | `not_verified` | `not_verified` | `not_verified` | 実機未検証 |
+| Brave | Linux (Kubuntu 2026.04) | `proxy_only` | `proxy_only` | `functional_only` | `functional_only` | `same_engine_proxy`（Chromium 系の代替確認） |
+| Brave | Android 16 / その他 | `not_verified` | `not_verified` | `not_verified` | `not_verified` | 実機未検証 |
+| Firefox | Linux (Kubuntu 2026.04) | `not_verified` | `not_verified` | `not_verified` | `not_verified` | 共有ライブラリ不足で実実行していない |
+| Firefox | Android 16 / その他 | `not_verified` | `not_verified` | `not_verified` | `not_verified` | 実機未検証 |
+| Safari | macOS / iOS | `not_verified` | `not_verified` | `not_verified` | `not_verified` | `webkit_proxy` の対象。WebKit 実実行が無いため未検証 |
+| Safari | Linux / Windows / Android | `blocked` | `blocked` | `blocked` | `blocked` | 理由: 当該 OS では実行不可。提供範囲は最小バージョン合意時に再確認 |
 
 ## Consequences
 

@@ -278,13 +278,13 @@ P1（本番運用の健全性）:
 
 ### 優先度: 低
 
-- [ ] **E2E解析失敗フェーズを既存2件へ統合** — 根拠 `e2e/tests/export.spec.ts` / `e2e/tests/moderation.spec.ts` / discovery R4 / 低。
+- [x] **E2E解析失敗フェーズを既存2件へ統合** — 根拠 `e2e/tests/export.spec.ts` / `e2e/tests/moderation.spec.ts` / discovery R4 / 低。
   EXPORT-11(不正JSON)とREPORTS-ERR(型壊れJSON)を既存test内へ。69件維持。
-- [ ] **ADR-0011の3層計測と実装の差分を解消** — 根拠 `docs/adr/ADR-0011` / `e2e/tests/metrics.spec.ts` / discovery R5 / 低。
+- [x] **ADR-0011の3層計測と実装の差分を解消** — 根拠 `docs/adr/ADR-0011` / `e2e/tests/metrics.spec.ts` / discovery R5 / 低。
   層3(転送量/wasmサイズ)と3回中央値を追加するか、Level 0は部分計測と明記。
-- [ ] **ADR-0012の互換マトリクス実体を作成** — 根拠 `docs/adr/ADR-0012` / discovery R5 / 低。
-- [ ] **監査Reasonの「全文は署名付きエクスポート」案内を到達可能な表現へ** — 根拠 `client/src/lib.rs:2708` / discovery R5 / 低。
-- [ ] **doc-numbersのコメント「実害なし」根拠を実態へ** — 根拠 `scripts/test-doc-numbers.sh:36` / review R5 / 低。
+- [x] **ADR-0012の互換マトリクス実体を作成** — 根拠 `docs/adr/ADR-0012` / discovery R5 / 低。
+- [x] **監査Reasonの「全文は署名付きエクスポート」案内を到達可能な表現へ** — 根拠 `client/src/lib.rs:2708` / discovery R5 / 低。
+- [x] **doc-numbersのコメント「実害なし」根拠を実態へ** — 根拠 `scripts/test-doc-numbers.sh:36` / review R5 / 低。
 - [x] **UI 文言を日本語へ統一（日英混在解消）** — 根拠 `client/src/lib.rs` alert/status/sr-only 文言 / discovery R5-VU / 中。
   `<html lang="ja">` と Intl ja-JP なのにナビ・エラーが英語固定。読み上げ部分を優先して辞書化。
 - [x] **通報フォームの必須入力と dedicated エラーを追加** — 根拠 `client/src/lib.rs` submit_report / discovery R5-VU / 中。
@@ -672,6 +672,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（低優先5件）: EXPORT-11/REPORTS-ERRの解析失敗フェーズを既存E2E内へ、
+  監査Reason注記を到達可能な表現へ。ADR-0011/0012を実装実態へ同期（Proposed維持）、
+  doc-numbersコメントの根拠を実態へ修正。親がコメント内test()の誤計測を修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests123）。残りは高2のみ。
 
 - 2026-11-22 coding（中優先7件）: /auth/refreshへOrigin完全一致＋cross-site拒否、
   nullオリジン拒否。XFF非UTF-8 fail-closed、safety copy 0600、systemd/cron排他明記。

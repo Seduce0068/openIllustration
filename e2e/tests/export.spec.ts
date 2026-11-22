@@ -23,6 +23,9 @@ test.describe('R5-04: Export My Data', () => {
     revoked_subs: [],
   };
 
+  // client/src/lib.rs の EXPORT_PARSE_ERROR で確定した固定文言。
+  const exportParseErrorText = 'エクスポート結果の解析に失敗しました。';
+
   async function loginAndOpenDashboard(page: Page): Promise<void> {
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
@@ -52,11 +55,23 @@ test.describe('R5-04: Export My Data', () => {
     let requestMethod: string | undefined;
     let authHeader: string | undefined;
     let requestCount = 0;
+    // 後続フェーズでレスポンスを不正 JSON へ差し替えるためのフラグ。
+    let malformedResponse = false;
 
     await page.route('**/me/export', async route => {
       requestCount += 1;
       requestMethod = route.request().method();
       authHeader = route.request().headers()['authorization'];
+      if (malformedResponse) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          // version が文字列の不正 JSON。DataExport として読めず、
+          // 「0 件」成功にせず固定エラーを表示する（EXPORT-11）。
+          body: JSON.stringify({ ...exportFixture, version: 'invalid' }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -76,6 +91,16 @@ test.describe('R5-04: Export My Data', () => {
     expect(download.suggestedFilename()).toBe('openillustration-export.json');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
+
+    // 追加フェーズ（EXPORT-11）: 同じケース内でレスポンスを不正 JSON へ差し替える。
+    // 型として読めないため export-error に固定文言のみを出し、成功文言は出さない。
+    malformedResponse = true;
+    await page.getByTestId('export-my-data').click();
+
+    await expect(page.getByTestId('export-error')).toHaveText(exportParseErrorText, { timeout: 10000 });
+    await expect(page.getByTestId('export-error')).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('export-status')).toHaveCount(0);
+    expect(requestCount).toBe(2);
   });
 
   test('R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること', async ({ page }) => {

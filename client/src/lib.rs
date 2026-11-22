@@ -2714,7 +2714,7 @@ where
                                             </div>
                                             <p class="text-gray-300">"By: " {log.changed_by.clone()}</p>
                                             <p class="italic">"Reason: " {log.reason.clone().unwrap_or_default()}</p>
-                                            <p class="text-[8px] text-gray-500">"※ 表示は要約です。全文は署名付きエクスポートで確認"</p>
+                                            <p class="text-[8px] text-gray-500">"※ 表示は要約です。全文は運用者へお問い合わせください"</p>
                                             <p class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
                                         </div>
                                     }

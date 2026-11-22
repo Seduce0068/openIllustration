@@ -34,3 +34,13 @@
   Edge / Brave は `same_engine_proxy`、Safari は `webkit_proxy`、
   認証 / 決済は `functional_only`、最小バージョン未決定、暗黙除外禁止。
   Status: Proposed。
+- [ADR-0011](ADR-0011-performance-measurement.md): 現状の Level 0 実装が層1（E2E 所要時間）＋
+  層2（`first-contentful-paint` / `responseEnd`）の単回計測のみであることを Decision /
+  Consequences へ明記。層3（転送バイト数・wasm サイズ）と3回測定の中央値は Level 1
+  （受入値合意後）の実装項目として宣言を実態へ合わせ（実装は追加せず）。
+  Status: Proposed 維持。
+- [ADR-0012](ADR-0012-compatibility-matrix.md): ブラウザ（Chrome / Edge / Brave / Firefox /
+  Safari）× OS × 閲覧 / 投稿 / 認証 / 決済の現状マトリクスを表として追加。
+  Edge / Brave は `same_engine_proxy`、Safari は `webkit_proxy`、認証 / 決済は
+  `functional_only`、最小バージョン未決定・暗黙除外禁止を明示し、入力を
+  `compat-selection` 添付とする旨を記載。Status: Proposed 維持。

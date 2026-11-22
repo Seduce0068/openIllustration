@@ -30,6 +30,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   // 固定文言。Vote と同様に、サーバー本文や生エラーは画面へ出さない契約を検証する。
   const reportsHttpErrorText = (status: number) => `投票一覧の取得に失敗しました (HTTP ${status}).`;
   const reportsNetworkErrorText = 'Network error loading reports.';
+  const reportsParseErrorText = '投票一覧の解析に失敗しました。';
 
   // submit_report の失敗時の固定文言。
   // 成功・進捗は status シグナルへ入り <p role="status" class="text-xs text-gray-400">
@@ -612,12 +613,31 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
   test('REPORTS-ERR-01: /mod/reports が 500 のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {
     const reportRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
+    // 後続フェーズでステータス200・壊れたフィールド型の JSON へ差し替えるためのフラグ。
+    let brokenPayload = false;
     await page.route('**/mod/reports', async route => {
       reportRequests.push({
         method: route.request().method(),
         path: new URL(route.request().url()).pathname,
         authorization: route.request().headers()['authorization'],
       });
+      if (brokenPayload) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          // report_id が文字列、reason が数値など Vec<Report> として読めない値。
+          // 生の serde エラーもサーバー本文（センチネル）も出さないことを検証する。
+          body: JSON.stringify([{
+            report_id: 'not-a-number',
+            target_cid: 42,
+            reason: 123,
+            created_at: [],
+            status: true,
+            debug: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN',
+          }]),
+        });
+        return;
+      }
       await route.fulfill({
         status: 500,
         contentType: 'application/json',
@@ -637,6 +657,17 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     expect(reportRequests).toEqual([
       { method: 'GET', path: '/mod/reports', authorization: 'Bearer mock_jwt_token' },
     ]);
+
+    // 追加フェーズ: 同じケース内でステータス200だがフィールド型が壊れた JSON へ差し替え、
+    // 再マウントして初回フェッチをやり直す。固定文言のみを出し、サーバー本文と
+    // 「保留投票なし」の誤表示は出さない（REPORTS-ERR / REPORTS_PARSE_ERROR）。
+    brokenPayload = true;
+    await openModeration(page);
+
+    await expect(reportsError).toHaveText(reportsParseErrorText, { timeout: 10000 });
+    await expect(reportsError).toHaveAttribute('role', 'alert');
+    await expect(reportsError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    await expect(page.getByText('NO_PENDING_VOTES')).toHaveCount(0);
   });
 
   test('REPORTS-ERR-02: /mod/reports が network error のとき reports-error に固定文言を表示し NO_PENDING_VOTES を出さない', async ({ page }) => {

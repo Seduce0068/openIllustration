@@ -351,7 +351,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     ]);
 
     // 各 Reason 行の直後に要約注記が添わる（全部で3行）。全文は署名付きエクスポート側の契約。
-    await expect(card.getByText('※ 表示は要約です。全文は署名付きエクスポートで確認')).toHaveCount(3);
+    await expect(card.getByText('※ 表示は要約です。全文は運用者へお問い合わせください')).toHaveCount(3);
 
     // R2: 監査日時は Intl.DateTimeFormat で整形表示され、生 ISO の区切り 'T' を含まない。
     // ロケール依存の完全一致は期待せず、書式と生 ISO 属性の保持のみを確認する。

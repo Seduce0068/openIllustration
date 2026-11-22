@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -27,10 +27,15 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   real-api 4 / search 1 / upload 6）。この内訳は `e2e/tests/*.spec.ts` の `test()` 定義を数えた値である。
   auth は3件のまま。認証トークン失効時の回復経路は基盤実装のみで自動有効化は保留
   （`ENABLE_AUTO_REFRESH=false`）、E2E 回復フェーズは未統合。新規 `test()` は追加せず69件を維持する。
-  R2-URL の回帰は既存 E2E 内へ統合し、新規 `test()` は追加していない（69件を維持）。
-  低優先(1)〜(7)の E2E 側反映でも `test()` 定義は増えていない（69件を維持）。
+  R2-URL の回帰は既存 E2E 内へ統合し（下記の EXPORT-11 / REPORTS-ERR / 監査注記も既存テスト内へ統合）、新規 `test()` は追加していない（69件を維持）。
+  低優先(1)〜(7)の E2E 側反映でも（EXPORT-11 / REPORTS-ERR / 監査注記の追加分は既存テスト内へ統合済み） `test()` 定義は増えていない（69件を維持）。
   `upload.spec.ts` / `export.spec.ts` の件数文言は2件のみ更新し、GENERATED_AT 期待値と
-  固定文言（禁止リスト）は据え置いた。`moderation.spec.ts` は REPORT-ERR-01 内へ
+   固定文言（禁止リスト）は据え置いた。
+   EXPORT-11 の解析失敗フェーズは `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ、
+   REPORTS-ERR の解析失敗フェーズは `moderation.spec.ts` の REPORTS-ERR-01 内へ、
+   監査注記のアサーション更新は `integrity.spec.ts` の既存 test 内へ追加した
+   （いずれも既存テスト内へ統合、新規 `test()` なし、E2E69件を維持）。
+   `moderation.spec.ts` は REPORT-ERR-01 内へ
   空 CID / 空 reason の検証フェーズを、`search.spec.ts` は既存1件内へ `q='Ghost'` の
   0件表示とクリア復帰フェーズを、`integrity.spec.ts` は既存2件内へ
   aria-label フォールバックと要約注記のアサーションを追加した（新規 `test()` なし）。
@@ -164,7 +169,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-08 | `common::summarize_reason` の境界・日本語・PII除去 | 空は空のまま。119/120 Unicode 文字は変更なし、121 文字は先頭119文字＋`…`。日本語も文字数で計数し同じ境界になる。`@` を含むトークン（メール）、`://` を含むトークン（括弧付き URL を含む）、`www.` で始まるトークン、IPv4 らしいドット区切り、Unicode 数字4連続（全角含む）は `[redacted]` に置換し、3桁の数字列は残る | 実装済み（`summarize_reason_redacts_pii` の4桁ちょうど境界と `summarize_reason_redacts_additional_pii_patterns`）。E2E オラクルは `e2e/tests/moderation.spec.ts` の `GOV-01 (summary): PII を含む元理由は要約済み文字列のみ表示され、メール/電話/URL は露出しない`（下記「GOV-01 要約表示の E2E」）。通報理由の送信時バイト契約（2000 B）も本ゲートで扱う: 日本語666文字（1998 B）は受理、667文字（2001 B）は拒否。クライアントは `submit_report` の `validate_report_input` 直後に `report_reason_byte_error` を検査し、固定文言を validationError（`role="alert"`）へ set して早期 return するため、超過入力は通信前に拒否され HTTP リクエストは0本。これは要約の120 Unicode 文字上限（文字数）とは別の UTF-8 バイト上限であり、`maxlength` は UTF-16 単位のため守れない。境界回帰はクライアント側の既存 `#[cfg(test)]` モジュール内の単体テストへ統合し、E2E `test()` 69件は不変 |
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
-| MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
+| MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み。REPORTS-ERR-01 の既存1件内へ、ステータス200だがフィールド型が壊れた JSON（`report_id` が文字列・`reason` が数値）を返すフェーズを追加し、`reports-error` の固定文言 `投票一覧の解析に失敗しました。`・サーバー本文センチネル非表示・`NO_PENDING_VOTES` 非表示を検証（新規 `test()` なし、moderation14件・全体69件を維持） |
 | MOD-13 | `GET /mod/stats/public`（ADR-0008 段階2の公開集計） | 未認証は401。認証済みは運用者未設定・未登録・BAN済みでも200。レスポンスは `generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみで、bans / unbans / unpins と CID・reason・`user_hash` は型に存在しない。`require_moderation_operator` を呼ばない | 実装済み（3表の読み取りは `BEGIN DEFERRED` 単一スナップショット、`/mod/stats` と同一の読み取りトランザクション）。サーバー側テスト5件: `test_public_mod_stats_requires_authentication` / `test_public_mod_stats_allows_general_sub` / `test_public_mod_stats_allows_operator_sub` / `test_public_mod_stats_response_contains_no_forbidden_fields` / `test_build_public_mod_stats_matches_source`。E2E 定義数は69件のまま変更なし（新規 E2E なし）。既存ゲート（E2E69件 / check23 / doctor53 / migrations14）は不変 |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
@@ -228,7 +233,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | AUDIT-04 | `GET /content/{cid}/audit` の取得上限・新着順と検証限界 | 最新 MAX_AUDIT_LIST(500) 件を `log_id` 新しい順（DESC）で返す。501件投入なら先頭 `log_id=501`・末尾 `2`・全体降順（最古の1は除外）。古い行はAPIから参照不可で、完全検証には署名付きエクスポート/DBを使用。レスポンスには `previous_log_hash` が無く `reason` はマスクされるため、レスポンス単体でのハッシュ連鎖検証は成立しない | 実装済み（`get_content_audit` の `ORDER BY log_id DESC LIMIT ?`）。サーバー側テスト `get_content_audit_caps_at_max_audit_list` が501件投入・500件返却・先頭501・末尾2・降順を検証。E2E は `e2e/tests/integrity.spec.ts` の `/audit` モック（log_id DESC の3件）で FORENSIC_TIMELINE の表示順が新しい順であることを検証。完全な連鎖検証は AUDIT-01（署名付きエクスポート/DB）を参照 |
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
-| EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。下記同節を参照 |
+| EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -799,6 +804,15 @@ E2E 定義数は69件のまま変更しない。
 | レスポンスの `entry_hash` | 生 reason から `calculate_hash_v2()` で計算した値と一致（マスク後では再計算しない） |
 | DB の `reason` / `entry_hash` | 更新前と同じ生値。再計算値も DB の `entry_hash` と一致 |
 
+#### 監査 Reason 注記の案内文言
+
+FORENSIC_TIMELINE の各 Reason 行に添わる注記は、UI から到達可能な案内へ変更した。
+`client/src/lib.rs` では `※ 表示は要約です。全文は運用者へお問い合わせください` を表示し、
+旧文言 `※ 表示は要約です。全文は署名付きエクスポートで確認` は使用しない。
+`entry_hash` の生値表示と DB 全文は不変で、完全検証は従来どおり AUDIT-01 が担う。
+E2E は `e2e/tests/integrity.spec.ts` の FORENSIC_TIMELINE 既存 test 内で同注記が3行あることを検証し
+（新規 `test()` なし、integrity6件・全体69件を維持）、DB 全文や署名付きエクスポートの本文には触れない。
+
 #### MOD-12: 投票署名 v2 の4件
 
 `moderation_vote_message_v2` は `domain` / `report_id` / `result` / `juror_hash` の4項目を
@@ -855,6 +869,11 @@ JOIN / WHERE / ORDER には影響しない。
 `{"version":"invalid","contents":[]}` で固定文言が返ることと、正常系
 （`{"version":1,...}`）で従来どおり `エクスポート完了: 1 件のレコードをダウンロードしました。`
 が返ることを検証する。エラー時は `export-error` のみへ表示し `export-status` は空のまま。
+
+E2E 側は `e2e/tests/export.spec.ts` のダウンロード成功シナリオ（既存1件目）へフェーズを追加し、
+モック応答を `version: 'invalid'` の不正 JSON へ差し替えて同じボタンを再クリックする。
+`export-error` に固定文言 `エクスポート結果の解析に失敗しました。` が `role="alert"` 付きで出る、
+`export-status` は `toHaveCount(0)` であることを検証する（新規 `test()` なし、export3件・全体69件を維持）。
 
 ### 監査一覧の上限・新着順の検証（AUDIT-04）
 
@@ -1127,6 +1146,13 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 2. REPORTS-ERR-02: `/mod/reports` を `route.abort()` で失敗させる。`reports-error` に
    固定文言 `Network error loading reports.` が表示され、`NO_PENDING_VOTES` が
    出ないことを確認する。
+3. REPORTS-ERR-01 の追加フェーズ（解析失敗）: 同じ test() 内でモック応答をステータス200の
+   `{ report_id: 'not-a-number', target_cid: 42, reason: 123, created_at: [], status: true,
+   debug: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }` を要素に持つ配列へ差し替え、再マウントして
+   初回フェッチをやり直す。`Vec<Report>` として読めないため `reports-error` に
+   `投票一覧の解析に失敗しました。`（REPORTS_PARSE_ERROR）が `role="alert"` 付きで表示され、
+   サーバー本文センチネルと `NO_PENDING_VOTES` は出ない。新規 `test()` は追加せず
+   REPORTS-ERR-01 の既存1件内へ統合（moderation14件・全体69件を維持）。
 
 実装は失敗時に `reports` を空にせず既存データを維持し、成功時にのみ一覧を更新して
 エラーをクリアする。JSON 解析失敗は固定文言 `投票一覧の解析に失敗しました。` を
@@ -1196,7 +1222,10 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    `data-testid="export-status"` は `toHaveCount(0)`（成功文言も出ない）。
    これは EXPORT-11 の `エクスポート結果の解析に失敗しました。`（レスポンス解析失敗）とは
    別事象であり、固定文言と testid の両方で切り分ける。
-5. `e2e/tests/export.spec.ts` は定義3件（上記1・2・4）。chromium で pass を確認済み。
+5. `e2e/tests/export.spec.ts` は定義3件（上記1・2・4）。上記1のダウンロード成功シナリオ内へ
+   EXPORT-11 の解析失敗フェーズを追加し、`version` が文字列の不正 JSON で
+   `export-error` に固定文言、`export-status` は空を検証（既存テスト内へ統合、新規 `test()` なし、
+   export3件・全体69件を維持）。chromium で pass を確認済み。
    webkit はホスト側の libicu/libxml2 不在で起動不可（環境依存）のため未検証。
 
 ### E2E エラーパスシナリオ（DASH-ERR / R5-04 network / AUTH-500 / AUDIT-500 / CONTENT-ERR-404 / 500）

@@ -1,7 +1,10 @@
 ---
 type: Reference
 title: "未知の残タスク・機能追加案 調査レポート"
-description: "エージェントチーム探索で抽出した TASK_INVENTORY 未記載タスク（2026-11-18時点の履歴、E2E 当時9/35件・11 spec→現在69件/12 spec）。"
+description: >-
+  エージェントチーム探索で抽出した TASK_INVENTORY 未記載タスク
+  （2026-11-18時点の履歴、E2E 当時9/35件・11 spec→現在69件/12 spec）。
+  現在値は TEST_SPECIFICATION を参照。
 tags:
   - tasks
   - backlog
@@ -9,10 +12,10 @@ tags:
   - agent-team
 generated:
   by: dsh (agent team)
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 status: historical
 ---
 
@@ -176,7 +179,7 @@ Reported/Rejected でも CID を知っていれば配信されることは**コ�
 | R3-09 | E2E が Chrome 1 ブラウザ固定で Edge/Brave/Firefox/Safari のカバレッジが皆無 | **高** | `e2e/playwright.config.ts:42-50`、`e2e/ci-e2e.sh:60-69,102-103` | 0.97 |
 | R3-10 | ログイン→失効（logout/401/トークン更新）の UI journey に E2E が無い（**解消済み 2026-11-22**: `e2e/tests/auth.spec.ts` の既存 logout テスト内へ 401 → `/auth/refresh` 1回 → 再試行200 のフェーズを統合。新規 `test()` なしで69件維持） | **高** | `e2e/tests/auth.spec.ts:3-41`、`client/src/lib.rs:144-152,267-283` | 0.90 |
 | R3-11 | 通報→投票→確定の「投票」区間に E2E が無く UI はゼロ署名 | **高** | `e2e/tests/moderation.spec.ts:6-116`、`client/src/lib.rs:710-732,777-784` | 0.88 |
-| R3-12 | E2E の 8/10 テストが `/auth/verify` をスタブし実 JWT 経路を通らない（分母10件は2026-11-18当時、現在は69件/12 spec のため更新要） | **高** | `e2e/tests/economy.spec.ts:17-26` 他 | 0.93 |
+| R3-12 | E2E の 8/10 テストが `/auth/verify` をスタブし実 JWT 経路を通らない（分母10件は2026-11-18当時で未更新。現在値は TEST_SPECIFICATION を参照） | **高** | `e2e/tests/economy.spec.ts:17-26` 他 | 0.93 |
 | R3-13 | 空状態・エラー状態・ローディング状態の UI が E2E で未検証 | 中 | `client/src/lib.rs:304-312,645-647,790-792,423,253` | 0.95 |
 | R3-14 | アップロード成功 E2E が不正な JXL バイトとスタブ応答で成功を宣言 | 中 | `e2e/tests/upload.spec.ts:25-43` vs `lib.rs:2504-2513` | 0.92 |
 | R3-15 | 新規投稿→閲覧のクロス画面 journey が E2E で接続されていない | 中 | `upload.spec.ts:43` で終了し、閲覧側は別 CID をモック | 0.85 |
@@ -185,6 +188,7 @@ Reported/Rejected でも CID を知っていれば配信されることは**コ�
 **補足**: 2026-11-18 当時は TASK_INVENTORY が「E2E 9件」と記載する一方、ソースは
 `test()` 35 件（11 spec ファイル）で26件差があった（履歴）。2026-11-22 実測では
 69 件 / 12 spec であり、当時の 9件/35件は現在値ではない。
+旧割合は注記のみで現行値へ更新していない。現在値は TEST_SPECIFICATION を参照。
 
 ## Round 4: 運用・本番化・CI/CD
 

@@ -35,7 +35,12 @@ assert_numbers_match "e2e total" "$e2e_total" "$measured_n"
 
 # --- 1b. E2E 総数表記の古い件数検出（未注記は fail-closed） ----------------
 # 走査対象は TEST_SPECIFICATION.md（$spec）のみ。他ドキュメントは対象外だが、
-# 現状は全て注記済み（当時 / 旧 / 履歴 / 当初）のため実害はない。
+# 「全て注記済みで実害なし」という前提は実態と一致しない:
+# HANDOFF.md の旧総数（当時 9 件 / 65 件 / 66 件）と
+# UNKNOWN_TASKS_INVESTIGATION.md の旧割合（当時 9/35 件・分母 10 件）は
+# 注記（当時 / 履歴）が付くのみで現行値へ更新されていなかった。
+# 両文書には「現在値は TEST_SPECIFICATION を参照」の注記を付けて対処し、
+# 本ゲートの走査対象・ロジックは変更しない。現行値は TEST_SPECIFICATION を正とする。
 # フルスイートの E2E 総数を示す文脈（"定義数はN件" / "実測は全N件"）の数値を走査し、
 # 実測値（e2e_total / measured_n）と異なる数値には同じ行の注記
 # （当時 / 旧 / 履歴 / 当初）を要求する。注記が無ければ FAIL。

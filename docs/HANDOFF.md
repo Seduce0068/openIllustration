@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T10:30:00+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -114,7 +114,7 @@ CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジ�
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
 解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
-wasm build / E2E(9件) がすべて成功した。
+wasm build / E2E(9件) がすべて成功した（9件は当時値。現在値は TEST_SPECIFICATION を参照）。
 
 配布物のライセンス同梱は `bash scripts/prepare-distribution.sh <出力先>` で生成（LICENSE / NOTICE / DEPENDENCIES.tsv /
 THIRD_PARTY_LICENSES/）。出力先は 0755、LICENSE / NOTICE / DEPENDENCIES.tsv / THIRD_PARTY_LICENSES/*.txt は 0644 で配置
@@ -133,7 +133,9 @@ cargo run -p server --bin verify_audit_log -- \
   --database-url file:local.db --expect-root <保存した Root>
 ```
 
-CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる（2026-11-17 に9件成功）。固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color`
+CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる
+（2026-11-17 に9件成功、当時値。現在値は TEST_SPECIFICATION を参照）。
+固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color`
 解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。8080 が他プロセスに占拠されても動くよう `E2E_CLIENT_PORT` の既定値は 18080。
 
 E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
@@ -142,7 +144,7 @@ E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22 以上が�
 `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
-2026-11-15 に trunk 0.21.14・`E2E_CLIENT_PORT=18080` で 9 件成功を確認。
+2026-11-15 に trunk 0.21.14・`E2E_CLIENT_PORT=18080` で 9 件成功を確認（9 件は当時値。現在値は TEST_SPECIFICATION を参照）。
 
 ```bash
 cd e2e
@@ -339,7 +341,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - 依存は `uuid` 1.29.2 / `coins-bip32` 0.17.2 へパッチ更新。`sha3` 0.12 は破壊的変更のため保留。
 - 2026-11-20 時点のローカルゲート（スナップショット・履歴）: `cargo test --workspace` 679 件
   （common 66 / server 536 / client 57 / restore_db 20）、E2E 65 件。いずれも 0 失敗。
-  件数はコード上の `#[test]` / `#[tokio::test]` 属性数。
+  件数はコード上の `#[test]` / `#[tokio::test]` 属性数。旧 E2E 65 件は当時値で未更新。
+  現在値は TEST_SPECIFICATION を参照。
 - 現行値（2026-11-22 実コード照合）: 単体テスト属性数は common 76 / server 622（bin 160 含む）/
   client 58 の計 756 件、E2E は 69 件（12 spec）。他ゲート実測は doctor 53 テスト /
   doctor check 23 / migration 14 / `backup_db` 17 / `sign_audit_export` 17 /
