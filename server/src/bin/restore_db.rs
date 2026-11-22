@@ -117,6 +117,13 @@ fn ensure_no_live_instance(db_path: &Path, side: &str) -> anyhow::Result<()> {
     let contents = std::fs::read_to_string(&lock)
         .with_context(|| format!("cannot read {side} instance lock: {lock_display}"))?;
     let (pid, starttime) = parse_instance_lock(&contents);
+    // PID が読めない壊れ内容は所有者を識別できないため、stale とみなさず拒否する
+    // （サーバー起動側と同じ fail-closed 契約）。
+    if common::instance_lock::instance_lock_owner_unknown(pid) {
+        anyhow::bail!(
+            "instance lock has no identifiable owner ({lock_display}); refusing to treat as stale"
+        );
+    }
     if instance_lock_owner_alive(pid, starttime) {
         anyhow::bail!(
             "refusing restore: a live server instance holds the {side} instance lock \
@@ -477,6 +484,16 @@ mod tests {
         let backup = dir.path("backup.db");
         let target = dir.path("target.db");
         write_lock(&target, &format!("{}\n", std::process::id()));
+        assert!(ensure_restore_is_safe(&backup, &target).is_err());
+    }
+
+    #[test]
+    fn unparsable_lock_is_rejected_fail_closed() {
+        // PID が読めない壊れロックは stale とみなさず、バックアップ側と同じく拒否する。
+        let dir = TempDir::new();
+        let backup = dir.path("backup.db");
+        let target = dir.path("target.db");
+        write_lock(&target, "not-a-pid\n");
         assert!(ensure_restore_is_safe(&backup, &target).is_err());
     }
 

@@ -37,6 +37,14 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await loginButton.click();
     await rejected;
 
+    // R2-CLIENT-LOGIN-RESULT: リクエスト準備失敗時（.unwrap() を Result 伝播へ置換した経路）
+    // と同じく、失敗時は既存固定文言の role=alert を表示しボタンを再活性化する。
+    // 新規 test() は追加せず、auth 3件を維持する。
+    const loginError = page.getByTestId('login-error');
+    await expect(loginError).toHaveAttribute('role', 'alert');
+    await expect(loginError).toHaveText('認証に失敗しました (HTTP 403).');
+    await expect(loginButton).toBeEnabled();
+
     await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
   });
 

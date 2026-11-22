@@ -27,8 +27,6 @@ gloo-net = { version = "0.7", features = ["http"] }
 web-sys = { version = "0.3", features = ["HtmlInputElement", "File", "FileList", "FormData", "Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData", "History", "Location", "UrlSearchParams"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-sha2 = "0.11"
-hex = "0.4"
 jxl-oxide = "0.12"
 pulldown-cmark = { version = "0.13.4", features = ["default"] }
 
@@ -36,4 +34,9 @@ pulldown-cmark = { version = "0.13.4", features = ["default"] }
 # wasm32 では wasm_js バックエンドを明示的に有効化する。
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
+
+# チェックサム照合の検証だけに使うため、本番 wasm には入れない（cargo test では従来どおり利用可能）。
+[dev-dependencies]
+sha2 = "0.11"
+hex = "0.4"
 

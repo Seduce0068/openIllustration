@@ -52,6 +52,21 @@ cd client && npm ci && npm run build-css && cd ..   # Tailwind CSS をビルド�
 `http://localhost:3000` が埋め込まれ、HTTPS 配信下では mixed content になります）。
 `OIL_API_BASE=https://<本番オリジン> OIL_MOCK_AUTH=0 trunk build --release` のように指定し、
 `cargo run -p server --bin doctor -- --strict` を合わせて実行してください。
+`--features dev-console` は付けないでください。dev-console は内部 URL・リクエストデータ・
+スタック情報をコンソールへ出す開発専用機能で、リリース wasm には含めません。
+`OIL_API_BASE` は HTTPS のオリジンのみ指定できます。スキーム後に `/` `?` `#` `@` がある値や、
+`127.0.0.1` / `[::1]` / `0.0.0.0` / `localhost` を含む値はビルド時に拒否されます。
+
+配布前に埋め込みオリジンを確認してください。
+
+```bash
+# リリースビルド（dev-console なし・本番オリジン明示）
+OIL_API_BASE=https://api.example.org OIL_MOCK_AUTH=0 trunk build --release
+# 生成物へ意図したオリジンが埋め込まれていることを確認する
+grep -raF 'https://api.example.org' client/dist
+# 配置後は開発者ツールのネットワークで API 要求が本番オリジン宛のみであることを確認する
+# （開発既定値の文字列はコード内に残るため、文字列の有無ではなく実際の要求先で判定する）
+```
 
 ### 2. バックエンドの起動
 

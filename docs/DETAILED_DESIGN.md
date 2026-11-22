@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T15:00:00+09:00"
+  at: "2026-11-23T04:10:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -649,8 +649,8 @@ INSERT を同じトランザクションでコミットする。この原子的�
 | CLI | 純粋関数 / 境界関数 | テスト数 | 対応ゲート / 参照 |
 | --- | --- | --- | --- |
 | `backup_db` | `parse_args_from` / `parse_str_args` / `ensure_no_live_instance` / `resolve_database_url` | 17 | 詳細設計 §5 |
-| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 53（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1＋AGE_POLICY_CONFIGURED3＋バックアップ/TZ診断3＋バックアップ生値判定1件） | CLI-01 / CFG-01 |
-| `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 20 | 詳細設計 §5 |
+| `doctor` | `parse_args_from` / `check_all_with` / `should_fail` | 54（既存29＋境界テスト7＋OIDC URL検証3＋oidc_required_assurance1＋設定検証3＋ヘルプ優先2＋AUDIT_EXPECT_ROOT1＋AGE_POLICY_CONFIGURED3＋バックアップ/TZ診断3＋バックアップ生値判定1件＋LOG_FORMAT診断1件） | CLI-01 / CFG-01 |
+| `restore_db` | `parse_args_from` / `ensure_no_sidecars` / `ensure_restore_is_safe` | 21 | 詳細設計 §5 |
 | `sign_audit_export` | `parse_args_from` / `check_signing_key_permissions` / `ensure_include_reasons_allowed` / `resolve_database_url` | 17（鍵権限・トークン・上書き拒否10＋include_reasons本番ガード2＋DB接続先必須化5） | AUDIT-02 |
 | `verify_audit_export` | `parse_args_from` / `verify_export` / `VerificationOutcome::exit_code` | 20 | CLI-02 / AUDIT-01 |
 | `verify_audit_log` | `parse_args_from` / `check_expect_root` / `resolve_database_url` | 14 | AUDIT-01 |

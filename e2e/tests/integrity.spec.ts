@@ -496,6 +496,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page.getByTestId('support-overlay')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('support-overlay').getByText('Support Creator'))
       .toHaveAttribute('lang', 'en');
+    // R2-CLIENT-LANG: お気に入りボタンの英文 aria-label と言語宣言を整合させる。
+    await expect(page.getByTestId('favorite-toggle')).toHaveAttribute('lang', 'en');
 
     const card = page.getByTestId('content-card').first();
     const auditToggle = card.getByRole('button', { name: 'Audit' });
@@ -511,6 +513,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     const dialog = page.getByRole('dialog', { name: 'Forensic Timeline' });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute('id', /^forensic-timeline-.+$/);
+    // R2-CLIENT-LANG: 監査 dialog の英文 aria-label と言語宣言を整合させる。
+    await expect(dialog).toHaveAttribute('lang', 'en');
 
     // aria-controls の参照先と dialog の id が厳密に一致することを確認する。
     const controls = await auditToggle.getAttribute('aria-controls');
@@ -535,6 +539,28 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page).toHaveURL(/report_cid=/);
     const prefilledCid = page.locator('input[placeholder="TARGET CID"]');
     await expect(prefilledCid).toHaveValue(MOCK_CID);
+
+    // R2-CLIENT-LANG: 通報フォームの英文 aria-label / placeholder、アップロード各ラベル、
+    // Ledger の英文警告も言語宣言を整合させる（既存 ARIA ケース内のみ、新規 test なし）。
+    await expect(prefilledCid).toHaveAttribute('lang', 'en');
+    await expect(prefilledCid).toHaveAttribute('aria-label', 'TARGET CID');
+    const reasonField = page.locator('textarea[placeholder="REASON"]');
+    await expect(reasonField).toHaveAttribute('lang', 'en');
+    await expect(reasonField).toHaveAttribute('aria-label', 'REASON');
+
+    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    for (const target of [
+      'file-upload',
+      'upload-price',
+      'upload-title',
+      'upload-description',
+      'upload-tags',
+    ]) {
+      await expect(page.locator(`label[for="${target}"]`)).toHaveAttribute('lang', 'en');
+    }
+
+    await page.getByRole('button', { name: 'LEDGER', exact: true }).click();
+    await expect(page.getByText(/LEGACY MOCK RECORDS/).first()).toHaveAttribute('lang', 'en');
   });
 
   test('R2: Audit toggle dialog closes via CLOSE button and restores focus', async ({ page }) => {

@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-23T02:55:00+09:00"
+  at: "2026-11-23T04:10:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T02:55:00+09:00"
+  at: "2026-11-23T04:10:00+09:00"
 status: current
 ---
 
@@ -40,11 +40,11 @@ status: current
     `resolve_database_url(cli, env)` が `--database-url` と `DATABASE_URL` を解決する。
     両方が未設定または空・空白のみなら固定文言で起動拒否し、値はエコーしない。
     各 CLI に5テスト（計15件）を追加し、bin テスト数は17 / 17 / 14 へ追随させた。
-    E2E69・check23・doctor53・migration14 は不変。
+    E2E69・check23・doctor54・migration14 は不変。
   - [対応済み] `doctor` の純粋関数化と自動テスト: `parse_args_from` /
     `check_all_with` / `should_fail` を分離し、23カテゴリ固定・秘密値非出力・`--strict` 判定を
-    `server/src/bin/doctor.rs` の53テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋
-    oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件）で検証（
+    `server/src/bin/doctor.rs` の54テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋
+    oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件＋LOG_FORMAT診断1件）で検証（
     CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。実 CLI で23 check(s) を確認。
   - [対応済み] `doctor` の `AUDIT_EXPECT_ROOT` 設定診断: 本番相当（mock 無効）で未設定・
@@ -76,7 +76,7 @@ status: current
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
   - [対応済み] `doctor` のネットワーク設定警告: `ALLOW_IPV4_LOCALHOST` が有効な
     ときと `TRUSTED_PROXY_CIDRS` が設定されているときに警告を追加（設定値は出力しない）。
-    検査は現行23カテゴリ、bin テストは53件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件）。
+    検査は現行23カテゴリ、bin テストは54件（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件＋LOG_FORMAT診断1件）。
     `env -i ALLOW_MOCK_AUTH=1 ./target/debug/doctor`
     の実出力で23 check(s) を確認（CLI-01 / CFG-01、
     [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
@@ -566,7 +566,7 @@ status: current
 - [対応済み] グレースフル停止: `GRACEFUL_DRAIN_TIMEOUT_SECS`（既定 30 秒、1〜300 秒）で drain に上限を設定し、超過時は警告ログを出して残接続を切断。停止シグナルで readiness を
   503 化（[REVIEW_REPORT.md](REVIEW_REPORT.md), [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 - [対応済み] `doctor` の純粋関数化: `parse_args_from` / `check_all_with` /
-  `should_fail` を分離し、`server/src/bin/doctor.rs` に53テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件）を追加。
+  `should_fail` を分離し、`server/src/bin/doctor.rs` に54テスト（既存29件＋境界テスト7件＋OIDC URL検証3件＋oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件＋LOG_FORMAT診断1件）を追加。
   検査は23カテゴリ固定、秘密値は非出力、既定は警告のみで exit 0、`--strict` は問題検出時のみ exit 1。
   `ALLOW_IPV4_LOCALHOST` / `TRUSTED_PROXY_CIDRS` も警告対象（CLI-01 / CFG-01、
   [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。

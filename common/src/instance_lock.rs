@@ -39,6 +39,12 @@ pub fn read_proc_starttime(pid: u32) -> Option<u64> {
         .ok()
 }
 
+/// PID が 0（読解不能／所有者識別不能）かどうか。
+/// 生存判定の前にこれを検査し、stale 回収ではなく fail-closed に倒す。
+pub fn instance_lock_owner_unknown(pid: u32) -> bool {
+    pid == 0
+}
+
 /// ロック所有者が生存中かを判定する。
 /// `/proc` が読めない環境では判定不能のため「生存」として起動を拒否する（fail-closed）。
 #[cfg(not(target_arch = "wasm32"))]

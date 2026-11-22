@@ -233,6 +233,27 @@ pub fn max_concurrent_requests(env_value: Option<&str>) -> usize {
         .unwrap_or(DEFAULT)
 }
 
+/// 数値系環境変数が非 UTF-8 だったときの固定警告（キー名のみ、値・生バイトはエコーしない）。
+pub fn numeric_env_non_utf8_warning(name: &str) -> String {
+    format!("{name} is not valid UTF-8; using default")
+}
+
+/// `common::env::EnvValue` を数値パーサの入力と固定警告へ変換する。
+///
+/// 未設定・非 UTF-8 は `None` として既定値フォールバックへ倒し、
+/// 非 UTF-8 のみ固定文言の警告を併返す（生バイトは保持しない）。
+/// UTF-8 の値はそのままパーサへ渡し、範囲外・不正値の判定はパーサ側が担う。
+pub fn numeric_env_value<'a>(
+    name: &str,
+    value: &'a common::env::EnvValue,
+) -> (Option<&'a str>, Option<String>) {
+    match value {
+        common::env::EnvValue::Utf8(raw) => (Some(raw.as_str()), None),
+        common::env::EnvValue::Missing => (None, None),
+        common::env::EnvValue::NonUtf8 => (None, Some(numeric_env_non_utf8_warning(name))),
+    }
+}
+
 /// 軽量メトリクス。テストから注入できるよう `AppState` に保持する。
 #[derive(Default)]
 pub struct Metrics {
@@ -857,15 +878,45 @@ pub struct Vote {
     pub signature: Vec<u8>,
 }
 
+/// `LOG_FORMAT` の分類結果。未設定・`text` は人間向け、`json` は構造化ログ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogFormatState {
+    /// テキスト形式（未設定を含む）。
+    Text,
+    /// 1行1JSONの構造化ログ。
+    Json,
+    /// 受理値外（タイポ・非 UTF-8）。テキスト形式へフォールバックする。
+    Invalid,
+}
+
+/// 不正な `LOG_FORMAT` に対する固定警告（値・生バイトは一切含めない）。
+pub const LOG_FORMAT_INVALID_WARNING: &str =
+    "LOG_FORMAT must be json or text; using text (invalid value)";
+
+/// `common::env::EnvValue` を `LOG_FORMAT` の状態へ分類する。
+/// 受理値は大小文字不問の `json` / `text` と未設定。それ以外は `Invalid`。
+pub fn log_format_state(value: common::env::EnvValue) -> LogFormatState {
+    match value {
+        common::env::EnvValue::Missing => LogFormatState::Text,
+        common::env::EnvValue::Utf8(raw) if raw.eq_ignore_ascii_case("json") => {
+            LogFormatState::Json
+        }
+        common::env::EnvValue::Utf8(raw) if raw.eq_ignore_ascii_case("text") => {
+            LogFormatState::Text
+        }
+        common::env::EnvValue::Utf8(_) | common::env::EnvValue::NonUtf8 => LogFormatState::Invalid,
+    }
+}
+
 /// `RUST_LOG` でフィルタ可能なログ subscriber を初期化する。未設定時は INFO。
 /// タイムスタンプは RFC 3339 (UTC)。
+/// `LOG_FORMAT` は `common::env::read_env` で一度だけ読み、未設定 / `json` / `text`
+/// のみを受理する。タイポ・非 UTF-8 は固定文言の警告のうえテキスト形式へフォールバックする。
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    let use_json = std::env::var("LOG_FORMAT")
-        .map(|value| value.eq_ignore_ascii_case("json"))
-        .unwrap_or(false);
-    if use_json {
+    let log_format = log_format_state(common::env::read_env("LOG_FORMAT"));
+    if log_format == LogFormatState::Json {
         tracing_subscriber::fmt()
             .json()
             .with_env_filter(filter)
@@ -878,6 +929,10 @@ fn init_tracing() {
             .with_env_filter(filter)
             .with_timer(tracing_subscriber::fmt::time::UtcTime::rfc_3339())
             .init();
+    }
+    // subscriber 初期化後に出す（初期化前の warn! は捨てられるため）。
+    if log_format == LogFormatState::Invalid {
+        warn!("{LOG_FORMAT_INVALID_WARNING}");
     }
 }
 
@@ -1697,7 +1752,19 @@ pub async fn run() -> anyhow::Result<()> {
         None
     } else {
         use std::num::NonZeroU32;
-        let per_min = rate_limit_per_min(std::env::var("RATE_LIMIT_PER_MIN").ok().as_deref());
+        let rate_limit_env = common::env::read_env("RATE_LIMIT_PER_MIN");
+        let (rate_limit_input, rate_limit_warning) =
+            numeric_env_value("RATE_LIMIT_PER_MIN", &rate_limit_env);
+        if let Some(warning) = rate_limit_warning {
+            warn!("{warning}");
+        }
+        let concurrency_env = common::env::read_env("MAX_CONCURRENT_REQUESTS");
+        let (concurrency_input, concurrency_warning) =
+            numeric_env_value("MAX_CONCURRENT_REQUESTS", &concurrency_env);
+        if let Some(warning) = concurrency_warning {
+            warn!("{warning}");
+        }
+        let per_min = rate_limit_per_min(rate_limit_input);
         let quota = governor::Quota::per_minute(
             NonZeroU32::new(per_min)
                 .unwrap_or_else(|| unreachable!("rate_limit_per_min returns a positive value")),
@@ -1705,17 +1772,21 @@ pub async fn run() -> anyhow::Result<()> {
         Some(Arc::new(RateLimitState {
             limiter: governor::RateLimiter::keyed(quota),
             concurrency: Arc::new(tokio::sync::Semaphore::new(max_concurrent_requests(
-                std::env::var("MAX_CONCURRENT_REQUESTS").ok().as_deref(),
+                concurrency_input,
             ))),
         }))
     };
 
+    let oidc_timeout_env = common::env::read_env("OIDC_HTTP_TIMEOUT_SECS");
+    let (oidc_timeout_input, oidc_timeout_warning) =
+        numeric_env_value("OIDC_HTTP_TIMEOUT_SECS", &oidc_timeout_env);
+    if let Some(warning) = oidc_timeout_warning {
+        warn!("{warning}");
+    }
     let shared_state = Arc::new(AppState {
         db: Arc::new(db),
-        http_client: build_http_client(oidc_http_timeout(
-            std::env::var("OIDC_HTTP_TIMEOUT_SECS").ok().as_deref(),
-        ))
-        .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
+        http_client: build_http_client(oidc_http_timeout(oidc_timeout_input))
+            .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
         jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth,
         ipfs_gateways,
@@ -1751,8 +1822,13 @@ pub async fn run() -> anyhow::Result<()> {
     let shutdown_flag = Arc::clone(&shared_state.shutting_down);
     let app = build_router(shared_state);
 
-    let finalize_interval_secs = std::env::var("MODERATION_FINALIZE_INTERVAL_SECS").ok();
-    let finalize_interval = moderation_finalize_interval(finalize_interval_secs.as_deref());
+    let finalize_interval_env = common::env::read_env("MODERATION_FINALIZE_INTERVAL_SECS");
+    let (finalize_interval_input, finalize_interval_warning) =
+        numeric_env_value("MODERATION_FINALIZE_INTERVAL_SECS", &finalize_interval_env);
+    if let Some(warning) = finalize_interval_warning {
+        warn!("{warning}");
+    }
+    let finalize_interval = moderation_finalize_interval(finalize_interval_input);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
     let finalizer = tokio::spawn(run_moderation_finalizer(
         worker_db,
@@ -1765,8 +1841,13 @@ pub async fn run() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("openIllustration Backend listening on {}", addr);
-    let drain_timeout_secs = std::env::var("GRACEFUL_DRAIN_TIMEOUT_SECS").ok();
-    let drain_timeout = graceful_drain_timeout(drain_timeout_secs.as_deref());
+    let drain_timeout_env = common::env::read_env("GRACEFUL_DRAIN_TIMEOUT_SECS");
+    let (drain_timeout_input, drain_timeout_warning) =
+        numeric_env_value("GRACEFUL_DRAIN_TIMEOUT_SECS", &drain_timeout_env);
+    if let Some(warning) = drain_timeout_warning {
+        warn!("{warning}");
+    }
+    let drain_timeout = graceful_drain_timeout(drain_timeout_input);
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

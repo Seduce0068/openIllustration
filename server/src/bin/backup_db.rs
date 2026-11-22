@@ -103,6 +103,13 @@ fn ensure_no_live_instance(db_path: &str) -> anyhow::Result<()> {
     let contents = std::fs::read_to_string(lock)
         .with_context(|| format!("cannot read instance lock: {lock_path}"))?;
     let (pid, starttime) = parse_instance_lock(&contents);
+    // PID が読めない壊れ内容は所有者を識別できないため、stale とみなさず拒否する
+    // （サーバー起動側と同じ fail-closed 契約）。
+    if common::instance_lock::instance_lock_owner_unknown(pid) {
+        anyhow::bail!(
+            "instance lock has no identifiable owner ({lock_path}); refusing to treat as stale"
+        );
+    }
     if instance_lock_owner_alive(pid, starttime) {
         anyhow::bail!(
             "refusing backup: a live server instance holds the instance lock \
@@ -438,14 +445,15 @@ mod tests {
     }
 
     #[test]
-    fn backup_is_allowed_for_unparsable_lock() {
+    fn backup_rejects_unparsable_lock_fail_closed() {
         if read_proc_starttime(std::process::id()).is_none() {
             return;
         }
         let dir = TempDir::new();
         let db = dir.db("app.db");
         write_lock(&db, "not-a-pid\n");
-        assert!(ensure_no_live_instance(&db).is_ok());
+        // PID が読めない壊れロックは所有者識別不能なので、stale 回収せず拒否する。
+        assert!(ensure_no_live_instance(&db).is_err());
     }
 
     // --- resolve_database_url: 暗黙既定値の撤廃 ---

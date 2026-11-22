@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T03:25:00+09:00"
+  at: "2026-11-23T04:10:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -68,7 +68,7 @@ generated:
   進めた epoch と `complete` 時に照合して、不一致なら旧 JWT を書き戻さず待機者へ
   `Failed` を配る。いずれもクライアント側の fail-closed 契約であり、サーバーの
   Cookie ファミリ失効や Origin 検査を置き換えるものではない。既存の固定文言・
-  data-testid・E2E69件 / check23 / doctor53 / migrations14 の数値は不変。
+  data-testid・E2E69件 / check23 / doctor54 / migrations14 の数値は不変。
 - 失効判定（`sid` と sub 失効閾値）は DB を正本とし、認証リクエストごとに DB へ照会するため、
   他インスタンスで記録された logout / BAN / backchannel logout が即時に反映される。
   起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
@@ -289,7 +289,8 @@ generated:
 
 - 本番用のオリジンを定義し、CORSを環境設定する。ローカル開発オリジンを本番許可設定に流用しない。
   クライアントの API オリジンはビルド時に `OIL_API_BASE` で注入する。値はオリジンのみ
-  （`<scheme>://<host>[:<port>]`、末尾 `/` は除去）とし、パス・クエリ・認証情報・機微情報は入れない。
+  （`<scheme>://<host>[:<port>]`）とし、末尾 `/`・パス・クエリ・認証情報・機微情報は入れない。
+  リリースビルドの const 検証は末尾 `/` も拒否するため、指定時に取り除くこと。
   未設定時は開発用の `http://localhost:3000`。HTTPS 配信では HTTPS オリジンを指定し mixed content を避ける。
   リリース成果物（`dev-console` feature なし）は `OIL_API_BASE` に `http://` または
   `localhost`（大小文字非区別）を含む値を指定すると const アサーションでビルドを拒否する
@@ -515,7 +516,7 @@ generated:
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、有効な `http(s)://` オリジンのみ、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
-| `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。 |
+| `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。読取は `common::env::read_env` に一本化し、未設定と `json` / `text`（大小文字不問）のみ受理。タイポ・非 UTF-8 は固定文言 `LOG_FORMAT must be json or text; using text (invalid value)` の警告のうえテキスト形式へフォールバックし、`doctor` の `production` カテゴリが同じ判定で `--strict` の警告対象にする（値・生バイトはエコーしない）。 |
 | `RETENTION_DAYS` | バックアップ運用 | 30 | `backup-rotate.sh` の保持日数。0 以上で先頭ゼロなし。 |
 | `MIN_KEEP` | バックアップ運用 | 3 | 最低保持世代数。1 以上。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
@@ -523,12 +524,12 @@ generated:
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値も固定文言（値非エコー）のハードエラーで起動拒否（fail-closed）。 |
 | `OIDC_REQUIRED_AMR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `amr`（カンマ区切り、すべて含まれること）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For`（XFF）を解釈し、追記型（末尾がピア）は末尾のピアを除去して最左のクライアントを、上書き型（末尾がピアでない）は末尾をクライアントIPとして採用する。不正エントリ・解決不能は 403（fail-closed）。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。`doctor --strict` の警告対象。読取は `common::env::read_env` に一本化し、非 UTF-8 は固定文言警告のうえ空範囲（fail-closed）。警告にはキー名と理由のみを含め、設定値・生バイトはエコーしない。`run()` の起動ログも同じ分類結果を使う。 |
-| `RATE_LIMIT_PER_MIN` | 任意 | `60` | IP 単位のリクエスト上限（1〜600）。本番相当（`ALLOW_MOCK_AUTH` 無効）のみ適用。超出は 429。 |
-| `MAX_CONCURRENT_REQUESTS` | 任意 | `16` | 同時実行リクエスト上限（1〜256）。超過は 429。`/health`・`/ready`・`/metrics` は対象外。 |
+| `RATE_LIMIT_PER_MIN` | 任意 | `60` | IP 単位のリクエスト上限（1〜600）。本番相当（`ALLOW_MOCK_AUTH` 無効）のみ適用。超出は 429。読取は `common::env::read_env` で一度だけ行い、非 UTF-8 は固定文言警告のうえ既定60へフォールバック。`doctor` も `classify` ベースで同じ警告を出す（値・生バイト非エコー）。 |
+| `MAX_CONCURRENT_REQUESTS` | 任意 | `16` | 同時実行リクエスト上限（1〜256）。超過は 429。`/health`・`/ready`・`/metrics` は対象外。読取は `common::env::read_env` で一度だけ行い、非 UTF-8 は固定文言警告のうえ既定16へフォールバック。`doctor` も `classify` ベースで同じ警告を出す（値・生バイト非エコー）。 |
 | `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む URL であること。スキームは `https` のみを受理し、`http` は `ALLOW_MOCK_AUTH` が有効な開発・隔離テスト環境でのみ受理する（本番相当では警告のうえ無視）。空要素、`{cid}` を含まない要素、その他スキームも警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
 | `IPFS_TIMEOUT_SECS` | 任意 | `15` | 各ゲートウェイへのリクエストタイムアウト秒（1〜300）。範囲外・不正値は既定値。 |
-| `GRACEFUL_DRAIN_TIMEOUT_SECS` | 任意 | `30` | グレースフル停止の drain タイムアウト秒（1〜300）。範囲外・不正値は既定30へフォールバックし `doctor` が警告（値は出力しない）。 |
-| `MODERATION_FINALIZE_INTERVAL_SECS` | 任意 | `300` | 自動確定ワーカーの周期（秒、30〜3600）。範囲外・不正値は既定300へフォールバックし `doctor` が警告（値は出力しない）。 |
+| `GRACEFUL_DRAIN_TIMEOUT_SECS` | 任意 | `30` | グレースフル停止の drain タイムアウト秒（1〜300）。読取は `common::env::read_env` で一度だけ行い、範囲外・不正値・非 UTF-8 は既定30へフォールバックし `doctor` が `classify` ベースの固定文言で警告（値・生バイトは出力しない）。 |
+| `MODERATION_FINALIZE_INTERVAL_SECS` | 任意 | `300` | 自動確定ワーカーの周期（秒、30〜3600）。読取は `common::env::read_env` で一度だけ行い、範囲外・不正値・非 UTF-8 は既定300へフォールバックし `doctor` が `classify` ベースの固定文言で警告（値・生バイトは出力しない）。 |
 | `MODERATION_OPERATOR_HASHES` | 本番では必須（未設定時は特権操作を全拒否） | 未設定 | カンマ区切りの運用者 user_hash。未設定・空要素のみなら空集合となり BAN/UNBAN/UNPIN は全拒否（fail-closed）。読取は `common::env::read_env` に一本化し、非 UTF-8 は固定文言 `MODERATION_OPERATOR_HASHES is not valid UTF-8; treating as unset (BAN/UNBAN/UNPIN are all rejected; value redacted)` の警告のうえ未設定扱いとする。生バイトは保持・エコーしない。`doctor --strict` は同じ共有文言を `production` カテゴリの警告へ反映し、全拒否になる設定ミスを検出する（check23 不変）。未設定自体の警告は従来どおり `run()` の起動ログが担う。 |
 | `AGE_DEFAULT_MINIMUM` | 任意（非秘密） | `21` | 年齢判定の一律既定最少年齢。保守的安全余裕ベースライン（法的事実の確定主張ではない）。有効設定値は `GET /policy/age` で常時公開。 |
 | `AGE_COUNTRY_OVERRIDES` | 任意（非秘密） | 空 | 国別しきい値上書き（`CC=NN,...`）。 |
@@ -546,7 +547,7 @@ generated:
 | `OIDC_AUTHORIZATION_ENDPOINT` | 任意 | 未設定 | 認可エンドポイント。 |
 | `OIDC_TOKEN_ENDPOINT` | 任意 | 未設定 | トークンエンドポイント。 |
 | `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
-| `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
+| `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。読取は `common::env::read_env` で一度だけ行い、範囲外・不正値・非 UTF-8 は既定10へフォールバックし `doctor` が `classify` ベースの固定文言で警告（値・生バイトは出力しない）。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
 | `OIDC_COOKIE_SECURE` | 任意 | 有効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`0`/`false` で refresh / OIDC state Cookie の `Secure` を外す（開発時のみ）。受理値外は起動拒否、`doctor` の `oidc_cookie_secure` カテゴリで警告し、Secure は外さない。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
@@ -657,7 +658,7 @@ CI は共通ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` の `ext
 シェル静的ゲートを追加する。対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示し、
 `bash -n`（構文検査）、`shellcheck`（静的解析）、`shfmt -l`（未整形ファイルの列挙）の3 command を
 既存ゲートに追加する。既存のゲート行は削除・意味変更せず維持し、
-E2E69件 / check23 / doctor53 / migrations14 の各数値は不変である。
+E2E69件 / check23 / doctor54 / migrations14 の各数値は不変である。
 `shfmt` は `shfmt -l scripts/*.sh e2e/*.sh` の出力が非空（未整形ファイルあり）のとき失敗とし、
 未整形ファイル名をエラー出力へ出す（`bash -n` / `shellcheck` の行は維持する）。
 runner への `shellcheck` / `shfmt` の導入は、
@@ -731,8 +732,8 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   「再ログインが必要です。」と LOG OUT からの再ログイン案内を表示する。
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
-  既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
-  tests145 の数値は不変。
+  既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 / migrations14 /
+  tests147 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -740,8 +741,8 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `role=alert` で再試行を案内するが画面遷移は現行どおりログインへ戻す。
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
-  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests145 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
+  migrations14 / tests147 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -760,5 +761,25 @@ apt 導入ステップでインストールされる）。本リポジトリに�
 - **公開集計の鮮度とオプインの分離**: 公開集計の `GENERATED_AT` が15分を超えた場合に
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
-  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests145 の数値は不変。
+  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
+  migrations14 / tests147 の数値は不変。
+
+### R2-ENV 追加契約（2026-11-23）
+
+- **LOG_FORMAT の分類と doctor 診断**: `init_tracing()` の読取を
+  `common::env::read_env("LOG_FORMAT")` へ移し、未設定と `json` / `text`
+  （大小文字不問）のみを受理する。タイポ・非 UTF-8 は固定文言
+  `LOG_FORMAT must be json or text; using text (invalid value)` の警告のうえ
+  テキスト形式へフォールバックする。共有判定 `log_format_state` を `doctor` も使い、
+  subscriber 初期化後に警告を出すため、`--strict` で設定ミスを検出できる。
+  値・生バイトは一切エコーしない。`results.push` を増やさず既存 `production`
+  カテゴリへマージするため check23 は不変で、doctor のテスト数は 53→54 へ追随した。
+- **数値系 env の read_env 一本化と classify 統一**: `RATE_LIMIT_PER_MIN` /
+  `MAX_CONCURRENT_REQUESTS` / `OIDC_HTTP_TIMEOUT_SECS` /
+  `MODERATION_FINALIZE_INTERVAL_SECS` / `GRACEFUL_DRAIN_TIMEOUT_SECS` を
+  `common::env::read_env` で一度だけ読み、`numeric_env_value` がパーサ入力と
+  固定警告を導出する。非 UTF-8 は `<NAME> is not valid UTF-8; using default` の
+  固定文言警告のうえ既定値へフォールバックし、`doctor` も `classify` ベースで
+  同じ警告を出す。これにより「不正値は既定へフォールバックし doctor が警告する」
+  という契約を実装と一致させた（値・生バイトは非エコー）。
+  E2E69件 / check23 / migrations14 / tests147 は不変。

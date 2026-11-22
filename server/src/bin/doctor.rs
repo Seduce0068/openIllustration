@@ -230,6 +230,14 @@ where
     ) {
         production.push(MODERATION_OPERATORS_NON_UTF8_WARNING.to_string());
     }
+    // LOG_FORMAT: 未設定 / json / text（大小文字不問）のみ受理。タイポ・非 UTF-8 は
+    // run() と同じ共有判定で固定文言警告のうえテキスト形式へフォールバックする。
+    // 値・生バイトはエコーせず、results.push を増やさず production 内へマージする（check23 維持）。
+    if server::log_format_state(common::env::classify(lookup("LOG_FORMAT")))
+        == server::LogFormatState::Invalid
+    {
+        production.push(server::LOG_FORMAT_INVALID_WARNING.to_string());
+    }
     results.push(("production", production));
 
     // モック認証と本番相当の設定の併用は危険（モック認証で本番データが触れる）。
@@ -359,8 +367,13 @@ where
     results.push(("ipfs_max_attempts", attempts_errors));
 
     let mut oidc_timeout_errors = Vec::new();
-    if let Ok(value) = lookup("OIDC_HTTP_TIMEOUT_SECS")
-        && oidc_http_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    let oidc_timeout_env = common::env::classify(lookup("OIDC_HTTP_TIMEOUT_SECS"));
+    let (oidc_timeout_input, oidc_timeout_warning) =
+        server::numeric_env_value("OIDC_HTTP_TIMEOUT_SECS", &oidc_timeout_env);
+    if let Some(warning) = oidc_timeout_warning {
+        oidc_timeout_errors.push(warning);
+    } else if let Some(value) = oidc_timeout_input
+        && oidc_http_timeout(Some(value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         oidc_timeout_errors
             .push("OIDC_HTTP_TIMEOUT_SECS is invalid or outside 1..=60; using default".to_string());
@@ -373,8 +386,13 @@ where
     const DRAIN_WARNING: &str =
         "GRACEFUL_DRAIN_TIMEOUT_SECS is invalid or outside 1..=300; using default";
     let mut drain_timeout_errors = Vec::new();
-    if let Ok(value) = lookup("GRACEFUL_DRAIN_TIMEOUT_SECS")
-        && graceful_drain_timeout(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    let drain_env = common::env::classify(lookup("GRACEFUL_DRAIN_TIMEOUT_SECS"));
+    let (drain_input, drain_warning) =
+        server::numeric_env_value("GRACEFUL_DRAIN_TIMEOUT_SECS", &drain_env);
+    if let Some(warning) = drain_warning {
+        drain_timeout_errors.push(warning);
+    } else if let Some(value) = drain_input
+        && graceful_drain_timeout(Some(value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         drain_timeout_errors.push(DRAIN_WARNING.to_string());
     }
@@ -386,8 +404,13 @@ where
     const FINALIZE_WARNING: &str =
         "MODERATION_FINALIZE_INTERVAL_SECS is invalid or outside 30..=3600; using default";
     let mut finalize_interval_errors = Vec::new();
-    if let Ok(value) = lookup("MODERATION_FINALIZE_INTERVAL_SECS")
-        && moderation_finalize_interval(Some(&value)).as_secs() != value.parse::<u64>().unwrap_or(0)
+    let finalize_env = common::env::classify(lookup("MODERATION_FINALIZE_INTERVAL_SECS"));
+    let (finalize_input, finalize_warning) =
+        server::numeric_env_value("MODERATION_FINALIZE_INTERVAL_SECS", &finalize_env);
+    if let Some(warning) = finalize_warning {
+        finalize_interval_errors.push(warning);
+    } else if let Some(value) = finalize_input
+        && moderation_finalize_interval(Some(value)).as_secs() != value.parse::<u64>().unwrap_or(0)
     {
         finalize_interval_errors.push(FINALIZE_WARNING.to_string());
     }
@@ -548,14 +571,25 @@ where
     results.push(("age_policy", age_errors));
 
     // レート制限: 既定値へフォールバックしていても警告する。
+    // 非 UTF-8 は run() と同じ read_env/classify 分類で固定文言警告へ倒す（値はエコーしない）。
     let mut rate_errors = Vec::new();
-    if let Ok(value) = lookup("RATE_LIMIT_PER_MIN")
-        && rate_limit_per_min(Some(&value)) != value.parse::<u32>().unwrap_or(0)
+    let rate_limit_env = common::env::classify(lookup("RATE_LIMIT_PER_MIN"));
+    let (rate_limit_input, rate_limit_warning) =
+        server::numeric_env_value("RATE_LIMIT_PER_MIN", &rate_limit_env);
+    if let Some(warning) = rate_limit_warning {
+        rate_errors.push(warning);
+    } else if let Some(value) = rate_limit_input
+        && rate_limit_per_min(Some(value)) != value.parse::<u32>().unwrap_or(0)
     {
         rate_errors.push("RATE_LIMIT_PER_MIN is outside 1..=600; using default".to_string());
     }
-    if let Ok(value) = lookup("MAX_CONCURRENT_REQUESTS")
-        && max_concurrent_requests(Some(&value)) != value.parse::<usize>().unwrap_or(0)
+    let concurrency_env = common::env::classify(lookup("MAX_CONCURRENT_REQUESTS"));
+    let (concurrency_input, concurrency_warning) =
+        server::numeric_env_value("MAX_CONCURRENT_REQUESTS", &concurrency_env);
+    if let Some(warning) = concurrency_warning {
+        rate_errors.push(warning);
+    } else if let Some(value) = concurrency_input
+        && max_concurrent_requests(Some(value)) != value.parse::<usize>().unwrap_or(0)
     {
         rate_errors.push("MAX_CONCURRENT_REQUESTS is outside 1..=256; using default".to_string());
     }
@@ -869,6 +903,65 @@ mod tests {
     }
 
     #[test]
+    fn log_format_invalid_warns_without_disclosing_value() {
+        // 未設定と json / text（大小文字不問）は受理し、LOG_FORMAT の警告を出さない。
+        for pairs in [
+            vec![],
+            vec![("LOG_FORMAT", "json")],
+            vec![("LOG_FORMAT", "JSON")],
+            vec![("LOG_FORMAT", "text")],
+            vec![("LOG_FORMAT", "TeXt")],
+        ] {
+            let results = check_all_with(lookup_from(&pairs));
+            assert!(
+                !errors_for(&results, "production")
+                    .iter()
+                    .any(|error| error.as_str() == server::LOG_FORMAT_INVALID_WARNING),
+                "pairs={pairs:?}"
+            );
+        }
+
+        // タイポ等は固定文言警告へ倒す（設定値・生バイトはエコーしない）。
+        for value in ["jsonn", "xml", " JSON "] {
+            let results = check_all_with(lookup_from(&[("LOG_FORMAT", value)]));
+            let errors = errors_for(&results, "production");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.as_str() == server::LOG_FORMAT_INVALID_WARNING),
+                "value={value:?}, errors={errors:?}"
+            );
+            for error in errors {
+                assert!(!error.contains(value.trim()), "設定値が漏洩: {error}");
+            }
+        }
+
+        // 非 UTF-8 は生バイト保持せず同じ固定文言へマージする（check23 不変）。
+        let results = check_all_with(|name: &str| {
+            if name == "LOG_FORMAT" {
+                Err(std::env::VarError::NotUnicode(
+                    std::ffi::OsString::from_vec(vec![0xff]),
+                ))
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        });
+        let errors = errors_for(&results, "production");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.as_str() == server::LOG_FORMAT_INVALID_WARNING),
+            "errors={errors:?}"
+        );
+        for error in errors {
+            assert!(
+                !error.contains('\u{fffd}') && !error.as_bytes().contains(&0xff),
+                "生バイトが漏洩: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn mock_auth_alone_adds_a_warning() {
         let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
         let errors = errors_for(&results, "mock_auth_enabled");
@@ -1089,6 +1182,41 @@ mod tests {
                 }
             });
             let errors = errors_for(&results, "production");
+            assert!(
+                errors.iter().any(|error| error.as_str() == expected),
+                "非 UTF-8 {name} は固定文言で警告する: {errors:?}"
+            );
+            for error in errors {
+                assert!(
+                    !error.contains('\u{fffd}') && !error.as_bytes().contains(&0xff),
+                    "生バイトが漏洩: {error}"
+                );
+            }
+        }
+
+        // 数値系 env の非 UTF-8 も run() と同じ classify ベースの固定文言警告へ倒す。
+        // 値・生バイトはエコーしない（新規テスト関数なし・doctor54 へ追随）。
+        for (name, category) in [
+            ("RATE_LIMIT_PER_MIN", "rate_limit"),
+            ("MAX_CONCURRENT_REQUESTS", "rate_limit"),
+            ("OIDC_HTTP_TIMEOUT_SECS", "oidc_http_timeout"),
+            (
+                "MODERATION_FINALIZE_INTERVAL_SECS",
+                "moderation_finalize_interval",
+            ),
+            ("GRACEFUL_DRAIN_TIMEOUT_SECS", "graceful_drain_timeout"),
+        ] {
+            let expected = server::numeric_env_non_utf8_warning(name);
+            let results = check_all_with(|key: &str| {
+                if key == name {
+                    Err(std::env::VarError::NotUnicode(
+                        std::ffi::OsString::from_vec(vec![0xff]),
+                    ))
+                } else {
+                    Err(std::env::VarError::NotPresent)
+                }
+            });
+            let errors = errors_for(&results, category);
             assert!(
                 errors.iter().any(|error| error.as_str() == expected),
                 "非 UTF-8 {name} は固定文言で警告する: {errors:?}"

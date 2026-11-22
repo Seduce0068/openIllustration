@@ -817,6 +817,29 @@ fn test_rate_limit_configuration() {
     assert_eq!(crate::max_concurrent_requests(Some("0")), 16);
     assert_eq!(crate::max_concurrent_requests(Some("257")), 16);
     assert_eq!(crate::max_concurrent_requests(Some("bad")), 16);
+
+    // R2-ENV: read_env 分類を数値パーサ入力と固定警告へ変換する（生バイト非保持）。
+    let utf8 = common::env::EnvValue::Utf8("42".to_string());
+    let (input, warning) = crate::numeric_env_value("RATE_LIMIT_PER_MIN", &utf8);
+    assert_eq!(input, Some("42"));
+    assert_eq!(warning, None);
+    assert_eq!(crate::rate_limit_per_min(input), 42);
+
+    let missing = common::env::EnvValue::Missing;
+    let (input, warning) = crate::numeric_env_value("RATE_LIMIT_PER_MIN", &missing);
+    assert_eq!(input, None);
+    assert_eq!(warning, None);
+    assert_eq!(crate::rate_limit_per_min(input), 60);
+
+    let non_utf8 = common::env::EnvValue::NonUtf8;
+    let (input, warning) = crate::numeric_env_value("RATE_LIMIT_PER_MIN", &non_utf8);
+    assert_eq!(input, None);
+    assert_eq!(crate::rate_limit_per_min(input), 60);
+    // 固定文言はキー名のみで値・生バイトを含まない。
+    assert_eq!(
+        warning.as_deref(),
+        Some("RATE_LIMIT_PER_MIN is not valid UTF-8; using default")
+    );
 }
 
 /// R4-02: `MAX_CONCURRENT_REQUESTS` の境界値。
@@ -2285,6 +2308,39 @@ fn test_production_config_fail_closed() {
     assert_eq!(
         crate::production_config_errors(false, true, non_utf8),
         vec!["PINATA_JWT is empty"]
+    );
+
+    // R2-ENV: LOG_FORMAT は未設定 / json / text（大小文字不問）のみ受理し、
+    // タイポ・非 UTF-8 は共通の固定文言へ倒す（値・生バイトはエコーしない）。
+    assert_eq!(
+        crate::log_format_state(common::env::EnvValue::Missing),
+        crate::LogFormatState::Text
+    );
+    for value in ["json", "JSON", "text", "TeXt"] {
+        assert_eq!(
+            crate::log_format_state(common::env::EnvValue::Utf8(value.to_string())),
+            if value.eq_ignore_ascii_case("json") {
+                crate::LogFormatState::Json
+            } else {
+                crate::LogFormatState::Text
+            },
+            "value={value}"
+        );
+    }
+    for value in ["jsonn", "xml", ""] {
+        assert_eq!(
+            crate::log_format_state(common::env::EnvValue::Utf8(value.to_string())),
+            crate::LogFormatState::Invalid,
+            "value={value:?}"
+        );
+    }
+    assert_eq!(
+        crate::log_format_state(common::env::EnvValue::NonUtf8),
+        crate::LogFormatState::Invalid
+    );
+    assert_eq!(
+        crate::LOG_FORMAT_INVALID_WARNING,
+        "LOG_FORMAT must be json or text; using text (invalid value)"
     );
 
     // 実値は従来どおり警告なし（前後の空白があっても非空なら許可）。

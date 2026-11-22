@@ -56,6 +56,22 @@ struct ApiOrigin;
 #[cfg(not(feature = "dev-console"))]
 const _: () = assert_release_api_origin(API_BASE_ENV);
 
+/// オリジン判定の境界値をビルド時にも検証する（path / query / userinfo / loopback は拒否）。
+#[cfg(not(feature = "dev-console"))]
+const _: () = {
+    assert!(is_https_non_local_origin("https://api.example.org"));
+    assert!(is_https_non_local_origin("https://api.example.org:8443"));
+    assert!(!is_https_non_local_origin("http://api.example.org"));
+    assert!(!is_https_non_local_origin("https://api.example.org/v1"));
+    assert!(!is_https_non_local_origin("https://api.example.org/?key=1"));
+    assert!(!is_https_non_local_origin("https://api.example.org#top"));
+    assert!(!is_https_non_local_origin("https://user@api.example.org"));
+    assert!(!is_https_non_local_origin("https://127.0.0.1:8443"));
+    assert!(!is_https_non_local_origin("https://[::1]:8443"));
+    assert!(!is_https_non_local_origin("https://0.0.0.0"));
+    assert!(!is_https_non_local_origin("https://LOCALHOST"));
+};
+
 /// 不正なオリジンが注入されたら const 評価時にビルドを失敗させる（fail-closed）。
 #[cfg(not(feature = "dev-console"))]
 const fn assert_release_api_origin(origin: Option<&str>) {
@@ -67,7 +83,40 @@ const fn assert_release_api_origin(origin: Option<&str>) {
     }
 }
 
-/// `https://` で始まり `localhost` を含まないことをバイト単位で判定する。
+/// ASCII の大小文字を無視して `needle` の出現を探す（const 対応のバイト走査）。
+#[cfg(not(feature = "dev-console"))]
+const fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index + needle.len() <= haystack.len() {
+        let mut matched = true;
+        let mut offset = 0;
+        while offset < needle.len() {
+            let byte = haystack[index + offset];
+            let lowered = if byte >= b'A' && byte <= b'Z' {
+                byte + 32
+            } else {
+                byte
+            };
+            if lowered != needle[offset] {
+                matched = false;
+                break;
+            }
+            offset += 1;
+        }
+        if matched {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// `https://` で始まり、スキーム後にオリジン区切り（`/` `?` `#` `@`）がなく、
+/// loopback / wildcard 宿主（`127.0.0.1` / `[::1]` / `0.0.0.0` / `localhost`）
+/// を含まないことをバイト単位で判定する。
 /// const 対応のため `str` の高級メソッドではなくバイト走査を使う。
 #[cfg(not(feature = "dev-console"))]
 const fn is_https_non_local_origin(origin: &str) -> bool {
@@ -83,28 +132,22 @@ const fn is_https_non_local_origin(origin: &str) -> bool {
         }
         index += 1;
     }
-    let localhost = b"localhost";
-    index = 0;
-    while index + localhost.len() <= bytes.len() {
-        let mut matched = true;
-        let mut offset = 0;
-        while offset < localhost.len() {
-            let byte = bytes[index + offset];
-            let lowered = if byte >= b'A' && byte <= b'Z' {
-                byte + 32
-            } else {
-                byte
-            };
-            if lowered != localhost[offset] {
-                matched = false;
-                break;
-            }
-            offset += 1;
-        }
-        if matched {
+    // オリジンのみを許可する。パス・クエリ・フラグメント・userinfo は拒否。
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'/' || byte == b'?' || byte == b'#' || byte == b'@' {
             return false;
         }
         index += 1;
+    }
+    // loopback / wildcard 宿主は大小文字無視で拒否する。
+    let forbidden: [&[u8]; 4] = [b"127.0.0.1", b"[::1]", b"0.0.0.0", b"localhost"];
+    let mut pattern = 0;
+    while pattern < forbidden.len() {
+        if contains_ascii_case_insensitive(bytes, forbidden[pattern]) {
+            return false;
+        }
+        pattern += 1;
     }
     true
 }
@@ -2146,16 +2189,21 @@ where
                     None
                 }
             };
-            let res = Request::post(&format!("{}/auth/verify", API_BASE))
-                .json(&serde_json::json!({
+            // リクエスト準備（URL / JSON シリアライズ）失敗で panic させず、
+            // 既存の login-error 固定文言を role=alert で出し、ボタンを再活性化する。
+            let Ok(request) =
+                Request::post(&format!("{}/auth/verify", API_BASE)).json(&serde_json::json!({
                     "presentation_token": "mock_token",
                     "nonce": nonce,
                     "birth_date": "2000-01-01",
                     "country_code": "JP"
                 }))
-                .unwrap()
-                .send()
-                .await;
+            else {
+                set_error.set("ネットワークエラーが発生しました。".to_string());
+                set_loading.set(false);
+                return;
+            };
+            let res = request.send().await;
 
             match res {
                 Ok(response) if response.ok() => match response.json::<VerifyResponse>().await {
@@ -3101,6 +3149,7 @@ where
                         on:click=toggle_favorite
                         data-testid="favorite-toggle"
                         disabled=move || favorite_busy.get()
+                        lang="en"
                         aria-label=move || if favorite.get() { "Remove from favorites" } else { "Add to favorites" }
                         aria-pressed=move || if favorite.get() { "true" } else { "false" }
                         class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
@@ -3208,6 +3257,7 @@ where
                 <Show when=move || show_audit.get() fallback=|| ()>
                     <div id=move || audit_panel_id.get_value().to_string()
                         role="dialog"
+                        lang="en"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
@@ -3550,6 +3600,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         class="absolute h-px w-px overflow-hidden whitespace-nowrap border-0 p-0 clip-[rect(0,0,0,0)]"
                         id="file-upload" />
                     <label for="file-upload"
+                        lang="en"
                         role="button"
                         tabindex=move || if loading.get() { -1 } else { 0 }
                         aria-disabled=move || if loading.get() { "true" } else { "false" }
@@ -3579,7 +3630,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 </div>
 
                 <div class="space-y-2">
-                    <label for="upload-price" class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
+                    <label for="upload-price" lang="en" class="text-[10px] text-gray-500 uppercase tracking-widest">"Support Price (JPYC)"</label>
                     <input type="number"
                         id="upload-price"
                         name="price"
@@ -3605,7 +3656,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 </div>
 
                 <div class="space-y-1">
-                    <label for="upload-title" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                    <label for="upload-title" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
                         "Title (optional)"
                     </label>
                     <input
@@ -3621,7 +3672,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 </div>
 
                 <div class="space-y-1">
-                    <label for="upload-description" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                    <label for="upload-description" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
                         "Description (optional)"
                     </label>
                     <textarea
@@ -3636,7 +3687,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 </div>
 
                 <div class="space-y-1">
-                    <label for="upload-tags" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                    <label for="upload-tags" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
                         "Tags (optional, comma separated)"
                     </label>
                     <input
@@ -3715,7 +3766,7 @@ fn Ledger(token: String) -> impl IntoView {
     view! {
         <div class="max-w-5xl mx-auto mt-12">
             <h2 class="text-xl font-bold tracking-widest uppercase mb-8">"Forensic Transaction Ledger"</h2>
-            <div class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
+            <div lang="en" class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
                 "LEGACY MOCK RECORDS — Written by the disabled mock support API. These entries are not proof of payment; JPYC settlement is not implemented."
             </div>
             <Show when=move || !ledger_error.get().is_empty() fallback=|| ()>
@@ -4271,6 +4322,7 @@ where
                 </p>
                 <input
                     type="text"
+                    lang="en"
                     aria-label="TARGET CID"
                     placeholder="TARGET CID"
                     required=true
@@ -4280,6 +4332,7 @@ where
                     class="w-full bg-black border border-white/20 p-3 text-sm"
                 />
                 <textarea
+                    lang="en"
                     aria-label="REASON"
                     placeholder="REASON"
                     required=true
@@ -5159,6 +5212,39 @@ mod tests {
             super::normalize_api_origin("https://api.example.org///"),
             "https://api.example.org"
         );
+        // オリジンのみの判定境界（const アサーションの実行時確認）。
+        #[cfg(not(feature = "dev-console"))]
+        assert!(super::is_https_non_local_origin("https://api.example.org"));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(super::is_https_non_local_origin(
+            "https://api.example.org:8443"
+        ));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin("http://api.example.org"));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin(
+            "https://api.example.org/v1"
+        ));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin(
+            "https://api.example.org/?key=1"
+        ));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin(
+            "https://api.example.org#top"
+        ));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin(
+            "https://user@api.example.org"
+        ));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin("https://127.0.0.1:8443"));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin("https://[::1]:8443"));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin("https://0.0.0.0"));
+        #[cfg(not(feature = "dev-console"))]
+        assert!(!super::is_https_non_local_origin("https://LOCALHOST"));
     }
 
     /// 監視イベントは event 名と count だけを持ち、サーバーの範囲 1..=1000 を守る。
