@@ -1087,6 +1087,28 @@ pub fn production_audit_expect_root_error(
     }
 }
 
+/// 本番相当（モック認証無効）で `ALLOWED_ORIGINS` が有効な http(s) オリジンを
+/// 1 つでも持つかを検証する純粋関数。
+///
+/// 開発（`allow_mock_auth = true`）では従来どおり `None`。本番相当では未設定・
+/// 非 UTF-8・空・全不正（scheme なしや `null` 等）を固定文言で拒否する（fail-closed）。
+/// 実パーサ `allowed_origins` の結果をそのまま使い、doctor の `allowed_origins`
+/// カテゴリと同じ判定を共有する。オリジン値も生バイトも一切エコーしない。
+pub fn production_allowed_origins_error(
+    allow_mock_auth: bool,
+    value: common::env::EnvValue,
+) -> Option<&'static str> {
+    const ERROR: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+    if allow_mock_auth {
+        return None;
+    }
+    let has_valid_origin = match value {
+        common::env::EnvValue::Utf8(raw) => !allowed_origins(Some(&raw), false).is_empty(),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => false,
+    };
+    if has_valid_origin { None } else { Some(ERROR) }
+}
+
 /// 本番・テスト共通の HTTP クライアントを組み立てる。
 ///
 /// `Policy::none()` で全リダイレクトを拒否する。IPFS ゲートウェイ（および
@@ -1279,6 +1301,12 @@ pub async fn run() -> anyhow::Result<()> {
     config_errors.extend(production_audit_expect_root_error(
         allow_mock_auth,
         audit_expect_root_env,
+    ));
+    // ALLOWED_ORIGINS も同じ設定フェーズで検証する。本番相当では未設定・非 UTF-8・
+    // 空・全不正を fail-closed で起動拒否し、doctor の allowed_origins と共有判定する。
+    config_errors.extend(production_allowed_origins_error(
+        allow_mock_auth,
+        common::env::read_env("ALLOWED_ORIGINS"),
     ));
     if !config_errors.is_empty() {
         return Err(anyhow::anyhow!(

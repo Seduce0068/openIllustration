@@ -90,6 +90,8 @@ rollback() {
 		;;
 	stashed)
 		# 旧 out_dir を退避した後: 旧を戻してから作業ディレクトリを消す。
+		# mv が失敗しても上の set +e により元の rc は維持され、退避ディレクトリ
+		# old_dir は残る（安全側。決して削除しない）。
 		if [[ -n "$old_dir" && -d "$old_dir" ]]; then
 			mv "$old_dir" "$out_dir"
 		fi
@@ -97,6 +99,7 @@ rollback() {
 		;;
 	published)
 		# 新 out_dir を配置した後: 新を捨てて旧を復元する。
+		# 同様に mv が失敗しても元 rc を維持し、old_dir を退避ディレクトリとして残す。
 		rm -rf "$out_dir"
 		if [[ -n "$old_dir" && -d "$old_dir" ]]; then
 			mv "$old_dir" "$out_dir"
@@ -207,8 +210,10 @@ mv "$work_dir" "$out_dir"
 phase="published"
 
 if [[ -n "$old_dir" ]]; then
+	# ここでの失敗は「旧成果物の削除失敗」であり復元失敗ではない。
+	# 親の EXIT trap（rollback）が published の復元を試み、元の rc を維持する。
 	if ! rm -rf "$old_dir"; then
-		echo "旧成果物の復元に失敗した: ${old_dir}" >&2
+		echo "旧成果物の削除に失敗した: ${old_dir}" >&2
 		exit 1
 	fi
 fi

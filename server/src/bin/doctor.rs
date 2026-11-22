@@ -3,10 +3,10 @@
 //! 秘密情報の値は一切出力しない。
 
 use server::{
-    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, allowed_origins,
-    graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
-    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
-    pinata_jwt_production_like, policy_utc_offset_hours, production_audit_expect_root_error,
+    CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, graceful_drain_timeout,
+    ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env, max_concurrent_requests,
+    moderation_finalize_interval, oidc_http_timeout, pinata_jwt_production_like,
+    policy_utc_offset_hours, production_allowed_origins_error, production_audit_expect_root_error,
     production_config_errors, rate_limit_per_min, validate_jwt_secret, validate_oidc_config_with,
 };
 
@@ -436,8 +436,9 @@ where
     // 年齢ポリシー: 不正値は AgePolicy::from_env_with がエラーを返す。
     // プロセス環境を触らず lookup を渡すことで、CLI と同じ分岐をテストできる。
     let mut age_errors = Vec::new();
-    // AgePolicy は Option 契約のため、Result 契約の lookup をここでだけ橋渡しする。
-    match common::age::AgePolicy::from_env_with(|name: &str| lookup(name).ok()) {
+    // AgePolicy は std::env::var と同じ Result 契約のため、lookup をそのまま渡す。
+    // 非 UTF-8 は Invalid として固定文言の警告へ変換され、生バイトはエコーしない。
+    match common::age::AgePolicy::from_env_with(&lookup) {
         Ok(policy) => {
             // 手動フラグは廃止され、必須設定値の充足結果からゲートを判定する。
             // 明示設定必須なのに未充足なら年齢検証は fail closed（403）となるため警告する。
@@ -542,22 +543,17 @@ where
     }
     results.push(("expose_internal_errors", expose_internal_errors_errors));
 
-    // ALLOWED_ORIGINS: mock 無効時に実パーサ allowed_origins() が空ベクタなら
-    // すべての CORS オリジンが拒否される（fail-closed）。scheme なし等の不正要素は
-    // パーサが捨てるため「非空」判定では見逃していた。オリジン値は出力しない。
-    let allowed_origins_errors = if !allow_mock_auth {
-        let no_valid_origin = lookup("ALLOWED_ORIGINS")
-            .ok()
-            .map(|value| allowed_origins(Some(&value), false).is_empty())
-            .unwrap_or(true);
-        if no_valid_origin {
-            vec![
-                "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected"
-                    .to_string(),
-            ]
-        } else {
-            Vec::new()
-        }
+    // ALLOWED_ORIGINS: 起動ゲートと同じ共有ヘルパ production_allowed_origins_error で判定する。
+    // mock 無効時に実パーサ allowed_origins() が空ベクタなら全 CORS オリジンが拒否される。
+    // オリジン値・生バイトは出力しない。既定は警告のみ（check23・文言・件数は不変）。
+    const ALLOWED_ORIGINS_WARNING: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+    let allowed_origins_errors = if production_allowed_origins_error(
+        allow_mock_auth,
+        common::env::classify(lookup("ALLOWED_ORIGINS")),
+    )
+    .is_some()
+    {
+        vec![ALLOWED_ORIGINS_WARNING.to_string()]
     } else {
         Vec::new()
     };
@@ -1700,6 +1696,22 @@ mod tests {
             assert_eq!(errors.len(), 1, "value={value}, errors={errors:?}");
             assert_eq!(errors[0], AGE_POLICY_UNSATISFIED_WARNING, "value={value}");
         }
+        // 非 UTF-8 は「未設定」ではなく Invalid として age_policy カテゴリへ
+        // 受理値列挙の固定文言警告を出す。生バイトはエコーしない（件数は不変）。
+        let results = check_all_with(|name: &str| match name {
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION" => Err(std::env::VarError::NotUnicode(
+                std::ffi::OsString::from_vec(vec![0xff]),
+            )),
+            "TZ" => Ok("Asia/Tokyo".to_string()),
+            _ => Err(std::env::VarError::NotPresent),
+        });
+        let errors = errors_for(&results, "age_policy");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(
+            errors[0],
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)"
+        );
+        assert!(!errors[0].contains('\u{fffd}'), "生バイトを文字列化しない");
         // 廃止した手動フラグは単独では警告を生じない（充足判定に使わない）。
         let results = check_all_with(lookup_from(&[
             ("AGE_POLICY_CONFIGURED", "1"),

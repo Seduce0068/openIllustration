@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T10:30:00+09:00"
+  at: "2026-11-22T11:25:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T10:30:00+09:00"
+  at: "2026-11-22T11:25:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -94,7 +94,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | 領域 | 現行カバレッジ | 制約 |
 | --- | --- | --- |
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
-| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証 | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
+| 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証。クライアントは `/auth/login` が 501 のとき固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らず早期 return し、`/auth/verify` が 501 のときも同文言へ変換する（403 / 500 等は既存 `認証に失敗しました (HTTP <status>).` を維持し、サーバー本文は非表示）。ビルド時に `OIL_MOCK_AUTH=0` を指定するとログイン画面のモック認証注記を非表示にする | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
 | エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
@@ -137,7 +137,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 
 | ID | ケース | 期待結果 | 状態 |
 | --- | --- | --- | --- |
-| AUTH-01 | `ALLOW_MOCK_AUTH` 未設定、`JWT_REQUIRE_KID` 有効 | モック認証とゼロ署名、`kid` 無しトークンを拒否 | 実装済み。`mock_token` とゼロ署名を拒否する回帰テストあり。`JWT_REQUIRE_KID=1` で kid 無し拒否・kid 付き受理、HS256 併用は起動拒否を実プロセスで確認 |
+| AUTH-01 | `ALLOW_MOCK_AUTH` 未設定、`JWT_REQUIRE_KID` 有効 | モック認証とゼロ署名、`kid` 無しトークンを拒否 | 実装済み。`mock_token` とゼロ署名を拒否する回帰テストあり。`JWT_REQUIRE_KID=1` で kid 無し拒否・kid 付き受理、HS256 併用は起動拒否を実プロセスで確認。クライアント側は `OIL_MOCK_AUTH=0` ビルドでモック注記（`data-testid="mock-auth-notice"`）を出さず、`/auth/login` の501では固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らない（`auth.spec.ts` の既存 LOG OUT テスト内で検証、E2E 定義数69件不変） |
 | AUTH-02 | 不正・期限切れJWT、`exp` 欠落トークン | 認証済みAPIが401を返す | 期限切れ（`exp` が過去）と `exp` 欠落トークンを手組みで署名し、保護 API が 401 を返す回帰テストを追加 |
 | NET-01 | IPv4アクセスと開発ループバック例外 | 設定に応じて拒否/許可 | 一部実装済み |
 | NET-02 | 信頼されないX-Forwarded-For | クライアント入力で接続元判定を迂回できない | 実装済み（IPv4-mapped 正規化、`TRUSTED_PROXY_CIDRS` 未設定時はピアアドレスのみで判定、信頼済みで解決不能時は403。回帰テストあり）。実プロキシ環境・多段構成の試験は要 |
@@ -584,6 +584,17 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 各 CLI へ追加した5テスト（計15件）が、両方未設定の拒否、CLI 優先、環境変数のみの受理、
 空/空白拒否、非エコーを検証する。
 
+本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
+`AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
+`scripts/test-backup-rotate.sh` には既存 AUDIT_EXPECT_ROOT ケース内へ、計算 root の
+`.audit-root` 世代保存（成果物と同一 stamp・0600・内容一致・stdout/stderr 非エコー）の
+オラクルを追加した（新規 `expect_*` 呼び出しなし、`expect_failure` 28件 /
+`expect_success` 12件を維持）。
+`scripts/test-prepare-distribution.sh` には `..` 成分拒否・`repo_root`／祖先置換拒否・
+`jq` / `cargo` 未検出 fail-closed・`INT` / `TERM` → rollback・旧成果物削除失敗時の
+published rollback の5ケースを追加した。実 `repo_root` を壊さないため
+スクリプトと `LICENSE` は work 配下のコピーで実行する。
+
 ### レート制限キーの検証（NET-03）
 
 `server/src/tests.rs` の3テストで、解決済みクライアント IP の優先とピア IP への
@@ -929,9 +940,9 @@ cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_stat
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done    # シェル構文検査（対象を glob で明示）
 for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016,SC2034 "$f"; done # シェル静的解析（apt_packages で導入）
-for f in scripts/*.sh e2e/*.sh; do shfmt -d "$f"; done   # シェル書式差分（apt_packages で導入）
+shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi   # shfmt -l の出力が非空なら失敗（apt_packages で導入）
 cd e2e && npm test
-cd e2e && npm test -- auth.spec.ts   # 認証 E2E（3件: モックJPKIログイン / 年齢ゲート拒否 / LOG OUT 回帰）のみ
+cd e2e && npm test -- auth.spec.ts   # 認証 E2E（3件: モックJPKIログイン / 年齢ゲート拒否 / LOG OUT 回帰＋501固定文言・verify 未送信）のみ
 cd e2e && npm test -- build-gate.spec.ts   # ビルドゲート E2E（trunk archive 検証 3件 + version gate 9件 + E2E_PROJECTS選択 3件の計15件）のみ
 cd e2e && npm test -- search.spec.ts   # R5-01 検索 E2E のみ
 cd e2e && npm test -- favorites.spec.ts   # R5-02 お気に入り E2E のみ
@@ -973,8 +984,9 @@ CI では共通ワークフロー `rust-gates.yml` の追加ゲートとして
 （sha256 検証。更新時は version・sha256・資産名の 3 点を同時に変更）、
 E2E 用 JWT シークレットは実行ごとに生成する。型検査
 （`npm run typecheck`）も同じゲートで実行する。
-シェル静的ゲート（`bash -n` / `shellcheck` / `shfmt -d`）も同じ `extra_gates` に追加し、
+シェル静的ゲート（`bash -n` / `shellcheck` / `shfmt -l`）も同じ `extra_gates` に追加し、
 対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示する（上記「4. 実行コマンド」参照）。
+`shfmt` は `shfmt -l` の出力が非空（未整形ファイルあり）のとき失敗とし、`bash -n` / `shellcheck` の行は維持する。
 `shellcheck -e SC2016,SC2034` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
 本リポジトリ側の追加導入は不要とする（本リポジトリに install 手順は置かない）。
 
@@ -1244,6 +1256,12 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
 3. `AUTH-500: /auth/verify が HTTP 500 のとき login-error に文言が出て UPLOAD が出ないこと`:
    `/auth/verify` を500に差し替え、`data-testid="login-error"` の `role="alert"` に
    `認証に失敗しました (HTTP 500).` が表示され UPLOAD は出ない。
+   対照として 501 は別文言へ変換する。`e2e/tests/auth.spec.ts` の LOG OUT 回帰（既存の認証3件のまま）内で
+   `/auth/login` を501＋センチネル本文へ差し替えて再クリックし、`data-testid="login-error"` の
+   `role="alert"` に固定文言 `本番認証は未実装です。` が出ること、UPLOAD が出ないこと、
+   センチネル本文が画面へ現れないこと、未モックの `/auth/verify` が送られないことを検証する
+   （`/auth/verify` の501も同文言へ変換。403 / 500 等は既存の `認証に失敗しました (HTTP <status>).` を維持）。
+   新規 `test()` は追加せず、auth 3件・全体69件を維持する。
 4. `AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること`:
    監査エンドポイントを500に差し替え、監査パネルの `data-testid="audit-error"` の
    `role="alert"` に `監査ログの取得に失敗しました (HTTP 500).` が表示される。
@@ -1520,6 +1538,15 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 （本番相当での拒否と明示オプトインによる break-glass 受理）と
 `include_reasons_is_allowed_with_mock_auth`（mock 認証時の受理）の2件。
 
+`AUDIT_EXPECT_ROOT` の更新ライフサイクルは Runbook の段階ロールアウト／リストア手順で
+規定する（[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。監査ログ更新のたびに
+`verify_audit_log` の計算 root（`audit_chain_digest:` 行の `root=<hex>`）を再取得し、
+`backup-rotate.sh` が成果物と同じ stamp の `.audit-root`（0600）として世代保存する
+（root 値は stdout / stderr / ALERT へエコーしない）。次回期待値への昇格は運用者の
+明示承認を要する手作業で自動上書きしない。リストアでは復元対象世代に紐付いた root を
+`--expect-root` に渡す。`verify_audit_log` の bin テスト14件は不変で、新規オラクルは
+`scripts/test-backup-rotate.sh` の既存ケース内に追加し呼び出し件数を維持する。
+
 ## 5. リリース証跡
 
 リリースごとにテスト結果・ビルド成果物・依存ロックファイルを保存する。Nix再現可能ビルド、オンチェーン記録、バイナリ同一性の証明は別途設計・実装するまでリリース保証として主張しない。
@@ -1613,3 +1640,4 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `illustration_aria_label_uses_cid_prefix_when_title_blank` | 無題時に CID 接頭辞を aria ラベルへ使用 |
 | `client_metrics_enabled_only_disabled_by_zero` | 0 のみクライアントメトリクスを無効化 |
 | `client_metrics_gate_controls_payload` | ゲートがペイロード送信を制御 |
+| `mock_auth_enabled_only_disabled_by_zero` | 0 のみモック認証を無効化（未設定は有効） |

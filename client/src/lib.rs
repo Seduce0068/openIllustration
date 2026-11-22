@@ -111,6 +111,22 @@ const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
     }
 }
 
+/// 開発用モック認証の有効/無効。ビルド時に `OIL_MOCK_AUTH=0` を指定すると注記を止める。
+/// 未設定（既定）は有効とする（現行の開発用モック認証契約を維持するため）。
+const MOCK_AUTH_ENABLED: bool = mock_auth_enabled_from_env(option_env!("OIL_MOCK_AUTH"));
+
+/// ビルド時設定値からモック認証の可否を決める（純粋関数）。
+/// `"0"` だけを無効とみなし、未設定・その他の値は有効とする。
+const fn mock_auth_enabled_from_env(value: Option<&str>) -> bool {
+    match value {
+        Some(v) => {
+            let bytes = v.as_bytes();
+            !(bytes.len() == 1 && bytes[0] == b'0')
+        }
+        None => true,
+    }
+}
+
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
 const MAX_UPLOAD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
@@ -134,6 +150,10 @@ const EXPORT_PARSE_ERROR: &str = "エクスポート結果の解析に失敗し�
 /// レスポンス本文や生エラーは機微情報を含み得るため画面へ出さない。
 const CONTENT_INDEX_LOAD_ERROR: &str = "Failed to load content index.";
 const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
+
+/// 本番認証が未実装であることを示す固定文言。
+/// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
+const PRODUCTION_AUTH_NOT_IMPLEMENTED: &str = "本番認証は未実装です。";
 
 // ---- 共有トークンと refresh の単一フライト ----
 //
@@ -1750,11 +1770,17 @@ where
         let on_success = on_success.clone();
         spawn_local(async move {
             // 開発用モック認証でも nonce を取得して単回消費のフローを通す。
-            // 失敗しても verify は従来どおり試み、表示するエラーは verify の結果で上書きする。
+            // 501（本番認証未実装）は固定文言を出して verify を送らず早期 return する。
+            // それ以外の失敗は従来どおり verify を試み、表示するエラーは verify の結果で上書きする。
             let nonce = match Request::post(&format!("{}/auth/login", API_BASE))
                 .send()
                 .await
             {
+                Ok(response) if response.status() == 501 => {
+                    set_error.set(PRODUCTION_AUTH_NOT_IMPLEMENTED.to_string());
+                    set_loading.set(false);
+                    return;
+                }
                 Ok(response) if response.ok() => match response.json::<Oid4vpRequest>().await {
                     Ok(request) => Some(request.nonce),
                     Err(_) => {
@@ -1795,6 +1821,9 @@ where
                     Ok(_) => set_error.set("認証が許可されませんでした。".to_string()),
                     Err(_) => set_error.set("認証結果の解析に失敗しました。".to_string()),
                 },
+                Ok(response) if response.status() == 501 => {
+                    set_error.set(PRODUCTION_AUTH_NOT_IMPLEMENTED.to_string());
+                }
                 Ok(response) => {
                     set_error.set(format!("認証に失敗しました (HTTP {}).", response.status()));
                 }
@@ -1813,6 +1842,9 @@ where
             <p class="text-[10px] text-gray-500 mb-8 leading-relaxed">
                 "JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY."
             </p>
+            <Show when=move || MOCK_AUTH_ENABLED>
+                <p data-testid="mock-auth-notice">"開発用モック認証（本番では利用できません）。"</p>
+            </Show>
             <button on:click=do_login disabled=loading
                 class="w-full py-4 border border-white hover:bg-white hover:text-black transition-all font-bold uppercase tracking-widest disabled:opacity-50">
                 {move || if loading.get() { "VERIFYING..." } else { "CONNECT WITH JPKI" }}
@@ -5450,6 +5482,19 @@ mod tests {
         } else {
             assert_eq!(super::client_event_payload(3), None);
         }
+    }
+
+    /// モック認証は "0" のときだけ止まり、未設定・他値は有効（既定継続）。
+    #[test]
+    fn mock_auth_enabled_only_disabled_by_zero() {
+        assert_eq!(
+            super::MOCK_AUTH_ENABLED,
+            option_env!("OIL_MOCK_AUTH") != Some("0")
+        );
+        assert!(super::mock_auth_enabled_from_env(None));
+        assert!(super::mock_auth_enabled_from_env(Some("1")));
+        assert!(super::mock_auth_enabled_from_env(Some("")));
+        assert!(!super::mock_auth_enabled_from_env(Some("0")));
     }
 }
 

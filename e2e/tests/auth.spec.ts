@@ -104,5 +104,35 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect.poll(() => refreshOrigin).toBe(probe.API_BASE);
     // ヘッダ欠損はサーバ契約で許可のため、cross-site でなければよい。
     expect(refreshFetchSite).not.toBe('cross-site');
+
+    // R2-MOCK-SHFMT: 本番認証未実装（501）の固定文言と verify 未送信を検証する。
+    // ログイン画面復帰後に /auth/login を501＋センチネル本文へ差し替える（既存ケース内へ統合）。
+    await page.unroute('**/auth/login');
+    const loginSentinel = 'SENTINEL_LOGIN_BODY_MUST_NOT_BE_SHOWN';
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({
+        status: 501,
+        contentType: 'text/plain',
+        body: loginSentinel
+      });
+    });
+
+    // 未モックの /auth/verify が飛ばないことをリクエスト監視で確認する。
+    await page.unroute('**/auth/verify');
+    let verifyRequests = 0;
+    page.on('request', request => {
+      if (request.url().includes('/auth/verify')) {
+        verifyRequests += 1;
+      }
+    });
+
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+
+    const loginError = page.getByTestId('login-error');
+    await expect(loginError).toHaveAttribute('role', 'alert');
+    await expect(loginError).toHaveText('本番認証は未実装です。');
+    await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
+    expect(await page.locator('body').innerText()).not.toContain(loginSentinel);
+    expect(verifyRequests).toBe(0);
   });
 });

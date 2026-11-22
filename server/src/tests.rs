@@ -2422,6 +2422,47 @@ fn test_production_config_fail_closed() {
     ] {
         assert_eq!(crate::production_audit_expect_root_error(true, value), None);
     }
+
+    // R2-AGE-ORIGINS: ALLOWED_ORIGINS を本番起動ゲートへ昇格。共有ヘルパの直接検証。
+    const ORIGINS_ERROR: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
+    let non_utf8_origins = || {
+        common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )))
+    };
+    // 開発（mock 有効）では値の有無を問わず受理（後方互換）。
+    for value in [
+        common::env::EnvValue::Missing,
+        non_utf8_origins(),
+        common::env::EnvValue::Utf8(String::new()),
+        common::env::EnvValue::Utf8("localhost:8080, null".to_string()),
+    ] {
+        assert_eq!(crate::production_allowed_origins_error(true, value), None);
+    }
+    // 本番相当では未設定・非 UTF-8・空・全不正を固定文言で拒否（値・生バイトはエコーしない）。
+    for value in [
+        common::env::EnvValue::Missing,
+        non_utf8_origins(),
+        common::env::EnvValue::Utf8(String::new()),
+        common::env::EnvValue::Utf8(" , , ".to_string()),
+        common::env::EnvValue::Utf8("localhost:8080, null, ftp://x".to_string()),
+    ] {
+        assert_eq!(
+            crate::production_allowed_origins_error(false, value),
+            Some(ORIGINS_ERROR)
+        );
+    }
+    // 有効な http(s) オリジンが1つでもあれば受理（不正要素が混じっても捨てて残す）。
+    for valid in ["https://example.jp", "http://localhost:8080, null"] {
+        assert_eq!(
+            crate::production_allowed_origins_error(
+                false,
+                common::env::EnvValue::Utf8(valid.to_string())
+            ),
+            None,
+            "valid={valid:?}"
+        );
+    }
 }
 
 /// T-01: IPFS ゲートウェイ設定の既定値と無効要素の除外。
@@ -10960,6 +11001,21 @@ fn test_age_policy_fail_closed_modes() {
     };
     let err = validate_age(&trusted_only, &adult_birth, "JP").unwrap_err();
     assert!(matches!(err, AppError::Forbidden(_)));
+
+    // 非 UTF-8 の AGE_* 値は「未設定」ではなく Invalid として起動拒否する。
+    // VarError::NotUnicode の生バイト（0xff）は固定文言へ変換され、エコーされない。
+    let err = common::age::AgePolicy::from_env_with(|name: &str| match name {
+        "AGE_REQUIRE_EXPLICIT_CONFIGURATION" => Err(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )),
+        _ => Err(std::env::VarError::NotPresent),
+    })
+    .expect_err("non-UTF-8 age flag must be rejected");
+    assert_eq!(
+        err,
+        "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)"
+    );
+    assert!(!err.contains('\u{fffd}'), "生バイトを文字列化しない: {err}");
 }
 
 /// DEC-01: 署名付き年齢属性の adapter を mock 経路で検証するためのアプリ。

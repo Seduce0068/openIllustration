@@ -1,6 +1,7 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::env::VarError;
 use std::fmt;
 use thiserror::Error;
 
@@ -108,18 +109,34 @@ impl AgePolicy {
     ///
     /// 不正な値は安全側に倒してエラーとする（起動失敗させる用途を想定）。
     pub fn from_env() -> Result<Self, String> {
-        // 欠落・非 Unicode の環境変数は従来どおり「未設定」として扱う。
-        Self::from_env_with(|key| std::env::var(key).ok())
+        // getter に std::env::var をそのまま渡し、未設定と非 UTF-8 を区別する。
+        // 欠落は「未設定」、非 UTF-8 は Invalid（固定文言の起動拒否）として扱う。
+        Self::from_env_with(|name: &str| std::env::var(name))
     }
 
     /// 依存注入版の `from_env`。
     ///
-    /// `getter` は環境変数名を受け取り、設定されていれば値を `Some` で返す。
+    /// `getter` は環境変数名を受け取り、`std::env::var` と同じ Result 契約で返す。
+    /// `Ok` は設定値、`NotPresent` は未設定、`NotUnicode` は不正値（起動拒否）を表す。
+    /// 非 UTF-8 の生バイトは一切保持せず、変数ごとの固定文言へ変換する。
     /// プロセス環境を直接変更せずに分岐・境界値をテストするための入口。
-    pub fn from_env_with(getter: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+    pub fn from_env_with(
+        getter: impl Fn(&str) -> Result<String, VarError>,
+    ) -> Result<Self, String> {
+        // 真偽値・モードは受理値を列挙した固定文言を不正値・非 UTF-8 の両方で使う。
+        const BOOLEAN_ERROR: &str =
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)";
+        const MODE_ERROR: &str = "AGE_ENFORCEMENT_MODE must be one of: empty (default/self_reported), \
+             self_reported, self_reported_dob_country, \
+             trusted_attribute, trusted_attribute_required";
+
         let mut policy = Self::default();
 
-        if let Some(value) = getter("AGE_DEFAULT_MINIMUM") {
+        if let Some(value) = read_env_value(
+            &getter,
+            "AGE_DEFAULT_MINIMUM",
+            "AGE_DEFAULT_MINIMUM must be valid UTF-8",
+        )? {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
                 let parsed = trimmed
@@ -129,15 +146,23 @@ impl AgePolicy {
             }
         }
 
-        if let Some(value) = getter("AGE_COUNTRY_OVERRIDES") {
+        if let Some(value) = read_env_value(
+            &getter,
+            "AGE_COUNTRY_OVERRIDES",
+            "AGE_COUNTRY_OVERRIDES must be valid UTF-8",
+        )? {
             policy.country_minimums = parse_country_minimums(&value)?;
         }
 
-        if let Some(value) = getter("AGE_TARGET_REGIONS") {
+        if let Some(value) = read_env_value(
+            &getter,
+            "AGE_TARGET_REGIONS",
+            "AGE_TARGET_REGIONS must be valid UTF-8",
+        )? {
             policy.target_regions = parse_target_regions(&value)?;
         }
 
-        if let Some(value) = getter("AGE_ENFORCEMENT_MODE") {
+        if let Some(value) = read_env_value(&getter, "AGE_ENFORCEMENT_MODE", MODE_ERROR)? {
             let normalized = value.trim().to_ascii_lowercase();
             policy.enforcement_mode = match normalized.as_str() {
                 "" | "self_reported" | "self_reported_dob_country" => {
@@ -148,26 +173,26 @@ impl AgePolicy {
                 }
                 _ => {
                     // 受理値は入力値をエコーせず、別名と既定（空）を含めて列挙する。
-                    return Err(
-                        "AGE_ENFORCEMENT_MODE must be one of: empty (default/self_reported), \
-                         self_reported, self_reported_dob_country, \
-                         trusted_attribute, trusted_attribute_required"
-                            .to_string(),
-                    );
+                    return Err(MODE_ERROR.to_string());
                 }
             };
         }
 
-        if let Some(value) = getter("AGE_TRUSTED_ISSUERS") {
+        if let Some(value) = read_env_value(
+            &getter,
+            "AGE_TRUSTED_ISSUERS",
+            "AGE_TRUSTED_ISSUERS must be valid UTF-8",
+        )? {
             // trim と空要素除去は parse_csv_list に集約する。正規化・部分一致は
             // 行わず、adapter 側で完全一致比較する（発行者 URL の大小文字は意味を持つ）。
             policy.trusted_issuers = parse_csv_list(&value);
         }
 
-        if let Some(value) = getter("AGE_REQUIRE_EXPLICIT_CONFIGURATION") {
-            policy.require_explicit_configuration = parse_bool_env(&value).ok_or_else(|| {
-                "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)".to_string()
-            })?;
+        if let Some(value) =
+            read_env_value(&getter, "AGE_REQUIRE_EXPLICIT_CONFIGURATION", BOOLEAN_ERROR)?
+        {
+            policy.require_explicit_configuration =
+                parse_bool_env(&value).ok_or_else(|| BOOLEAN_ERROR.to_string())?;
         }
 
         policy.normalize();
@@ -236,6 +261,22 @@ impl AgePolicy {
         self.default_minimum_age != 21
             || !self.country_minimums.is_empty()
             || !self.target_regions.is_empty()
+    }
+}
+
+/// `std::env::var` 互換の getter を「未設定 / 設定値 / 非 UTF-8（固定文言エラー）」へ変換する。
+///
+/// `NotUnicode` が保持する生バイト（`OsString`）は一切参照せず、呼び出し側が渡した
+/// 変数ごとの固定文言だけをエラーとして返す（値・生バイトはエコーしない）。
+fn read_env_value(
+    getter: &impl Fn(&str) -> Result<String, VarError>,
+    key: &str,
+    invalid: &str,
+) -> Result<Option<String>, String> {
+    match getter(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(invalid.to_string()),
     }
 }
 
@@ -527,14 +568,16 @@ mod tests {
     }
 
     /// テスト用の環境変数 getter。呼び出し元のエントリ列を借用し、同じ文の中で使う。
+    /// `std::env::var` と同じ Result 契約（未設定は `NotPresent`）で返す。
     fn getter_from<'a>(
         entries: &'a [(&'static str, &'static str)],
-    ) -> impl Fn(&str) -> Option<String> + 'a {
+    ) -> impl Fn(&str) -> Result<String, VarError> + 'a {
         move |key| {
             entries
                 .iter()
                 .find(|(name, _)| *name == key)
                 .map(|(_, value)| (*value).to_string())
+                .ok_or(VarError::NotPresent)
         }
     }
 
@@ -588,6 +631,21 @@ mod tests {
             err.contains("AGE_REQUIRE_EXPLICIT_CONFIGURATION"),
             "error must name the variable: {err}"
         );
+
+        // 非 UTF-8 は「未設定」ではなく Invalid。受理値列挙の固定文言で拒否し、
+        // 生バイト（ここでは番兵文字列）をエコーしない。
+        let err = AgePolicy::from_env_with(|name: &str| match name {
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION" => Err(VarError::NotUnicode(
+                std::ffi::OsString::from("SENSITIVE_RAW_BYTES_SHOULD_NOT_LEAK"),
+            )),
+            _ => Err(VarError::NotPresent),
+        })
+        .expect_err("non-UTF-8 boolean must be rejected");
+        assert_eq!(
+            err,
+            "AGE_REQUIRE_EXPLICIT_CONFIGURATION must be a boolean (1/0/true/false)"
+        );
+        assert!(!err.contains("SENSITIVE_RAW_BYTES_SHOULD_NOT_LEAK"));
 
         let enabled = AgePolicy::from_env_with(getter_from(&[(
             "AGE_REQUIRE_EXPLICIT_CONFIGURATION",
@@ -714,6 +772,17 @@ mod tests {
         }
         // 入力値自体はエコーしない（設定名のみで機微情報を扱わない）。
         assert!(!err.contains(invalid), "error must not echo input: {err}");
+
+        // 非 UTF-8 も同じ受理値列挙の固定文言で拒否し、生バイトをエコーしない。
+        let raw_non_utf8 = AgePolicy::from_env_with(|name: &str| match name {
+            "AGE_ENFORCEMENT_MODE" => Err(VarError::NotUnicode(std::ffi::OsString::from(
+                "SENSITIVE_RAW_BYTES_SHOULD_NOT_LEAK",
+            ))),
+            _ => Err(VarError::NotPresent),
+        })
+        .expect_err("non-UTF-8 mode must be rejected");
+        assert_eq!(raw_non_utf8, err, "同じ固定文言であること");
+        assert!(!raw_non_utf8.contains("SENSITIVE_RAW_BYTES_SHOULD_NOT_LEAK"));
     }
 
     #[test]

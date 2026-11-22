@@ -37,19 +37,19 @@ status: current
 
 ### 優先度: 高
 
-- [ ] **AGE_* 非UTF-8をfail-closed化（env分類器へ統一）**
+- [x] **AGE_* 非UTF-8をfail-closed化（env分類器へ統一）**
   — 根拠 `common/src/age.rs:110` / `server/src/bin/doctor.rs:440` / review R1-AR+R2-ER / high。
   std::env::var(key).ok() が NotUnicode を None 化し明示設定必須・信頼属性必須を解除し得る。
-- [ ] **ALLOWED_ORIGINSを本番起動ゲートへ**
+- [x] **ALLOWED_ORIGINSを本番起動ゲートへ**
   — 根拠 `docs/OPERATIONAL_POLICY.md:333` / `server/src/lib.rs:1268` / review R1-AR / high。
   doctor は必須とするが run() の config_errors に無く、未設定でも起動して CORS/refresh が全拒否になる。
-- [ ] **本番UIのモック認証表示を整備** — 根拠 `client/src/lib.rs:1774` / `README.md:22` / discovery R5-VU / high。
+- [x] **本番UIのモック認証表示を整備** — 根拠 `client/src/lib.rs:1774` / `README.md:22` / discovery R5-VU / high。
   「CONNECT WITH JPKI」と表示しつつ mock_token を送信。501時に「本番認証は未実装」文言へ。
-- [ ] **shfmt -d を実効ゲートへ** — 根拠 `.github/workflows/ci.yml:57` / review R4-OPS / high。
+- [x] **shfmt -d を実効ゲートへ** — 根拠 `.github/workflows/ci.yml:57` / review R4-OPS / high。
   差分があっても終了コード0で書式ゲートが無効。shfmt -l の出力非空を失敗にする。
-- [ ] **AUDIT_EXPECT_ROOTの更新ライフサイクルを定義** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:75` / discovery R5-VU / high。
+- [x] **AUDIT_EXPECT_ROOTの更新ライフサイクルを定義** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:75` / discovery R5-VU / high。
   監査ログ追加以後の root 再取得・世代保存・リストア時選択の手順が無く毎日のバックアップが失敗し得る。
-- [ ] **prepare-distribution.shの出力先検証を回帰テストへ** — 根拠 `scripts/test-prepare-distribution.sh` / discovery R3-TQ / high。
+- [x] **prepare-distribution.shの出力先検証を回帰テストへ** — 根拠 `scripts/test-prepare-distribution.sh` / discovery R3-TQ / high。
   '..'成分・repo_root置換・jq/cargo欠落・INT/TERMrollback・旧成果物削除失敗が未検証。
 
 - [x] **リモートDBでJWT失効がメモリに閉じ込められる問題を是正** — 根拠 `server/src/lib.rs` AuthClaims抽出器 / review R1-AR / 重大度 high。
@@ -719,6 +719,12 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（高優先6件）: AGE_*/ALLOWED_ORIGINSをenv分類器と共有ヘルパで起動ゲート化、
+  OIL_MOCK_AUTH=0と501固定文言で本番UIの誤認を解消、shfmt -l を実効ゲートへ。
+  AUDIT_EXPECT_ROOTの世代ライフサイクルとroot保存、prepare-distribution回帰5ケースを追加。
+  親がLeptos文字列リテラル・HRTBクロージャ・doc-numbersコメント・markdownlintを修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests123）。残り高2（外部要因）・中20・低9。
 
 - 2026-11-22 コンボ第8ラウンド（review 4 + discovery 3 担当）: 全7担当完了。
   R6 で重複排除・Runtime Proof 確認のうえ新規28件（高6/中20/低2＋保留1）を追記。

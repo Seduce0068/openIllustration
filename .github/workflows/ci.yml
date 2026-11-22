@@ -54,4 +54,4 @@ jobs:
         # SC2034 は nameref 引数（実際は呼び出し側で使用）、SC2016 は systemd unit へ
         # 書き込むリテラル '${APP_UNIT}' の意図的な単一引用のため、既存誤検知として除外する。
         for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016,SC2034 "$f"; done
-        for f in scripts/*.sh e2e/*.sh; do shfmt -d "$f"; done
+        shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi

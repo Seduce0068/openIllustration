@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T11:25:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -16,6 +16,10 @@ generated:
 ## 1. 認証・環境分離
 
 - `ALLOW_MOCK_AUTH=1` はローカル開発・隔離テスト専用。本番環境では設定しない。
+- クライアントのビルドでは本番成果物に `OIL_MOCK_AUTH=0` を指定し、
+  ログイン画面の開発用モック認証注記（`data-testid="mock-auth-notice"`）を出さない。未設定（既定）は注記を表示する開発用契約で、`"0"` のみが無効化する。`ALLOW_MOCK_AU
+  TH` がサーバー起動時の設定であるのに対し、`OIL_MOCK_AUTH` はクライアントのビルド時設定である。
+  
 - `JWT_SECRET` は必須。32バイト未満は起動時に拒否する。十分な強度のランダム値を秘密管理基盤から注入し、ソース・ログ・配布物に含めない。
 - `JWT_RSA_PRIVATE_KEY_PEM` を設定すると RS256 で署名する。検証用の公開鍵は
   秘密鍵から導出し、別途設定させない。許可アルゴリズムは起動時に確定し、
@@ -118,6 +122,11 @@ generated:
   第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
   `scripts/backup-rotate.sh` は `AUDIT_EXPECT_ROOT` が設定されていれば同じ root を
   `verify_audit_log --expect-root` へ自動で渡し、取得直後の検証で空化・末尾切詰めを検出する。
+  監査ログ更新後は `verify_audit_log` の計算 root（`audit_chain_digest:` 行の `root=<hex>`）を
+  再取得し、`backup-rotate.sh` が成果物と同じ stamp の `.audit-root`（0600）として世代保存する
+  （暗号化時も同じ世代名、root 値は stdout / stderr / ALERT へエコーしない）。次回期待値への
+  昇格は運用者の明示承認を要する手作業とし、スクリプトは期待値を自動上書きしない。
+  リストアでは復元対象世代に紐付いた root を `--expect-root` へ渡す。
   本番では `AUDIT_EXPECT_ROOT` の設定が必須（本番起動ゲート）。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・
    不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否し、値・バイトはエコーしない。
    判定は共有ヘルパ `production_audit_expect_root_error` が担い、`production_config_errors` と
@@ -330,7 +339,7 @@ generated:
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
-| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。モック認証無効時に未設定なら全オリジン拒否（fail-closed）。 |
+| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。 |
@@ -345,8 +354,8 @@ generated:
 | `AGE_DEFAULT_MINIMUM` | 任意（非秘密） | `21` | 年齢判定の一律既定最少年齢。保守的安全余裕ベースライン（法的事実の確定主張ではない）。有効設定値は `GET /policy/age` で常時公開。 |
 | `AGE_COUNTRY_OVERRIDES` | 任意（非秘密） | 空 | 国別しきい値上書き（`CC=NN,...`）。 |
 | `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |
-| `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。 |
-| `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。 |
+| `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。非 UTF-8 の値は「未設定」ではなく不正値として、受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
+| `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。真偽値は `1`/`true`/`0`/`false` のみ。非 UTF-8 および受理値外は受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
 | `AGE_POLICY_CONFIGURED`（廃止） | — | — | 旧手動フラグ。読取を廃止し設定されても無視される。充足判定は `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の実効値から導出（`AgePolicy::configuration_satisfied()`）。 |
 | `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
@@ -369,7 +378,7 @@ generated:
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。受理値外は起動時に警告のうえ per-request 判定で `false`（IPv4 不許可、fail-closed）とし、`doctor` の `ipv4_localhost` カテゴリでも警告。 |
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
-| `AUDIT_EXPECT_ROOT` | 本番起動必須（開発 mock 時のみ任意） | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否（fail-closed、値・バイトはエコーしない）。判定は共有ヘルパ `production_audit_expect_root_error` が担い、DB 接続・マイグレーション・instance.lock・FK 検査より前に検証する。`doctor` は同じ判定を `audit_expect_root` カテゴリの固定文言警告へ反映する（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。`backup-rotate.sh` 自体は未設定時も内部整合性チェックのみで動作する従来契約を維持し、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。 |
+| `AUDIT_EXPECT_ROOT` | 本番起動必須（開発 mock 時のみ任意） | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否（fail-closed、値・バイトはエコーしない）。判定は共有ヘルパ `production_audit_expect_root_error` が担い、DB 接続・マイグレーション・instance.lock・FK 検査より前に検証する。`doctor` は同じ判定を `audit_expect_root` カテゴリの固定文言警告へ反映する（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。`backup-rotate.sh` 自体は未設定時も内部整合性チェックのみで動作する従来契約を維持し、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。監査ログ更新時は `verify_audit_log` の計算 root を `<prefix>-<stamp>.audit-root`（0600）へ世代保存し、成果物と同じ stamp 名で公開する（暗号化時も同じ世代名、root 値は stdout/stderr/ALERT 非エコー）。次回期待値への昇格は運用者明示承認の手作業で自動上書きしない。リストア時は復元対象世代に紐付いた root を `--expect-root` に渡す。 |
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | cron 版は `backup-cron-wrapper.sh` がこのパスを読む。systemd 版はこの変数を使わず、`EnvironmentFile=` の固定パス（同パス）から読む。権限600・所有者固定、秘密情報は配布物へ含めない。 |
 | `APP_UNIT` | 任意（systemd 窓 unit） | `openillustration.service` | `deploy/openillustration-backup-window.service` が停止/起動するアプリ unit 名。`deploy/` にはアプリ unit を置いていないため、導入環境の実 unit 名へ drop-in 等で上書きする。バックアップ失敗時も `ExecStopPost` が起動を保証する。 |
 | `BACKUP_DIR` | 任意 | リポジトリルートの `backups/` | バックアップ出力先。deploy 設定例では `/var/backups/openillustration`。事前に存在させ、権限を適切に設定する。 |
@@ -431,6 +440,11 @@ generated:
   （`EXPOSE_INTERNAL_ERRORS` / `ALLOW_IPV4_LOCALHOST`）は `Valid(true)` 以外を
   安全側 `false` として fail-closed とし、`doctor` は既存カテゴリ内で固定文言の警告を
   出す。いずれも生バイトはログ・エラー文言へエコーしない。
+   `AGE_*` も `std::env::var` と同じ Result 契約で読み、`NotPresent` のみ「未設定」とする。
+   非 UTF-8（`NotUnicode`）は Invalid として `AgePolicy::from_env_with` が固定文言で起動拒否する
+   （`AGE_REQUIRE_EXPLICIT_CONFIGURATION` は真偽値受理値列挙、`AGE_ENFORCEMENT_MODE` は
+   モード受理値列挙）。`doctor` は同じ判定を `age_policy` カテゴリの固定文言警告へ反映する。
+   いずれも値・生バイトはエコーしない。
 - 年齢/地域ポリシーの有効設定値（`AGE_*` と `GET /policy/age` の応答内容）は非秘密かつ常時公開。新しいポリシー項目を追加する際も秘密情報を含めないこと。
 - マイグレーションディレクトリの探索には開発便宜として `CARGO_MANIFEST_DIR` を参照する।
 
@@ -438,9 +452,11 @@ generated:
 
 CI は共通ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` の `extra_gates` へ
 シェル静的ゲートを追加する。対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示し、
-`bash -n`（構文検査）、`shellcheck`（静的解析）、`shfmt -d`（書式差分）の3 command を
+`bash -n`（構文検査）、`shellcheck`（静的解析）、`shfmt -l`（未整形ファイルの列挙）の3 command を
 既存ゲートに追加する。既存のゲート行は削除・意味変更せず維持し、
 E2E69件 / check23 / doctor53 / migrations14 の各数値は不変である。
+`shfmt` は `shfmt -l scripts/*.sh e2e/*.sh` の出力が非空（未整形ファイルあり）のとき失敗とし、
+未整形ファイル名をエラー出力へ出す（`bash -n` / `shellcheck` の行は維持する）。
 runner への `shellcheck -e SC2016,SC2034` / `shfmt` の導入は、
 呼び出し側 `.github/workflows/ci.yml` の `apt_packages` で指定する（共通ワークフローの
 apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない

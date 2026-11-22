@@ -12,6 +12,11 @@ mkdir -p "${work}/bin" "${work}/backups" "${work}/offsite"
 # テスト用ディレクトリも本番と同じ権限に揃える（umask 022 環境での誤失敗を防ぐ）。
 chmod 700 "${work}/backups"
 
+# verify_audit_log スタブが成功時に出力する計算 root（非機微な hex）。
+# backup-rotate.sh の .audit-root 世代保存オラクルの期待値としても使う。
+stub_root="aaaabbbbccccddddeeeeffff00001111aaaabbbbccccddddeeeeffff00001111"
+export STUB_AUDIT_ROOT="$stub_root"
+
 # 実際の DB 操作の代わりに成果物を作るダミーコマンド。
 cat >"${work}/bin/backup_db" <<'EOF'
 #!/usr/bin/env bash
@@ -38,7 +43,9 @@ cat >"${work}/bin/verify_audit_log" <<'EOF'
 if [[ -n "${AUDIT_VERIFY_LOG:-}" ]]; then
   printf '%s\n' "$*" >> "$AUDIT_VERIFY_LOG"
 fi
-echo "dummy audit verify"
+# 実 CLI の成功出力と同じ形式で計算 root を出す（root 値はスクリプト側で捕捉される）。
+echo "audit_chain_digest: count=1 first=Some(1) last=Some(1) root=${STUB_AUDIT_ROOT}"
+echo "audit_log_verification: OK"
 EOF
 # 実際の gpg の代わりにダミー成果物を作る（外部サービス不要）。
 cat >"${work}/bin/gpg" <<'EOF'
@@ -347,6 +354,50 @@ if grep -Fq -- "--expect-root ${expect_root}" "$AUDIT_VERIFY_LOG"; then
 else
 	echo "FAIL AUDIT_EXPECT_ROOT not forwarded as --expect-root"
 	cat "$AUDIT_VERIFY_LOG" >&2
+	failures=$((failures + 1))
+fi
+
+# (a'') 成功時にverify_audit_logの計算rootが、成果物と同じstampの
+#       .audit-root として0600で公開され、root値がstdout/stderrへ出ないこと。
+#       expect_* の呼び出し件数は増やさず、既存ケース内へオラクルのみ追加する。
+mapfile -d '' audit_root_files < <(find "$expect_root_dir" -maxdepth 1 -type f -name 'openillustration-*.audit-root' -print0)
+# このケースは暗号化を有効にしているため最終成果物は .db.gpg（平文 .db は削除済み）。
+mapfile -d '' audit_db_files < <(find "$expect_root_dir" -maxdepth 1 -type f \
+	\( -name 'openillustration-*.db' -o -name 'openillustration-*.db.gpg' \) -print0)
+if ((${#audit_root_files[@]} == 1)) && ((${#audit_db_files[@]} == 1)); then
+	root_name="${audit_root_files[0]##*/}"
+	db_name="${audit_db_files[0]##*/}"
+	root_stamp="${root_name#openillustration-}"
+	root_stamp="${root_stamp%.audit-root}"
+	db_stamp="${db_name#openillustration-}"
+	db_stamp="${db_stamp%.db.gpg}"
+	db_stamp="${db_stamp%.db}"
+	if [[ "$root_stamp" == "$db_stamp" ]]; then
+		echo "PASS .audit-root published with the same stamp as the artifact"
+	else
+		echo "FAIL .audit-root stamp differs from artifact stamp"
+		failures=$((failures + 1))
+	fi
+	if [[ "$(stat -c %a "${audit_root_files[0]}")" == "600" ]]; then
+		echo "PASS .audit-root mode is 600"
+	else
+		echo "FAIL .audit-root mode is not 600"
+		failures=$((failures + 1))
+	fi
+	if [[ "$(cat "${audit_root_files[0]}")" == "$stub_root" ]]; then
+		echo "PASS .audit-root contains the freshly computed root"
+	else
+		echo "FAIL .audit-root content mismatch"
+		failures=$((failures + 1))
+	fi
+	if grep -Fq -- "$stub_root" "${work}/out.log"; then
+		echo "FAIL computed root leaked into script stdout/stderr"
+		failures=$((failures + 1))
+	else
+		echo "PASS computed root not echoed to stdout/stderr"
+	fi
+else
+	echo "FAIL .audit-root / artifact count mismatch"
 	failures=$((failures + 1))
 fi
 

@@ -192,6 +192,10 @@ assert_publishable "$output" || exit 1
 if [[ -n "$gpg_recipient" ]]; then
 	assert_publishable "$encrypted" || exit 1
 fi
+# 監査 root は成果物と同じ stamp の別ファイルとして公開する。
+# 暗号化の有無にかかわらず同じ世代名（<prefix>-<stamp>.audit-root）を使う。
+audit_root_output="${backup_dir}/${prefix}-${stamp}.audit-root"
+assert_publishable "$audit_root_output" || exit 1
 
 # 予測可能な最終パスへ直接書き込まず、mktemp の私有ディレクトリで生成して
 # 検証後に atomic rename で公開する（VACUUM INTO は既存ファイルへ書けない）。
@@ -213,10 +217,25 @@ audit_verify_args=(--database-url "file:${tmp_db}")
 if [[ -n "$audit_expect_root" ]]; then
 	audit_verify_args+=(--expect-root "$audit_expect_root")
 fi
-run_bin verify_audit_log "${audit_verify_args[@]}"
+# 成功出力の計算 root を取得して世代保存する。出力全体を捕捉して stdout へ出さない
+# ことで、root 値がログや ALERT へエコーされる経路を断つ（既存の非エコー契約を維持）。
+audit_verify_output="$(run_bin verify_audit_log "${audit_verify_args[@]}")"
+audit_root_line="$(printf '%s\n' "$audit_verify_output" | grep -E '^audit_chain_digest: .* root=[0-9a-fA-F]+' | tail -n 1 || true)"
+audit_root="${audit_root_line##* root=}"
+if [[ ! "$audit_root" =~ ^[0-9a-fA-F]+$ ]]; then
+	# 値・生バイトはエコーせず、段階名のみを通知する（fail-closed）。
+	echo "verify_audit_log did not report a valid Merkle root" >&2
+	exit 1
+fi
+# tmp_dir は 0600 の umask 下にあり、失敗時は on_failure で必ず削除される。
+tmp_audit_root="${tmp_dir}/${prefix}.audit-root"
+printf '%s\n' "$audit_root" >"$tmp_audit_root"
+chmod 600 "$tmp_audit_root"
 stage="publish"
 assert_publishable "$output" || exit 1
 mv -T -- "$tmp_db" "$output"
+assert_publishable "$audit_root_output" || exit 1
+mv -T -- "$tmp_audit_root" "$audit_root_output"
 
 if [[ -n "$gpg_recipient" ]]; then
 	stage="encrypt"

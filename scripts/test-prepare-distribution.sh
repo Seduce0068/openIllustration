@@ -383,6 +383,129 @@ else
 	failures=$((failures + 1))
 fi
 
+echo "=== ケース8〜12: 出力先検証と rollback（実 repo_root はwork配下のコピーで保護） ==="
+# prepare-distribution.sh は BASH_SOURCE から repo_root を解決するため、
+# スクリプトと LICENSE を work 配下へコピーして実行する（実 repo_root は変更しない）。
+repo_copy="${work}/repo-copy"
+mkdir -p "${repo_copy}/scripts"
+cp "$script" "${repo_copy}/scripts/prepare-distribution.sh"
+cp "${repo_root}/LICENSE" "${repo_copy}/LICENSE"
+copy_script="${repo_copy}/scripts/prepare-distribution.sh"
+
+echo "=== ケース8: '..' 成分の拒否 ==="
+expect_failure "case8 dotdot suffix rejected" bash "$copy_script" "${repo_copy}/dist/../escape"
+expect_failure "case8 dotdot prefix rejected" bash "$copy_script" "../escape"
+if [[ -e "${work}/escape" || -e "${repo_copy}/escape" || -e "${repo_copy}/dist" ]]; then
+	echo "FAIL case8: path escaped via '..'"
+	failures=$((failures + 1))
+else
+	echo "PASS case8: '..' component refused"
+fi
+
+echo "=== ケース9: repo_root / 祖先の置換拒否 ==="
+expect_failure "case9 repo_root rejected" bash "$copy_script" "$repo_copy"
+expect_failure "case9 ancestor rejected" bash "$copy_script" "$work"
+if [[ ! -f "${repo_copy}/LICENSE" ]]; then
+	echo "FAIL case9: repo_root copy was disturbed"
+	failures=$((failures + 1))
+else
+	echo "PASS case9: repo_root / ancestor refused and copy intact"
+fi
+
+echo "=== ケース10: jq / cargo 未検出の fail-closed ==="
+no_tools_bin="${work}/no-tools-bin"
+mkdir -p "$no_tools_bin"
+# repo_root 解決に使う dirname だけを残し、jq / cargo は見えないようにする。
+dirname_path="$(command -v dirname)"
+ln -s "$dirname_path" "${no_tools_bin}/dirname"
+expect_failure "case10 jq not found" env PATH="$no_tools_bin" /bin/bash "$copy_script" "${work}/out-no-jq"
+# jq は見えるが cargo が無い状態を作り、cargo 側のチェックも検証する。
+no_cargo_bin="${work}/no-cargo-bin"
+mkdir -p "$no_cargo_bin"
+jq_path="$(command -v jq)"
+ln -s "$dirname_path" "${no_cargo_bin}/dirname"
+ln -s "$jq_path" "${no_cargo_bin}/jq"
+expect_failure "case10 cargo not found" env PATH="$no_cargo_bin" /bin/bash "$copy_script" "${work}/out-no-cargo"
+if [[ ! -e "${work}/out-no-jq" && ! -e "${work}/out-no-cargo" ]]; then
+	echo "PASS case10: no artifact created without required tools"
+else
+	echo "FAIL case10: artifact created without required tools"
+	failures=$((failures + 1))
+fi
+
+echo "=== ケース11: INT / TERM で rollback が通ること ==="
+signal_bin="${work}/signal-bin"
+mkdir -p "$signal_bin"
+cp "${work}/bin/cargo" "${signal_bin}/cargo-real"
+cat >"${signal_bin}/cargo" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+# deny list の時点で親スクリプトへシグナルを送り、EXIT trap（rollback）を強制する。
+if [[ "${2:-}" == "list" && -n "${SIGNAL_NAME:-}" ]]; then
+	kill -"${SIGNAL_NAME}" "$PPID"
+fi
+exec "${DUMMY_CARGO_REAL}" "$@"
+EOF
+chmod +x "${signal_bin}/cargo"
+signal_out="${repo_copy}/out-signal"
+mkdir -p "$signal_out"
+printf 'KEEP ME\n' >"${signal_out}/marker"
+signal_snapshot="${work}/signal-snapshot"
+cp -a "$signal_out" "$signal_snapshot"
+for signal_name in INT TERM; do
+	expect_failure "case11 ${signal_name} triggers rollback" env \
+		PATH="${signal_bin}:${work}/bin:${PATH}" \
+		DUMMY_CARGO_REAL="${signal_bin}/cargo-real" \
+		SIGNAL_NAME="$signal_name" \
+		bash "$copy_script" "$signal_out"
+	if diff -r -q "$signal_snapshot" "$signal_out" >"${work}/case11-${signal_name}.diff" 2>&1; then
+		echo "PASS case11 ${signal_name}: existing artifact preserved by rollback"
+	else
+		echo "FAIL case11 ${signal_name}: existing artifact changed"
+		cat "${work}/case11-${signal_name}.diff" >&2
+		failures=$((failures + 1))
+	fi
+done
+if [[ -z "$(find "$work" -type d -name '*.tmp.*' -print -quit 2>/dev/null || true)" ]]; then
+	echo "PASS case11: no .tmp.* leftovers"
+else
+	echo "FAIL case11: .tmp.* leftover"
+	failures=$((failures + 1))
+fi
+
+echo "=== ケース12: 旧成果物削除失敗時に published rollback が働くこと ==="
+rm_fail_bin="${work}/rm-fail-bin"
+mkdir -p "$rm_fail_bin"
+cat >"${rm_fail_bin}/rm" <<'EOF'
+#!/usr/bin/env bash
+for arg in "$@"; do
+	if [[ "$arg" == *.old.* ]]; then
+		echo "simulated old artifact deletion failure" >&2
+		exit 14
+	fi
+done
+exec /bin/rm "$@"
+EOF
+chmod +x "${rm_fail_bin}/rm"
+delete_fail_out="${repo_copy}/out-delete-fail"
+mkdir -p "$delete_fail_out"
+printf 'OLD MARKER\n' >"${delete_fail_out}/marker"
+expect_failure "case12 old artifact deletion failure" env \
+	PATH="${rm_fail_bin}:${work}/bin:${PATH}" \
+	bash "$copy_script" "$delete_fail_out"
+if [[ -f "${delete_fail_out}/marker" ]] && [[ "$(cat "${delete_fail_out}/marker")" == "OLD MARKER" ]]; then
+	echo "PASS case12: old artifact restored after deletion failure"
+else
+	echo "FAIL case12: old artifact not restored"
+	failures=$((failures + 1))
+fi
+if compgen -G "${delete_fail_out}.old.*" >/dev/null; then
+	echo "FAIL case12: stashed directory left behind"
+	failures=$((failures + 1))
+else
+	echo "PASS case12: stashed directory not left behind"
+fi
+
 if ((failures > 0)); then
 	echo "prepare-distribution tests FAILED (${failures})" >&2
 	exit 1

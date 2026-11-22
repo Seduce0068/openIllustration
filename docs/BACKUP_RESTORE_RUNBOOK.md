@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T10:10:00+09:00"
+  at: "2026-11-22T11:25:00+09:00"
 ---
 
 ## 目的
@@ -76,7 +76,10 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotate.sh` が
 `verify_audit_log --database-url file:<平文 DB> --expect-root <値>` を実行し、
 外部 root との照合まで自動化する（引数ログやエラー文言へ root 値をエコーしない
-既存契約は維持）。**本番起動では `AUDIT_EXPECT_ROOT` の設定が必須**で、未設定・非 UTF-8・
+既存契約は維持）。成功時は計算 root を `<prefix>-<stamp>.audit-root`（権限 0600）へ保存し、
+成果物（`.db` または `.db.gpg`）と同じ stamp 世代で公開する。暗号化時も成果物と同じ
+世代名を使い、root 値は stdout / stderr / `ALERT_CMD` へ出さない。
+**本番起動では `AUDIT_EXPECT_ROOT` の設定が必須**で、未設定・非 UTF-8・
 不正 hex は固定文言で起動拒否（fail-closed）となる。
 `backup-rotate.sh` 自体は未設定時も内部整合性チェックのみを行い、外部 root 照合は行わない
 （既存運用を壊さないための後方互換動作）。
@@ -98,6 +101,17 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
    する。本番相当（モック認証無効）で未設定・非 UTF-8・不正 hex は固定文言で起動拒否し、
    DB 接続・マイグレーション・instance.lock・FK 検査より前に失敗を確定させる。
    値や生バイトはエラー文言へエコーしない。
+4. **監査ログ更新後の再取得と世代保存**: 監査ログへ新しいエントリが追加されると root が
+   変わるため、取得済みバックアップに対して `verify_audit_log` を実行し、成功出力の
+   `audit_chain_digest:` 行の `root=<hex>` を再取得する。`backup-rotate.sh` はこの
+   計算 root を `<prefix>-<stamp>.audit-root`（0600）として成果物と同じ stamp 世代で
+   公開する（暗号化時も同じ世代名）。root と成果物は世代の対として保管し、
+   監査ログ追加以後の照合に使う。
+5. **次回期待値への昇格は明示承認**: 保存した次世代 root を `AUDIT_EXPECT_ROOT` の
+   期待値へ昇格するのは運用者の明示的な承認を要する手作業とし、自動上書きを禁止する。
+   `backup-rotate.sh` は保存した root を既存期待値や `backup.env` へ書き戻さない。
+   不一致が続く場合は、意図的なロールオーバーか監査ログの改ざん・欠落を切り分けてから
+   承認する。
 
 `BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
 無ければ `cargo run` にフォールバックする（開発用）。設定例:
@@ -345,7 +359,11 @@ cargo run -p server --bin restore_db -- \
    末尾切り詰めを検出できる。`verify_backup` はテーブル数とマイグレーション台帳
    のみを検査するため、監査ログの空化はこの外部 root 照合で検出する。
    自動取得時は同じ照合を `AUDIT_EXPECT_ROOT` で行う（本番では設定必須、
-   上記「バックアップ取得」を参照）。
+   上記「バックアップ取得」を参照）。リストア時は復元対象世代に紐付いた
+   `.audit-root`（または別経路保存の同じ世代の root）を `--expect-root` に渡す。
+   現在の `AUDIT_EXPECT_ROOT` をそのまま使うと、監査ログ追加以後の別世代を復元した
+   場合に不一致となり正しい復元を拒否してしまう。世代と root の対応を確認してから
+   実行すること。
 1. 必要なコンテンツ・ユーザー・決済注文が存在することを抽样確認する。
 
 ### safety copy の取り扱い
