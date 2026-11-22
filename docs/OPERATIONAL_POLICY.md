@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T14:12:00+09:00"
+  at: "2026-11-22T15:00:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -151,6 +151,16 @@ generated:
 - 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト17件を追加済み
   （TEST_SPECIFICATION AUDIT-02）。Runbook の手動確認（鍵権限・親ディレクトリ権限・
   `DATABASE_TOKEN` 設定・既存出力の有無）は補助的な確認として扱う。
+- 監査・バックアップ系 CLI（`backup_db` / `restore_db` / `sign_audit_export` /
+  `verify_audit_export` / `verify_audit_log` / `verify_backup`）の argv 契約は
+  `server::cli_args` に集約する（[DETAILED_DESIGN.md](DETAILED_DESIGN.md) の
+  「共通 argv 契約」を参照）。各 bin が定義するのは受け付けるフラグの一覧だけとし、
+  秘密値の非 argv 化・ハイフン始まりの値拒否・unknown argument の固定文言を
+  bin ごとに複製しない。
+- 具体的には、`--database-token` は
+  `--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
+  で拒否して値をエコーせず、値取りは `<flag> requires a value`、
+  未知の引数は `unknown argument: <arg>` の固定文言で拒否する。
 - 本番前に署名鍵の HSM 管理とローテーション、監査対象・公開範囲、外部アンカー、個人情報保護、障害時運用を定めて試験する。
 
 ## 4. 支援・決済
@@ -167,6 +177,12 @@ generated:
   外部書き換えされて 0 件更新になった場合は 409（CONFLICT）で拒否し、書き換え後の値を
   上書きしない。1 件更新時は従来どおり 400（`transfer does not match the order`）を返し、
   注文を `MISMATCH` にする。
+- `bind_wallet` のウォレット所有証明記録も CAS 検査対象とする。`write_lock` を取得した
+  単一トランザクション内で `status` と `expires_at` を読み直し、期限再判定
+  （`reject_if_expired`）後も `status = 'PENDING'` を条件に `wallet_bound = 1` を更新する。
+  0 件更新（status が PENDING 以外へ進行した競合）は 409（CONFLICT、固定文言
+  `order status changed during wallet binding`）で拒否し、`verify_order` と同じ
+  単一ライター契約とする。正常系は 1 件更新で従来どおり成功する。
 
 ## 5. 運用準備・未整備事項
 
@@ -174,6 +190,13 @@ generated:
   クライアントの API オリジンはビルド時に `OIL_API_BASE` で注入する。値はオリジンのみ
   （`<scheme>://<host>[:<port>]`、末尾 `/` は除去）とし、パス・クエリ・認証情報・機微情報は入れない。
   未設定時は開発用の `http://localhost:3000`。HTTPS 配信では HTTPS オリジンを指定し mixed content を避ける。
+  リリース成果物（`dev-console` feature なし）は `OIL_API_BASE` に `http://` または
+  `localhost`（大小文字非区別）を含む値を指定すると const アサーションでビルドを拒否する
+  （fail-closed）。本番は `https://` オリジンを明示指定し、未設定時に倒れる開発既定値を
+  成果物へ持ち込まない。E2E / ローカル開発ビルドは `OIL_API_BASE` 未設定（開発既定値）または
+  `dev-console` feature を使い、従来どおり平文 HTTP オリジンを扱える。
+  このビルド時検証はクライアントへ注入する値に限り、サーバーの `ALLOWED_ORIGINS` 完全一致検査や
+  `Origin` ゲートの代替ではない。
 - 全レスポンスへ `X-Content-Type-Options: nosniff` と `X-Frame-Options: DENY` を付与する。
   `security_headers` は `CorsLayer` の内側に加えてさらに外側にも置く。CORS プリフライト（OPTIONS 204）は
   `CorsLayer` で短絡して内側を通らないため、外側の層が無いとヘッダーが落ちる。
@@ -184,7 +207,9 @@ generated:
   上げると DB や外部依存への同時負荷が増えるため、本番ではキャパシティ試験の結果で設定する。
   範囲外の値はクランプせず既定16へ倒れ、`doctor --strict` が設定不整合として警告する。
 - DBスキーマは起動時にバージョン管理マイグレーションで適用する（`_migrations` にchecksumを記録し、1ファイル1トランザクションで適用、前方のみでロールバックは提供しない）。失敗時は起動を中止し、
-  失敗ファイルは適用されない。復旧は原因修正後の再起動とし、`_migrations` の記録を確認する。適用済みバージョンに対応するファイルが無い場合（古いイメージでの起動等）、
+  失敗ファイルは適用されない。マイグレーションファイルが1つも無い（空ディレクトリで最低001が存在しない）場合も `run` / `verify` の双方で起動を拒否する（fail-closed）。未適用マイグレーシ
+  ョンの判定では `db.query` の Rows を1行読んだ後に明示 `drop(rows)` してからトランザクションを開始し、読み取りカーソルを残さない。復旧は原因修正後の再起動とし、`_migrations` の記録を確認する。
+  適用済みバージョンに対応するファイルが無い場合（古いイメージでの起動等）、
   およびマイグレーションディレクトリ自体が存在しない場合も起動を拒否する（fail-closed、ディレクトリ欠落で欠落検査をすり抜けるのを防止）。単一プロセス内の書き込みトランザクションは接続ごとのロックで直列化する（libSQL
   は同一接続で同時に1つの `BEGIN` しか保持できない）。ローカル DB では起動時に `<DB path>.instance.lock` を原子的に作成し、生存 PID
   のロックがある場合は第二インスタンスの起動を拒否する（fail-closed）。クラッシュ後の残骸（死んだ PID）は自動回収し、停止時にロックを削除する。
@@ -327,6 +352,15 @@ generated:
   値は `AtomicU64` のプロセス内カウンタで、再起動時にゼロ（最終成功時刻は 0）へ戻る。
   これらは参考値であり、中立化URL件数と同様に単独のアラート判定・請求判断へ使わない。
 
+- CI の依存ゲートは cargo-deny の4契約（licenses / advisories / bans / sources）を
+  `extra_gates` で実行する。`bans` は `multiple-versions = "deny"` とし、既知の重複だけを
+  `deny.toml` の exact version skip（`version = "=x.y.z"`）へ列挙する。新規バージョンの
+  重複は skip に一致しないためビルドを失敗させ、理由を添えて skip を追加する運用とする。
+  `version = "*"` の skip は新規重複まで黙って通すため使用しない。
+  `sources` は crates.io インデックスのみを許可し、未知レジストリ・Git 起源は拒否する。
+  `wildcards = "allow"` は workspace の path 依存を誤検知しないための設定であり、
+  取得元やライセンス検査を緩めるものではない。
+
 ## 6. 本番移行ゲート
 
 本番移行には、実JPKI認証の独立検証、JPYC取引確認と手数料・失敗時運用、第三者検証可能な監査、プライバシー・法務レビュー、モデレーション承認、IPFS削除/通報対応、DB復旧訓練、環境別設定とセキュリティ試験を必要とする。
@@ -355,7 +389,7 @@ generated:
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
-| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
+| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、`http(s)://` または `null`、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |

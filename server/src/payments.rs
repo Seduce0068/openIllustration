@@ -582,16 +582,31 @@ pub async fn bind_wallet(
             "order is no longer verifiable".to_string(),
         ));
     }
-    // 期限切れ判定と EXPIRED 更新は write_lock を取得したトランザクション内で行う。
+    // 期限切れ判定と status 確認は write_lock を取得したトランザクション内で行う。
     // 期限切れなら更新をコミットしてから 400 を返す（旧挙動を維持）。
     let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
-    if reject_if_expired(&tx, &order.order_id, &order.expires_at).await? {
+    // tx 外で読んだ order の status / expires_at は古い可能性があるため、
+    // 同じ tx 内で最新値を読み直す（verify_order の期限再判定と同じ契約）。
+    let (current_status, current_expires_at) = {
+        let mut rows = tx
+            .query(
+                "SELECT status, expires_at FROM payment_orders WHERE order_id = ?",
+                [order.order_id.as_str()],
+            )
+            .await?;
+        match rows.next().await? {
+            Some(row) => (row.get::<String>(0)?, row.get::<String>(1)?),
+            None => (order.status.clone(), order.expires_at.clone()),
+        }
+    };
+    if reject_if_expired(&tx, &order.order_id, &current_expires_at).await? {
         tx.commit().await?;
         return Err(AppError::BadRequest("order has expired".to_string()));
     }
-    if order.status != STATUS_PENDING {
-        return Err(AppError::BadRequest(
-            "order is not awaiting wallet binding".to_string(),
+    if current_status != STATUS_PENDING {
+        // 競合時は verify_order の CAS と同じ 409・固定文言で拒否する。
+        return Err(AppError::Conflict(
+            "order status changed during wallet binding".to_string(),
         ));
     }
 
@@ -612,14 +627,22 @@ pub async fn bind_wallet(
     }
 
     // 所有証明を DB へ記録する。再起動後も verify の必須条件として残る。
-    // 期限切れ判定で取得したトランザクションをそのまま使い、一括でコミットする。
-    tx.execute(
-        "UPDATE payment_orders
-         SET wallet_bound = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE order_id = ?",
-        [order.order_id.as_str()],
-    )
-    .await?;
+    // status = 'PENDING' を CAS 条件にし、0 件更新なら成功応答しない。
+    // 期限再判定で取得したトランザクションをそのまま使い、一括でコミットする。
+    let update = tx
+        .execute(
+            "UPDATE payment_orders
+             SET wallet_bound = 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE order_id = ? AND status = 'PENDING'",
+            [order.order_id.as_str()],
+        )
+        .await?;
+    if tx.changes() != 1 {
+        return Err(AppError::Conflict(
+            "order status changed during wallet binding".to_string(),
+        ));
+    }
+    debug_assert_eq!(update, 1);
     tx.commit().await?;
 
     Ok(Json(true))

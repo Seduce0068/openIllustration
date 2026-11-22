@@ -3,7 +3,8 @@
 # 環境変数は env_vars、clippy の追加引数は clippy_args で渡す。
 # wasm ターゲットの導入は wasm_targets、client の wasm ビルドは
 # e2e/ci-e2e.sh の trunk build に一元化する（extra_gates での重複を避ける）。
-# ライセンス検査と E2E（Playwright）は extra_gates で追加する。
+# cargo-deny の4ゲート（licenses / advisories / bans / sources）と
+# E2E（Playwright）は extra_gates で追加する。
 # E2E の JWT シークレットは e2e/ci-e2e.sh が実行ごとに生成する。
 name: CI
 

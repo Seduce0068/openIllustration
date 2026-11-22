@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T14:12:00+09:00"
+  at: "2026-11-22T15:00:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T14:12:00+09:00"
+  at: "2026-11-22T15:00:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -228,7 +228,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | NET-04 | `MAX_CONCURRENT_REQUESTS` の境界と同時実行上限（R4-02） | 未設定は既定16、有効範囲は 1..=256。`0` / `-1` / 空 / 非数値 / `257` / 極端な過大値は上限へクランプせず既定16へフォールバック。同時実行上限1では1件目保持中に2件目が429で、permit 返却後の再リクエストは200 | 実装済み。`test_max_concurrent_requests_defaults_and_bounds`（境界）と `test_concurrent_request_limit_rejects_second_and_releases_permit`（`Notify` で1件目を保持し permit 0 → 2件目429 → 解放 → permit 1 → 3件目200、レート制限は100/min で切り分け）。下記「同時リクエスト上限の検証（NET-04）」を参照 |
 | NET-05 | SSRF: IPFSゲートウェイのリダイレクト追従拒否 | 302 + `Location` で内部サービスへ誘導されても追従せず、リダイレクト先へ到達しない。3xx はエラーとして次のゲートウェイへフェイルオーバーする | 実装済み。`build_http_client` が `Policy::none()` を設定。サーバー側テスト2件（`test_get_content_does_not_follow_gateway_redirect` / `test_get_content_redirect_falls_back_to_next_gateway`）。下記「SSRF リダイレクト無効化の検証（NET-05）」を参照 |
 | NET-06 | XFF複数値解釈と IPv4-compatible 形式の拒否 | 追記型は末尾ピアを除去して最左クライアントを採用、上書き型は末尾を採用、不正エントリは fail-closed。`::a.b.c.d` は IPv4 として拒否、`::` / `::1` は IPv6 を維持 | 実装済み。サーバー側テスト11件（`server/src/network.rs` 6件 + `server/src/tests.rs` 5件）。下記「XFF 複数値・IPv4互換形式の検証（NET-06）」を参照 |
-| PAY-04 | `verify_order` の CAS 2段目 | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない | 実装済み（`server/src/payments.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
+| PAY-04 | `verify_order` の CAS 2段目と `bind_wallet` の CAS | 確定処理の2段目 UPDATE が `changes() == 0` なら 409 を返し、成功応答しない。`bind_wallet` も tx 内で `status` / `expires_at` を読み直し、`status = 'PENDING'` を条件に `wallet_bound = 1` を更新して 0 件更新なら 409 | 実装済み（`server/src/payments.rs`）。`bind_wallet` は競合時に固定文言 `order status changed during wallet binding` を返し、`verify_order` と同じ単一ライター契約を満たす。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | PAY-05 | ウォレット bind 署名 v2 と旧形式拒否（盲署名対策） | 署名対象は `order_id` / `chain_id` / `wallet_address` / `recipient_address` / `amount_jpy`。注文IDのみを署名対象にした旧形式は 401 で拒否する | 実装済み。`wallet_bind_message_v2` と `amount_jpy_from_wei` を追加し、`bind_wallet` を v2 へ切替。`test_bind_wallet_rejects_legacy_order_only_signature`（旧形式は `UNAUTHORIZED`）を追加。既存の bind 回帰はhelperを v2 署名へ更新。下記「ウォレット bind 署名 v2 の検証（PAY-05）」を参照 |
 | ID-05 | 再認証時の失効閾値レース | 古い閾値以下の行だけを削除し、back-channel logout が登録した新しい失効を残す | 実装済み（`server/src/oidc.rs`）。下記「CAS 2段目と失効閾値レースの検証」を参照 |
 | ID-07 | JWT 検証の追加カバレッジ（2026-11-18） | 検証鍵JSON（旧kid登録/不正JSON/kid境界/不正PEM）、alg混同の直接検証、`JWT_REQUIRE_KID`解析 | 実装済み・検証済み: `test_jwt_verification_keys_json_*` / `test_jwt_rejects_hs256_token_signed_with_public_pem` / `test_jwt_add_verification_key_kid_bounds` / `test_jwt_require_kid_from_env_values`（server/src/tests.rs、10件） |
@@ -250,6 +250,8 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
+| BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "allow"` は workspace の path 依存に対する誤検知回避のみ |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests128 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -684,6 +686,14 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   `AppError::Conflict`（HTTP 409、`order status changed during finalization`）を返す。
   1段目の CAS は `test_payment_verify_cas_rejects_stale_status` が検証済みで、
   古い書き込みが勝たないことを確認している。
+- R2-BIND-WALLET: `bind_wallet` も同じ単一ライター契約を満たす。`write_lock` 取得後の
+  単一 tx で `status` / `expires_at` を読み直し、期限再判定（`reject_if_expired`）の後で
+  `status = 'PENDING'` を CAS 条件に `wallet_bound = 1` を更新する。`tx.changes() != 1`
+  は `AppError::Conflict`（HTTP 409）で拒否し、競合時に所有証明を上書きしない。
+  固定文言は `order status changed during wallet binding` で、正常系は 1 件更新で従来どおり
+  成功する。既存の `test_bind_wallet_rejects_legacy_order_only_signature` 内に、
+  status が PENDING 以外へ進行したケースの 409 と未書き込みのアサーションを追加した
+  （テスト関数数および各種固定数値は不変）。
 - ID-05: 再認証時に `revoked_subs` の閾値をメモリから取り出し、DB は
   `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?` で古い閾値以下のみ削除する。
   これにより削除前に back-channel logout が登録した新しい失効が残る。既存の関連テストは

@@ -14,6 +14,85 @@ pub use oidc::{
     OidcConfigValidation, is_valid_oidc_endpoint, validate_oidc_config_with,
 };
 
+// 監査・バックアップ系 CLI（backup_db / restore_db / sign_audit_export /
+// verify_audit_export / verify_backup / verify_audit_log）の argv 契約を単一情報源へ集約する。
+// 各 bin に残すのは「どのフラグを取るか」の定義だけとし、値取り・秘密値拒否・
+// ハイフン値拒否・unknown argument の固定文言はここで一度だけ定義する。
+pub mod cli_args {
+    /// 秘密値を argv で受け付けない契約の固定文言。値は一切含めない。
+    pub const DATABASE_TOKEN_NOT_ACCEPTED: &str =
+        "--database-token is not accepted; set DATABASE_TOKEN in the environment instead";
+
+    /// unknown argument の固定文言（接頭辞）。引数名だけを添える。
+    pub const UNKNOWN_ARGUMENT_PREFIX: &str = "unknown argument: ";
+
+    /// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
+    /// 値やトークンをエコーせずに `{flag} requires a value` を返す。
+    /// `?Sized` を付けるのは共有ドライバが `&mut dyn Iterator` を渡すため。
+    pub fn take_value<'a, I>(it: &mut I, flag: &str) -> anyhow::Result<&'a str>
+    where
+        I: Iterator<Item = &'a str> + ?Sized,
+    {
+        match it.next() {
+            Some(value) if !value.starts_with('-') => Ok(value),
+            _ => Err(anyhow::anyhow!("{flag} requires a value")),
+        }
+    }
+
+    /// `--database-token` が argv に現れたときの固定エラー。値はエコーしない。
+    pub fn database_token_error() -> anyhow::Error {
+        anyhow::Error::msg(DATABASE_TOKEN_NOT_ACCEPTED)
+    }
+
+    /// 未知の引数の固定エラー。引数名以外はエコーしない。
+    pub fn unknown_argument(arg: &str) -> anyhow::Error {
+        anyhow::Error::msg(format!("{UNKNOWN_ARGUMENT_PREFIX}{arg}"))
+    }
+
+    /// 所有権付き引数列を保持してから借用し、bin 側のパーサへ `&[String]` を渡す。
+    pub fn parse_args_from<I, T, F>(items: I, parser: F) -> anyhow::Result<T>
+    where
+        I: IntoIterator<Item = String>,
+        F: FnOnce(&[String]) -> anyhow::Result<T>,
+    {
+        let owned: Vec<String> = items.into_iter().collect();
+        parser(&owned)
+    }
+
+    /// argv 解釈の共通ドライバ。
+    ///
+    /// `--database-token` の拒否と unknown argument の固定文言をここで担う。
+    /// 値取りは各 bin が [`take_value`] を呼ぶことでハイフン始まりの値拒否を共有する。
+    /// どのフラグを取るかは `handle_flag` を渡す各 bin 側に残す。
+    ///
+    /// `handle_flag` は引数を解釈して受理したら `Ok(true)`、未知のフラグなら
+    /// `Ok(false)` を返す。`Err` はそのまま伝播する
+    /// （例: [`take_value`] の `{flag} requires a value`）。
+    pub fn parse_str_args_with<'a, T, F>(
+        items: &'a [String],
+        initial: T,
+        mut handle_flag: F,
+    ) -> anyhow::Result<T>
+    where
+        F: FnMut(&mut T, &str, &mut dyn Iterator<Item = &'a str>) -> anyhow::Result<bool>,
+    {
+        let mut state = initial;
+        let mut it = items.iter().skip(1).map(String::as_str);
+        while let Some(arg) = it.next() {
+            // argv は ps 等で公開される。トークン値は受け付けず、
+            // エラーにも値をエコーしない（秘密値を出力しない）。
+            if arg == "--database-token" {
+                return Err(database_token_error());
+            }
+            // Err はそのまま伝播する（例: take_value の `{flag} requires a value`）。
+            if !handle_flag(&mut state, arg, &mut it)? {
+                return Err(unknown_argument(arg));
+            }
+        }
+        Ok(state)
+    }
+}
+
 use axum::{
     Json, Router,
     body::Body,
@@ -1218,6 +1297,20 @@ pub async fn foreign_key_doctor_warnings() -> Vec<String> {
         .collect()
 }
 
+/// `DATABASE_TOKEN` が非 UTF-8 の場合の固定文言。値・生バイトはエコーしない。
+/// `sign_audit_export::database_token_from_env_value` と同じ契約。
+const DATABASE_TOKEN_INVALID: &str = "DATABASE_TOKEN must be a valid UTF-8 string";
+
+/// `read_env` の結果から DB トークンを取り出す純粋版。
+/// 未設定は空文字、非 UTF-8 は固定文言で拒否し、生バイトを保持しない。
+fn database_token_from_env_value(value: common::env::EnvValue) -> anyhow::Result<String> {
+    match value {
+        common::env::EnvValue::Utf8(token) => Ok(token),
+        common::env::EnvValue::Missing => Ok(String::new()),
+        common::env::EnvValue::NonUtf8 => anyhow::bail!("{DATABASE_TOKEN_INVALID}"),
+    }
+}
+
 /// doctor の FK 検査用に `run()` と同じ DSN 解決で DB を開く（接続先はエコーしない）。
 async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
     let db_url = match common::env::read_env("DATABASE_URL") {
@@ -1229,7 +1322,9 @@ async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
             anyhow::bail!("DATABASE_URL is not configured for foreign key check")
         }
     };
-    let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
+    // 非 UTF-8 は「未設定」とせず固定文言のエラーへ倒す。呼び出し側の
+    // foreign_key_doctor_warnings が値を保持せず fail-closed 警告へ変換する。
+    let db_token = database_token_from_env_value(common::env::read_env("DATABASE_TOKEN"))?;
     if !is_remote_database_url(&db_url) {
         let path = db_url.strip_prefix("file:").unwrap_or(&db_url);
         let db = Builder::new_local(path).build().await?;
@@ -1331,7 +1426,10 @@ pub async fn run() -> anyhow::Result<()> {
             "file:local.db".to_string()
         }
     };
-    let db_token = std::env::var("DATABASE_TOKEN").unwrap_or_else(|_| "".to_string());
+    // DATABASE_TOKEN も共通分類器で一度だけ読む。非 UTF-8 は「未設定」として
+    // 空トークンへ倒さず、固定文言で起動拒否する（値・生バイトはエコーしない）。
+    // sign_audit_export の database_token_from_env_value と同じ契約。
+    let db_token = database_token_from_env_value(common::env::read_env("DATABASE_TOKEN"))?;
 
     let local_path = if !is_remote_database_url(&db_url) {
         Some(db_url.strip_prefix("file:").unwrap_or(&db_url).to_string())
@@ -2933,23 +3031,49 @@ pub async fn auth_verify(
         .expect("valid timestamp")
         .timestamp() as usize;
 
+    // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
+    // ban_user / backchannel と同じ「DB コミット先行」方針に合わせ、ここでは
+    // メモリから読むだけで削除しない（DB 削除が成功してから remove する）。
     let (iat, old_threshold) = {
-        let mut revoked_subs = state
+        let revoked_subs = state
             .revoked_subs_before
             .lock()
             .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
-        let old = revoked_subs.remove(&user_hash);
+        let old = revoked_subs.get(&user_hash).copied();
         let issued_at = match old {
             Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
             None => now_ts,
         };
         (issued_at, old)
     };
-    // OIDC callback と同じ順序で、メモリ削除の後に DB の旧閾値も削除する。
+    // OIDC callback と同じく、不要になった旧閾値を DB から先に削除する。
     // これを省くと再起動後に refresh が古い閾値で塞がる。
     if let Some(old_threshold) = old_threshold {
-        oidc::delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await?;
+        if let Err(err) =
+            oidc::delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await
+        {
+            // DB が失敗したらメモリを元の状態へ戻す（閾値を挿入し直す）。
+            // 並行して新しい閾値が登録済みなら上書きしない。
+            state
+                .revoked_subs_before
+                .lock()
+                .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+                .entry(user_hash.clone())
+                .or_insert(old_threshold);
+            return Err(err);
+        }
+        // DB コミット後にメモリの旧閾値を削除する。DB 側と同じく、削除後に
+        // 登録された新しい閾値は残す。
+        let mut revoked_subs = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        if revoked_subs
+            .get(&user_hash)
+            .is_some_and(|current| *current <= old_threshold)
+        {
+            revoked_subs.remove(&user_hash);
+        }
     }
 
     let claims = Claims {

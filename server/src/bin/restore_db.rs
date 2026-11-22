@@ -1,6 +1,7 @@
 use anyhow::{Context, anyhow};
 use common::instance_lock::{instance_lock_owner_alive, parse_instance_lock};
 use libsql::Builder;
+use server::cli_args;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -26,48 +27,35 @@ fn print_help() {
     );
 }
 
-/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
-/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
-fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
-    match it.next() {
-        Some(value) if !value.starts_with('-') => Ok(value),
-        _ => Err(anyhow!("{flag} requires a value")),
-    }
-}
-
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
-    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
-    let owned: Vec<String> = items.into_iter().collect();
-    parse_str_args(&owned)
+    cli_args::parse_args_from(items, parse_str_args)
 }
 
+/// 受け付けるフラグの定義は bin 側に残す。値取り・秘密値拒否・unknown 固定文言は
+/// `server::cli_args` の共有実装を呼ぶだけ。
 fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
-    let mut args = Args::default();
-    let mut it = items.iter().skip(1).map(String::as_str);
-    while let Some(arg) = it.next() {
-        match arg {
-            "-h" | "--help" => args.help = true,
-            "--backup" => {
-                args.backup = Some(take_value(&mut it, "--backup")?.to_string());
-            }
-            "--target" => {
-                args.target = Some(take_value(&mut it, "--target")?.to_string());
-            }
-            "--force" => args.force = true,
-            // argv は ps 等で公開される。トークン値は受け付けず、
-            // エラーにも値をエコーしない（秘密値を出力しない）。
-            "--database-token" => {
-                return Err(anyhow!(
-                    "--database-token is not accepted; set DATABASE_TOKEN in the environment instead"
-                ));
-            }
-            other => return Err(anyhow!("unknown argument: {other}")),
+    cli_args::parse_str_args_with(items, Args::default(), |args, arg, it| match arg {
+        "-h" | "--help" => {
+            args.help = true;
+            Ok(true)
         }
-    }
-    Ok(args)
+        "--backup" => {
+            args.backup = Some(cli_args::take_value(it, "--backup")?.to_string());
+            Ok(true)
+        }
+        "--target" => {
+            args.target = Some(cli_args::take_value(it, "--target")?.to_string());
+            Ok(true)
+        }
+        "--force" => {
+            args.force = true;
+            Ok(true)
+        }
+        _ => Ok(false),
+    })
 }
 
 fn parse_args() -> anyhow::Result<Args> {

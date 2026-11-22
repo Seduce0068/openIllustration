@@ -1,5 +1,6 @@
 use anyhow::{Context, anyhow};
 use libsql::Builder;
+use server::cli_args;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default)]
@@ -21,45 +22,29 @@ fn print_help() {
     eprintln!("{HELP}");
 }
 
-/// 値取りの共通ヘルパ。オプション風トークン（`-` で始まる値）は値として受理せず、
-/// 値やトークンをエコーせずに `{flag} requires a value` を返す。
-fn take_value<'a>(it: &mut impl Iterator<Item = &'a str>, flag: &str) -> anyhow::Result<&'a str> {
-    match it.next() {
-        Some(value) if !value.starts_with('-') => Ok(value),
-        _ => Err(anyhow!("{flag} requires a value")),
-    }
-}
-
 /// argv の解釈だけを行う純粋関数。環境変数・プロセス引数を読まないため、
 /// 一時 DB のパスや不正な引数を直接渡してテストできる。
 fn parse_args_from<I>(items: I) -> anyhow::Result<Args>
 where
     I: IntoIterator<Item = String>,
 {
-    // 所有権付き引数を保持してから借用し、値取りヘルパへ &str を渡す。
-    let owned: Vec<String> = items.into_iter().collect();
-    parse_str_args(&owned)
+    cli_args::parse_args_from(items, parse_str_args)
 }
 
+/// 受け付けるフラグの定義は bin 側に残す。値取り・秘密値拒否・unknown 固定文言は
+/// `server::cli_args` の共有実装を呼ぶだけ。
 fn parse_str_args(items: &[String]) -> anyhow::Result<Args> {
-    let mut args = Args::default();
-    let mut it = items.iter().skip(1).map(String::as_str);
-    while let Some(arg) = it.next() {
-        match arg {
-            "-h" | "--help" => args.help = true,
-            "--input" => {
-                args.input = Some(take_value(&mut it, "--input")?.to_string());
-            }
-            // argv は ps 等で公開される。トークン値は受け付けず、
-            // エラーにも値をエコーしない（秘密値を出力しない）。
-            "--database-token" => {
-                return Err(anyhow!(
-                    "--database-token is not accepted; set DATABASE_TOKEN in the environment instead"
-                ));
-            }
-            other => return Err(anyhow!("unknown argument: {other}")),
+    let args = cli_args::parse_str_args_with(items, Args::default(), |args, arg, it| match arg {
+        "-h" | "--help" => {
+            args.help = true;
+            Ok(true)
         }
-    }
+        "--input" => {
+            args.input = Some(cli_args::take_value(it, "--input")?.to_string());
+            Ok(true)
+        }
+        _ => Ok(false),
+    })?;
     if !args.help && args.input.is_none() {
         return Err(anyhow!("--input is required"));
     }

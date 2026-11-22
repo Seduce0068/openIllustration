@@ -38,15 +38,15 @@ status: current
 ### 優先度: 高
 
 - [x] **LOG OUTのrefresh Cookie失効を修正** — 2026-11-22 実装済み（`credentials: Include`）。E2Eはlocalhost/127.0.0.1別ホストのためCookie送信は未検証、同一サイト構成で検証可能な旨を記録。
-- [ ] **未適用マイグレーションのカーソルを閉じてからBEGIN** — 根拠 `server/src/migration.rs:283` / review R2-ER / high。
-- [ ] **auth_verify失効閾値削除をDB正本先行へ** — 根拠 `server/src/lib.rs:2936` / review R2-ER / high。
+- [x] **未適用マイグレーションのカーソルを閉じてからBEGIN** — 根拠 `server/src/migration.rs:283` / review R2-ER / high。
+- [x] **auth_verify失効閾値削除をDB正本先行へ** — 根拠 `server/src/lib.rs:2936` / review R2-ER / high。
  メモリ先行だとDB失敗時に再起動前後で判定が分岐する。
-- [ ] **空migrationsディレクトリを拒否** — 根拠 `server/src/migration.rs:146` / review R2-ER / 中。
-- [ ] **DATABASE_TOKEN非UTF-8をEnvValue分類へ** — 根拠 `server/src/lib.rs:1334` / review R2-ER / 中。
-- [ ] **bind_walletをtx内でstatus再確認** — 根拠 `server/src/payments.rs:579` / review R2-ER / 中。
-- [ ] **6 CLIのargvパーサを共通化** — 根拠 `server/src/bin/*` / review R1-AR / 中。
-- [ ] **cargo deny bansを実効ゲート化** — 根拠 `deny.toml:74` / review R1-AR+R3-TQ / 中。warn+ワイルドカードskipで実質無効。
-- [ ] **APIオリジンの平文HTTPを本番fail-closed化** — 根拠 `client/src/lib.rs:39` / review R3-AU / 中。
+- [x] **空migrationsディレクトリを拒否** — 根拠 `server/src/migration.rs:146` / review R2-ER / 中。
+- [x] **DATABASE_TOKEN非UTF-8をEnvValue分類へ** — 根拠 `server/src/lib.rs:1334` / review R2-ER / 中。
+- [x] **bind_walletをtx内でstatus再確認** — 根拠 `server/src/payments.rs:579` / review R2-ER / 中。
+- [x] **6 CLIのargvパーサを共通化** — 根拠 `server/src/bin/*` / review R1-AR / 中。
+- [x] **cargo deny bansを実効ゲート化** — 根拠 `deny.toml:74` / review R1-AR+R3-TQ / 中。warn+ワイルドカードskipで実質無効。
+- [x] **APIオリジンの平文HTTPを本番fail-closed化** — 根拠 `client/src/lib.rs:39` / review R3-AU / 中。
 - [ ] **Back-Channel Logoutトークンにiat/nbf新鮮性検証** — 根拠 `server/src/oidc.rs:861` / review R3-AU / 中。再送で後続セッションを失効させない。
 - [ ] **IPFSゲートウェイのhttpを本番拒否** — 根拠 `server/src/lib.rs:1818` / review R3-AU / 低。
 - [ ] **gpg実暗号化テストの黙スキップを防止** — 根拠 `scripts/test-backup-rotate.sh:690` / discovery R3-TQ / 中。
@@ -749,6 +749,12 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（高2+中6）: migrationのdrop(rows)→BEGIN、空migrations拒否、
+  auth_verify DB正本先行、DATABASE_TOKEN NonUtf8拒否、bind_wallet PENDING CAS、
+  6CLI argv共通化、deny multiple-versions=deny+exact skip、API origin本番HTTPS const拒否。
+  親がmarkdownlint行長1箇所を修正。全ゲート green（E2E69/check23/doctor53/migrations14/tests128）。
+  残り中7・低8・高2（外部要因/JWT段階移行）。
 
 - 2026-11-22 コンボ第13ラウンド（review4+discovery3）: 全7担当完了。
   R6 で重複排除し、LOG OUT の refresh Cookie 欠落（2担当独立確認・high）は即時修正済み

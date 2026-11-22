@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T13:50:00+09:00"
+  at: "2026-11-22T15:00:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -745,3 +745,21 @@ INSERT を同じトランザクションでコミットする。この原子的�
   終了コード0、失敗時は `(None, 1)` を返す。エラー本文は stdout へ出さず stderr の
   `Error: ...` に委譲する。手順は
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+
+### 共通 argv 契約（`server::cli_args`）
+
+- `backup_db` / `restore_db` / `sign_audit_export` / `verify_audit_export` /
+  `verify_audit_log` / `verify_backup` の argv 解釈は `server/src/lib.rs` の
+  `cli_args` モジュールへ集約する。各 bin に残すのは受け付けるフラグの定義だけとし、
+  `take_value` / `parse_str_args` の共通部分 / `--database-token` 拒否 /
+  ハイフン始まりの値拒否 / unknown argument の固定文言は共有実装の単一情報源とする。
+- 秘密値は argv で受け付けない。`--database-token` が現れた時点で
+  `--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
+  を返し、渡された値もトークン名もエラーへエコーしない。リモート libSQL のトークンは
+  `DATABASE_TOKEN` 環境変数からのみ読む。
+- 値取りは `-` で始まるオプション風トークンを値として受理せず、
+  `<flag> requires a value` の固定文言を返す（値・トークンをエコーしない）。
+- 未知の引数は `unknown argument: <arg>` の固定文言で拒否する。
+  `<arg>` は引数名のみで、秘密値は含めない。
+- 既存の CLI 引数回帰テストは各 bin の `#[cfg(test)]` 内に残し、共有関数へ委譲した後も
+  期待文言・テスト名・件数を変更しない。

@@ -169,13 +169,25 @@ fn collect_migration_files(migrations_path: &Path) -> Result<Vec<MigrationFile>,
         });
     }
 
+    // 空ディレクトリを「001 が無い」として fail-closed で拒否する。
+    if files.is_empty() {
+        return Err(AppError::Internal(EMPTY_MIGRATIONS_ERROR.to_string()));
+    }
+
     files.sort_by_key(|file| file.version);
     validate_migration_sequence(&files)?;
     Ok(files)
 }
 
+/// 空の migrations ディレクトリを拒否する単一情報源（最低 001 が必要）。
+const EMPTY_MIGRATIONS_ERROR: &str =
+    "No migration files found: at least migration 001 is required; refusing to run migrations";
+
 /// Versions must start at 001 and increase by exactly one, with no duplicates.
 fn validate_migration_sequence(files: &[MigrationFile]) -> Result<(), AppError> {
+    if files.is_empty() {
+        return Err(AppError::Internal(EMPTY_MIGRATIONS_ERROR.to_string()));
+    }
     let mut expected = 1u32;
     let mut previous: Option<&MigrationFile> = None;
 
@@ -302,6 +314,10 @@ async fn apply_migration(
             )));
         }
     }
+    // 1 行読んだ時点で Rows を明示的に解放してから BEGIN する。
+    // 他箇所の read-then-BEGIN パターンと同じ順序にし、同一接続に
+    // 読み取りカーソルを残したままトランザクションを開始しない。
+    drop(rows);
 
     info!("Applying migration {}: {}", version, name);
 
@@ -355,6 +371,10 @@ pub async fn run_migrations_from(db: &Connection, migrations_path: &Path) -> Res
     // applying anything, so an unknown/non-numeric file can never become a
     // `_migrations.version` value that later passes verification.
     let files = collect_migration_files(migrations_path)?;
+    // collect が拒否するはずだが、公開入口でも明示的に空を拒否する（多層防御）。
+    if files.is_empty() {
+        return Err(AppError::Internal(EMPTY_MIGRATIONS_ERROR.to_string()));
+    }
 
     for file in files {
         if applied.contains(&file.version_token) {
@@ -396,6 +416,10 @@ pub async fn verify_migrations_from(
     // run_migrations と同じ厳密検証を共有する。ここでも検証しないと、
     // run 側をすり抜けた不正ファイルが verify を通過してしまう。
     let files = collect_migration_files(migrations_path)?;
+    // collect が拒否するはずだが、公開入口でも明示的に空を拒否する（多層防御）。
+    if files.is_empty() {
+        return Err(AppError::Internal(EMPTY_MIGRATIONS_ERROR.to_string()));
+    }
 
     let file_versions: HashSet<String> = files
         .iter()
@@ -623,6 +647,26 @@ mod tests {
         run_migrations_from(&db, &dir).await.unwrap();
         verify_migrations_from(&db, &dir).await.unwrap();
         assert_eq!(get_applied_versions(&db).await.unwrap().len(), 13);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 空の migrations ディレクトリ（001 が無い）は run / verify ともに拒否されること。
+    #[tokio::test]
+    async fn rejects_empty_migrations_directory() {
+        let dir = temp_migrations_dir("empty");
+        let db = memory_db().await;
+
+        let run_err = run_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            run_err.to_string().contains("at least migration 001"),
+            "unexpected error: {run_err}"
+        );
+        let verify_err = verify_migrations_from(&db, &dir).await.unwrap_err();
+        assert!(
+            verify_err.to_string().contains("at least migration 001"),
+            "unexpected error: {verify_err}"
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

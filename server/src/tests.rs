@@ -7315,7 +7315,7 @@ async fn test_bind_wallet_rejects_legacy_order_only_signature() {
     let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
     let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
     let verifier = Arc::new(MockVerifier::default());
-    let (app, _db) = setup_app_with_payments(receiving, verifier).await;
+    let (app, db) = setup_app_with_payments(receiving, verifier).await;
     let token = generate_token(TEST_JWT_SECRET, "test_user").await;
     let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
 
@@ -7344,6 +7344,53 @@ async fn test_bind_wallet_rejects_legacy_order_only_signature() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    // 競合ケース: 他ライターが status を PENDING 以外へ進めた場合は 409 で拒否し、
+    // wallet_bound を書き換えない（verify_order と同じ単一ライター契約）。
+    db.execute(
+        "UPDATE payment_orders SET status = ? WHERE order_id = ?",
+        (crate::payments::STATUS_MISMATCH, order_id.clone()),
+    )
+    .await
+    .unwrap();
+    let message = crate::payments::wallet_bind_message_v2(&order_id, 137, &wallet, receiving, 1000);
+    let mut hasher = Keccak256::new();
+    hasher.update(format!("\x19Ethereum Signed Message:\n{}", message.len()).as_bytes());
+    hasher.update(message.as_bytes());
+    let digest = hasher.finalize();
+    let (signature, recovery_id) = wallet_key.sign_prehash_recoverable(&digest);
+    let mut sig_bytes = signature.to_bytes().to_vec();
+    sig_bytes.push(recovery_id.to_byte());
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post(format!("/payments/orders/{order_id}/bind"))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({ "signature": format!("0x{}", hex::encode(sig_bytes)) }).to_string(),
+                ))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("order status changed during wallet binding"),
+        "conflict must use the fixed 409 wording: {text}"
+    );
+    let mut rows = db
+        .query(
+            "SELECT wallet_bound FROM payment_orders WHERE order_id = ?",
+            [order_id],
+        )
+        .await
+        .unwrap();
+    let bound: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(bound, 0, "conflicting bind must not stamp wallet_bound");
 }
 
 /// 決済: status が PENDING のまま expires_at を過ぎた注文を拒否し EXPIRED へ更新する。

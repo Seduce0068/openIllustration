@@ -36,12 +36,78 @@ fn upload_media_type(browser_type: &str, filename: &str) -> &'static str {
     }
 }
 
+/// ビルド時に注入する API オリジン。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで、
+/// 未設定（E2E / ローカル開発）は従来の開発既定値を使う。
+const API_BASE_ENV: Option<&str> = option_env!("OIL_API_BASE");
+
+/// 開発用の既定オリジン。リリース成果物では `OIL_API_BASE` へ HTTPS オリジンを明示する。
+const DEFAULT_API_ORIGIN: &str = "http://localhost:3000";
+
 /// API オリジン。ビルド時に `OIL_API_BASE` で上書きできる表示用の型。
 ///
 /// 値はオリジンのみ（`<scheme>://<host>[:<port>]`）とし、パス・クエリ・
 /// 認証情報・機微情報は含めない。HTTPS 配信では HTTPS オリジンを指定し、
 /// mixed content を避ける。未設定時は開発用ローカルの既定値を使う。
 struct ApiOrigin;
+
+/// リリースビルド（`dev-console` feature なし）で平文 HTTP / localhost の指定を拒否する。
+/// `OIL_API_BASE` 未設定は開発ビルドの既定値として従来どおり通す（E2E の `trunk build` は
+/// feature・環境変数なしで動く）。`dev-console` 付きの開発ビルドも検証対象外とする。
+#[cfg(not(feature = "dev-console"))]
+const _: () = assert_release_api_origin(API_BASE_ENV);
+
+/// 不正なオリジンが注入されたら const 評価時にビルドを失敗させる（fail-closed）。
+#[cfg(not(feature = "dev-console"))]
+const fn assert_release_api_origin(origin: Option<&str>) {
+    if let Some(origin) = origin {
+        assert!(
+            is_https_non_local_origin(origin),
+            "OIL_API_BASE must be an HTTPS origin without localhost in release builds"
+        );
+    }
+}
+
+/// `https://` で始まり `localhost` を含まないことをバイト単位で判定する。
+/// const 対応のため `str` の高級メソッドではなくバイト走査を使う。
+#[cfg(not(feature = "dev-console"))]
+const fn is_https_non_local_origin(origin: &str) -> bool {
+    let bytes = origin.as_bytes();
+    let scheme = b"https://";
+    if bytes.len() < scheme.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < scheme.len() {
+        if bytes[index] != scheme[index] {
+            return false;
+        }
+        index += 1;
+    }
+    let localhost = b"localhost";
+    index = 0;
+    while index + localhost.len() <= bytes.len() {
+        let mut matched = true;
+        let mut offset = 0;
+        while offset < localhost.len() {
+            let byte = bytes[index + offset];
+            let lowered = if byte >= b'A' && byte <= b'Z' {
+                byte + 32
+            } else {
+                byte
+            };
+            if lowered != localhost[offset] {
+                matched = false;
+                break;
+            }
+            offset += 1;
+        }
+        if matched {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 
 /// 設定値の表記ゆれを吸収するため、末尾の `/` だけを除去する。
 fn normalize_api_origin(origin: &str) -> &str {
@@ -86,8 +152,7 @@ fn format_local_datetime(iso: &str) -> String {
 
 impl std::fmt::Display for ApiOrigin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        const DEFAULT: &str = "http://localhost:3000";
-        let origin = option_env!("OIL_API_BASE").unwrap_or(DEFAULT);
+        let origin = API_BASE_ENV.unwrap_or(DEFAULT_API_ORIGIN);
         f.write_str(normalize_api_origin(origin))
     }
 }
