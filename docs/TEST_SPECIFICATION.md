@@ -2075,6 +2075,11 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - **R2-A11Y アップロード送信中の busy 告知**: `Sign & Submit to Evidence Ledger` ボタンへ
   `aria-busy=move || loading.get()` を付け、送信中フェーズの属性の付与・解除を
   `upload.spec.ts` の既存成功ケース内で検証する。新規 `test()` は追加しない。
+- **R2-A11Y 第4次（英文見出し・バッジとビュー切替フォーカス）**: ナビの `<h1>`、
+  `content-verification-badge`（`● VERIFIED` / `× COMPROMISED` / `× LOAD FAILED`）、
+  種別バッジへ `lang="en"` を付与し `integrity.spec.ts` の既存ケースで検証する。
+  view が実際に変わったときだけ `#main-content` へフォーカスし、初回マウントでは
+  奪わない（`auth.spec.ts` の否定オラクルとログイン後の `toBeFocused()`）。
 - 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests152 は不変。
 
 ## R2-CLIENT（第2次）の受け入れ契約（既存ケース内へ統合・数値不変）
@@ -2207,7 +2212,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 新規テスト関数は `test_logout_rejects_revoked_sub` と
 `test_cors_exposes_request_id_header` の2件のみ。doc→code テスト名照合値は
-tests152 → tests152 へ追随し、E2E69件 / check23 / doctor54 / migrations14 は
+当時 tests148 → tests150 へ追随（現行照合値は tests152）し、E2E69件 / check23 / doctor54 / migrations14 は
 不変（履歴記載の数値は変更しない）。
 
 ## R2-SERVER（第2次・部分適用）の受け入れ契約（2026-11-23）

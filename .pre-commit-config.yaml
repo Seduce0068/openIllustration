@@ -6,3 +6,4 @@ repos:
     rev: v1.10.1
     hooks:
       - id: betterleaks
+        args: [--config, .betterleaks.toml]

@@ -58,11 +58,19 @@ jobs:
           pull_request)
             scan_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
             ;;
-          *)
+          push)
             scan_range="${{ github.event.before || 'HEAD~1' }}..HEAD"
             ;;
+          *)
+            # schedule / workflow_dispatch: 定期再スキャンなので全到達可能履歴を対象にする。
+            scan_range=""
+            ;;
         esac
-        betterleaks git . --redact --log-opts="$scan_range"
+        if [[ -n "$scan_range" ]]; then
+          betterleaks git . --redact --config .betterleaks.toml --log-opts="$scan_range"
+        else
+          betterleaks git . --redact --config .betterleaks.toml
+        fi
         npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。
         # いずれも devDependency で本番ランタイムへは入らない。

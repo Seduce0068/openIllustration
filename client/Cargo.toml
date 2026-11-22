@@ -35,7 +35,7 @@ pulldown-cmark = { version = "0.13.4", features = ["default"] }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
-# チェックサム照合の検証だけに使うため、本番 wasm には入れない（cargo test では従来どおり利用可能）。
+# client の直接依存からは除外（common が通常依存で保持するため推移的には本番 wasm へ残る）。
 [dev-dependencies]
 sha2 = "0.11"
 hex = "0.4"

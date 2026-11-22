@@ -171,7 +171,9 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/local
 ローカルフックは回避され得るため、CI の extra_gates でも `betterleaks git . --redact
 --log-opts="<範囲>"` を最終ゲートとして併設しています。CI は checkout 直後に
 ステージングエリアが空のため `--staged` は使わず、pull_request では base..head、
-push では before..HEAD を明示して走査します（マルチコミット PR も漏らしません）。
+push では before..HEAD、schedule / workflow_dispatch では全到達可能履歴を走査します
+（マルチコミット PR も漏らしません）。`.betterleaks.toml` は `server/src/tests.rs` と `todo.md` に含まれる
+`example.com` / `REDACTED` のダミー値だけをパス付きで除外します。
 
 ## 年齢/地域ポリシー（DEC-02 方針、公開設定）
 

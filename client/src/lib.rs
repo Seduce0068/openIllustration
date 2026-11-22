@@ -2820,7 +2820,7 @@ mod jxl;
 fn error_lang(message: &str) -> &'static str {
     if message
         .chars()
-        .any(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9faf}'))
+        .any(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
     {
         "ja"
     } else {

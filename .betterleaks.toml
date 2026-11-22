@@ -1,0 +1,9 @@
+# Betterleaks の誤検知抑制設定。
+# redact_url の回帰テストに含まれるダミー URL（example.com / user:pass）は
+# 実際の秘密情報ではないため、パスとホストで明示的に除外する。
+filter = '''
+(
+  filter.contains(attributes["path"], "server/src/tests.rs")
+  || filter.contains(attributes["path"], "todo.md")
+) && filter.containsAny(finding["match"], ["example.com", "REDACTED"])
+'''
