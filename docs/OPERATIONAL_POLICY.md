@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T02:55:00+09:00"
+  at: "2026-11-23T03:05:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -164,8 +164,8 @@ generated:
   TRUE のまま残す（自動でフラグを落とさない）。UNBAN・UNPIN とともに主体・対象・理由を `governance_audit_log` に記録する。
   これは運用ログであり第三者検証可能な監査ではない。
   投票者選出・Sybil耐性と監査方式（DEC-04）は未実装・未決定であり、モデレーション結果を本番の最終判断として扱わない。
-- BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。BAN と back-channel logo
-  ut のどちらも `iat` を更新時刻とみなし、同一トークンの再送や古い `iat` では `revoked_at` を前進させない（UPSERT の `changes() == 0` でメモリ更新とリフレッシュ消費をスキップする）。
+- BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。BAN と back-channel logout
+  のどちらも `iat` を更新時刻とみなし、同一トークンの再送や古い `iat` では `revoked_at` を前進させない（UPSERT の `changes() == 0` でメモリ更新とリフレッシュ消費をスキップする）。
   メモリの失効閾値は positive-only キャッシュに留め、書き込みは DB コミットを先に行うため、他インスタンスへ即時に反映される。
   UNBAN は `users` の BAN フラグ解除に加え、`revoked_subs` の失効閾値を削除せず
   `MAX(revoked_at, now)` で sub epoch を進め、コミット後に positive-only キャッシュも
@@ -493,6 +493,9 @@ generated:
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、有効な `http(s)://` オリジンのみ、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
+| `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。 |
+| `RETENTION_DAYS` | バックアップ運用 | 30 | `backup-rotate.sh` の保持日数。0 以上で先頭ゼロなし。 |
+| `MIN_KEEP` | バックアップ運用 | 3 | 最低保持世代数。1 以上。 |
 | `IPFS_MAX_ATTEMPTS` | 任意 | 1 | ネットワークエラー時に各 IPFS ゲートウェイを再試行する回数（1〜5、範囲外は1）。HTTP エラー・サイズ超過・チェックサム不一致は再試行しない。 |
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値も固定文言（値非エコー）のハードエラーで起動拒否（fail-closed）。 |
@@ -686,8 +689,8 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `cargo deny check advisories` を定期実行する。既存の push / pull_request /
   workflow_dispatch トリガは維持する。`npm ci` の `--no-audit` を外し、
   `npm audit --audit-level=high` を `extra_gates` へ追加する。
-  監査対象の npm 依存はルートと `e2e/` の `devDependencies` のみで、
-  本番ランタイムへはインストールしない。
+  監査対象の npm 依存はルート / `e2e/` / `client/` の3 lockfile（いずれも
+  `devDependencies`）で、本番ランタイムへはインストールしない。
   Dependabot は外部サービス設定（`.github/dependabot.yml`）のため本方針では追加せず、
   CI ゲート側で検出を担保する。
 

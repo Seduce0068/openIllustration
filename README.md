@@ -17,6 +17,9 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 
 - 現行プロトタイプはJPEG XL静止画・Markdown小説、CID/SHA-256照合、JWT、DB内通報・投票を備えます。
 - ログは標準出力へ出し、`RUST_LOG` で制御します（例: `RUST_LOG=server=debug`。未設定時は INFO）。
+  `LOG_FORMAT=json` で1行1JSONの構造化ログを出力します（詳細は [HANDOFF](docs/HANDOFF.md)）。
+- `GET /metrics` で Prometheus カウンタ（requests / errors / neutralized_urls / finalizer 各、
+  再起動でゼロに戻る）を公開します（詳細は [OPERATIONAL_POLICY](docs/OPERATIONAL_POLICY.md)）。
 - クライアント側メトリクスはビルド時に `OIL_CLIENT_METRICS=0` で無効化できます（未設定時は有効）。
   `POST /metrics/client-events` に送るのは `event` と `count` のみで、URL・IP アドレス・User-Agent は送りません。
 - `ALLOW_MOCK_AUTH=1` は開発専用です。指定マイナアプリ/JPKI認証の代替ではなく、本番では有効化しません。
@@ -44,6 +47,11 @@ cargo install trunk --version 0.21.14 --locked   # CI と同じ版を推奨（E2
 rustup target add wasm32-unknown-unknown
 cd client && npm ci && npm run build-css && cd ..   # Tailwind CSS をビルド時に生成
 ```
+
+本番ビルドでは API オリジンを明示してください（`OIL_API_BASE` 未設定時は開発既定
+`http://localhost:3000` が埋め込まれ、HTTPS 配信下では mixed content になります）。
+`OIL_API_BASE=https://<本番オリジン> OIL_MOCK_AUTH=0 trunk build --release` のように指定し、
+`cargo run -p server --bin doctor -- --strict` を合わせて実行してください。
 
 ### 2. バックエンドの起動
 
@@ -115,6 +123,8 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は
 cargo run -p server --bin doctor -- --strict
 cargo run -p server --bin backup_db -- --database-url file:/path/to/local.db --output /path/to/backup.db
 cargo run -p server --bin verify_backup -- --input /path/to/backup.db
+# 既存 DB を原子的に置換します。safety copy は <target>.pre-restore-<timestamp> に平文で残るため、
+# 復元後の片付け手順は BACKUP_RESTORE_RUNBOOK を参照してください。
 cargo run -p server --bin restore_db -- --backup /path/to/backup.db --target /path/to/local.db --force
 cargo run -p server --bin sign_audit_export -- --database-url file:/path/to/local.db \
   --signing-key /secure/path/audit-signing-key.pem --output /path/to/audit-snapshot.json

@@ -787,6 +787,21 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第26ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  doc-numbers へ test.only/skip/fixme 残存検出を追加、client の未使用 base64 依存を削除、
+  backup.service へ TimeoutStartSec=1800、README へ OIL_API_BASE 本番指定・/metrics・
+  LOG_FORMAT・restore --force 注意、運用ポリシーの npm audit 3 lockfile 表記・env一覧
+  (LOG_FORMAT/RETENTION_DAYS/MIN_KEEP)・改行損壊、e2e/package.json のライセンス
+  AGPL-3.0-or-later+private、.amazonq/rules を markdownlint 対象へ追加+OKF title。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests142、npm audit3lockfile、
+  markdownlint 39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化、公開ledger意図、
+  OIL_API_BASE未設定fail-openの自動ゲート化、起動設定一括Config化、E2E_SERVER_PORT設定化、
+  監査要約窓口、監査エクスポート自動スケジューラ、doctor --strict の CI ゲート化、
+  doc-numbers のRustテスト総数照合、ローカルE2Eトレース、GPG復号訓練の自動化）は記録のみで保留。
+
 - 2026-11-23 コンボ第25ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   doctor が非UTF-8 TRUSTED_PROXY_CIDRS を診断せず false pass していた問題を classify 判定へ修正、

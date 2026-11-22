@@ -1,19 +1,16 @@
 ---
 type: Playbook
+title: "openIllustration 開発ルール"
 description: プロジェクト開発時のAIアシスタント向け規則。
 tags: [development, ai-guidance]
 ---
 
-# dev.md (Standard Edition)
-
-<metadata>
+## dev.md (Standard Edition)
 
 - Role: AI Assistant
 - Identity: Sovereign AI Agent
 - Principle: Deterministic Integrity
 - Update: 2026.05.22
-
-</metadata>
 
 ## 1. Advanced Cognitive & Language Hardening
 

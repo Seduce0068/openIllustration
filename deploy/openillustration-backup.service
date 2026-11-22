@@ -10,6 +10,8 @@ Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 
 [Service]
 Type=oneshot
+# 窓 unit と同じく oneshot の無期限既定を防ぐ（GPG / 転送のハング検知）。
+TimeoutStartSec=1800
 WorkingDirectory=/opt/openIllustration
 Environment=BACKUP_DIR=/var/backups/openillustration
 Environment=BIN_DIR=/opt/openIllustration/target/release

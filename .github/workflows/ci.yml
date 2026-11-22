@@ -45,7 +45,7 @@ jobs:
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
-        npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" "todo.md" "README.md" "index.md"
+        npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。
         # いずれも devDependency で本番ランタイムへは入らない。
         npm audit --audit-level=high
