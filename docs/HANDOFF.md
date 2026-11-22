@@ -101,7 +101,7 @@ cargo test --workspace
 
 ```bash
 cargo fmt --all --check
-cargo clippy --all-targets -- -D warnings -A clippy::module-inception
+cargo clippy --all-targets -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
 cargo test --workspace
 cargo deny check licenses
 cargo deny check advisories
@@ -350,8 +350,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   （common 66 / server 536 / client 57 / restore_db 20）、E2E 65 件。いずれも 0 失敗。
   件数はコード上の `#[test]` / `#[tokio::test]` 属性数。旧 E2E 65 件は当時値で未更新。
   現在値は TEST_SPECIFICATION を参照。
-- 現行値（2026-11-22 実コード照合）: 単体テスト属性数は common 76 / server 622（bin 160 含む）/
-  client 58 の計 756 件、E2E は 69 件（12 spec）。他ゲート実測は doctor 53 テスト /
+- 現行値（2026-11-23 実コード照合）: 単体テスト属性数は common 76 / server 622（bin 160 含む）/
+  client 58 の計 756 件、E2E は 69 件（12 spec）。他ゲート実測は doctor 54 テスト /
   doctor check 23 / migration 14 / `backup_db` 17 / `sign_audit_export` 17 /
   `verify_audit_log` 14。E2E 推移は 2026-11-20 時点 65 件 → 2026-11-21 時点 66 件 →
   現在 69 件（内訳は [TEST_SPECIFICATION.md](TEST_SPECIFICATION.md) を正とする）。

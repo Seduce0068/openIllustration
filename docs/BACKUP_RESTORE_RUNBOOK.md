@@ -124,7 +124,7 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
 `BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
 無ければ `cargo run` にフォールバックする（開発用）。設定例:
 
-- systemd（推奨）: `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=true`、
+- systemd（推奨）: `deploy/openillustration-backup.timer`（毎日 03:17、`Persistent=false`、
   `RandomizedDelaySec=300`）→ `deploy/openillustration-backup-window.service`
   （停止→`backup-rotate.sh`→起動）。`deploy/openillustration-backup.service` は
   オーケストレーション無しの単体実行用として残す。
@@ -236,7 +236,7 @@ refusing restore: a live server instance holds the <side> instance lock (<lock p
 systemd 版ではタイマーが窓 unit を起動し、次の順で実行する。
 
 1. `deploy/openillustration-backup.timer` が `OnCalendar=*-*-* 03:17:00`
-   （`Persistent=true`、`RandomizedDelaySec=300`）で
+   （`Persistent=false`、`RandomizedDelaySec=300`）で。ホスト停止中に逃した実行は補完せず、手動バックアップで取得する
    `openillustration-backup-window.service` を起動する。
 1. `ExecStartPre=+/usr/bin/systemctl stop ${APP_UNIT}` でアプリ unit を停止する。
 1. `ExecStart=/opt/openIllustration/scripts/backup-rotate.sh` で取得・検証・ローテーションを行う。
@@ -258,6 +258,12 @@ systemctl status openillustration-backup-window.service
 systemctl list-timers openillustration-backup.timer
 ```
 
+- 停止待ち時間の契約: window unit の `TimeoutStartSec=1800` は自 unit の Exec にしかかからず、
+  `ExecStartPre` の `systemctl stop` が待つアプリ unit の `TimeoutStopSec`（既定90秒）は別値。
+  アプリの drain 上限 `GRACEFUL_DRAIN_TIMEOUT_SECS`（最大300秒）を超えないよう、
+  アプリ unit の drop-in で `TimeoutStopSec` を drain 上限より大きく設定すること。
+  停止がタイムアウトすると ExecStartPre が失敗してバックアップがスキップされるため、
+  アラート対象に含めること。
 - バックアップ窓の間はアプリ unit が停止しているため `/ready` は応答しない（接続拒否が正常）。
   停止確認は `systemctl is-active <APP_UNIT>` が `inactive` であることで行う。
   `/ready` が 503 を返すのは SIGTERM 直後の graceful drain 窓だけであり、窓全体ではない。

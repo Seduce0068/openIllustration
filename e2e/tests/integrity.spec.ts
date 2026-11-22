@@ -402,6 +402,17 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // 各 Reason 行の直後に要約注記が添わる（全部で3行）。全文は署名付きエクスポート側の契約。
     await expect(card.getByText('※ 表示は要約です。全文は運用者へお問い合わせください')).toHaveCount(3);
 
+    // R2-LANG: dialog 全体には lang を付けず、子要素単位で言語を宣言する。
+    const forensicDialog = card.getByRole('dialog', { name: 'Forensic Timeline' });
+    await expect(forensicDialog).not.toHaveAttribute('lang');
+    await expect(forensicDialog.getByText('FORENSIC_TIMELINE')).toHaveAttribute('lang', 'en');
+    // 英文ラベルは個別に lang="en"、日本語の要約注記は lang="ja"。
+    await expect(forensicDialog.locator('p[lang="en"]', { hasText: 'By: reporter-3' })).toHaveCount(1);
+    await expect(forensicDialog.locator('span[lang="en"]', { hasText: 'Reason: ' }).first())
+      .toHaveAttribute('lang', 'en');
+    await expect(forensicDialog.locator('p[lang="en"]', { hasText: 'Hash: 3333' })).toHaveCount(1);
+    await expect(forensicDialog.locator('p[lang="ja"]', { hasText: '※ 表示は要約です。' })).toHaveCount(3);
+
     // R2: 監査日時は Intl.DateTimeFormat で整形表示され、生 ISO の区切り 'T' を含まない。
     // ロケール依存の完全一致は期待せず、書式と生 ISO 属性の保持のみを確認する。
     const createdAtCells = card.getByTestId('audit-created-at');
@@ -476,6 +487,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       .toHaveAttribute('lang', 'en');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
+    // R2-LANG: Dashboard の英文見出し MY DATA も lang="en" を宣言する。
+    await expect(page.getByRole('heading', { name: 'MY DATA' })).toHaveAttribute('lang', 'en');
 
     // R2-LEGACY-LANG: lang="ja" のページ内で、主要英語固定ラベルだけが
     // lang="en" を宣言し、スクリーンリーダーの発音と言語宣言が整合することを確認する。
@@ -519,8 +532,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     const dialog = page.getByRole('dialog', { name: 'Forensic Timeline' });
     await expect(dialog).toBeVisible();
     await expect(dialog).toHaveAttribute('id', /^forensic-timeline-.+$/);
-    // R2-CLIENT-LANG: 監査 dialog の英文 aria-label と言語宣言を整合させる。
-    await expect(dialog).toHaveAttribute('lang', 'en');
+    // R2-LANG: dialog 全体には lang を付けず、英文ラベルへ子要素単位で lang="en" を付与する。
+    await expect(dialog).not.toHaveAttribute('lang');
+    await expect(dialog.getByText('FORENSIC_TIMELINE')).toHaveAttribute('lang', 'en');
+    await expect(dialog.getByRole('button', { name: 'CLOSE' })).toHaveAttribute('lang', 'en');
 
     // aria-controls の参照先と dialog の id が厳密に一致することを確認する。
     const controls = await auditToggle.getAttribute('aria-controls');
@@ -553,8 +568,15 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     const reasonField = page.locator('textarea[placeholder="REASON"]');
     await expect(reasonField).toHaveAttribute('lang', 'en');
     await expect(reasonField).toHaveAttribute('aria-label', 'REASON');
+    // R2-LANG: Moderation の代表的英文ノードへ lang="en" を付与する（新規 test なし）。
+    for (const heading of ['PUBLIC STATS', 'Submit Report', 'Jury Voting Queue']) {
+      await expect(page.getByRole('heading', { name: heading })).toHaveAttribute('lang', 'en');
+    }
+    await expect(page.getByText('NO_PENDING_VOTES')).toHaveAttribute('lang', 'en');
 
     await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await expect(page.getByRole('heading', { name: 'Forensic Upload Engine' }))
+      .toHaveAttribute('lang', 'en');
     for (const target of [
       'file-upload',
       'upload-price',
@@ -567,6 +589,11 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     await page.getByRole('button', { name: 'LEDGER', exact: true }).click();
     await expect(page.getByText(/LEGACY MOCK RECORDS/).first()).toHaveAttribute('lang', 'en');
+    await expect(page.getByRole('heading', { name: 'Forensic Transaction Ledger' }))
+      .toHaveAttribute('lang', 'en');
+    // Date / Sender の th は静的英文なので lang="en" を宣言する。
+    await expect(page.getByRole('columnheader', { name: 'Date' })).toHaveAttribute('lang', 'en');
+    await expect(page.getByRole('columnheader', { name: /Sender/ })).toHaveAttribute('lang', 'en');
   });
 
   test('R2: Audit toggle dialog closes via CLOSE button and restores focus', async ({ page }) => {

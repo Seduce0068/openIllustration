@@ -1827,8 +1827,9 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | 親ディレクトリ権限 | `mode & 0o055 != 0`（`0700` 以外、例 `0755`） | 警告を出力して継続 |
 | トークン受け渡し | `--database-token TOKEN` を指定 | エラー（`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`） |
 | トークン受け渡し | `DATABASE_TOKEN` 環境変数を設定 | 読み込んでリモート libSQL へ渡す（未設定は空） |
-| 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` により原子的に失敗）。原子的公開経路も既存ファイルを拒否し内容を保持する |
-| 出力の原子性 | 新規 `--output` を指定 | 同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` で公開。失敗時は一時ファイルを削除し、最終パスに中途半端なファイルが残らない |
+| 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` と `hard_link` の双方で既存ファイルを拒否し内容を保持）。 |
+| 空監査ログ | 両ログが0件で `--allow-empty` 未指定 | 拒否（固定文言）。`verify_audit_log` も空ログを暗黙 OK としない。AUDIT_CHAIN_EMPTY ダミールートを期待値として暗黙受け入れない |
+| 出力の原子性 | 新規 `--output` を指定 | 同ディレクトリの `0600` 一時ファイル（名前に pid + unix_millis）へ書き `fsync` 後に `hard_link` で公開（create_new 相当、既存ファイルは EEXIST で拒否）。失敗時は staging を残し最終パスへ中途半端なファイルを出さない |
 | 平文理由のエクスポート | 本番相当（`ALLOW_MOCK_AUTH` 無効・`AUDIT_EXPORT_INCLUDE_REASONS` 未設定）で `--include-reasons` を指定 | 拒否（`--include-reasons is not allowed in production without explicit opt-in; keep reasons masked or set AUDIT_EXPORT_INCLUDE_REASONS=1 deliberately`）。フラグ値・環境変数値はエコーしない |
 | 平文理由のエクスポート | `ALLOW_MOCK_AUTH=1`（開発）または `AUDIT_EXPORT_INCLUDE_REASONS=1`（明示オプトイン）付きで `--include-reasons` を指定 | 受理（理由をマスクせずエクスポート） |
 
@@ -1987,6 +1988,10 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   check23 / doctor54 / migrations14 / tests148 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
+
+- SPA ビュー切替時のタブタイトル同期: `document.set_title` が `{label} — OpenIllustration` を設定し、
+  search.spec.ts の既存ケース内で UPLOAD 遷移後の `toHaveTitle('UPLOAD — OpenIllustration')` を検証する
+  （新規 test() なし・E2E69件維持）。
 
 - **投票一覧の取得失敗と投票ボタン**: `/mod/reports` が失敗（`reports_error` 非空）の間は
   `APPROVE (RESTORE)` / `REJECT (VOTE)` を disabled にし、同期ガードでも受け付けない。

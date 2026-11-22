@@ -717,6 +717,13 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   日本語文言には `lang="ja"` を付与する（ルートは `lang="ja"` のまま）。
   ヘルパは favorite / upload / vote / content のエラー表示で共有し、
   文言ごとの属性付け忘れによる drift を防ぐ。
+- **言語宣言の適用範囲**: 静的英文ノード（画面見出し、テーブルの `th`、
+  定型ボタン、空状態の英文など）へ個別に `lang="en"` を付与する。動的な
+  文言は `error_lang` で日本語文字の有無から `lang` を決め、値そのものを
+  属性へエコーしない。監査タイムラインの `role=dialog` は要素全体に
+  `lang` を付けず、英文ラベル（FORENSIC_TIMELINE / By: / Reason: /
+  Hash: / CLOSE）へ `lang="en"`、日本語の要約注記へ `lang="ja"`、
+  動的な理由文言へは `error_lang` の判定を子要素単位で適用する。
 - **依存監査**: `.github/workflows/ci.yml` に週次 `schedule` トリガを追加し、
   `cargo deny check advisories` を定期実行する。既存の push / pull_request /
   workflow_dispatch トリガは維持する。`npm ci` の `--no-audit` を外し、

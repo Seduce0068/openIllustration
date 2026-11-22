@@ -2483,7 +2483,7 @@ where
         <div class="mt-8">
             <section data-testid="export-section" class="border border-white/10 p-4 mb-8 flex flex-wrap items-center justify-between gap-4">
                 <div>
-                    <h2 class="text-xs font-bold tracking-widest uppercase">"MY DATA"</h2>
+                    <h2 lang="en" class="text-xs font-bold tracking-widest uppercase">"MY DATA"</h2>
                     <p lang="en" class="text-[9px] text-gray-500 mt-1">
                         "DOWNLOAD ALL OF YOUR DATA AS JSON."
                     </p>
@@ -3273,10 +3273,9 @@ where
                 <Show when=move || show_audit.get() fallback=|| ()>
                     <div id=move || audit_panel_id.get_value().to_string()
                         role="dialog"
-                        lang="en"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
-                        <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
+                        <h4 lang="en" class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
                         <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
                             <p role="alert" data-testid="audit-error" lang=move || error_lang(&audit_error.get()) class="text-[8px] text-red-500">
                                 {move || audit_error.get()}
@@ -3289,16 +3288,19 @@ where
                                 children=move |log| {
                                     // 表示は整形済み日時、生 ISO は title 属性へ保持する。
                                     let created_at = log.created_at.clone();
+                                    // 理由は日本語になり得るため error_lang で言語を決める（値は属性へエコーしない）。
+                                    let reason = log.reason.clone().unwrap_or_default();
+                                    let reason_for_lang = reason.clone();
                                     view! {
                                         <div class="text-[8px] space-y-1">
                                             <div class="flex justify-between text-gray-500">
                                                 <span data-testid="audit-created-at" title=created_at>{format_local_datetime(&log.created_at)}</span>
                                                 <span class="text-green-500">{log.new_status.clone()}</span>
                                             </div>
-                                            <p class="text-gray-300">"By: " {log.changed_by.clone()}</p>
-                                            <p class="italic">"Reason: " {log.reason.clone().unwrap_or_default()}</p>
-                                            <p class="text-[8px] text-gray-500">"※ 表示は要約です。全文は運用者へお問い合わせください"</p>
-                                            <p class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
+                                            <p lang="en" class="text-gray-300">"By: " {log.changed_by.clone()}</p>
+                                            <p class="italic"><span lang="en">"Reason: "</span><span lang=move || error_lang(&reason_for_lang)>{reason}</span></p>
+                                            <p lang="ja" class="text-[8px] text-gray-500">"※ 表示は要約です。全文は運用者へお問い合わせください"</p>
+                                            <p lang="en" class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
                                         </div>
                                     }
                                 }
@@ -3309,6 +3311,7 @@ where
                                 // 取得済みフラグを戻して次回オープンで再取得する。
                                 close_audit();
                             }
+                            lang="en"
                             node_ref=audit_close_ref
                             class="mt-4 w-full py-2 border border-white/20 text-[8px] hover:bg-white/10">
                             "CLOSE"
@@ -3603,7 +3606,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 
     view! {
         <div class="max-w-2xl mx-auto mt-12 border border-white/10 p-8">
-            <h2 class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine"</h2>
+            <h2 lang="en" class="text-xl font-bold mb-6 tracking-widest uppercase">"Forensic Upload Engine"</h2>
             <div class="space-y-6">
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
                     // 視覚的に隠すがタブ停止点にはしない（ラベル側を唯一のタブ停止点にする）。
@@ -3790,7 +3793,7 @@ fn Ledger(token: String) -> impl IntoView {
 
     view! {
         <div class="max-w-5xl mx-auto mt-12">
-            <h2 class="text-xl font-bold tracking-widest uppercase mb-8">"Forensic Transaction Ledger"</h2>
+            <h2 lang="en" class="text-xl font-bold tracking-widest uppercase mb-8">"Forensic Transaction Ledger"</h2>
             <div lang="en" class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
                 "LEGACY MOCK RECORDS — Written by the disabled mock support API. These entries are not proof of payment; JPYC settlement is not implemented."
             </div>
@@ -3810,11 +3813,11 @@ fn Ledger(token: String) -> impl IntoView {
                     <caption>"取引履歴"</caption>
                     <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
                         <tr>
-                            <th scope="col" class="p-4">"Date"</th>
-                            <th scope="col" class="p-4">"Sender (P2P)"</th>
-                            <th scope="col" class="p-4">"Receiver"</th>
-                            <th scope="col" class="p-4 text-right">"Amount"</th>
-                            <th scope="col" class="p-4">"Record_Hash"</th>
+                            <th lang="en" scope="col" class="p-4">"Date"</th>
+                            <th lang="en" scope="col" class="p-4">"Sender (P2P)"</th>
+                            <th lang="en" scope="col" class="p-4">"Receiver"</th>
+                            <th lang="en" scope="col" class="p-4 text-right">"Amount"</th>
+                            <th lang="en" scope="col" class="p-4">"Record_Hash"</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-white/5">
@@ -4346,7 +4349,7 @@ where
         <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
             <section data-testid="public-mod-stats" class="md:col-span-2 border border-white/10 p-8 space-y-4">
                 <div class="flex items-center justify-between gap-4">
-                    <h2 class="text-xl font-bold tracking-widest uppercase">"PUBLIC STATS"</h2>
+                    <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"PUBLIC STATS"</h2>
                     <button
                         type="button"
                         lang="en"
@@ -4393,7 +4396,7 @@ where
                 </button>
                 <Show when=move || stats_authorized.get() fallback=|| ()>
                     <section data-testid="moderation-stats-section" class="border-t border-white/10 pt-8 space-y-4">
-                        <h2 class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
+                        <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
                         <Show when=move || !stats_error.get().is_empty() fallback=|| ()>
                             <p role="alert" data-testid="moderation-stats-error" lang=move || error_lang(&stats_error.get()) class="text-xs text-red-500">
                                 {move || stats_error.get()}
@@ -4406,7 +4409,7 @@ where
                 </Show>
             </div>
             <div class="border border-white/10 p-8 space-y-6 h-fit">
-                <h2 class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
+                <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
                 <p class="text-[10px] text-gray-500">
                     "Reporter: " {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
                 </p>
@@ -4469,7 +4472,7 @@ where
             </div>
 
             <div class="border border-white/10 p-8 space-y-6">
-                <h2 class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
+                <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"Jury Voting Queue"</h2>
                 <Show when=move || !reports_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="reports-error" lang=move || error_lang(&reports_error.get()) class="text-xs text-red-500">
                         {move || reports_error.get()}
@@ -4509,17 +4512,17 @@ where
                                             class="text-[8px] text-green-500 truncate mr-2 underline hover:text-white">
                                             {report.target_cid.clone()}
                                         </a>
-                                        <span class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
+                                        <span lang="en" class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
                                     </div>
                                     <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
                                     <div class="grid grid-cols-2 gap-4">
-                                        <button on:click=move |_| do_vote(rid, "Approve".to_string())
+                                        <button lang="en" on:click=move |_| do_vote(rid, "Approve".to_string())
                                             disabled=move || vote_busy.get() || !reports_error.get().is_empty()
                                             aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-green-500/50 text-green-500 text-[8px] hover:bg-green-500 hover:text-black transition-colors">
                                             "APPROVE (RESTORE)"
                                         </button>
-                                        <button on:click=move |_| do_vote(rid, "Reject".to_string())
+                                        <button lang="en" on:click=move |_| do_vote(rid, "Reject".to_string())
                                             disabled=move || vote_busy.get() || !reports_error.get().is_empty()
                                             aria-busy=move || if vote_busy.get() { "true" } else { "false" }
                                             class="py-2 border border-red-500/50 text-red-500 text-[8px] hover:bg-red-500 hover:text-black transition-colors">
@@ -4531,7 +4534,7 @@ where
                         }
                     />
                     <Show when=move || reports.get().is_empty() && reports_error.get().is_empty() fallback=|| ()>
-                        <div class="text-center py-12 text-[10px] text-gray-600 italic">"NO_PENDING_VOTES"</div>
+                        <div lang="en" class="text-center py-12 text-[10px] text-gray-600 italic">"NO_PENDING_VOTES"</div>
                     </Show>
                 </div>
             </div>

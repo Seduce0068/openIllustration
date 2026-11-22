@@ -46,7 +46,7 @@ jobs:
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
         # dev-console feature 配下（初期化・EXPORT_RESULT）もコンパイル/テストして未検証経路を残さない。
-        cargo clippy -p client --all-targets --all-features -- -D warnings -A clippy::module-inception
+        cargo clippy -p client --all-targets --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         cargo test -p client --all-features --quiet
         npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。
