@@ -289,6 +289,9 @@ const DASHBOARD_LOAD_FAILED_ANNOUNCEMENT: &str = "コンテンツを取得でき
 /// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
 const PRODUCTION_AUTH_NOT_IMPLEMENTED: &str = "本番認証は未実装です。";
 
+/// ログイン進捗を dedicated `role=status` で告知する固定文言（日本語）。
+const LOGIN_PROGRESS: &str = "本人確認の通信中です。";
+
 // ---- 共有トークンと refresh の単一フライト ----
 //
 // wasm は単一スレッドなので、モジュール級状態は thread_local + Rc<RefCell> で足りる。
@@ -2127,7 +2130,7 @@ pub fn App() -> impl IntoView {
             <main id="main-content" tabindex="-1" class="container mx-auto p-4">
                 // ログアウト API 失敗はログイン画面へ戻った後も dedicated role=alert で告知する。
                 <Show when=move || !logout_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="logout-error" class="mb-4 text-xs text-red-500">
+                    <p role="alert" data-testid="logout-error" lang=move || error_lang(&logout_error.get()) class="mb-4 text-xs text-red-500">
                         {move || logout_error.get()}
                     </p>
                 </Show>
@@ -2243,9 +2246,17 @@ where
                 <p data-testid="mock-auth-notice">"開発用モック認証（本番では利用できません）。"</p>
             </Show>
             <button lang="en" on:click=do_login disabled=loading
+                aria-busy=move || if loading.get() { "true" } else { "false" }
                 class="w-full py-4 border border-white hover:bg-white hover:text-black transition-all font-bold uppercase tracking-widest disabled:opacity-50">
                 {move || if loading.get() { "VERIFYING..." } else { "CONNECT WITH JPKI" }}
             </button>
+            // 送信中は dedicated role=status で進捗を告知する（既存の role=alert は失敗のみ）。
+            <Show when=move || loading.get() fallback=|| ()>
+                <p data-testid="login-progress" role="status" aria-live="polite"
+                    lang=move || error_lang(LOGIN_PROGRESS) class="text-xs text-gray-400 mt-4">
+                    {LOGIN_PROGRESS}
+                </p>
+            </Show>
             <Show when=move || !error.get().is_empty() fallback=|| ()>
                 <p role="alert" data-testid="login-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500">
                     {move || error.get()}
@@ -2267,7 +2278,7 @@ where
     let initial_query = parse_content_query(&current_content_query());
     // 投票キューからのディープリンクで指定された CID。検索条件には使わず、
     // URL の正規化と該当カードの強調表示だけに使う。
-    let (deep_link_cid, _set_deep_link_cid) = signal(initial_query.cid);
+    let (deep_link_cid, set_deep_link_cid) = signal(initial_query.cid);
     let (q, set_q) = signal(initial_query.q);
     let (tag, set_tag) = signal(initial_query.tag);
     let (content_type, set_content_type) = signal(initial_query.content_type);
@@ -2298,8 +2309,9 @@ where
     // タイマーハンドル（i32）だけを StoredValue に持つ。
     let timer_handle = StoredValue::new(None::<i32>);
 
-    // popstate（戻る／進む）では検索条件を 4 signal へ batch で同時反映する。
+    // popstate（戻る／進む）では検索条件とディープリンク CID を batch で同時反映する。
     // batch にすることで fetch Effect は 1 回だけ再実行され、二重 GET にならない。
+    // cid も同じ履歴条目に紐づくため、往復で古い強調表示が残らないように復元する。
     // refresh_counter / search_submit は操作トリガーなので URL から復元しない。
     let query_listener: StoredValue<Option<EventClosure>, LocalStorage> =
         StoredValue::new_local(None);
@@ -2310,6 +2322,7 @@ where
             set_tag.set(restored.tag);
             set_content_type.set(restored.content_type);
             set_favorite_only.set(restored.favorite_only);
+            set_deep_link_cid.set(restored.cid);
         });
     });
     if let Some(window) = web_sys::window() {
@@ -2570,7 +2583,7 @@ where
             </search>
             // エラー時は前回成功時の件数を読み上げない（古い件数が残るため）。
             // 成功時は従来どおり件数を告知し、失敗時は取得失敗を dedicated に告知する。
-            <p role="status" aria-live="polite" class="sr-only">
+            <p role="status" aria-live="polite" lang=move || error_lang(if error.get().is_empty() { "件のコンテンツを表示中" } else { DASHBOARD_LOAD_FAILED_ANNOUNCEMENT }) class="sr-only">
                 {move || if error.get().is_empty() {
                     format!("{}件のコンテンツを表示中", items.get().len())
                 } else {
@@ -2746,7 +2759,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 </p>
             </Show>
             <Show when=move || !status.get().is_empty() fallback=|| ()>
-                <p role="status" data-testid="export-status" class="text-xs text-gray-400">
+                <p role="status" data-testid="export-status" lang=move || error_lang(&status.get()) class="text-xs text-gray-400">
                     {move || status.get()}
                 </p>
             </Show>
@@ -2766,12 +2779,15 @@ fn ExportMyData(token: String) -> impl IntoView {
 
 mod jxl;
 
-/// エラー文言の言語を判定し、要素の `lang` 属性に渡す共通ヘルパ。
+/// エラー／進捗文言の言語を判定し、要素の `lang` 属性へ渡す共通ヘルパ。
 ///
-/// 既存固定文言は一切変更せず、英語の文言を描画する `role=alert` / `role=status`
-/// 要素だけへ `lang="en"` を付与する。日本語（既定）は `lang="ja"` を明示する。
-/// 判定は文言に日本語文字（ひらがな・カタカナ・漢字）が含まれるかだけを見るため、
-/// 個々の文言追加・変更で drift しない。HTTP ステータス番号は判定に影響しない。
+/// 契約: すべての `role="alert"` / `role="status"` 要素は、動的な文言だけでなく
+/// 固定の英文見出しも含めて必ずこのヘルパを経由して `lang` を宣言する
+/// （ルートの `lang="ja"` に依存した暗黙宣言は使わない）。英語の文言は
+/// `lang="en"`、日本語（既定）は `lang="ja"` を明示する。
+/// 既存固定文言は一切変更しない。判定は文言に日本語文字（ひらがな・カタカナ・
+/// 漢字）が含まれるかだけを見るため、個々の文言追加・変更で drift しない。
+/// HTTP ステータス番号は判定に影響しない。
 fn error_lang(message: &str) -> &'static str {
     if message
         .chars()
@@ -3218,7 +3234,7 @@ where
                     Some(false) => view! {
                         <div class="text-center p-4" data-testid="content-verification-error">
                             <Show when=move || !content_load_error.get().is_empty() fallback=|| ()>
-                                <p role="alert" lang="en" data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang=move || error_lang("Content Load Failed") data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Content Load Failed"
                                 </p>
                                 <p data-testid="content-load-error-detail" lang=move || error_lang(&content_load_error.get()) class="text-gray-500 text-[8px]">
@@ -3226,7 +3242,7 @@ where
                                 </p>
                             </Show>
                             <Show when=move || content_load_error.get().is_empty() && decode_error.get() fallback=|| ()>
-                                <p role="alert" lang="en" data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang=move || error_lang("JXL Decode Failed") data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "JXL Decode Failed"
                                 </p>
                                 <p data-testid="jxl-decode-error-detail" class="text-gray-500 text-[8px]">
@@ -3235,7 +3251,7 @@ where
                             </Show>
                             // 小説本文の UTF-8 失敗は JXL とは別の dedicated role=alert で告知する。
                             <Show when=move || content_load_error.get().is_empty() && novel_decode_error.get() fallback=|| ()>
-                                <p role="alert" lang="en" data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang=move || error_lang("Novel Decode Failed") data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Novel Decode Failed"
                                 </p>
                                 <p data-testid="novel-decode-error-detail" class="text-gray-500 text-[8px]">
@@ -3262,7 +3278,7 @@ where
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         <h4 class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
                         <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
-                            <p role="alert" data-testid="audit-error" class="text-[8px] text-red-500">
+                            <p role="alert" data-testid="audit-error" lang=move || error_lang(&audit_error.get()) class="text-[8px] text-red-500">
                                 {move || audit_error.get()}
                             </p>
                         </Show>
@@ -3710,7 +3726,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
-                    <div data-testid="upload-status" role="status" aria-live="polite" class="p-4 bg-white/5 border border-white/20 text-xs">
+                    <div data-testid="upload-status" role="status" aria-live="polite" lang=move || error_lang(&status.get()) class="p-4 bg-white/5 border border-white/20 text-xs">
                         <span class="text-gray-500 mr-2">"[STATUS]"</span> {move || status.get()}
                     </div>
                 </Show>
@@ -3727,6 +3743,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 /// `/transactions` の取得失敗時に表示する固定文言。
 /// レスポンス本文や生エラー（reqwest / serde_json）は機微情報を含み得るため出さない。
 const LEDGER_ERROR: &str = "取引履歴の取得に失敗しました。";
+/// 取得中に dedicated `role=status` で告知する固定文言（既存固定文言は変更しない）。
+const LEDGER_LOADING: &str = "取引履歴を取得しています。";
 
 #[component]
 fn Ledger(token: String) -> impl IntoView {
@@ -3734,11 +3752,15 @@ fn Ledger(token: String) -> impl IntoView {
     // 取得失敗を明示する。失敗時は「NO_TRANSACTIONS_RECORDED」を出さず、
     // 固定文言のみを表示する。
     let (ledger_error, set_ledger_error) = signal(String::new());
+    // 取得中は loading status を出し、空状態は取得完了後のみ描画する。
+    let (loading, set_loading) = signal(false);
 
     Effect::new(move |_| {
         let token = token.clone();
         spawn_local(async move {
             // 再取得時に前回の失敗表示が残らないようにする。
+            set_loading.set(true);
+            let _release = BusyGuard(set_loading);
             set_ledger_error.set(String::new());
             match api_fetch(
                 |jwt| {
@@ -3772,8 +3794,14 @@ fn Ledger(token: String) -> impl IntoView {
             <div lang="en" class="border border-amber-500/30 bg-amber-500/5 text-amber-300/90 text-[9px] p-3 mb-4 font-mono leading-relaxed">
                 "LEGACY MOCK RECORDS — Written by the disabled mock support API. These entries are not proof of payment; JPYC settlement is not implemented."
             </div>
+            <Show when=move || loading.get() fallback=|| ()>
+                <p role="status" aria-live="polite" data-testid="ledger-loading"
+                    lang=move || error_lang(LEDGER_LOADING) class="text-xs text-gray-400 mb-4">
+                    {LEDGER_LOADING}
+                </p>
+            </Show>
             <Show when=move || !ledger_error.get().is_empty() fallback=|| ()>
-                <p role="alert" data-testid="ledger-error" class="text-xs text-red-500 mb-4">
+                <p role="alert" data-testid="ledger-error" lang=move || error_lang(&ledger_error.get()) class="text-xs text-red-500 mb-4">
                     {move || ledger_error.get()}
                 </p>
             </Show>
@@ -3811,7 +3839,8 @@ fn Ledger(token: String) -> impl IntoView {
                         />
                     </tbody>
                 </table>
-                <Show when=move || txs.get().is_empty() && ledger_error.get().is_empty() fallback=|| ()>
+                // 取得が完了する前は空状態を出さない（読み込み中を「記録なし」と誤告知しない）。
+                <Show when=move || !loading.get() && txs.get().is_empty() && ledger_error.get().is_empty() fallback=|| ()>
                     <div class="p-12 text-center text-gray-600 italic">"NO_TRANSACTIONS_RECORDED"</div>
                 </Show>
             </div>
@@ -3963,7 +3992,10 @@ where
     let (public_stats_loaded, set_public_stats_loaded) = signal(false);
     // 公開集計の鮮度警告と明示的な「更新」トリガ。オプイン集計の状態とは独立。
     let (public_stats_stale, set_public_stats_stale) = signal(false);
-    let (public_stats_refresh, set_public_stats_refresh) = signal(0u32);
+    // 一覧と同じレスポンス世代。マウント取得と「更新」押下が重なっても最新だけを採用する。
+    let public_stats_generation = Rc::new(Cell::new(0u64));
+    // 「更新」ボタンの連打抑止。マウント取得では busy を立てず、押下時だけ立てる。
+    let (public_stats_busy, set_public_stats_busy) = signal(false);
     // 運用者パネルのマウント条件。`/mod/stats` が 200 を返したというサーバ応答だけを根拠にし、
     // トークン内容やクライアント状態から運用者を推測しない。
     let (stats_authorized, set_stats_authorized) = signal(false);
@@ -3978,6 +4010,30 @@ where
 
     let token_stored = StoredValue::new(token);
     let user_hash_stored = StoredValue::new(user_hash);
+
+    // popstate では report_cid を cid signal へ同期する。View が MODERATION のまま
+    // 履歴条目だけが入れ替わっても通報フォームのプリフィルが古く残らないようにする。
+    // 履歴の追記は行わず、URL を読んで signal を更新するだけ（Dashboard と同じ契約）。
+    let mod_cid_listener: StoredValue<Option<EventClosure>, LocalStorage> =
+        StoredValue::new_local(None);
+    let mod_cid_popstate: EventClosure = Closure::new(move |_: web_sys::Event| {
+        set_cid.set(parse_content_query(&current_content_query()).report_cid);
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.add_event_listener_with_callback(
+            "popstate",
+            mod_cid_popstate.as_ref().unchecked_ref(),
+        );
+        mod_cid_listener.set_value(Some(mod_cid_popstate));
+    }
+    on_cleanup(move || {
+        let mut taken = None;
+        mod_cid_listener.update_value(|slot| taken = slot.take());
+        if let (Some(listener), Some(window)) = (taken, web_sys::window()) {
+            let _ = window
+                .remove_event_listener_with_callback("popstate", listener.as_ref().unchecked_ref());
+        }
+    });
 
     let fetch_reports = move || {
         let token = token_stored.get_value();
@@ -4022,10 +4078,15 @@ where
     // ADR-0008 段階2: 認証済み利用者向けの公開集計をマウント時に取得する。
     // オプイン押下を待たず、一般画面へ無条件に描画するためのデータ取得。
     // 「更新」ボタンの押下でも同じ経路を通り、オプイン集計（/mod/stats）には触れない。
-    Effect::new(move |_| {
-        let _refresh = public_stats_refresh.get();
+    // 世代カウンタは一覧と同じ契約（should_apply_response）で、遅れて届いた古い応答を捨てる。
+    let fetch_public_stats = move |clear_busy: bool| {
+        let generation_cell = Rc::clone(&public_stats_generation);
+        let response_generation = generation_cell.get() + 1;
+        generation_cell.set(response_generation);
         let token = token_stored.get_value();
         spawn_local(async move {
+            // 「更新」由来のときだけ busy を解除する（マウント取得は busy を立てない）。
+            let _release = clear_busy.then(|| BusyGuard(set_public_stats_busy));
             match api_fetch(
                 |jwt| {
                     let jwt = if jwt.is_empty() { token.as_str() } else { jwt };
@@ -4039,23 +4100,27 @@ where
                 Ok(response) if response.ok() => {
                     match response.json::<PublicModerationStats>().await {
                         Ok(stats) => {
-                            set_public_stats_html.set(render_public_mod_stats_html(&stats));
-                            set_public_stats_error.set(String::new());
-                            set_public_stats_loaded.set(true);
-                            // GENERATED_AT の鮮度だけを警告し、オプイン集計の状態は変更しない。
-                            set_public_stats_stale.set(public_stats_is_stale(
-                                &stats.generated_at,
-                                PUBLIC_STATS_FRESHNESS_MAX_AGE_MS,
-                            ));
+                            if should_apply_response(generation_cell.get(), response_generation) {
+                                set_public_stats_html.set(render_public_mod_stats_html(&stats));
+                                set_public_stats_error.set(String::new());
+                                set_public_stats_loaded.set(true);
+                                // GENERATED_AT の鮮度だけを警告し、オプイン集計の状態は変更しない。
+                                set_public_stats_stale.set(public_stats_is_stale(
+                                    &stats.generated_at,
+                                    PUBLIC_STATS_FRESHNESS_MAX_AGE_MS,
+                                ));
+                            }
                         }
                         Err(_) => {
-                            // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず、
-                            // 運用者向け /mod/stats と同じ Parse 分類の固定文言を表示する。
-                            set_public_stats_html.set(String::new());
-                            set_public_stats_loaded.set(false);
-                            set_public_stats_stale.set(false);
-                            set_public_stats_error
-                                .set(stats_error_message(StatsFailure::Parse).to_string());
+                            if should_apply_response(generation_cell.get(), response_generation) {
+                                // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず、
+                                // 運用者向け /mod/stats と同じ Parse 分類の固定文言を表示する。
+                                set_public_stats_html.set(String::new());
+                                set_public_stats_loaded.set(false);
+                                set_public_stats_stale.set(false);
+                                set_public_stats_error
+                                    .set(stats_error_message(StatsFailure::Parse).to_string());
+                            }
                         }
                     }
                 }
@@ -4063,20 +4128,38 @@ where
                 // 403 / 5xx / ネットワークエラーは従来どおり取得失敗文言を維持する。
                 // いずれも生情報やステータス詳細は出さない。
                 Ok(response) if response.status() == 401 => {
-                    set_public_stats_html.set(String::new());
-                    set_public_stats_loaded.set(false);
-                    set_public_stats_stale.set(false);
-                    set_public_stats_error.set(PUBLIC_STATS_UNAUTHORIZED.to_string());
+                    if should_apply_response(generation_cell.get(), response_generation) {
+                        set_public_stats_html.set(String::new());
+                        set_public_stats_loaded.set(false);
+                        set_public_stats_stale.set(false);
+                        set_public_stats_error.set(PUBLIC_STATS_UNAUTHORIZED.to_string());
+                    }
                 }
                 _ => {
-                    set_public_stats_html.set(String::new());
-                    set_public_stats_loaded.set(false);
-                    set_public_stats_stale.set(false);
-                    set_public_stats_error
-                        .set(stats_error_message(StatsFailure::Fetch).to_string());
+                    if should_apply_response(generation_cell.get(), response_generation) {
+                        set_public_stats_html.set(String::new());
+                        set_public_stats_loaded.set(false);
+                        set_public_stats_stale.set(false);
+                        set_public_stats_error
+                            .set(stats_error_message(StatsFailure::Fetch).to_string());
+                    }
                 }
             }
         });
+    };
+    // 更新ボタン: disabled / aria-busy に加え、同期ガードでも連打を止める。
+    let refresh_public_stats = {
+        let fetch = fetch_public_stats.clone();
+        move || {
+            if !claim_submission(public_stats_busy.get()) {
+                return;
+            }
+            set_public_stats_busy.set(true);
+            fetch(true);
+        }
+    };
+    Effect::new(move |_| {
+        fetch_public_stats(false);
     });
 
     // 運用者パネルを開くためのオプイン。初期表示では /mod/stats を 1 本も送らず、
@@ -4267,14 +4350,16 @@ where
                     <button
                         type="button"
                         lang="en"
-                        on:click=move |_| set_public_stats_refresh.update(|n| *n += 1)
+                        on:click=move |_| refresh_public_stats.clone()()
+                        disabled=move || public_stats_busy.get()
+                        aria-busy=move || if public_stats_busy.get() { "true" } else { "false" }
                         data-testid="public-mod-stats-refresh"
-                        class="py-2 px-4 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white hover:text-black">
+                        class="py-2 px-4 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white hover:text-black disabled:opacity-50">
                         "REFRESH PUBLIC STATS"
                     </button>
                 </div>
                 <Show when=move || !public_stats_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="public-mod-stats-error" class="text-xs text-red-500">
+                    <p role="alert" data-testid="public-mod-stats-error" lang=move || error_lang(&public_stats_error.get()) class="text-xs text-red-500">
                         {move || public_stats_error.get()}
                     </p>
                 </Show>
@@ -4289,7 +4374,7 @@ where
                 </Show>
                 // GENERATED_AT が閾値を超えて古いときだけ出す鮮度警告（オプイン集計には触れない）。
                 <Show when=move || public_stats_stale.get() fallback=|| ()>
-                    <p role="status" data-testid="public-mod-stats-stale" class="text-[10px] text-yellow-500">
+                    <p role="status" data-testid="public-mod-stats-stale" lang=move || error_lang("公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。") class="text-[10px] text-yellow-500">
                         // 色に依存しない手がかり。既存固定文言は変更せず dedicated 要素を前置する。
                         <span data-testid="public-mod-stats-stale-icon" aria-hidden="true">"⚠ "</span>
                         "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。"
@@ -4310,7 +4395,7 @@ where
                     <section data-testid="moderation-stats-section" class="border-t border-white/10 pt-8 space-y-4">
                         <h2 class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
                         <Show when=move || !stats_error.get().is_empty() fallback=|| ()>
-                            <p role="alert" data-testid="moderation-stats-error" class="text-xs text-red-500">
+                            <p role="alert" data-testid="moderation-stats-error" lang=move || error_lang(&stats_error.get()) class="text-xs text-red-500">
                                 {move || stats_error.get()}
                             </p>
                         </Show>
@@ -4325,54 +4410,61 @@ where
                 <p class="text-[10px] text-gray-500">
                     "Reporter: " {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
                 </p>
-                // aria-label は補助技術向けの既定名として維持し、<label for> で明示的に関連付ける。
-                // placeholder は例示のみでありラベル代わりには使わない。
-                <label for="report-target-cid" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
-                    "TARGET CID"
-                </label>
-                <input
-                    id="report-target-cid"
-                    type="text"
-                    lang="en"
-                    aria-label="TARGET CID"
-                    placeholder="TARGET CID"
-                    required=true
-                    maxlength=REPORT_CID_MAX_LEN
-                    on:input=move |ev| set_cid.set(event_target_value(&ev))
-                    prop:value=cid
-                    class="w-full bg-black border border-white/20 p-3 text-sm"
-                />
-                <label for="report-reason" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
-                    "REASON"
-                </label>
-                <textarea
-                    id="report-reason"
-                    lang="en"
-                    aria-label="REASON"
-                    placeholder="REASON"
-                    required=true
-                    maxlength=REPORT_REASON_MAX_LEN
-                    on:input=move |ev| set_reason.set(event_target_value(&ev))
-                    class="w-full bg-black border border-white/20 p-3 text-sm h-24"
-                />
-                <button lang="en" on:click=submit_report
-                    disabled=move || report_busy.get()
-                    aria-busy=move || if report_busy.get() { "true" } else { "false" }
-                    class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
-                    "SUBMIT FORENSIC REPORT"
-                </button>
-                <Show when=move || !report_validation_error.get().is_empty() fallback=|| ()>
-                    <p role="alert" data-testid="report-validation-error" class="text-xs text-red-500">
-                        {move || report_validation_error.get()}
-                    </p>
-                </Show>
+                // native required の検証バブルは使わず、aria-required + 独自 role=alert へ統一する。
+                // <form on:submit> で Enter 経路も同じ submit_report 検証へ集約する。
+                <form on:submit=move |ev| {
+                    ev.prevent_default();
+                    submit_report(());
+                } class="space-y-6">
+                    // aria-label は補助技術向けの既定名として維持し、<label for> で明示的に関連付ける。
+                    // placeholder は例示のみでありラベル代わりには使わない。
+                    <label for="report-target-cid" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                        "TARGET CID"
+                    </label>
+                    <input
+                        id="report-target-cid"
+                        type="text"
+                        lang="en"
+                        aria-label="TARGET CID"
+                        aria-required="true"
+                        placeholder="TARGET CID"
+                        maxlength=REPORT_CID_MAX_LEN
+                        on:input=move |ev| set_cid.set(event_target_value(&ev))
+                        prop:value=cid
+                        class="w-full bg-black border border-white/20 p-3 text-sm"
+                    />
+                    <label for="report-reason" lang="en" class="block text-[10px] text-gray-500 uppercase tracking-widest">
+                        "REASON"
+                    </label>
+                    <textarea
+                        id="report-reason"
+                        lang="en"
+                        aria-label="REASON"
+                        aria-required="true"
+                        placeholder="REASON"
+                        maxlength=REPORT_REASON_MAX_LEN
+                        on:input=move |ev| set_reason.set(event_target_value(&ev))
+                        class="w-full bg-black border border-white/20 p-3 text-sm h-24"
+                    />
+                    <button type="submit" lang="en"
+                        disabled=move || report_busy.get()
+                        aria-busy=move || if report_busy.get() { "true" } else { "false" }
+                        class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">
+                        "SUBMIT FORENSIC REPORT"
+                    </button>
+                    <Show when=move || !report_validation_error.get().is_empty() fallback=|| ()>
+                        <p role="alert" data-testid="report-validation-error" lang=move || error_lang(&report_validation_error.get()) class="text-xs text-red-500">
+                            {move || report_validation_error.get()}
+                        </p>
+                    </Show>
+                </form>
                 <Show when=move || !report_failed.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="report-failed" lang=move || error_lang(&report_failed.get()) class="text-xs text-red-500">
                         {move || report_failed.get()}
                     </p>
                 </Show>
                 <Show when=move || !status.get().is_empty() fallback=|| ()>
-                    <p role="status" class="text-xs text-gray-400">{move || status.get()}</p>
+                    <p role="status" lang=move || error_lang(&status.get()) class="text-xs text-gray-400">{move || status.get()}</p>
                 </Show>
             </div>
 
@@ -4389,7 +4481,7 @@ where
                     </p>
                 </Show>
                 <Show when=move || !vote_notice.get().is_empty() fallback=|| ()>
-                    <p role="status" data-testid="vote-notice" class="text-xs text-green-500">
+                    <p role="status" data-testid="vote-notice" lang=move || error_lang(&vote_notice.get()) class="text-xs text-green-500">
                         {move || vote_notice.get()}
                     </p>
                 </Show>

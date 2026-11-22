@@ -498,6 +498,9 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       .toHaveAttribute('lang', 'en');
     // R2-CLIENT-LANG: お気に入りボタンの英文 aria-label と言語宣言を整合させる。
     await expect(page.getByTestId('favorite-toggle')).toHaveAttribute('lang', 'en');
+    // R2-CLIENT-LANG: 日本語の件数告知 role=status も error_lang 経由で lang="ja" を明示する。
+    await expect(page.locator('p[role="status"][aria-live="polite"].sr-only'))
+      .toHaveAttribute('lang', 'ja');
 
     const card = page.getByTestId('content-card').first();
     const auditToggle = card.getByRole('button', { name: 'Audit' });

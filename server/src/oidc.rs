@@ -1499,6 +1499,8 @@ pub async fn refresh(
 
     // (d) 消費 UPDATE と新トークン INSERT を単一 tx で原子的に実行する。
     //     write_lock → BEGIN → UPDATE → changes() 判定 → INSERT(in_tx) → COMMIT。
+    //     write_lock が Mutex poison を検出しても panic せず、ここでの `?` により
+    //     AppError::Internal として伝播する（begin_write_tx_sql 経由）。
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
     let updated = tx
         .execute(

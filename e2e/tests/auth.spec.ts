@@ -19,6 +19,8 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
 
   test('SEC-03: should reject underage user', async ({ page }) => {
     await page.route('**/auth/verify', async route => {
+      // 送信中の aria-busy / role=status を観測するため、応答を少し保留する。
+      await new Promise(resolve => setTimeout(resolve, 300));
       await route.fulfill({
         status: 403,
         contentType: 'application/json',
@@ -35,13 +37,29 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
       { timeout: 10000 }
     );
     await loginButton.click();
+
+    // R2-CLIENT-LOGIN-BUSY: 送信中はボタンが disabled / aria-busy=true になり、
+    // 専用の role=status が日本語の進捗を告知する（lang="ja" を明示）。
+    // ボタンの文言は VERIFYING... へ変わるため、両方の文言に一致する locator を使う。
+    const busyButton = page.getByRole('button', { name: /VERIFYING|CONNECT WITH JPKI/ });
+    await expect(busyButton).toBeDisabled();
+    await expect(busyButton).toHaveAttribute('aria-busy', 'true');
+    const loginProgress = page.getByTestId('login-progress');
+    await expect(loginProgress).toHaveAttribute('role', 'status');
+    await expect(loginProgress).toHaveAttribute('lang', 'ja');
+    await expect(loginProgress).toContainText('本人確認の通信中です。');
+
     await rejected;
+    await expect(busyButton).toHaveAttribute('aria-busy', 'false');
+    await expect(loginProgress).toHaveCount(0);
 
     // R2-CLIENT-LOGIN-RESULT: リクエスト準備失敗時（.unwrap() を Result 伝播へ置換した経路）
     // と同じく、失敗時は既存固定文言の role=alert を表示しボタンを再活性化する。
     // 新規 test() は追加せず、auth 3件を維持する。
     const loginError = page.getByTestId('login-error');
     await expect(loginError).toHaveAttribute('role', 'alert');
+    // R2-CLIENT-LANG: 日本語固定文言の role=alert は error_lang 経由で lang="ja" を明示する。
+    await expect(loginError).toHaveAttribute('lang', 'ja');
     await expect(loginError).toHaveText('認証に失敗しました (HTTP 403).');
     await expect(loginButton).toBeEnabled();
 

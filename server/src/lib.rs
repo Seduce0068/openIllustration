@@ -578,17 +578,21 @@ static DB_WRITE_LOCKS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// 指定接続に対応する書き込みロックを返す。
-pub fn write_lock(db: &Connection) -> Arc<tokio::sync::Mutex<()>> {
+/// ロックテーブルの取得・キー登録を含む全体を `Result` で包み、poison 時は
+/// panic させず `AppError::Internal` として呼び出し側へ伝播する。
+pub fn write_lock(db: &Connection) -> Result<Arc<tokio::sync::Mutex<()>>, AppError> {
     let key = db as *const Connection as usize;
-    let mut locks = DB_WRITE_LOCKS.lock().expect("write lock table poisoned");
-    Arc::clone(
+    let mut locks = DB_WRITE_LOCKS
+        .lock()
+        .map_err(|_| AppError::Internal("write lock table is poisoned".to_string()))?;
+    Ok(Arc::clone(
         locks
             .entry(key)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-    )
+    ))
 }
 
-/// ロックを保持したままトランザクションを開始する（libsql::Error をそのまま返す版）。
+/// ロックを保持したままトランザクションを開始する（AppError を返す版）。
 ///
 /// すべての書き込みはこの関数を通す。共有 `Connection` で `BEGIN` を保持できるのは
 /// 1 つだけなので、`BEGIN` の前に `write_lock` を取得し、コミット後にガードを
@@ -596,9 +600,11 @@ pub fn write_lock(db: &Connection) -> Arc<tokio::sync::Mutex<()>> {
 /// このトランザクションへ取り込まれるため、順序を逆転させないこと。
 async fn begin_write_tx_sql(
     db: &Connection,
-) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), libsql::Error> {
-    let guard = write_lock(db).lock_owned().await;
-    begin_write_tx_sql_with_guard(db, guard).await
+) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
+    let guard = write_lock(db)?.lock_owned().await;
+    begin_write_tx_sql_with_guard(db, guard)
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))
 }
 
 /// 取得済みの write_lock ガードを保持したまま `BEGIN` する。
@@ -618,8 +624,8 @@ async fn begin_write_tx_sql_with_guard(
 async fn acquire_purge_lock(
     db: &Connection,
     wait: Option<Duration>,
-) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, libsql::Error> {
-    let lock = write_lock(db);
+) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, AppError> {
+    let lock = write_lock(db)?;
     let guard = match wait {
         Some(wait) => match tokio::time::timeout(wait, lock.lock_owned()).await {
             Ok(guard) => guard,
@@ -630,14 +636,13 @@ async fn acquire_purge_lock(
     Ok(Some(guard))
 }
 
-/// `begin_write_tx_sql` を `AppError` 側の API へ変換したラッパー。
+/// `begin_write_tx_sql` の公開 API ラッパー。poison を含むロック取得失敗は
+/// すでに `AppError::Internal` として伝播済みであり、ここでは再ラップしない。
 /// ガードは戻り値に保持させ、コミット後にドロップする。
 async fn begin_write_tx(
     db: &Connection,
 ) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
-    begin_write_tx_sql(db)
-        .await
-        .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))
+    begin_write_tx_sql(db).await
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -654,6 +659,9 @@ pub enum AppError {
     NotFound,
     #[error("Bad request: {0}")]
     BadRequest(String),
+    /// 既存CIDの再アップロード。新規ピンを作っていないため補償 unpin を走らせない。
+    #[error("Content already exists")]
+    ContentAlreadyExists,
     #[error("Forbidden: {0}")]
     Forbidden(String),
     #[error("Conflict: {0}")]
@@ -685,6 +693,10 @@ impl IntoResponse for AppError {
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::ContentAlreadyExists => (
+                StatusCode::BAD_REQUEST,
+                "Content already exists".to_string(),
+            ),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg),
             AppError::Conflict(msg) => (StatusCode::CONFLICT, msg),
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg),
@@ -2240,7 +2252,7 @@ pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
 /// 期限到達済みの未確定通報をまとめて確定する。自動ワーカーと手動操作の共通処理。
 /// ロック取得は完了まで待つ（呼び出し側で上限を設けたい場合は `finalize_due_reports_with_wait` を使う）。
 pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
-    let guard = write_lock(db).lock_owned().await;
+    let guard = write_lock(db)?.lock_owned().await;
     // 手動確定はメトリクスを持たないため None（成功件数の計上は自動ワーカー側で行う）。
     finalize_due_reports_with_guard(db, guard, None).await
 }
@@ -2359,7 +2371,7 @@ const STARTUP_LOCK_WAIT: Duration = Duration::from_secs(30);
 async fn purge_expired_refresh_tokens_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
-) -> Result<Option<u64>, libsql::Error> {
+) -> Result<Option<u64>, AppError> {
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
@@ -2383,7 +2395,7 @@ async fn purge_expired_refresh_tokens_with_wait(
 }
 
 /// 周期用: ロック取得だけ `PURGE_LOCK_WAIT` を待ち、ビジーならスキップする。
-async fn purge_expired_refresh_tokens(db: &Connection) -> Result<Option<u64>, libsql::Error> {
+async fn purge_expired_refresh_tokens(db: &Connection) -> Result<Option<u64>, AppError> {
     purge_expired_refresh_tokens_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
@@ -2393,7 +2405,7 @@ async fn purge_expired_refresh_tokens(db: &Connection) -> Result<Option<u64>, li
 async fn purge_stale_revoked_sessions_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
-) -> Result<Option<u64>, libsql::Error> {
+) -> Result<Option<u64>, AppError> {
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
@@ -2410,7 +2422,7 @@ async fn purge_stale_revoked_sessions_with_wait(
 }
 
 /// 周期用: ロック取得だけ `PURGE_LOCK_WAIT` を待ち、ビジーならスキップする。
-async fn purge_stale_revoked_sessions(db: &Connection) -> Result<Option<u64>, libsql::Error> {
+async fn purge_stale_revoked_sessions(db: &Connection) -> Result<Option<u64>, AppError> {
     purge_stale_revoked_sessions_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
@@ -2428,7 +2440,7 @@ const REVOCATION_RETENTION_SECS: i64 = 30 * 24 * 60 * 60 + 60;
 async fn purge_stale_revoked_subs_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
-) -> Result<Option<u64>, libsql::Error> {
+) -> Result<Option<u64>, AppError> {
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
@@ -2442,7 +2454,7 @@ async fn purge_stale_revoked_subs_with_wait(
 }
 
 /// 周期用: ロック取得だけ `PURGE_LOCK_WAIT` を待ち、ビジーならスキップする。
-async fn purge_stale_revoked_subs(db: &Connection) -> Result<Option<u64>, libsql::Error> {
+async fn purge_stale_revoked_subs(db: &Connection) -> Result<Option<u64>, AppError> {
     purge_stale_revoked_subs_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
@@ -4066,6 +4078,9 @@ pub async fn update_content_status(
     } else {
         return Err(AppError::NotFound);
     };
+    // 1 行読んだ時点で Rows を明示的に解放してから tx.execute を発行する。
+    // migration.rs と同じ read-then-write 順序に統一する。
+    drop(rows);
 
     let mut log_rows = tx
         .query(
@@ -4078,6 +4093,7 @@ pub async fn update_content_status(
     } else {
         "GENESIS_HASH".to_string()
     };
+    drop(log_rows);
 
     let entry = common::AuditLogEntry {
         log_id: None,
@@ -4313,6 +4329,9 @@ pub async fn process_report_conclusion(
         }
         None => return Ok(()),
     };
+    // 1 行読んだ時点で Rows を明示的に解放してから後続の tx.execute を発行する。
+    // migration.rs と同じ read-then-write 順序に統一する。
+    drop(report_rows);
 
     if due == 0 || content_status != "Reported" || concluded_at.is_some() {
         return Ok(());
@@ -4344,6 +4363,9 @@ pub async fn process_report_conclusion(
             reject_count = count;
         }
     }
+    // 集計用カーソルも更新前に解放し、読み取りカーソルを残したまま
+    // update_content_status / tx.execute を呼ばないようにする。
+    drop(rows);
 
     let total_votes = approve_count + reject_count;
     let (final_status, reason) = if total_votes >= QUORUM_VOTES {
@@ -4588,11 +4610,22 @@ pub async fn unban_user(
     // 再認証が新しい iat で閾値を上書きしたときだけセッションが復活する（再ログイン必須）。
     // DB を正本として users 更新と同じ tx で確定する。
     let epoch = chrono::Utc::now().timestamp();
-    tx.execute(
-        "UPDATE revoked_subs SET revoked_at = MAX(revoked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE sub = ?",
-        libsql::params![epoch, user_hash.to_string()],
-    )
-    .await?;
+    let updated = tx
+        .execute(
+            "UPDATE revoked_subs SET revoked_at = MAX(revoked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE sub = ?",
+            libsql::params![epoch, user_hash.to_string()],
+        )
+        .await?;
+    if updated == 0 {
+        // users.is_banned=TRUE なのに revoked_subs 行が無いデータでは UPDATE が
+        // 0 件になり、旧 JWT が UNBAN を境に復活してしまう。同じ tx 内で
+        // 閾値行を作成し、DB 正本の失効を維持する。
+        tx.execute(
+            "INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)",
+            (user_hash.to_string(), epoch),
+        )
+        .await?;
+    }
     record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
     tx.commit()
         .await
@@ -5191,8 +5224,10 @@ pub async fn upload_content(
         let mut existing = tx
             .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
             .await?;
-        if existing.next().await?.is_some() {
-            return Err(AppError::BadRequest("Content already exists".to_string()));
+        let already_exists = existing.next().await?.is_some();
+        drop(existing);
+        if already_exists {
+            return Err(AppError::ContentAlreadyExists);
         }
 
         tx.execute(
@@ -5228,10 +5263,7 @@ pub async fn upload_content(
     // 既存CIDによる「Content already exists」は新規ピンを作っていないため、
     // 補償 unpin を走らせると登録済みの正当なピンまで解除してしまう。
     // この場合のみ補償をスキップする（値・CID はログへ出さない）。
-    let skip_compensation = match &result {
-        Err(AppError::BadRequest(message)) => message == "Content already exists",
-        _ => false,
-    };
+    let skip_compensation = matches!(&result, Err(AppError::ContentAlreadyExists));
     if result.is_err() && !skip_compensation {
         compensate_unpin(&state, &cid).await;
     }

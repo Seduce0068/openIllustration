@@ -220,6 +220,7 @@ else
 fi
 assert_capture_absent "case8 disallowed key"
 assert_log_contains "case8 fixed message" 'Disallowed key #1 in backup env file' "${work}/case8.err"
+assert_log_absent "case8 key name absent" 'BASH_ENV' "${work}/case8.err"
 assert_log_absent "case8 value absent" '/tmp/evil.sh' "${work}/case8.err"
 
 if ((failures > 0)); then

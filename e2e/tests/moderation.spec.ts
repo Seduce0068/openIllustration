@@ -434,6 +434,19 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     let forbiddenPublicStats = false;
     // 鮮度警告の検証用: 生成時刻を「現在」に差し替えて警告が消えることを確認する。
     let freshPublicStats = false;
+    // 遅延レスポンスの順序逆転検証用（R2-CLIENT 世代ガード）。
+    // マウント取得を保留中に「更新」で最新を取得し、古い応答が後から届いても
+    // 画面が最新のままであることを同じ R5-09 ケース内で確認する。
+    let delayedPublicStats = false;
+    let delayedPublicStatsCount = 0;
+    let releaseOldPublicStats = (): void => {};
+    const oldPublicStatsGate = new Promise<void>(resolve => {
+      releaseOldPublicStats = resolve;
+    });
+    let releaseNewPublicStats = (): void => {};
+    const newPublicStatsGate = new Promise<void>(resolve => {
+      releaseNewPublicStats = resolve;
+    });
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
     // ADR-0008 段階2: 初期表示と再マウントで送られる公開集計のリクエストを記録する。
     const publicStatsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
@@ -466,6 +479,33 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         path: new URL(route.request().url()).pathname,
         authorization: route.request().headers()['authorization'],
       });
+      if (delayedPublicStats) {
+        // 1本目（マウント取得）を保留して古いレスポンスとして後から返し、
+        // 2本目（更新ボタン）を先に完了させる。generation guard の順序逆転オラクル。
+        delayedPublicStatsCount += 1;
+        if (delayedPublicStatsCount === 1) {
+          await oldPublicStatsGate;
+          await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+              ...publicStatsFixture,
+              generated_at: '2026-11-01T00:00:00Z',
+            }),
+          });
+          return;
+        }
+        await newPublicStatsGate;
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ...publicStatsFixture,
+            generated_at: '2026-11-19T00:00:00Z',
+          }),
+        });
+        return;
+      }
       if (unauthorizedPublicStats) {
         // 401 は dedicated 固定文言＋LOG OUT からの再ログイン案内を出す。
         await route.fulfill({
@@ -668,6 +708,47 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 属性セレクタでも role=status の警告が消えたことを確認する。
     await expect(page.locator('p[role="status"][data-testid="public-mod-stats-stale"]')).toHaveCount(0);
     expect(statsRequests).toHaveLength(statsCountBeforeRefresh);
+
+    // フェーズ7: 遅延レスポンスの順序逆転（R2-CLIENT 世代ガード）。
+    // マウント取得（古い GENERATED_AT）を保留中に「更新」で最新を取得し、
+    // 古い応答が後から到着しても最新のまま。更新ボタンの disabled / aria-busy も検証する。
+    delayedPublicStats = true;
+    delayedPublicStatsCount = 0;
+    const refreshButton = page.getByTestId('public-mod-stats-refresh');
+    const statsCountBeforeRace = statsRequests.length;
+    const publicCountBeforeRace = publicStatsRequests.length;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect.poll(() => publicStatsRequests.length).toBe(publicCountBeforeRace + 1);
+    // マウント取得は busy を立てないため、更新ボタンは押せる。
+    await expect(refreshButton).toBeEnabled();
+    await expect(refreshButton).toHaveAttribute('aria-busy', 'false');
+    await refreshButton.click();
+    await expect.poll(() => publicStatsRequests.length).toBe(publicCountBeforeRace + 2);
+    // 更新リクエストの保留中は連打抑止が効く。
+    await expect(refreshButton).toBeDisabled();
+    await expect(refreshButton).toHaveAttribute('aria-busy', 'true');
+    // 最新レスポンスを先に到着させる。
+    releaseNewPublicStats();
+    await expect(page.getByTestId('public-mod-stats-generated-at'))
+      .toHaveAttribute('title', '2026-11-19T00:00:00Z', { timeout: 10000 });
+    await expect(refreshButton).toBeEnabled();
+    await expect(refreshButton).toHaveAttribute('aria-busy', 'false');
+    // 古いレスポンスが後から到着しても、一覧と同じ世代ガードで破棄される。
+    // waitForResponse で古い応答の到着を確定させてから最新のままであることを確認する。
+    const oldStatsResponse = page.waitForResponse(
+      response => response.url().includes('/mod/stats/public') && response.status() === 200,
+      { timeout: 10000 },
+    );
+    releaseOldPublicStats();
+    await oldStatsResponse;
+    await expect.poll(() => page.getByTestId('public-mod-stats-generated-at').getAttribute('title'))
+      .toBe('2026-11-19T00:00:00Z');
+    await expect(publicStatsError).toHaveCount(0);
+    expect(statsRequests).toHaveLength(statsCountBeforeRace);
+
+    // 日本語側の lang 宣言（error_lang 統一）を既存ケース内で検証する。
+    await expect(page.getByTestId('public-mod-stats-stale')).toHaveAttribute('lang', 'ja');
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
     // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。
@@ -973,6 +1054,22 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 専用の role="alert"（data-testid="report-validation-error"）を出す。POST は0本。
     const validationError = page.getByTestId('report-validation-error');
     await expect(validationError).toHaveCount(0);
+
+    // R2-CLIENT-REPORT-REQUIRED: native required は外し、aria-required + 独自 role=alert に統一。
+    const cidField = page.locator('input[placeholder="TARGET CID"]');
+    const reasonField = page.locator('textarea[placeholder="REASON"]');
+    expect(await cidField.getAttribute('required')).toBeNull();
+    expect(await reasonField.getAttribute('required')).toBeNull();
+    await expect(cidField).toHaveAttribute('aria-required', 'true');
+    await expect(reasonField).toHaveAttribute('aria-required', 'true');
+    // <form on:submit> の Enter 経路も同じ検証へ集約され、POST は増えない。
+    await cidField.fill('');
+    await reasonField.fill('Illegal content detected');
+    await cidField.press('Enter');
+    await expect(validationError).toHaveText('対象 CID を入力してください。');
+    await expect(validationError).toHaveAttribute('role', 'alert');
+    await expect(validationError).toHaveAttribute('lang', 'ja');
+    expect(reportRequests).toEqual([]);
 
     await page.locator('input[placeholder="TARGET CID"]').fill('');
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');

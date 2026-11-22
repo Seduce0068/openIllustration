@@ -733,7 +733,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 / migrations14 /
-  tests147 の数値は不変。
+  tests148 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -742,7 +742,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests147 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests148 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -762,7 +762,23 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests147 の数値は不変。
+  migrations14 / tests148 の数値は不変。
+
+### R2-CLIENT（第2次）追加契約（2026-11-23）
+
+- **公開集計の鮮度と順序**: 「更新」操作は最新のレスポンスのみを採用し、
+  古い応答が遅れて到着しても集計表示を上書きしない。取得中は更新ボタンを
+  `disabled` / `aria-busy=true` として連打を受け付けない。
+- **履歴とディープリンク**: 戻る／進むでカードの強調表示と通報フォームの
+  CID を URL から復元する。未知 hash を既知 view へ正規化する従来契約は維持する。
+- **進捗と読み込みの告知**: ログインと取引履歴の取得中は dedicated
+  `role=status` で日本語の進捗を告知し、空状態は取得完了後のみ描画する。
+- **言語宣言と必須表現**: 全 `role=alert` / `role=status` は `error_lang` を
+  経由して言語を宣言する（ルート既定への暗黙依存を使わない）。通報フォームは
+  `required` を使わず `aria-required` と独自 `role=alert` で検証し、
+  Enter 経路も同じ検証へ集約する。
+- いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
+  migrations14 / tests148 の数値は不変。
 
 ### R2-ENV 追加契約（2026-11-23）
 
@@ -782,4 +798,26 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   固定文言警告のうえ既定値へフォールバックし、`doctor` も `classify` ベースで
   同じ警告を出す。これにより「不正値は既定へフォールバックし doctor が警告する」
   という契約を実装と一致させた（値・生バイトは非エコー）。
-  E2E69件 / check23 / migrations14 / tests147 は不変。
+  E2E69件 / check23 / migrations14 / tests148 は不変。
+
+### R2-SERVER 追加契約（2026-11-23）
+
+- **write_lock の poison を Result 化する**: `DB_WRITE_LOCKS` の
+  `Mutex::lock()` とキー登録を含むロックテーブル操作全体を `Result` で包み、
+  poison 時に panic（`expect`）せず `AppError::Internal` を返す。
+  `write_lock()` の呼び出し側（`begin_write_tx_sql` / `acquire_purge_lock` /
+  `finalize_due_reports`）は `?` で伝播し、purge 系のエラー型も `AppError` へ
+  統一する。OIDC の refresh 等は `begin_write_tx().await?` を通じで同じ
+  `AppError::Internal` を受け取る（oidc.rs 側の呼び出しは既に `?` 付き）。
+- **UNBAN 時の revoked_subs 行不存在フォールバック**: `unban_user` は
+  `UPDATE revoked_subs ... WHERE sub = ?` の影響件数を検査し、0 件なら
+  同じ tx 内で `INSERT` して閾値行を作成する。`users.is_banned = TRUE` なのに
+  `revoked_subs` 行が欠落していても旧 JWT が UNBAN を境に復活しない。
+  既存の BAN/UNBAN 監査と positive-only キャッシュ更新の契約は不変。
+- **監査連鎖カーソルの read-then-write 順序**: `update_content_status` と
+  `process_report_conclusion` は `status` / `entry_hash` / 投票集計を読む
+  `Rows` を `next()` 直後に `drop(rows)` し、その後に `tx.execute` を発行する。
+  `migration.rs` と同じ順序に統一し、読み取りカーソルを残したまま書き込まない。
+  既存のハッシュ連鎖・ログ ID 連続性・Merkle root の契約は変更しない。
+  新規テスト関数は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
+  tests148 の数値は不変。

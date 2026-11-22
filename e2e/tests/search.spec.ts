@@ -154,5 +154,38 @@ test.describe('Content search and filtering (R5-01)', () => {
 
     await page.goBack();
     await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+
+    // R2-CLIENT-DLINK: カード強調表示の根拠となる cid が popstate の往復で復元される。
+    // pushState 自身は popstate を出さないため、検索条件が異なる履歴条目を積んでから
+    // goBack / goForward で signal（cid）と一覧（q）の両方を往復させる。
+    const cidUrl = `/?q=Neon&cid=${encodeURIComponent(illustration.cid)}#dashboard`;
+    await page.evaluate(url => { history.pushState(null, '', url); }, cidUrl);
+    const highlighted = page.locator(`[data-testid="content-card"][data-cid="${illustration.cid}"]`);
+    await expect(highlighted).not.toHaveClass(/ring-green-500/);
+    await page.goBack();
+    await expect(page.getByLabel('Search')).toHaveValue('');
+    await expect(highlighted).not.toHaveClass(/ring-green-500/);
+    await page.goForward();
+    await expect(page.getByLabel('Search')).toHaveValue('Neon');
+    await expect(highlighted).toHaveClass(/ring-green-500/);
+    await page.goBack();
+    await expect(page.getByLabel('Search')).toHaveValue('');
+    await expect(highlighted).not.toHaveClass(/ring-green-500/);
+    await page.goForward();
+    await expect(highlighted).toHaveClass(/ring-green-500/);
+
+    // MODERATION の通報フォーム CID も、view を離れず履歴だけが変わる往復で復元される。
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    const targetCidInput = page.getByLabel('TARGET CID', { exact: true });
+    await expect(targetCidInput).toHaveValue('');
+    await page.evaluate(cid => {
+      history.pushState(null, '', `/?report_cid=${encodeURIComponent(cid)}#moderation`);
+    }, novel.cid);
+    await page.goBack();
+    await expect(targetCidInput).toHaveValue('');
+    await page.goForward();
+    await expect(targetCidInput).toHaveValue(novel.cid);
+    await page.goBack();
+    await expect(targetCidInput).toHaveValue('');
   });
 });

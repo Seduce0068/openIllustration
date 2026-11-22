@@ -70,7 +70,7 @@ while IFS= read -r line <&"$env_fd" || [[ -n "$line" ]]; do
 	case "$key" in
 	BACKUP_DIR | BACKUP_PREFIX | BACKUP_GPG_RECIPIENT | RETENTION_DAYS | MIN_KEEP | ALLOW_UNENCRYPTED_BACKUP | OFFSITE_COPY_CMD | OFFSITE_DEST | ALERT_CMD | AUDIT_EXPECT_ROOT | BIN_DIR | GPG_BIN | FIND_BIN) ;;
 	*)
-		echo "Disallowed key #${line_number} in backup env file: ${key}" >&2
+		echo "Disallowed key #${line_number} in backup env file" >&2
 		exit 1
 		;;
 	esac

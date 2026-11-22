@@ -211,18 +211,35 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     return {
       error: page.getByTestId('ledger-error'),
       noTransactions: page.getByText('NO_TRANSACTIONS_RECORDED'),
+      loading: page.getByTestId('ledger-loading'),
     };
   }
 
   test('ledger shows a fixed error and no empty-state on HTTP 500', async ({ page }) => {
-    const { error, noTransactions } = await setupLedgerFailurePage(page, async route => {
+    let releaseTransactions = (): void => {};
+    const transactionsGate = new Promise<void>(resolve => {
+      releaseTransactions = resolve;
+    });
+    const { error, noTransactions, loading } = await setupLedgerFailurePage(page, async route => {
+      await transactionsGate;
       await route.fulfill({
         status: 500,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'ledger unavailable' }),
       });
     });
+    // R2-CLIENT-LEDGER-LOADING: 取得中は dedicated role=status で告知し、
+    // 空状態（NO_TRANSACTIONS_RECORDED）は取得完了後のみ描画する。
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveAttribute('role', 'status');
+    await expect(loading).toHaveAttribute('lang', 'ja');
+    await expect(loading).toContainText('取引履歴を取得しています。');
+    await expect(noTransactions).toHaveCount(0);
+    releaseTransactions();
+    await expect(loading).toHaveCount(0);
     await expect(error).toHaveAttribute('role', 'alert');
+    // R2-CLIENT-LANG: 日本語の取得失敗文言は error_lang 経由で lang="ja" を明示する。
+    await expect(error).toHaveAttribute('lang', 'ja');
     await expect(error).toContainText('取引履歴の取得に失敗しました。');
     await expect(noTransactions).toHaveCount(0);
   });

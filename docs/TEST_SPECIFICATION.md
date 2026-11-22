@@ -301,7 +301,7 @@ auth 3件・export 3件・全体69件を維持する。
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "deny"` + `allow-wildcard-paths = true` でレジストリ依存の wildcard を拒否し、public crate（client / server）の path 依存のみ skip で例外許可 |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor54・migrations14・tests147 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor54・migrations14・tests148 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -500,7 +500,7 @@ doctor のテスト数は 53 のままだった（R2-ENV で 54 へ追随）。
    合わせる。doctor / CI の toolchain 指定変更は不要（不一致なし）。
 
 1・2 のアサーションは既存 `secret_values_are_never_printed_in_problems` 内へ追加し、
-当時はテスト関数数を変更していない（現行 doctor54 / tests147 / E2E69 / migrations14）。
+当時はテスト関数数を変更していない（現行 doctor54 / tests148 / E2E69 / migrations14）。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
@@ -712,7 +712,7 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 「未設定 / 非 UTF-8 の固定文言警告 / 有効な UTF-8」を返す。
 `run()` は JWT の非 UTF-8 を起動拒否、IPFS / 決済の非 UTF-8 を固定文言警告へ倒し、
 `doctor` は `common::env::classify(lookup(..))` で同じ分類を共有する。
-新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests147 不変）。
+新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests148 不変）。
 
 本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
@@ -1954,7 +1954,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor54 / migrations14 / tests147 は doc→code テスト名照合の現行値（実テスト総数ではない）。
+  （拒否値は非エコー）。check23 / doctor54 / migrations14 / tests148 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 - R2-SERVER の原子性・クリーンアップ契約（既存ケース内で担保、新規 test 関数なし）:
   `pin_to_ipfs` 成功後に DB コミットが失敗したら `unpin` 補償を試み、解除失敗は
   固定文言の警告ログのみへ記録してトークン値・レスポンス本文・CID をエコーしない。
@@ -1963,7 +1963,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   行う。UNBAN は `revoked_subs` を削除せず sub epoch を進めて旧 JWT の復活を防ぎ、
   back-channel logout 由来の閾値を保持する。backup / restore は中途失敗の部分ファイル
   を削除し、restore は staging 検証後に `rename` する。E2E69 / check23 / doctor54 /
-  migrations14 / tests147 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
+  migrations14 / tests148 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1984,7 +1984,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor54 / migrations14 / tests147 は doc→code テスト名照合の現行値（実テスト総数ではない）。
+  check23 / doctor54 / migrations14 / tests148 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -2063,7 +2063,41 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - **R2-A11Y アップロード送信中の busy 告知**: `Sign & Submit to Evidence Ledger` ボタンへ
   `aria-busy=move || loading.get()` を付け、送信中フェーズの属性の付与・解除を
   `upload.spec.ts` の既存成功ケース内で検証する。新規 `test()` は追加しない。
-- 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests147 は不変。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests148 は不変。
+
+## R2-CLIENT（第2次）の受け入れ契約（既存ケース内へ統合・数値不変）
+
+- **公開集計の世代ガードと更新ボタン**: `/mod/stats/public` の取得は
+  一覧（`Dashboard`）と同じ `should_apply_response` 世代カウンタを使い、
+  遅れて届いた古いレスポンスを破棄する。「更新」ボタンは `disabled` と
+  `aria-busy` に加え `claim_submission` で連打を抑止する。マウント取得は
+  busy を立てず、更新と重なっても最新のレスポンスだけを画面へ反映する。
+  `moderation.spec.ts` の R5-09 内へ「マウント取得を保留 → 更新を先に完了 →
+  古い応答を後到着」の順序逆転フェーズを追加する。
+- **ディープリンク CID の履歴復元**: `Dashboard` の popstate `batch` へ
+  `set_deep_link_cid(restored.cid)` を追加し、カード強調表示が往復で更新される。
+  `Moderation` も popstate で `report_cid` を `cid` signal へ同期する。
+  `search.spec.ts` の既存ディープリンクケース内へ `goBack` / `goForward`
+  の往復アサーションを追加する。
+- **ログイン進捗の告知**: ログインボタンへ `disabled` と `aria-busy` を付け、
+  送信中は dedicated `role=status`（`data-testid="login-progress"`、
+  日本語固定文言 `本人確認の通信中です。`）で進捗を告知する。
+  `auth.spec.ts` の既存 SEC-03 ケース内で属性・文言・`lang="ja"` を検証する。
+- **台帳の読み込み状態**: `Ledger` は `loading` signal と dedicated
+  `role=status`（`data-testid="ledger-loading"`）を追加し、空状態
+  `NO_TRANSACTIONS_RECORDED` は取得完了後のみ描画する。
+  `economy.spec.ts` の既存 HTTP 500 ケース内で取得中アサーションを追加する。
+- **error_lang の方針統一**: すべての `role="alert"` / `role="status"` 要素は
+  動的文言・固定英文見出しを問わず `error_lang` を経由して `lang` を宣言する
+  （ルートの `lang="ja"` への暗黙依存は使わない）。日本語側は `lang="ja"`、
+  英語側は `lang="en"`。ヘルパのコメントと既存 E2E（`auth` / `economy` /
+  `moderation` / `integrity`）の日本語側アサーションを揃える。
+- **通報フォームの必須表現**: `required` を外し `aria-required="true"` と
+  独自の `role=alert`（`report-validation-error`）へ統一する。
+  `<form on:submit>` で Enter 経路も同じ `submit_report` 検証へ集約し、
+  `moderation.spec.ts` の REPORT-ERR-01 内で POST 0 本を検証する。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
+  tests148 は不変。
 
 ## R2-ENV の受け入れ契約（2026-11-23）
 
@@ -2091,4 +2125,37 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
    （`numeric_env_value` の3分類と固定文言）と `server/src/bin/doctor.rs` の
    `secret_values_are_never_printed_in_problems` 内（5変数の非 UTF-8 警告と
    生バイト非漏洩）で行う。新規テスト関数は doctor の1件のみで、
-   E2E69件 / check23 / migrations14 / tests147 は不変（doctor は 53→54 へ追随）。
+   E2E69件 / check23 / migrations14 / tests148 は不変（doctor は 53→54 へ追随）。
+
+## R2-SERVER の受け入れ契約（2026-11-23）
+
+1. **DB_WRITE_LOCKS poison の Result 化**: `write_lock()` を
+   `Result<Arc<tokio::sync::Mutex<()>>, AppError>` へ変更し、
+   `DB_WRITE_LOCKS.lock()` の失敗とキー登録を含む全体を `?` の伝播対象にする。
+   panic 元の `expect("write lock table poisoned")` を廃止し、
+   `AppError::Internal("write lock table is poisoned")` を返す。
+   `begin_write_tx_sql` / `acquire_purge_lock` / `finalize_due_reports` の
+   呼び出しへ `?` を追加し、purge 系 4 関数のエラー型を `AppError` へ統一する。
+   `server/src/oidc.rs` の refresh / callback 経路は `begin_write_tx().await?`
+   で既に伝播済みであり、新規の `?` 追加は不要（コメントで契約を明記）。
+   既存の `test_auth_verify_write_waits_for_write_lock` /
+   `test_purge_waits_for_write_lock` 等のロック待ち回帰は呼び出し側の
+   `.unwrap()` 追従のみで検証する。
+2. **UNBAN の revoked_subs 行不存在フォールバック**: `unban_user` が
+   `UPDATE revoked_subs SET revoked_at = MAX(revoked_at, ?) ... WHERE sub = ?`
+   の影響件数（`tx.execute()` の戻り値）を検査し、0 件なら同じ tx 内で
+   `INSERT INTO revoked_subs (sub, revoked_at) VALUES (?, ?)` を実行する。
+   回帰は既存 `test_unban_restores_user_with_audit` 内へ追加する。
+   同テストは `is_banned = TRUE` だが `revoked_subs` 行が無いユーザーを
+   UNBAN し、UNBAN 時刻以降の `revoked_at` を持つ行が作成されることを検証する。
+   旧実装（UPDATE のみで INSERT フォールバック無し）では `rows.next()` が
+   None となり失敗する。
+3. **監査連鎖カーソルの read-then-write 統一**: `update_content_status` は
+   `status` と `entry_hash` の `Rows` を、`process_report_conclusion` は
+   通報ヘッダと投票集計の `Rows` を、それぞれ `next()` 直後に `drop(rows)` して
+   から `tx.execute` / `update_content_status` を呼ぶ。
+   `migration.rs` の「1 行読んだ時点で Rows を明示解放してから BEGIN/WRITE」
+   と同じ順序に統一する。既存の `test_audit_log_chain_integrity` および
+   自動確定・投票の回帰テストで連鎖と結果が不変であることを確認する。
+   新規テスト関数は追加しないため、E2E69件 / check23 / doctor54 /
+   migrations14 / tests148 の各数値は不変。

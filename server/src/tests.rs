@@ -7655,7 +7655,7 @@ fn spawn_lock_holding_writer(
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
         // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
-        let guard = crate::write_lock(&db).lock_owned().await;
+        let guard = crate::write_lock(&db).unwrap().lock_owned().await;
         let tx = db.transaction().await.unwrap();
         tx.execute("INSERT INTO users (user_hash) VALUES ('lock_holder')", ())
             .await
@@ -7723,7 +7723,7 @@ fn spawn_report_lock_holding_writer(
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
-        let guard = crate::write_lock(&db).lock_owned().await;
+        let guard = crate::write_lock(&db).unwrap().lock_owned().await;
         let tx = db.transaction().await.unwrap();
         tx.execute(
             "INSERT INTO contents (cid, type, owner_hash, checksum, status)
@@ -12851,6 +12851,7 @@ async fn test_unban_restores_user_with_audit() {
     )
     .await
     .unwrap();
+    let before_epoch = chrono::Utc::now().timestamp();
 
     assert_eq!(
         send_mod_action(
@@ -12885,6 +12886,26 @@ async fn test_unban_restores_user_with_audit() {
     let reason: String = row.get(1).unwrap();
     assert_eq!(action, "UNBAN");
     assert_eq!(reason, "appeal accepted");
+
+    // 行不存在フォールバック: is_banned=TRUE なのに revoked_subs 行が無い場合でも
+    // UPDATE の影響件数を検査して同じ tx で閾値行を INSERT し、旧 JWT の復活を防ぐ。
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = 'target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows
+        .next()
+        .await
+        .unwrap()
+        .expect("is_banned=TRUE で revoked_subs 行が無い場合も UNBAN が閾値行を作成すること");
+    let revoked_at: i64 = row.get(0).unwrap();
+    assert!(
+        revoked_at >= before_epoch,
+        "フォールバック INSERT は UNBAN 時刻以降の epoch を保持すること"
+    );
 }
 
 /// UNBAN は BAN 由来の revoked_subs 閾値を削除せず、sub epoch を現在時刻へ進める。
@@ -13478,7 +13499,7 @@ async fn concurrent_transactions_on_shared_connection_are_serialized() {
             let gate = Arc::clone(&gate);
             tokio::spawn(async move {
                 gate.wait().await;
-                let lock = crate::write_lock(&db);
+                let lock = crate::write_lock(&db).unwrap();
                 let _guard = lock.lock().await;
                 let tx = db.transaction().await.unwrap();
                 tx.execute(
@@ -18223,7 +18244,7 @@ async fn me_export_waits_for_concurrent_write_transaction() {
     let writer_db = Arc::clone(&db);
     let writer = tokio::spawn(async move {
         // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
-        let guard = crate::write_lock(&writer_db).lock_owned().await;
+        let guard = crate::write_lock(&writer_db).unwrap().lock_owned().await;
         let tx = writer_db.transaction().await.unwrap();
         tx.execute(
             "INSERT INTO users (user_hash) VALUES ('concurrent_writer')",
@@ -20172,7 +20193,7 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let db_writer = Arc::clone(&db);
     let writer = tokio::spawn(async move {
-        let guard = crate::write_lock(&db_writer).lock_owned().await;
+        let guard = crate::write_lock(&db_writer).unwrap().lock_owned().await;
         started_tx.send(()).unwrap();
         release_rx.await.unwrap();
         drop(guard);

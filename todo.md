@@ -787,6 +787,29 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第31ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  補償unpin判定をContentAlreadyExists dedicatedバリアントへ、write_lock poisonをResult化、
+  unban_userのrevoked_subs行不存在INSERTフォールバック、監査連鎖Rows drop統一、
+  backup-cron-wrapperのキー名エコー除去、CIへdev-console feature(--all-features)検証追加、
+  公開集計更新の世代ガード+連打抑止、deep link CIDのpopstate往復、
+  login aria-busy+進捗status、Ledger loading、error_lang全alert/status統一、
+  通報フォームrequired撤廃+aria-required+form on:submit。
+  R4指摘（tests148追随・重複CID Rows drop）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests148、npm audit3lockfile、
+  markdownlint39ファイル、clippy --all-features も別途green）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化+azp検証、公開ledger意図、
+  起動設定一括Config化、BIND_ADDR/PORT設定化、監査エクスポート自動スケジューラ、
+  doctor --strict の CI ゲート化、GPG復号訓練、Dependabot方針、MSRV下限CI検証、
+  コミット後二次処理の5xx伝播、finalizer異常終了のreadiness反映/失敗メトリクス、
+  back-channel logoutのsid/sub別tx、動的alertアナウンス、401復帰導線共通化、
+  a11y自動スキャン、クライアントエラーテレメトリ、.audit-rootオフサイト、
+  Persistent補完と窓の矛盾、alert unitテンプレート、CORSスタブOriginエコー、
+  E2E artifact回収/結果分離、Chromeバージョン固定、OIL_MOCK_AUTH=0ビルド検証、
+  BUILD-02負のビルドゲート、retries方針、warn_history1回だけ検証、
+  prepare-distribution親ディレクトリ権限）は記録のみで保留。
+
 - 2026-11-23 コンボ第30ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   監査Runbookの秘密鍵コピーをmktemp+trapで確実削除、未マッチ経路の生パスをアクセスログ/
