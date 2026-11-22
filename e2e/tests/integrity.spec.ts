@@ -448,6 +448,14 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
 
+    // R2-LEGACY-LANG: lang="ja" のページ内で、主要英語固定ラベルだけが
+    // lang="en" を宣言し、スクリーンリーダーの発音と言語宣言が整合することを確認する。
+    // 文言・data-testid は不変（既存 ARIA テスト内へ統合、新規ケースなし、E2E69件維持）。
+    for (const label of ['BROWSE', 'UPLOAD', 'MODERATION', 'LEDGER']) {
+      await expect(page.getByRole('button', { name: label })).toHaveAttribute('lang', 'en');
+    }
+    await expect(page.getByTestId('logout-button')).toHaveAttribute('lang', 'en');
+
     const card = page.getByTestId('content-card').first();
     const auditToggle = card.getByRole('button', { name: 'Audit' });
 

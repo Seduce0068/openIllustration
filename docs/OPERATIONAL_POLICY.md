@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T13:50:00+09:00"
+  at: "2026-11-22T14:12:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -480,7 +480,7 @@ CI は共通ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` の `ext
 E2E69件 / check23 / doctor53 / migrations14 の各数値は不変である。
 `shfmt` は `shfmt -l scripts/*.sh e2e/*.sh` の出力が非空（未整形ファイルあり）のとき失敗とし、
 未整形ファイル名をエラー出力へ出す（`bash -n` / `shellcheck` の行は維持する）。
-runner への `shellcheck -e SC2016,SC2034` / `shfmt` の導入は、
+runner への `shellcheck -e SC2016` / `shfmt` の導入は、
 呼び出し側 `.github/workflows/ci.yml` の `apt_packages` で指定する（共通ワークフローの
 apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない
 （未導入時に CI が赤化する構成を避けるため、導入要否はワークフロー側のコメントで明示する）。

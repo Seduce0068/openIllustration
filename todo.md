@@ -184,13 +184,13 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] **公開集計の解析失敗をStatsFailure::Parseへ** — 根拠 `client/src/lib.rs:3414` / discovery R5-VU / 低。
 - [x] **暗号化バックアップの復元パスを統一** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:155` / discovery R5-VU / 中。
 - [x] **cron版にオーケストレーション完成例を同梱** — 根拠 `deploy/openillustration-backup.cron:24` / discovery R5-VU / 中。
-- [ ] **SC2034除外を関数単位へ限定** — 根拠 `.github/workflows/ci.yml:54` / review R4-OPS / 低。
-- [ ] **README/REVIEW_REPORTのADR状態記述を是正** — 根拠 `README.md:26` / `docs/REVIEW_REPORT.md:507` / discovery+review / 低。
-- [ ] **旧プロジェクト名とconsole.logを整理** — 根拠 `server/src/lib.rs:1` / `client/src/lib.rs:2233` / review+discovery / 低。
-- [ ] **lang=jaと英語ラベルの不一致を解消** — 根拠 `client/index.html:2` / discovery R5-VU / 低。
-- [ ] **全文検索/sha3保留/iss-aud要件を棚卸しへ追記**
+- [x] **SC2034除外を関数単位へ限定** — 根拠 `.github/workflows/ci.yml:54` / review R4-OPS / 低。
+- [x] **README/REVIEW_REPORTのADR状態記述を是正** — 根拠 `README.md:26` / `docs/REVIEW_REPORT.md:507` / discovery+review / 低。
+- [x] **旧プロジェクト名とconsole.logを整理** — 根拠 `server/src/lib.rs:1` / `client/src/lib.rs:2233` / review+discovery / 低。
+- [x] **lang=jaと英語ラベルの不一致を解消** — 根拠 `client/index.html:2` / discovery R5-VU / 低。
+- [x] **全文検索/sha3保留/iss-aud要件を棚卸しへ追記**
   — 根拠 `docs/DETAILED_DESIGN.md:587` / `docs/HANDOFF.md:341` / `todo.md:872` / discovery / 低。
-- [ ] **request_idと4xx本文のオラクルを仕様へ** — 根拠 `docs/TEST_SPECIFICATION.md` / discovery R3-TQ / 低。
+- [x] **request_idと4xx本文のオラクルを仕様へ** — 根拠 `docs/TEST_SPECIFICATION.md` / discovery R3-TQ / 低。
 
 - [x] **AUDIT_EXPECT_ROOTをサーバ起動ゲートへ**
   — 根拠 `server/src/bin/doctor.rs` / `server/src/lib.rs` production_config_errors / review R1-CF / 中。
@@ -322,8 +322,10 @@ P1（本番運用の健全性）:
 
 ### 優先度: 低
 
-- [ ] **k-匿名性の要否を裁定** — 根拠 `todo.md:709` / discovery R5-VU / 保留(speculative)。
+- [x] **k-匿名性の要否を裁定 — 却下（2026-11-22）** — 根拠 `todo.md:709` / discovery R5-VU / 保留(speculative)。
   公開集計の小セル推論（review R3-AU medium）と同一課題。ADR-0008と照らして採用/却下を決定。
+  裁定メモ: 未リリースで小規模デプロイの想定はない。ADR-0008 の公開範囲はホワイトリストの集計値のみで、
+  個別情報（CID / `user_hash` / 理由本文・要約 / 個別行）は既に除外済み。必要になった場合は Level 1（受入）で再評価。
 
 - [x] **E2E解析失敗フェーズを既存2件へ統合** — 根拠 `e2e/tests/export.spec.ts` / `e2e/tests/moderation.spec.ts` / discovery R4 / 低。
   EXPORT-11(不正JSON)とREPORTS-ERR(型壊れJSON)を既存test内へ。69件維持。
@@ -719,6 +721,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（低6件）: SC2034関数単位除外、README/REVIEW_REPORTのADR状態是正、
+  旧名/console.log整理、英語ラベルlang="en"、全文検索/sha3/iss-aud棚卸し、
+  request_id/4xx本文オラクルを仕様化。k-匿名性は却下として前ラウンドで完了済み。
+  親がSC2034 disable構文・adr/index.md Accepted表記・doc-numbersコメントを修正。
+  R4の「Guild残存」はブランド表記として却下（仕様はサーバー側のみを対象）。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests128）。残り高2（外部要因）のみ。
 
 - 2026-11-22 coding（中6件+低2件）: session Cookie発行廃止、metrics count加算1固定、
   通報失敗時statusクリア、小説不正UTF-8をDECODE FAILED化、/content 401再ログイン導線、

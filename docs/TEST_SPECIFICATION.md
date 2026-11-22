@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T13:50:00+09:00"
+  at: "2026-11-22T14:12:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T13:50:00+09:00"
+  at: "2026-11-22T14:12:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -96,7 +96,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
 | セキュリティヘッダ | 全レスポンスへ `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'` を付与（通常 200、IP ゲートの 403、レート制限の 429、内部エラーの 500、本文なしの 204、CORS プリフライトの OPTIONS 成功レスポンスを含む）。CorsLayer の短絡を避けるため最外側にも `security_headers` を置く | 単体テストと実サーバーで確認済み。CSP は API レスポンスのみへ付与し、HTML 配信は配信側担当 |
 | 認証 | モックverify（nonce 必須・単回消費・再利用400）、無効トークン系、verify必須フィールド（birth_date/country_code）欠落と不正birth_dateの400拒否、OIDCはstate再利用/未知state、nonce不一致、JWKS未登録鍵での署名、kid欠落、at_hash不一致を401で拒否、OIDC未構成時のstart/callback/back-channel logoutは501、年齢判定（`common` のポリシー/計算ユニットテスト、`server` の検証・`GET /policy/age` 公開応答・明示設定必須/信頼属性必須フェイルクローズ・OIDC callback/refresh の設定必須403・`TZ` ローカル日付の境界、独立参照計算による proptest と境界月日の明示的サンプリング）、JWT秘密鍵長検査のユニットテスト、RS256 の `kid` 付与・一致検証・未知 `kid` 拒否・`kid` 無し旧トークン互換・旧公開鍵によるローテーション検証・重複 kid 拒否、refresh Cookie の Path=/auth（ログアウト時のファミリ失効到達）を検証。JPKI は証明書の base64 デコード・X.509 パース・有効期限・自己署名（DN 一致 + 暗号学的検証）・公開鍵ポリシーのエラーパス10件を Unauthorized の固定メッセージまで検証。開発用モック経路の `/auth/verify` では所有証明（PoP・opt-in）をハンドラ経由4件で検証（正常署名200・改ざん nonce/別鍵署名401・省略時200）。ログアウトは `refresh_token` 削除 Cookie（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`・`OIDC_COOKIE_SECURE` 追随の `Secure`、提示トークンはエコーせず本文 `true` を維持）を検証。クライアントは `/auth/login` が 501 のとき固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らず早期 return し、`/auth/verify` が 501 のときも同文言へ変換する（403 / 500 等は既存 `認証に失敗しました (HTTP <status>).` を維持し、サーバー本文は非表示）。ビルド時に `OIL_MOCK_AUTH=0` を指定するとログイン画面のモック認証注記を非表示にする。リフレッシュは BAN チェックと claims/JWT 事前計算を `BEGIN` 前に済ませ、消費 UPDATE（変更0件なら rollback 後に別tx でファミリ失効）と新トークン INSERT（`issue_refresh_token_in_tx`）を単一 tx で原子的に実行し、`test_refresh_rotates_token_and_issues_new_session` が旧 `used_at` 非NULL・新 `used_at` NULL を検証する。`OIDC_MAX_AUTH_AGE_SECS` は上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過を固定文言ハードエラーで起動拒否（fail-closed・値非エコー）し、`u64::MAX` は拒否される境界テストで確認する | 実JPKI/OID4VPの信頼検証、検証済み年齢属性入力、HSM 鍵管理は未テスト・未実装。現行年齢判定は申告値前提 |
 | ネットワーク | IPv4拒否・IPv6許可・IPv4-mapped正規化・XFF偽装回帰・fail-closedのミドルウェアテスト、XFF追記型（末尾ピア除去で最左クライアント採用）/上書き型（末尾採用）、複数値・不正エントリのfail-closed、IPv4-compatible IPv6（`::a.b.c.d`）拒否と `::` / `::1` 維持、SSRFリダイレクト無効化（3xxは追従せずフェイルオーバー）、CORSオリジン解析テスト、`MAX_CONCURRENT_REQUESTS` の境界値（既定16、有効範囲 1..=256、範囲外は既定へフォールバック）と同時実行上限 1 の実リクエスト（2件目は429、permit 返却後は200）を検証 | 実プロキシ、多段構成、WAFは未検証 |
-| エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理 |
+| エラー公開 | 500系詳細の既定非公開と `EXPOSE_INTERNAL_ERRORS` での公開のユニットテスト | 4xx系メッセージの公開範囲は未整理。オラクル: 代表4xx（400/404/429）の本文は `{"error": "<固定文言>"}` のみで、入力値・内部詳細・トークンをエコーしない（400: `Invalid CID` / `Invalid report reason`、404: `Resource not found`、429: `rate limit exceeded` / `too many concurrent requests`）。500系の既定非公開とは独立に仕様化する |
 | 可観測性 | `RUST_LOG` のフィルタ動作（未設定時INFO、不正値フォールバック）と WARN 出力の起動確認。`LOG_FORMAT=json` で全ログ行が JSON としてパースできることを実サーバーで確認。`/metrics` が Prometheus 形式でリクエスト数・4xx/5xx 数を公開し、404 後にエラーカウンタが進むことを単体テストと実サーバーで確認。新カウンタ `openillustration_neutralized_urls_total` の差分加算とペイロード非機微性を下記 MET-01 で検証。finalizer/purge の5カウンタも同じ MET-01 で HELP/TYPE 形式と進捗を検証。`observe_metrics` を `Router` 最外側へ移し、429 / IPv4 403 / 413 / CORS プリフライト OPTIONS 204 の4ケースを差分で計上する下記 MET-02 の4件を追加。E2E の protocol-relative / 再送抑制は下記 NEUT-URL-02 / NEUT-URL-03 として別 ID で仕様化し、サーバー側 MET-02 と衝突させない | ログ集約基盤・アラート通知先の選定は未実施 |
 | 停止動作 | `/health` 200・`/ready` 200・停止フラグ時の `/ready` 503・IP ゲート適用・`GRACEFUL_DRAIN_TIMEOUT_SECS` の既定/範囲外フォールバックを自動テストで確認。SIGTERM 時の drain ログと終了コード0は実起動確認済み。単一ライター検出（生存 PID 拒否・stale 回収・停止時削除）を単体テストと実プロセス2起動で確認 | 外部依存障害時の readiness 連動・drain タイムアウト発生時の実動作・リモート DB の並列起動制御は未試験 |
 | DBマイグレーション | 未適用分の適用・冪等性・チェックサム改変検出・外部キー強制・既存DBの段階的アップグレード（new migration の backfill とデータ保持）・適用済みマイグレーションファイル欠落の検出をユニットテスト。migration 011 で追加したメタデータ列を既存行が空文字として読むことを `test_migration_011_existing_rows_read_as_empty_metadata` で検証。migration 014 は `test_migration_014_declares_expires_at_as_text` / `test_migration_014_preserves_rfc3339_expires_at` / `test_migration_014_rewrite_detects_checksum_mismatch` の3件で検証 | ロールバック、複数インスタンス同時起動の排他は未実施 |
@@ -132,6 +132,22 @@ FormData / JSON を試行ごとに作り直して再送する。
 エラー表示が消える回帰が確認されたため、`ENABLE_AUTO_REFRESH=false` で既定無効としている。
 E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維持する。有効化には
 呼び出し側のエラー表示を refresh 非依存にする移行が必要。
+
+### 言語宣言方針とリリース時ログ方針（R2-LEGACY-LANG）
+
+- **言語宣言**: `client/index.html` は `lang="ja"` を維持し、日本語が主言語であることを宣言する。
+  外国人向けUIへ切り替えるのではなく、英語の固定ラベルを描画する要素へ個別に `lang="en"` を付与する。
+  対象は `CONNECT WITH JPKI` / `BROWSE` / `UPLOAD` / `MODERATION` / `LEDGER` / `LOG OUT` /
+  `SHOW STATS` / `SUBMIT FORENSIC REPORT` / `DOWNLOAD ALL OF YOUR DATA AS JSON` 等である。
+  これによりスクリーンリーダーの発音と言語宣言が整合する。ボタンの `textContent` と
+  `data-testid` は不変で、E2E は `e2e/tests/integrity.spec.ts` の既存 ARIA テスト内へ
+  `lang="en"` のアサーションを追加するのみ（新規 `test()` なし、E2E69件を維持）。
+- **リリース無ログ**: `client/src/lib.rs` の `EXPORT_RESULT` コンソール出力は
+  `#[cfg(feature = "dev-console")]` でゲートし、`dev-console` を明示した開発ビルド以外では
+  コンソールへ出力しない。エクスポート結果（件数・成功可否）や内部 URL・リクエストデータを
+  リリース wasm のコンソールへ出さない方針であり、詳細設計のメトリクス方針（機微データ非送出）と整合する。
+  あわせてサーバー側の旧プロジェクト名（コメント・起動ログ）を `openIllustration` へ統一し、
+  意味の無いマーカーを削除する。いずれもテスト件数（E2E69件ほか）は不変である。
 
 ## 3. 必須要件のリリースゲート
 
@@ -787,6 +803,22 @@ E2E 定義数は69件のまま変更しない。
 | `test_security_headers_on_no_content_response` | `POST /metrics/client-events` の本文なし 204 |
 | 既存アサーション | 通常 200 のコンテンツ応答 |
 
+### リクエスト相関 ID の検証（OBS-01 / OBS-02）
+
+全レスポンスの `x-request-id` 契約を仕様化する。新規テストは追加せず、既存実装の
+`server/src/tests.rs` 3件を根拠とする。
+
+- ユニーク性: リクエストごとに不同な v4 UUID を生成し、正規形（小文字・ハイフン区切り）で
+  `x-request-id` ヘッダへ格納する。
+- 付与範囲: IP ゲートの 403 などのエラー応答と、CorsLayer が短絡する OPTIONS プリフライト
+  （成功ステータス 200/204）にも付与し、既存のセキュリティヘッダを壊さない。
+- extensions 格納: 生成 ID は `RequestId` として request extensions へ格納する。
+  ヘッダ値の正規ソースは extensions の値で、ハンドラは `Extension<RequestId>` から
+  同じ値を取得できる。アクセスログは task-local の相関 ID を使う。
+- テスト: `test_request_id_header_is_unique_uuid`（3リクエストで v4・正規形・一意）、
+  `test_request_id_header_on_error_and_preflight_responses`（403 / OPTIONS）、
+  `test_request_id_stored_in_request_extensions`（extensions とヘッダ値の一致）。
+
 ### 同時リクエスト上限の検証（NET-04）
 
 - `test_max_concurrent_requests_defaults_and_bounds`: 実装は
@@ -961,7 +993,7 @@ cargo test -p server test_list_contents_null_price_is_returned_as_zero   # CONTE
 cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_status   # EXPORT-11 クライアント側
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done    # シェル構文検査（対象を glob で明示）
-for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016,SC2034 "$f"; done # シェル静的解析（apt_packages で導入）
+for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016 "$f"; done # シェル静的解析（apt_packages で導入）
 shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi   # shfmt -l の出力が非空なら失敗（apt_packages で導入）
 cd e2e && npm test
 cd e2e && npm test -- auth.spec.ts   # 認証 E2E（3件: モックJPKIログイン / 年齢ゲート拒否 / LOG OUT 回帰＋501固定文言・verify 未送信）のみ
@@ -1009,8 +1041,10 @@ E2E 用 JWT シークレットは実行ごとに生成する。型検査
 シェル静的ゲート（`bash -n` / `shellcheck` / `shfmt -l`）も同じ `extra_gates` に追加し、
 対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示する（上記「4. 実行コマンド」参照）。
 `shfmt` は `shfmt -l` の出力が非空（未整形ファイルあり）のとき失敗とし、`bash -n` / `shellcheck` の行は維持する。
-`shellcheck -e SC2016,SC2034` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
+`shellcheck -e SC2016` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
 本リポジトリ側の追加導入は不要とする（本リポジトリに install 手順は置かない）。
+SC2034 はファイル単位の `-e` 対象から外し、nameref を受け取る関数直前に
+`# shellcheck disable=SC2034` を置いて関数単位で除外する（`e2e/ci-e2e.sh`）。
 
 CI では HTML レポート・trace をアップロードしない（追加ゲートの制約）。
 失敗時は追加ゲートのログ（`::error::` アノテーションと error-context）で

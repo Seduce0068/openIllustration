@@ -1,4 +1,4 @@
-// Guild Backend library
+// openIllustration Backend library
 mod export;
 mod jpki;
 mod jwt;
@@ -700,8 +700,6 @@ pub struct Oid4vpRequest {
     pub nonce: String,
     pub presentation_definition_uri: String,
 }
-
-// End of imports
 
 #[derive(Serialize, Deserialize)]
 pub struct VerifyRequest {
@@ -1573,7 +1571,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("Guild Backend listening on {}", addr);
+    tracing::info!("openIllustration Backend listening on {}", addr);
     let drain_timeout_secs = std::env::var("GRACEFUL_DRAIN_TIMEOUT_SECS").ok();
     let drain_timeout = graceful_drain_timeout(drain_timeout_secs.as_deref());
     let server = axum::serve(

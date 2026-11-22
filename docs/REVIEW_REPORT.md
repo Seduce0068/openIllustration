@@ -506,6 +506,8 @@ APPROVE 後の追補（`evaluate_access` 分離、起動ログ改善、文書追
 - レビュー観点: アーキテクチャ、セキュリティ。
 - 結果: **条件付き承認（Proposedのまま）**。Critical 2件、High 9件、
   Mediumの主要項目を反映済み。Accepted への昇格は未承認。
+  （上記は 2026-11-02 当時の記録値。その後 ADR-0002 / ADR-0003 は Accepted へ昇格し、
+  現行状態は [adr/index.md](adr/index.md) を参照。）
 - 検証: ドキュメントのみ。`git diff --check` 成功。
 
 ### 主要な指摘と対応

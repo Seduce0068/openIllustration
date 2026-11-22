@@ -1708,27 +1708,27 @@ pub fn App() -> impl IntoView {
                 <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
-                        <button on:click=move |_| navigate("dashboard", NavigateMode::Push)
+                        <button lang="en" on:click=move |_| navigate("dashboard", NavigateMode::Push)
                             aria-current=move || if view.get() == "dashboard" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-500" })>
                             "BROWSE"
                         </button>
-                        <button on:click=move |_| navigate("upload", NavigateMode::Push)
+                        <button lang="en" on:click=move |_| navigate("upload", NavigateMode::Push)
                             aria-current=move || if view.get() == "upload" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-500" })>
                             "UPLOAD"
                         </button>
-                        <button on:click=move |_| navigate("moderation", NavigateMode::Push)
+                        <button lang="en" on:click=move |_| navigate("moderation", NavigateMode::Push)
                             aria-current=move || if view.get() == "moderation" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-500" })>
                             "MODERATION"
                         </button>
-                        <button on:click=move |_| navigate("ledger", NavigateMode::Push)
+                        <button lang="en" on:click=move |_| navigate("ledger", NavigateMode::Push)
                             aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
                             "LEDGER"
                         </button>
-                        <button type="button" on:click=handle_logout
+                        <button lang="en" type="button" on:click=handle_logout
                             data-testid="logout-button"
                             class="text-gray-500 hover:text-white transition-colors">
                             "LOG OUT"
@@ -1847,7 +1847,7 @@ where
             <Show when=move || MOCK_AUTH_ENABLED>
                 <p data-testid="mock-auth-notice">"開発用モック認証（本番では利用できません）。"</p>
             </Show>
-            <button on:click=do_login disabled=loading
+            <button lang="en" on:click=do_login disabled=loading
                 class="w-full py-4 border border-white hover:bg-white hover:text-black transition-all font-bold uppercase tracking-widest disabled:opacity-50">
                 {move || if loading.get() { "VERIFYING..." } else { "CONNECT WITH JPKI" }}
             </button>
@@ -2068,7 +2068,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             <section data-testid="export-section" class="border border-white/10 p-4 mb-8 flex flex-wrap items-center justify-between gap-4">
                 <div>
                     <h2 class="text-xs font-bold tracking-widest uppercase">"MY DATA"</h2>
-                    <p class="text-[9px] text-gray-500 mt-1">
+                    <p lang="en" class="text-[9px] text-gray-500 mt-1">
                         "DOWNLOAD ALL OF YOUR DATA AS JSON."
                     </p>
                 </div>
@@ -2276,6 +2276,9 @@ fn ExportMyData(token: String) -> impl IntoView {
             }
             .await;
             set_busy.set(false);
+            // リリース wasm は無ログ方針。EXPORT_RESULT の出力は dev-console
+            // feature を明示指定した開発ビルドだけに限定する（詳細設計・メトリクス方針と一致）。
+            #[cfg(feature = "dev-console")]
             web_sys::console::log_1(
                 &format!(
                     "EXPORT_RESULT ok={} value={:?}",
@@ -3694,6 +3697,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
             </section>
             <div data-testid="moderation-stats-optin" class="md:col-span-2 border border-white/10 p-8 space-y-4">
                 <button
+                    lang="en"
                     on:click=move |_| fetch_stats()
                     disabled=move || stats_busy.get()
                     aria-busy=move || if stats_busy.get() { "true" } else { "false" }
@@ -3737,7 +3741,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     on:input=move |ev| set_reason.set(event_target_value(&ev))
                     class="w-full bg-black border border-white/20 p-3 text-sm h-24"
                 />
-                <button on:click=submit_report
+                <button lang="en" on:click=submit_report
                     disabled=move || report_busy.get()
                     aria-busy=move || if report_busy.get() { "true" } else { "false" }
                     class="w-full py-3 border border-white hover:bg-white hover:text-black font-bold text-xs tracking-widest">

@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T14:12:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T14:12:00+09:00"
 status: current
 ---
 
@@ -250,6 +250,9 @@ status: current
 - [対応済み] 開発用モック認証の nonce: `/auth/login` が発行した nonce を `/auth/verify` で必須化し、5分 TTL の単回消費でリプレイを拒否。クライアントも login→verify
   のフローへ更新（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - [中] 開発用モックの VP 署名検証は未実装（本番は OIDC 経路を使用する前提）。
+- [低・要判断] **セッションJWTの iss/aud 要件化（DEC判断待ち）**: セッション JWT へ `iss` / `aud`
+  の発行と検証を要求するかは、実 OP 接続と本番オリジン確定（DEC-01 / DEC-08）後の判断とする。
+  現行は未要件化。
 
 ### 3.2 決済（JPYC）
 
@@ -584,11 +587,17 @@ status: current
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 
 - [対応済み] 旧 `sha256` 便宜 crate を削除し `sha2` + `hex` の `sha256_hex` へ統一。
+- [低・要判断] **`sha3` 0.12 の破壊的更新は保留**: 破壊的変更のため現行版を維持する。
+  再評価は四半期ごとの依存・勧告レビュー時（次回の依存更新サイクル）に行い、
+  ハッシュ出力の互換性とテスト更新の影響範囲を見積もってから判断する（[HANDOFF.md](HANDOFF.md)）。
 
 ### 3.9 将来検討（必要性・方式未決定）
 
 - Arweave、追加ゲートウェイ、Cloudflare Workers/R2、OpenTofu 等の必要性・方式（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
 - Rust優先方針に沿う技術例外記録、性能・軽量性・費用の計測値（[DETAILED_DESIGN.md](DETAILED_DESIGN.md)）。
+- [低・要判断] **全文検索・あいまい一致・スコアリング・タグ正規化**: 現行の LIKE 基点の絞り込みを
+  拡張する候補。必要性・方式・コストは未決定で、現行仕様を維持したまま要件化を判断する
+  （[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
 
 ## 4. テスト・検証ギャップ
 

@@ -55,6 +55,7 @@ assert_major_numeric() {
 # ルール: 明示時は指定を厳守（未知値は拒否）。未指定時は firefox/webkit が
 # 両方実行可能なら3プロジェクト、片方でも不可なら chromium へフォールバック
 # し警告を立てる。
+# shellcheck disable=SC2034
 select_e2e_projects() {
 	local explicit="${1:-}"
 	local firefox_ok="${2:-0}"
@@ -104,6 +105,7 @@ select_e2e_projects() {
 #   $6 = summary markdown 文字列（warn_fallback に関わらず選択プロジェクトを記録）
 # 固定文言は printf の書式リテラルとして持ち、入力はすべて %s で埋め込む。
 # E2E_PROJECTS の生文字列を書式として解釈させず、メッセージへ外部入力を混入させない。
+# shellcheck disable=SC2034
 format_e2e_browser_selection() {
 	local -n in_projects="$1"
 	local firefox_ok="$2"
