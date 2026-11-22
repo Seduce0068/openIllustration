@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T13:50:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -30,7 +30,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
 | GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ8種（全リクエスト数・4xx/5xx 応答数・中立化URL件数・finalizer/purge の ticks/processed/lock_busy/failures/last_success_timestamp）。外部クレートなし。 |
-| POST | `/metrics/client-events` | 不要 | 中立化URL件数を受信。`{"event":"neutralized_url","count":N}`（`event` は固定値、`count` 既定1・範囲1〜1000、`deny_unknown_fields`、本文1 KiB 境界）。成功204・不正400（いずれも本文なし）。IP/User-Agent/URL は送らず記録もせず、レート制限の対象。 |
+| POST | `/metrics/client-events` | 不要 | 中立化URL件数を受信。`{"event":"neutralized_url","count":N}`（`event` は固定値、`count` 既定1・範囲1〜1000、`deny_unknown_fields`、本文1 KiB 境界）。カウンタ加算は N によらず1リクエストにつき1固定。成功204・不正400（いずれも本文なし）。IP/User-Agent/URL は送らず記録もせず、レート制限の対象。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`）、`favorite_only` で本人のお気に入りへ絞り込み |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
 | POST | `/content/:cid/favorite` | Bearer JWT | お気に入り追加。`Claims.sub` のみで識別し、本人の行にだけ作用。重複追加は冪等で200 |
@@ -324,7 +324,7 @@ SHA-256 ハッシュの算出は旧 `sha256` 便宜 crate を廃止し、`server
   この検査は描画境界のクライアントでのみ実施し、サーバーはMarkdownを描画せず原本バイト列を保持する。
 - 中立化件数の計測単位は**描画回数**である。`render_markdown()`（小説カードの `ContentViewer`）が
   1 回描画するごとに、その本文内で置換した危険 URL の件数を数え、1 描画につき 1 回だけ送信する。
-  つまりコンテンツや URL の一意件数ではなく、同じ本文を再描画するたびに件数は再加算され得る。
+  つまりコンテンツや URL の一意件数ではなく、同じ本文を再描画するたびにサーバー側カウンタへ1が再加算され得る。
   再描画（再取得・タブ再表示・一覧の再レンダリング等）でも値はリセットされず累積する。
   このカウンタは参考値であり、アラート判定や請求等の意思決定に単独で使わない
   （[運用ポリシー](OPERATIONAL_POLICY.md) の「5. 運用準備・未整備事項」を参照）。

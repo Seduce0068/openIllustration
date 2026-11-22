@@ -174,16 +174,16 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
   production_config_errorsとpinata_jwt_production_likeが同一比較を再実装している。
 - [x] **instance.lock/resolve_database_url判定をcommonへ集約** — 根拠 `server/src/bin/backup_db.rs:118` / review R1-AR / 中。
   3CLIで約40行ずつ複製されfail-closed判定がdriftし得る。
-- [ ] **session Cookie未使用の露出を解消** — 根拠 `server/src/oidc.rs:1284` / review R3-AU / 中。
+- [x] **session Cookie未使用の露出を解消** — 根拠 `server/src/oidc.rs:1284` / review R3-AU / 中。
   Path=/ SameSite=Laxで全リクエストに送られ logout時も削除されない。
-- [ ] **/metrics/client-eventsのcount改ざん防止** — 根拠 `server/src/lib.rs:429` / review R3-AU / 中。
+- [x] **/metrics/client-eventsのcount改ざん防止** — 根拠 `server/src/lib.rs:429` / review R3-AU / 中。
   匿名でcount=1000まで加算できメトリクスを押し上げられる。
-- [ ] **通報失敗時に進捗文言をクリア** — 根拠 `client/src/lib.rs:3525` / discovery R5-VU / 中。
-- [ ] **小説本文の不正UTF-8をDECODE FAILEDへ** — 根拠 `client/src/lib.rs:2514` / discovery R5-VU / 中。
-- [ ] **/content 401に再ログイン導線を追加** — 根拠 `client/src/lib.rs:2000` / discovery R5-VU / 中。
-- [ ] **公開集計の解析失敗をStatsFailure::Parseへ** — 根拠 `client/src/lib.rs:3414` / discovery R5-VU / 低。
-- [ ] **暗号化バックアップの復元パスを統一** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:155` / discovery R5-VU / 中。
-- [ ] **cron版にオーケストレーション完成例を同梱** — 根拠 `deploy/openillustration-backup.cron:24` / discovery R5-VU / 中。
+- [x] **通報失敗時に進捗文言をクリア** — 根拠 `client/src/lib.rs:3525` / discovery R5-VU / 中。
+- [x] **小説本文の不正UTF-8をDECODE FAILEDへ** — 根拠 `client/src/lib.rs:2514` / discovery R5-VU / 中。
+- [x] **/content 401に再ログイン導線を追加** — 根拠 `client/src/lib.rs:2000` / discovery R5-VU / 中。
+- [x] **公開集計の解析失敗をStatsFailure::Parseへ** — 根拠 `client/src/lib.rs:3414` / discovery R5-VU / 低。
+- [x] **暗号化バックアップの復元パスを統一** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:155` / discovery R5-VU / 中。
+- [x] **cron版にオーケストレーション完成例を同梱** — 根拠 `deploy/openillustration-backup.cron:24` / discovery R5-VU / 中。
 - [ ] **SC2034除外を関数単位へ限定** — 根拠 `.github/workflows/ci.yml:54` / review R4-OPS / 低。
 - [ ] **README/REVIEW_REPORTのADR状態記述を是正** — 根拠 `README.md:26` / `docs/REVIEW_REPORT.md:507` / discovery+review / 低。
 - [ ] **旧プロジェクト名とconsole.logを整理** — 根拠 `server/src/lib.rs:1` / `client/src/lib.rs:2233` / review+discovery / 低。
@@ -719,6 +719,12 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中6件+低2件）: session Cookie発行廃止、metrics count加算1固定、
+  通報失敗時statusクリア、小説不正UTF-8をDECODE FAILED化、/content 401再ログイン導線、
+  公開集計Parse分類、暗号化バックアップ復元パス統一、cron必須步骤明記。
+  親がPrometheus期待値+1とdoc-numbersコメント内test()3箇所を修正。全ゲート green。
+  残り高2（外部要因）・低7。
 
 - 2026-11-22 coding（中優先6件）: リフレッシュ回転を単一tx原子化、OIDC_MAX_AUTH_AGEに30日上限、
   verify_order MISMATCH をCAS検査対象化、doctor FK のUnresolvedフォールバック廃止、

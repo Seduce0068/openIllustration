@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T13:50:00+09:00"
 ---
 
 ## 目的
@@ -266,6 +266,23 @@ cron 版は `backup-cron-wrapper.sh` のみを実行し、`systemctl` の stop/s
 または root crontab でラッパーの前後に stop/start を置く構成）を使う。
 `openillustration` ユーザーへ `systemctl` 実行権限を与える方式は採らない。
 
+**cron 配置の必須条件**: `deploy/openillustration-backup.cron` のジョブ行は
+`backup-cron-wrapper.sh` のみを実行するため、常時稼働環境では生存 `instance.lock` により
+`backup_db` が拒否される。root 側スケジューラで stop→wrapper→start を併設するまで
+ジョブを有効化しないこと。配置後は下記の手動1回実行で成功ログを確認してから有効化する。
+
+```bash
+echo "== cron 配置後の手動1回実行（root 側オーケストレーション併設後） =="
+# cron ジョブ行と同じ環境変数でラッパーを手動実行する
+/usr/bin/runuser -u openillustration -- env \
+  BACKUP_DIR=/var/backups/openillustration \
+  BIN_DIR=/opt/openIllustration/target/release \
+  RETENTION_DAYS=30 MIN_KEEP=3 \
+  DATABASE_URL=file:/var/lib/openillustration/local.db \
+  /opt/openIllustration/scripts/backup-cron-wrapper.sh
+# journald / メールで backup_ok: と backup_verification: OK の成功ログを確認してから有効化
+```
+
 ## バックアップ検証
 
 ```bash
@@ -332,20 +349,31 @@ rm /path/to/backups/openillustration.db-wal
 ## リストア（復旧訓練）
 
 1. 対象サーバーを停止する（SIGTERM）。readiness `/ready` が 503 になることを確認する。
-   暗号化バックアップ（`.db.gpg`）の場合は、先に復号して平文の `.db` を用意する:
-
-```bash
-gpg --decrypt --output /path/to/restored.db /path/to/backups/openillustration-YYYYMMDD-HHMMSS.db.gpg
-cargo run -p server --bin verify_backup -- --input /path/to/restored.db
-```
-
-1. リストアを実行する（WAL / SHM / journal サイドカーが残っている場合、またはバックアップ元・
-   復元先のいずれかに生存 instance lock がある場合は `refusing restore: ...` で拒否される）:
+   暗号化成果物は `<stamp>.db.gpg` である。`.db.gpg` の場合は `gpg --decrypt` で平文へ戻し、
+   復号先をシェル変数 `RESTORED_DB` に統一する。下記 step2 の `restore_db --backup` でも
+   同じ `RESTORED_DB` を指定する。`verify_backup` の成功を復元の前提とし、失敗した場合は
+   step2 へ進まない。下記2ブロックは同一シェルセッションで実行し `RESTORED_DB` を共有する
+   （平文 `.db` を直接復元する場合は `RESTORED_DB` にその `.db` パスを設定し復号を飛ばす）:
 
 ```bash
 # Kubuntu / リポジトリルート
+# 暗号化成果物 <stamp>.db.gpg を復号し、復号先を RESTORED_DB に統一する
+RESTORED_DB=/path/to/restored.db
+gpg --decrypt --output "$RESTORED_DB" \
+  /path/to/backups/openillustration-YYYYMMDD-HHMMSS.db.gpg
+# verify_backup 成功が復元の前提（失敗時は復元しない）
+cargo run -p server --bin verify_backup -- --input "$RESTORED_DB"
+```
+
+1. リストアを実行する。step1 の `verify_backup` 成功を確認したうえで、同じ `RESTORED_DB` を
+   `--backup` に指定する（WAL / SHM / journal サイドカーが残っている場合、またはバックアップ元・
+   復元先のいずれかに生存 instance lock がある場合は `refusing restore: ...` で拒否される）:
+
+```bash
+# Kubuntu / リポジトリルート（step1 と同一シェル）
+# --backup には step1 の verify_backup を通した RESTORED_DB をそのまま使う
 cargo run -p server --bin restore_db -- \
-  --backup /path/to/backups/openillustration-YYYYMMDD-HHMMSS.db \
+  --backup "$RESTORED_DB" \
   --target /path/to/local.db \
   --force
 ```

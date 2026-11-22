@@ -1311,26 +1311,14 @@ pub async fn callback(
     let family_id = Uuid::new_v4().to_string();
     let refresh_token = issue_refresh_token(&state, &user_hash, &family_id).await?;
 
-    let cookie = format!(
-        "session={session_token}; HttpOnly; Path=/; SameSite=Lax; Max-Age={SESSION_TTL_SECS}{}",
-        if oidc.config.cookie_secure {
-            "; Secure"
-        } else {
-            ""
-        }
-    );
-
+    // R2-SESSION-COOKIE: session JWT は応答本文（VerifyResponse.token）のみで搬送し、
+    // session Cookie は発行しない。SET_COOKIE は refresh と state 削除の2本だけ。
     let mut response = Json(VerifyResponse {
         authorized: true,
         user_hash: Some(user_hash),
         token: Some(session_token),
     })
     .into_response();
-    response.headers_mut().insert(
-        header::SET_COOKIE,
-        HeaderValue::from_str(&cookie)
-            .map_err(|_| AppError::Internal("invalid session cookie".to_string()))?,
-    );
     response.headers_mut().append(
         header::SET_COOKIE,
         refresh_cookie(&refresh_token, oidc.config.cookie_secure)?,

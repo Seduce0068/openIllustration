@@ -44,7 +44,17 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
   test('DASH-ERR: GET /content が network error のときダッシュボードにエラー表示が出ること', async ({ page }) => {
     let contentAborted = false;
+    // 同じケース内で network error → 401 へ切り替える（再ログイン導線の回帰）。
+    let unauthorized = false;
     await page.route('**/content', async route => {
+      if (unauthorized) {
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+        });
+        return;
+      }
       contentAborted = true;
       await route.abort();
     });
@@ -58,6 +68,18 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await expect(dashboardError).toHaveText('Network error loading content.', { timeout: 10000 });
     await expect(dashboardError).toHaveAttribute('role', 'alert');
     expect(contentAborted).toBe(true);
+
+    // 追加フェーズ: 401 のときだけ専用文言と LOG OUT 経由の再ログイン案内を出す。
+    // 他エラーの固定文言（CONTENT_INDEX_LOAD_ERROR / CONTENT_INDEX_NETWORK_ERROR）は不変。
+    unauthorized = true;
+    await loginWithMockAuth(page);
+    await expect(dashboardError).toBeVisible({ timeout: 10000 });
+    await expect(dashboardError).toHaveText('再ログインが必要です。', { timeout: 10000 });
+    await expect(dashboardError).toHaveAttribute('role', 'alert');
+    await expect(page.getByTestId('dashboard-relogin-hint')).toContainText('LOG OUT');
+    await expect(page.getByTestId('logout-button')).toBeVisible();
+    await expect(dashboardError).not.toHaveText('Network error loading content.');
+    await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
   });
 
   test('R5-04: GET /me/export が network error のとき role=alert にネットワークエラー文言が出ること', async ({ page }) => {

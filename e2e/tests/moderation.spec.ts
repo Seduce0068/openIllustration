@@ -334,6 +334,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     // 同じテスト内で 200 → 403 を切り替える（ボタン押下でプローブさせる）。
     let forbidStats = false;
+    // 公開集計も同じケース内で 200 → 不正 JSON へ切り替える（Parse 分類の回帰）。
+    let brokenPublicStats = false;
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
     // ADR-0008 段階2: 初期表示と再マウントで送られる公開集計のリクエストを記録する。
     const publicStatsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
@@ -358,6 +360,19 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         path: new URL(route.request().url()).pathname,
         authorization: route.request().headers()['authorization'],
       });
+      if (brokenPublicStats) {
+        // totals を文字列にして PublicModerationStats の deserialization を失敗させる。
+        // センチネルは生エラーに含まれ得る値で、画面へ出ないことを検証する。
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            generated_at: publicStatsFixture.generated_at,
+            totals: 'RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW',
+          }),
+        });
+        return;
+      }
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -451,6 +466,22 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('public-mod-stats')).toContainText('GENERATED_AT: 2026-11-18T00:00:00Z', { timeout: 10000 });
     // 公開集計はマウントごとに 1 本増える（初期表示 1 本 + 再マウント 1 本 = 2 本）。
     expect(publicStatsRequests).toHaveLength(2);
+
+    // フェーズ4: 公開集計が不正 JSON のときも運用者向け /mod/stats と同じ Parse 分類の
+    // 固定文言を出し、serde の生エラー（センチネル）は出さない。既存ケース内で完結する。
+    brokenPublicStats = true;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    const publicStatsError = page.getByTestId('public-mod-stats-error');
+    await expect(publicStatsError).toBeVisible({ timeout: 10000 });
+    await expect(publicStatsError).toHaveAttribute('role', 'alert');
+    await expect(publicStatsError).toHaveText(statsParseErrorText);
+    await expect(publicStatsError).not.toContainText('RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW');
+    await expect(page.getByTestId('public-mod-stats-content')).toHaveCount(0);
+    await expect(page.getByTestId('public-mod-stats')).not.toContainText('GENERATED_AT: 2026-11-18T00:00:00Z');
+    // オプイン押下はしていないので /mod/stats は増えず、公開集計だけ3本目が送られる。
+    expect(statsRequests).toHaveLength(2);
+    expect(publicStatsRequests).toHaveLength(3);
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
     // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。
@@ -738,6 +769,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 失敗は dedicated role="alert"、成功・進捗は status のまま。
     await expect(reportFailed).toHaveAttribute('role', 'alert');
     await expect(reportFailed).toHaveText(reportFailedText, { timeout: 10000 });
+    // 失敗時は role="status" の送信中進捗（通報を送信中...）を消し、do_vote と完了処理を揃える。
+    // 失敗告知は report-failed の role="alert" に残る。
+    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
+    await expect(reportStatus).toHaveCount(0, { timeout: 10000 });
+    await expect(page.locator('body')).not.toContainText('通報を送信中...');
     // 成功文言とサーバー本文は出ない。
     await expect(reportFailed).not.toContainText(reportSuccessText);
     await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
@@ -765,6 +801,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // abort でも HTTP 500 と同じ固定文言（submit_report の else アーム）。
     await expect(reportFailed).toHaveAttribute('role', 'alert');
     await expect(reportFailed).toHaveText(reportFailedText, { timeout: 10000 });
+    // ネットワーク失敗でも role="status" は空になり、送信中進捗は残らない。
+    const reportStatus = page.locator('p[role="status"]:not([data-testid])');
+    await expect(reportStatus).toHaveCount(0, { timeout: 10000 });
+    await expect(page.locator('body')).not.toContainText('通報を送信中...');
     await expect(reportFailed).not.toContainText(reportSuccessText);
     // 生のネットワークエラー文字列は画面へ出さない。
     for (const raw of ['Failed to fetch', 'net::ERR_FAILED', 'AbortError']) {

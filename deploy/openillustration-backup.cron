@@ -32,4 +32,9 @@ MAILTO=__SET_ME__
 #   （BACKUP_DIR 等は backup.env 側へ集約して渡す。start は backup 成否にかかわらず実行する。）
 # MAILTO は wrapper の失敗通知先。アプリ再起動失敗は root 側スケジューラの
 # journald / unit 結果をアラート対象にして検知する。
+# 【配置手順の必須ステップ】このファイル単体のジョブ行は backup-cron-wrapper.sh のみを
+# 実行するため、常時稼働環境では生存 instance.lock により backup_db が拒否される。
+# root 側スケジューラで stop→wrapper→start を併設するまで有効化しないこと。
+# 配置後はラッパーを手動で1回実行し、backup_ok: / backup_verification: OK の成功ログを
+# 確認してから有効化する（Runbook「自動オーケストレーション」を参照）。
 17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh

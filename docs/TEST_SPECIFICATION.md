@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T13:50:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T13:50:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -603,6 +603,15 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 published rollback の5ケースを追加した。実 `repo_root` を壊さないため
 スクリプトと `LICENSE` は work 配下のコピーで実行する。
 
+**Runbook 手動手順の注記（数値不変）**: 暗号化バックアップ（`<stamp>.db.gpg`）の復元は
+[BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) の「リストア（復旧訓練）」に従い、
+`gpg --decrypt` の復号先を `RESTORED_DB` に統一し、`verify_backup` 成功を前提として
+`restore_db --backup "$RESTORED_DB"` を実行する。cron 版は
+`deploy/openillustration-backup.cron` のジョブ行が `backup-cron-wrapper.sh` のみを実行するため、
+常時稼働環境では `instance.lock` で拒否される。root 側スケジューラで
+stop→wrapper→start を併設してから有効化し、配置後に手動1回実行して成功ログを確認する。
+本節の各 bin テスト数は変更しない。
+
 ### レート制限キーの検証（NET-03）
 
 `server/src/tests.rs` の3テストで、解決済みクライアント IP の優先とピア IP への
@@ -1133,6 +1142,16 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    client の baseURL（8080）ではなく絶対 URL のポート 3000 を明示する。
    未認証拒否（`AuthClaims` 必須）を E2E でも担保する。
 
+8. 公開集計の解析失敗（既存1件目の追加フェーズ）: `**/mod/stats/public` を200のまま
+   `totals` が文字列の不正 JSONへ差し替え、BROWSE → MODERATION で再マウントする。
+   `data-testid="public-mod-stats-error"`（`role="alert"`）に固定文言
+   `集計の解析に失敗しました。`（`statsParseErrorText`）を表示し、
+   `public-mod-stats-content` と `GENERATED_AT` は出ない。センチネル
+   `RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW` も出さない。公開集計の解析失敗は
+   `StatsFailure::Fetch` ではなく `StatsFailure::Parse` へ分類し、運用者向け
+   `/mod/stats` と統一する。オプイン押下がないため `/mod/stats` は2本のまま、
+   公開集計は3本目が送られる。moderation14件・全体69件は不変である。
+
 ### E2E 投票フィードバックシナリオ（VOTE-FB-01〜03）
 
 `e2e/tests/moderation.spec.ts` の `Moderation & Governance (GOV-01, GOV-02)` に追加した
@@ -1293,6 +1312,13 @@ MODERATION 画面を開いた直後の初回フェッチを差し替える。
    文言・testid は `client/src/lib.rs` の `content_load_error_message` /
    `verification_badge_text` の確定値を grep して使用する（推測しない）。
 
+DASH-ERR の既存 test() 内へ 401 の追加フェーズを統合した。`/content` が401のときだけ
+`dashboard-error` に専用文言 `再ログインが必要です。` を出し、`dashboard-relogin-hint` で
+既存の `LOG OUT` ボタン（`logout-button`）からの再ログインを案内する。
+network error の `Network error loading content.`（`CONTENT_INDEX_NETWORK_ERROR`）と、
+500 等の `Failed to load content index.`（`CONTENT_INDEX_LOAD_ERROR`）は変更しない。
+401 のレスポンス本文センチネルは画面へ出さない。error-paths の6件・全体69件は不変である。
+
 ### E2E 完全性検証シナリオ（INT-01 / R1-13）
 
 `e2e/tests/integrity.spec.ts` の `Forensic Integrity Verification (INT-01)` は、モック認証
@@ -1331,6 +1357,15 @@ CLOSE ボタンのフォーカス復帰）の4件を追加した。
 error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため、ここでは重複して数えない。
 この分岐はチェックサム不一致（`× COMPROMISED`）・デコード失敗（`× DECODE FAILED`）と排他である。
 
+正規ケースの既存 test() 内へ、チェックサム一致だが UTF-8 として不正なバイト列
+（`0xff, 0xfe, 0xfd`）を返す追加フェーズを統合した。クライアントは
+`String::from_utf8_lossy` を `String::from_utf8` へ変更し、失敗時に lossy 置換で成功扱いしない。
+失敗時は JXL デコード失敗と同じバッジ契約（`× DECODE FAILED`）を保ちつつ、小説本文専用の
+`role="alert"`（`data-testid="novel-decode-error"` / `Novel Decode Failed`）と詳細
+（`novel-decode-error-detail` / `小説本文の UTF-8 デコードに失敗しました。`）を表示する。
+`● VERIFIED` と `Integrity Breach Detected` は出ない。entry_hash と検証バッジの正規経路は不変で、
+integrity の6件・全体69件も変更しない。
+
 ### E2E 通報送信失敗シナリオ（REPORT-ERR-01 / 02）
 
 `e2e/tests/moderation.spec.ts` の REPORT-ERR-01（HTTP 500）/ 02（`route.abort()`）は、
@@ -1340,6 +1375,12 @@ error-paths.spec.ts の CONTENT-ERR-404 / CONTENT-ERR-500 で検証するため�
 成功文言 `Report accepted. Content marked Reported.` と進捗 `通報を送信中...` は
 既存どおり `role="status"` に描画する。新しい試行と送信開始時に失敗表示をクリアする。
 いずれも既存 test() 内へアサーションを追加するだけで、E2E 定義数69件は不変である。
+
+HTTP 失敗・ネットワーク失敗の双方で、失敗アームが `set_status.set(String::new())` を呼び、
+送信開始時に出した `通報を送信中...` を `p[role="status"]` から消す（do_vote の完了処理と揃える）。
+REPORT-ERR-01 / 02 の既存 test() 内で、`p[role="status"]:not([data-testid])` が0件になり
+body に進捗文言が残らないことを検証する。失敗告知は `report-failed` の `role="alert"` に残り、
+固定文言 `Report failed.` は変更しない。
 
 ### E2E Upload シナリオ（R1-14 / INT-02 / CONTENT-01）
 
@@ -1404,7 +1445,8 @@ HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータ
 クライアント送信とサーバー側の集計を分離して検証する。
 
 このカウンタは参考値であり、アラート判定や請求等の意思決定に単独で使わない。
-`POST /metrics/client-events` は認証不要のため `count=1000` の連投でカウンタを汚染でき、
+`POST /metrics/client-events` は認証不要だが、加算は1リクエストにつき1固定であり、
+`count=1000` の連投による増幅は60/分/IPのレート制限へ低減される。
 累積値を不正検知や課金の根拠として扱うアサーションは設けない。
 検証は差分加算・ペイロードの非機微性・レート制限の適用に限定し、
 判断には認証済みデータやサーバー側の独立した記録を突き合わせる。
@@ -1415,9 +1457,9 @@ HTTP その他=`Failed to upload content (HTTP {status}).`、None（ステータ
 テスト名は実装側と連携して確定した次の値を使う。
 
 - `test_metrics_expose_prometheus_counters`: 既存テストを拡張し、新カウンタが HELP/TYPE 行付きで
-  Prometheus 形式に現れ、POST 前後の差分が送信 count と一致することを確認する。
+  Prometheus 形式に現れ、POST 前後の差分が1増えることを確認する。
 - `test_client_events_neutralized_url_increments_counter`: 正常系（count 指定・省略）で 204
-  （本文なし）を返し、カウンタが `count` だけ増えることを確認する。
+  （本文なし）を返し、カウンタが1リクエストにつき1だけ増えることを確認する。
 - `test_client_events_rejects_invalid_payloads`: 不正 event、count（0 / 1001 / 負 / 小数 /
   文字列）、不正 JSON を 400 で拒否し、カウンタが増えないことを確認する。
 - `test_client_events_rejects_oversized_body`: 1 KiB 超のボディを 400 で拒否し、
@@ -1439,7 +1481,7 @@ last_success_timestamp）について、公開形式と実際の進捗を下記�
   `finalizer_ticks` と `finalizer_processed` が 1 以上、`finalizer_last_success_secs` が 0 より
   大きくなることをオラクルとする。
 - `test_client_events_neutralized_url_increments_counter`: `count` 指定7・省略時1・上限1000で
-  204（本文なし）を返し、カウンタの差分が +7 / +1 / +1000 になることをオラクルとする。
+  204（本文なし）を返し、加算は1固定でカウンタが before+1 / +2 / +3 と進むことをオラクルとする。
 - `test_client_events_rejects_invalid_payloads`: 不正 event（固定値以外）・`count` の 0 / 1001 /
   負 / 小数 / 文字列 / null・未知キー（`url` / `ip` / `user_agent`）・不正 JSON を本文なしの400で
   拒否し、カウンタが増えないことをオラクルとする（`deny_unknown_fields`）。

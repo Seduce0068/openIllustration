@@ -462,10 +462,11 @@ pub async fn client_events(
     if payload.event != "neutralized_url" || !(1..=1000).contains(&payload.count) {
         return StatusCode::BAD_REQUEST.into_response();
     }
-    state.metrics.neutralized_urls.fetch_add(
-        u64::from(payload.count),
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    // count は互換のため1..=1000を受け入れるが、加算は1リクエストにつき1。
+    state
+        .metrics
+        .neutralized_urls
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     StatusCode::NO_CONTENT.into_response()
 }
 

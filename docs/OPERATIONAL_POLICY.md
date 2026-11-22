@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T12:32:00+09:00"
+  at: "2026-11-22T13:50:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -52,6 +52,7 @@ generated:
   DB 側のファミリ失効だけではブラウザに 30 日間有効な refresh_token Cookie が残るため、
   削除 Cookie の配信がログアウト完了の条件。`Secure` は `OIDC_COOKIE_SECURE` に追随し、
   未設定なら付与する（本番では HTTPS 配信で Secure を維持する）。
+  session Cookie は発行しないため削除対象に含まない。JWT は応答本文のみで搬送する。
 - 失効判定（`sid` と sub 失効閾値）は DB を正本とし、認証リクエストごとに DB へ照会するため、
   他インスタンスで記録された logout / BAN / backchannel logout が即時に反映される。
   起動時ロードのメモリは positive-only 失効キャッシュ（失効済みエントリのみ保持、
@@ -217,6 +218,12 @@ generated:
   ユーザーへ `systemctl` 権限を与えない）。窓の前後で `/ready` 503 → `/health` / `/ready` 200
   を確認し、再起動失敗は unit 結果をアラート対象にする。`scripts/backup-rotate.sh` 単体は
   サーバーを停止しないため、オーケストレーション無しの稼働中実行は拒否されて失敗する。
+  暗号化成果物は `<stamp>.db.gpg` で、復元時は `gpg --decrypt` の復号先を `RESTORED_DB` に
+  統一する。`verify_backup --input "$RESTORED_DB"` の成功を前提に、
+  `restore_db --backup "$RESTORED_DB"` を実行する（Runbook「リストア（復旧訓練）」参照）。
+  `deploy/openillustration-backup.cron` のジョブ行は `backup-cron-wrapper.sh` のみを実行し、
+  常時稼働環境では `instance.lock` で拒否されるため、root 側スケジューラで
+  stop→wrapper→start を併設するまで有効化しない。配置後は手動1回実行して成功ログを確認する。
   詳細は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
 - 定期実行スケジューラは systemd timer＋window unit
   （`deploy/openillustration-backup.timer` ＋ `deploy/openillustration-backup-window.service`）
@@ -300,9 +307,10 @@ generated:
   サーバーも受信・記録・ログ出力しない（監視用の `/metrics` とは異なり、IP ゲートと
   既存レート制限の適用対象）。
   `GET /metrics` は `openillustration_neutralized_urls_total`（Prometheus counter、
-  送信された count の累積値）を公開する。カウンタはプロセス内で再起動時にゼロへ戻る。
+  受け付けたイベント数の累積値）を公開する。カウンタはプロセス内で再起動時にゼロへ戻る。
   このカウンタは参考値であり、アラート判定や請求等の意思決定に単独で使わない。
-  エンドポイントは認証不要のため `count=1000` の連投で指標を容易に汚染でき、
+  エンドポイントは認証不要だが、加算は1リクエストにつき1固定であり、
+   `count=1000` の連投による増幅は60/分/IPのレート制限へ低減される。
   累積値は実際の被害や不正の規模を保証しない。判断には認証済みデータや
   サーバー側の独立した記録を突き合わせる。
 - クライアント側メトリクス送信の無効化: ビルド時に `OIL_CLIENT_METRICS=0` を指定すると
@@ -310,7 +318,7 @@ generated:
   有効時のペイロードは `event`（固定値 `neutralized_url`）と `count`（1〜1000 の整数）のみで、
   URL 本文・IP アドレス・User-Agent・認証情報は含めず、サーバーも受信・記録・ログ出力しない。
   送信を止めても `GET /metrics` の `openillustration_neutralized_urls_total` は
-  それまでに送信された count の累積値として残る。
+  それまでに受け付けたイベント数の累積値として残る。
 - finalizer／purge の観測: `GET /metrics` は `openillustration_finalizer_ticks_total`（周期 tick の実行回数）、
   `openillustration_finalizer_processed_total`（finalizer と周期 purge の処理件数）、
   `openillustration_finalizer_lock_busy_total`（書き込みロック取得失敗でスキップした回数）、
@@ -378,7 +386,7 @@ generated:
 | `OIDC_JWKS_URI` | 任意 | 未設定 | JWK Set の URL。 |
 | `OIDC_HTTP_TIMEOUT_SECS` | 任意 | `10` | OIDC の token/JWKS 取得のタイムアウト（秒、1〜60）。範囲外は既定へフォールバック。 |
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
-| `OIDC_COOKIE_SECURE` | 任意 | 有効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`0`/`false` で session / refresh / OIDC state Cookie の `Secure` を外す（開発時のみ）。受理値外は起動拒否、`doctor` の `oidc_cookie_secure` カテゴリで警告し、Secure は外さない。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
+| `OIDC_COOKIE_SECURE` | 任意 | 有効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`0`/`false` で refresh / OIDC state Cookie の `Secure` を外す（開発時のみ）。受理値外は起動拒否、`doctor` の `oidc_cookie_secure` カテゴリで警告し、Secure は外さない。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
 | `PINATA_JWT` | 本番では必須 | `mock_jwt`（模擬、開発用） | IPFSピン用トークン。本番相当（`ALLOW_MOCK_AUTH` 無効）では実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。非 UTF-8 は `common::env` 分類器が `EnvValue::NonUtf8` として区別し、`run()` と `doctor` が同じ固定文言 `PINATA_JWT is empty` を返す（生バイトはエコーしない）。`doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |

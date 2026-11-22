@@ -8041,16 +8041,38 @@ async fn test_oidc_start_and_callback() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let cookie = response
+    // R2-SESSION-COOKIE: session Cookie は発行されず、SET_COOKIE は refresh と
+    // state 削除の2本だけ。prefix で選んで属性を検証する。
+    let cookies: Vec<String> = response
         .headers()
-        .get(header::SET_COOKIE)
-        .expect("session cookie")
-        .to_str()
-        .unwrap()
-        .to_string();
-    assert!(cookie.contains("HttpOnly"));
-    assert!(cookie.contains("SameSite=Lax"));
-    assert!(cookie.contains("session="));
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        cookies.len(),
+        2,
+        "callback must set exactly refresh + state deletion cookies: {cookies:?}"
+    );
+    let refresh = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("refresh_token="))
+        .expect("callback must set a refresh_token cookie");
+    assert!(refresh.contains("HttpOnly"), "{refresh}");
+    assert!(refresh.contains("SameSite=Strict"), "{refresh}");
+    assert!(refresh.contains("Path=/auth"), "{refresh}");
+    let state_deletion = cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("oidc_state=;"))
+        .expect("callback must clear the oidc_state cookie");
+    assert!(state_deletion.contains("HttpOnly"), "{state_deletion}");
+    assert!(state_deletion.contains("SameSite=Lax"), "{state_deletion}");
+    assert!(state_deletion.contains("Max-Age=0"), "{state_deletion}");
+    assert!(
+        cookies.iter().all(|cookie| !cookie.starts_with("session=")),
+        "session cookie must not be issued: {cookies:?}"
+    );
 
     let body: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 4096).await.unwrap()).unwrap();
@@ -9280,6 +9302,11 @@ async fn test_logout_clears_refresh_cookie() {
     assert!(
         !deletion.contains(SENT_REFRESH),
         "the presented token must not be echoed: {deletion}"
+    );
+    // R2-SESSION-COOKIE: session Cookie は発行されないため logout の削除対象に含まない。
+    assert!(
+        cookies.iter().all(|cookie| !cookie.starts_with("session=")),
+        "logout must not set a session cookie: {cookies:?}"
     );
 
     let body = to_bytes(response.into_body(), 64).await.unwrap();
@@ -14256,7 +14283,7 @@ async fn test_metrics_expose_prometheus_counters() {
         .unwrap();
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 
-    // クライアントイベントを送り、専用カウンタが count だけ進むことを確認する。
+    // クライアントイベントを送り、専用カウンタが1リクエストにつき1だけ進むことを確認する。
     let event = app
         .clone()
         .oneshot(client_event_request(Body::from(
@@ -14293,8 +14320,8 @@ async fn test_metrics_expose_prometheus_counters() {
     );
     assert_eq!(
         neutralized_after,
-        neutralized_before + 3,
-        "neutralized URL counter must advance by exactly the reported count"
+        neutralized_before + 1,
+        "neutralized URL counter must advance by one per accepted event"
     );
 }
 
@@ -14538,7 +14565,8 @@ async fn test_client_events_neutralized_url_increments_counter() {
         to_bytes(response.into_body(), 16).await.unwrap().is_empty(),
         "204 response must have no body"
     );
-    assert_eq!(read_neutralized_metric(&app).await, before + 7);
+    // count の値にかかわらず、1 リクエストにつきカウンタは 1 だけ進む。
+    assert_eq!(read_neutralized_metric(&app).await, before + 1);
 
     // count 省略時は 1。
     let response = app
@@ -14549,7 +14577,7 @@ async fn test_client_events_neutralized_url_increments_counter() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert_eq!(read_neutralized_metric(&app).await, before + 8);
+    assert_eq!(read_neutralized_metric(&app).await, before + 2);
 
     // 上限 1000 も受け付ける。
     let response = app
@@ -14560,7 +14588,20 @@ async fn test_client_events_neutralized_url_increments_counter() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert_eq!(read_neutralized_metric(&app).await, before + 1008);
+    assert_eq!(read_neutralized_metric(&app).await, before + 3);
+
+    // 加算は 1 固定: 同じリクエストを N 回送れば before + 3 + N になる。
+    for n in 1..=3u64 {
+        let response = app
+            .clone()
+            .oneshot(client_event_request(Body::from(
+                r#"{"event":"neutralized_url","count":1000}"#,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(read_neutralized_metric(&app).await, before + 3 + n);
+    }
 }
 
 /// 異常系: 不正な event / count / JSON は 400 で、カウンタを一切動かさない。

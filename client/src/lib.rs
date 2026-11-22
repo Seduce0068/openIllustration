@@ -150,6 +150,8 @@ const EXPORT_PARSE_ERROR: &str = "エクスポート結果の解析に失敗し�
 /// レスポンス本文や生エラーは機微情報を含み得るため画面へ出さない。
 const CONTENT_INDEX_LOAD_ERROR: &str = "Failed to load content index.";
 const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
+/// `/content` が 401 のときだけ出す再ログイン案内。他のエラー文言は変更しない。
+const CONTENT_INDEX_UNAUTHORIZED: &str = "再ログインが必要です。";
 
 /// 本番認証が未実装であることを示す固定文言。
 /// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
@@ -2029,6 +2031,12 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                             }
                         }
                     },
+                    // 401 だけは再ログイン案内へ切り替える。500 等は従来の LOAD_ERROR を維持する。
+                    Ok(res) if res.status() == 401 => {
+                        if should_apply_response(generation_cell.get(), response_generation) {
+                            set_error.set(CONTENT_INDEX_UNAUTHORIZED.to_string());
+                        }
+                    }
                     Ok(_) => {
                         if should_apply_response(generation_cell.get(), response_generation) {
                             set_error.set(CONTENT_INDEX_LOAD_ERROR.to_string());
@@ -2165,6 +2173,12 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             <Show when=move || !error.get().is_empty() fallback=|| ()>
                 <p role="alert" data-testid="dashboard-error" class="text-xs text-red-500 mb-4">
                     {move || error.get()}
+                </p>
+            </Show>
+            // 401 のときだけ、既存の LOG OUT ボタンからの再ログインを案内する。
+            <Show when=move || error.get() == CONTENT_INDEX_UNAUTHORIZED fallback=|| ()>
+                <p data-testid="dashboard-relogin-hint" class="text-xs text-gray-400 mb-4">
+                    "LOG OUT からログアウトし、再度 JPKI でログインしてください。"
                 </p>
             </Show>
             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 mt-8">
@@ -2374,6 +2388,9 @@ where
     let (verified, set_verified) = signal(None::<bool>);
     // チェックサムは正常だが JXL のデコードに失敗した場合を改ざん検知と区別する。
     let (decode_error, set_decode_error) = signal(false);
+    // 小説本文が UTF-8 として読めない場合もデコード失敗として扱い、JXL と同じ
+    // バッジ契約（× DECODE FAILED）を維持する。entry_hash と正規経路は不変。
+    let (novel_decode_error, set_novel_decode_error) = signal(false);
     // HTTP エラー／バイナリ読取失敗は改ざん検知ではなく取得失敗として扱う。
     let (content_load_error, set_content_load_error) = signal(String::new());
     let (novel_html, set_novel_html) = signal(String::new());
@@ -2527,6 +2544,7 @@ where
         spawn_local(async move {
             // 再取得や cid 切り替えで前回の失敗表示が残らないようにする。
             set_decode_error.set(false);
+            set_novel_decode_error.set(false);
             set_content_load_error.set(String::new());
             let url = format!("{}/content/{}", API_BASE, url_encode(&cid));
             let res = api_fetch(
@@ -2566,11 +2584,23 @@ where
                                     set_verified.set(Some(false));
                                 }
                             } else {
-                                let text = String::from_utf8_lossy(&bytes).to_string();
-                                // 本文と TOC は同じテキスト・同じ cid 由来 prefix から生成し、
-                                // カード間でアンカーが衝突しないようにする。
-                                set_novel_toc.set(render_toc_with_prefix(&text, &heading_prefix));
-                                set_novel_html.set(render_markdown_scoped(&text, &heading_prefix));
+                                // 不正 UTF-8 を lossy に置換して成功扱いにせず、JXL デコード失敗と
+                                // 同じ dedicated エラー representation へ切り替える。
+                                match String::from_utf8(bytes) {
+                                    Ok(text) => {
+                                        // 本文と TOC は同じテキスト・同じ cid 由来 prefix から生成し、
+                                        // カード間でアンカーが衝突しないようにする。
+                                        set_novel_toc
+                                            .set(render_toc_with_prefix(&text, &heading_prefix));
+                                        set_novel_html
+                                            .set(render_markdown_scoped(&text, &heading_prefix));
+                                    }
+                                    Err(_) => {
+                                        // 生バイトやデコーダの詳細は出さず固定文言のみを表示する。
+                                        set_novel_decode_error.set(true);
+                                        set_verified.set(Some(false));
+                                    }
+                                }
                             }
                         } else if is_ok && ct == "Illustration" {
                             // チェックサムが一致しても空バイトでは JXL をデコードできない。
@@ -2708,7 +2738,16 @@ where
                                     "JXL のデコードに失敗しました。"
                                 </p>
                             </Show>
-                            <Show when=move || content_load_error.get().is_empty() && !decode_error.get() fallback=|| ()>
+                            // 小説本文の UTF-8 失敗は JXL とは別の dedicated role=alert で告知する。
+                            <Show when=move || content_load_error.get().is_empty() && novel_decode_error.get() fallback=|| ()>
+                                <p role="alert" data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                    "Novel Decode Failed"
+                                </p>
+                                <p data-testid="novel-decode-error-detail" class="text-gray-500 text-[8px]">
+                                    "小説本文の UTF-8 デコードに失敗しました。"
+                                </p>
+                            </Show>
+                            <Show when=move || content_load_error.get().is_empty() && !decode_error.get() && !novel_decode_error.get() fallback=|| ()>
                                 <p class="text-red-500 font-bold text-[10px] mb-2 uppercase">"Integrity Breach Detected"</p>
                                 <p class="text-gray-500 text-[8px]">"Wasm checksum does not match forensic registry."</p>
                             </Show>
@@ -2776,7 +2815,7 @@ where
                     }>
                         {move || verification_badge_text(
                             verified.get(),
-                            decode_error.get(),
+                            decode_error.get() || novel_decode_error.get(),
                             !content_load_error.get().is_empty(),
                         )}
                     </span>
@@ -3445,11 +3484,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         }
                         Err(_) => {
                             // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず、
-                            // 取得失敗と同じ固定文言のみを表示する。
+                            // 運用者向け /mod/stats と同じ Parse 分類の固定文言を表示する。
                             set_public_stats_html.set(String::new());
                             set_public_stats_loaded.set(false);
                             set_public_stats_error
-                                .set(stats_error_message(StatsFailure::Fetch).to_string());
+                                .set(stats_error_message(StatsFailure::Parse).to_string());
                         }
                     }
                 }
@@ -3580,7 +3619,10 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     fetch_reports();
                 }
                 _ => {
+                    // 失敗時は送信中ステータスを消し、do_vote と完了処理を揃える。
+                    // role="alert" の "Report failed." 固定文言は変更しない。
                     set_report_failed.set("Report failed.".to_string());
+                    set_status.set(String::new());
                 }
             }
         });

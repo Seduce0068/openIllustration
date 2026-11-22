@@ -13,6 +13,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
   test('should verify genuine content successfully', async ({ page }) => {
     const hash = computeHash(ORIGINAL_CONTENT);
+    // 追加フェーズ用: チェックサムは一致するが UTF-8 として不正なバイト列。
+    const invalidUtf8Bytes = Buffer.from([0xff, 0xfe, 0xfd]);
+    const invalidUtf8Hash = crypto.createHash('sha256').update(invalidUtf8Bytes).digest('hex');
+    let invalidUtf8Phase = false;
 
     // 1. コンテンツインデックスのモック (ログイン前に登録)
     await page.route('**/content', async route => {
@@ -21,7 +25,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
         contentType: 'application/json',
         body: JSON.stringify([{
           cid: MOCK_CID,
-          checksum: hash,
+          checksum: invalidUtf8Phase ? invalidUtf8Hash : hash,
           type: 'Novel',
           status: 'Approved',
           price: 0,
@@ -36,14 +40,15 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     // 2. コンテンツ実体のモック
     await page.route(`**/content/${MOCK_CID}`, async route => {
+      const checksum = invalidUtf8Phase ? invalidUtf8Hash : hash;
       await route.fulfill({
         status: 200,
         contentType: 'text/markdown',
         headers: {
-          'x-forensic-checksum': hash,
+          'x-forensic-checksum': checksum,
           'content-type': 'text/markdown'
         },
-        body: ORIGINAL_CONTENT
+        body: invalidUtf8Phase ? invalidUtf8Bytes : ORIGINAL_CONTENT
       });
     });
 
@@ -77,6 +82,26 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       'aria-label',
       `無題のイラスト (${MOCK_CID.slice(0, 8)})`,
     );
+
+    // 追加フェーズ: 同じ正規ケース内で、チェックサム一致だが UTF-8 として不正な本文へ差し替える。
+    // String::from_utf8 の失敗は lossy 置換せず、JXL デコード失敗と同じ dedicated 表示になる。
+    invalidUtf8Phase = true;
+    await page.reload();
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+
+    await expect(page.getByTestId('novel-decode-error-detail')).toBeVisible({ timeout: 30000 });
+    await expect(page.getByTestId('content-verification-error')).toBeVisible();
+    await expect(page.locator('[data-testid="novel-decode-error"][role="alert"]')).toBeVisible();
+    await expect(page.getByTestId('novel-decode-error')).toHaveText('Novel Decode Failed');
+    await expect(page.getByTestId('novel-decode-error-detail')).toHaveText('小説本文の UTF-8 デコードに失敗しました。');
+    await expect(page.getByTestId('content-verification-badge')).toHaveText('× DECODE FAILED', { timeout: 10000 });
+    // VERIFIED・改ざん検知文言は出ない（デコード成功時のみ VERIFIED に戻る）。
+    await expect
+      .poll(() => page.locator('span', { hasText: '● VERIFIED' }).count(), { timeout: 5000 })
+      .toBe(0);
+    await expect
+      .poll(() => page.getByText('Integrity Breach Detected').count(), { timeout: 5000 })
+      .toBe(0);
   });
 
   test('should detect and block tampered content', async ({ page }) => {
