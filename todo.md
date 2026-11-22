@@ -37,6 +37,34 @@ status: current
 
 ### 優先度: 高
 
+- [x] **LOG OUTのrefresh Cookie失効を修正** — 2026-11-22 実装済み（`credentials: Include`）。E2Eはlocalhost/127.0.0.1別ホストのためCookie送信は未検証、同一サイト構成で検証可能な旨を記録。
+- [ ] **未適用マイグレーションのカーソルを閉じてからBEGIN** — 根拠 `server/src/migration.rs:283` / review R2-ER / high。
+- [ ] **auth_verify失効閾値削除をDB正本先行へ** — 根拠 `server/src/lib.rs:2936` / review R2-ER / high。
+ メモリ先行だとDB失敗時に再起動前後で判定が分岐する。
+- [ ] **空migrationsディレクトリを拒否** — 根拠 `server/src/migration.rs:146` / review R2-ER / 中。
+- [ ] **DATABASE_TOKEN非UTF-8をEnvValue分類へ** — 根拠 `server/src/lib.rs:1334` / review R2-ER / 中。
+- [ ] **bind_walletをtx内でstatus再確認** — 根拠 `server/src/payments.rs:579` / review R2-ER / 中。
+- [ ] **6 CLIのargvパーサを共通化** — 根拠 `server/src/bin/*` / review R1-AR / 中。
+- [ ] **cargo deny bansを実効ゲート化** — 根拠 `deny.toml:74` / review R1-AR+R3-TQ / 中。warn+ワイルドカードskipで実質無効。
+- [ ] **APIオリジンの平文HTTPを本番fail-closed化** — 根拠 `client/src/lib.rs:39` / review R3-AU / 中。
+- [ ] **Back-Channel Logoutトークンにiat/nbf新鮮性検証** — 根拠 `server/src/oidc.rs:861` / review R3-AU / 中。再送で後続セッションを失効させない。
+- [ ] **IPFSゲートウェイのhttpを本番拒否** — 根拠 `server/src/lib.rs:1818` / review R3-AU / 低。
+- [ ] **gpg実暗号化テストの黙スキップを防止** — 根拠 `scripts/test-backup-rotate.sh:690` / discovery R3-TQ / 中。
+- [ ] **CIクロスブラウザ選定を導入前に修正** — 根拠 `e2e/ci-e2e.sh:315` / discovery R3-TQ / 中。検出がinstall前に走りchromiumへ自己完結フォールバック。
+- [ ] **依存監査の定期実行とnpm audit** — 根拠 `.github/workflows/ci.yml:10` / discovery R3-TQ / 中。
+- [ ] **deny.toml先頭コメントを4ゲート実態へ** — 根拠 `deny.toml:1` / review R1-AR / 低。
+- [ ] **todo.md doctor件数43→53** — 根拠 `todo.md:22` / review R1-AR / 低。
+- [ ] **OPERATIONAL_POLICYのALLOW_MOCK_AUTH改行損壊を修正** — 根拠 `docs/OPERATIONAL_POLICY.md:20` / review R1-AR / 低。
+- [ ] **ADR-0001へStatus/Accepted表示を付与** — 根拠 `docs/adr/index.md:3` / review R4 / 低。
+- [ ] **SC2016除外を行単位へ縮小** — 根拠 `.github/workflows/ci.yml:54` / review R4 / 低。
+- [ ] **wasm-bindgen-test未使用依存を整理** — 根拠 `client/Cargo.toml:41` / review R1-AR / 低。
+- [ ] **Runbook/TASK_INVENTORYのmigration件数を履歴明示** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:459` / discovery R5-VU / 低。
+- [ ] **E2Eエラーパスの行番号コメントをシンボル参照へ** — 根拠 `e2e/tests/error-paths.spec.ts:8` / discovery R5-VU / 低。
+- [ ] **aria-live件数をエラー時にゲート** — 根拠 `client/src/lib.rs:2168` / discovery R5-VU / 中。
+- [ ] **ファイル選択のタブ停止を1つへ** — 根拠 `client/src/lib.rs:3086` / discovery R5-VU / 中。
+- [ ] **warn_history_update_onceをdev-consoleゲートへ** — 根拠 `client/src/lib.rs:1502` / discovery R5-VU / 中。
+- [ ] **エラー文言の日英混在を統一方針化** — 根拠 `client/src/lib.rs:2328` / discovery R5-VU / 中。
+
 - [x] **AGE_* 非UTF-8をfail-closed化（env分類器へ統一）**
   — 根拠 `common/src/age.rs:110` / `server/src/bin/doctor.rs:440` / review R1-AR+R2-ER / high。
   std::env::var(key).ok() が NotUnicode を None 化し明示設定必須・信頼属性必須を解除し得る。
@@ -721,6 +749,13 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 コンボ第13ラウンド（review4+discovery3）: 全7担当完了。
+  R6 で重複排除し、LOG OUT の refresh Cookie 欠落（2担当独立確認・high）は即時修正済み
+  （client の handle_logout へ credentials: Include）。E2E は localhost/127.0.0.1 別ホストのため
+  Cookie 送信は検証不可、同一サイト構成で検証可能な旨を記録。
+  その他25件（高2・中15・低8）を追記。後続ADR待ち（DEC-01/02/03/04・PoP・PPID・JPYC税務・
+  リリース証跡）とセッションCookie廃止のXSSトレードオフは記録のみで保留。
 
 - 2026-11-22 coding（低6件）: SC2034関数単位除外、README/REVIEW_REPORTのADR状態是正、
   旧名/console.log整理、英語ラベルlang="en"、全文検索/sha3/iss-aud棚卸し、

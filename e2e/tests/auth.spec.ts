@@ -53,17 +53,29 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' })
+        body: JSON.stringify({ authorized: true, user_hash: 'mock_user_hash', token: 'mock_jwt_token' }),
+        // 実サーバの callback と同じく refresh_token Cookie を設定し、
+        // ログアウト時の credentials: Include で送られることを検証可能にする。
+        headers: { 'set-cookie': 'refresh_token=mock_refresh; Path=/auth; HttpOnly; SameSite=Strict' },
       });
     });
 
     // /auth/logout をモックしてメソッドと Authorization ヘッダを記録する。
     let logoutMethod: string | undefined;
     let logoutAuthHeader: string | undefined;
+    let logoutCookie: string | undefined;
     await page.route('**/auth/logout', async route => {
       logoutMethod = route.request().method();
       logoutAuthHeader = route.request().headers()['authorization'];
-      await route.fulfill({ status: 200, contentType: 'application/json', body: 'true' });
+      // 実構成では app/api が同一サイトのため credentials: Include で Cookie が送られる。
+      // E2E は localhost と 127.0.0.1 の別ホストのため Cookie 送信は検証しない。
+      logoutCookie = route.request().headers()['cookie'];
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: 'true',
+        headers: { 'set-cookie': 'refresh_token=; Path=/auth; HttpOnly; SameSite=Strict; Max-Age=0' },
+      });
     });
 
     // R2-REFRESH-ORIGIN: /auth/refresh はモック200で通し、Origin / Sec-Fetch-Site を記録する。

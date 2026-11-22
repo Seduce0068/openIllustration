@@ -1680,6 +1680,9 @@ pub fn App() -> impl IntoView {
                 // 既存の /auth/logout 契約どおり Bearer でセッションを失効させる。
                 let _ = Request::post(&format!("{API_BASE}/auth/logout"))
                     .header("Authorization", &format!("Bearer {}", jwt))
+                    // refresh_token Cookie も送り、サーバ側でファミリを失効させる
+                    // （api_fetch と同じ credentials 契約）。
+                    .credentials(RequestCredentials::Include)
                     .send()
                     .await;
             });
