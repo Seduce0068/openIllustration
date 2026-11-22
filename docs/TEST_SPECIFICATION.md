@@ -143,7 +143,11 @@ auth は既存3件・全体69件を維持する。
 `refreshAttempts>=1`・`Bearer refreshed_jwt_token` での再送を同じ `test()` 内で確認する
 （新規 `test()` なし、export3件・全体69件を維持）。
 
-R2-REFRESH-SEC では、上記の回復経路へ次の3契約を追加した（既存の数値は不変）。
+R2-REFRESH-SEC では、上記の回復経路へ次の4契約を追加した（既存の数値は不変）。
+
+- **epoch ガードの回帰**: `refresh_slot_epoch_mismatch_discards_stale_token` が
+  claim → bump_refresh_epoch → complete(Token("stale")) の順で Failed を返し、
+  REFRESHED_JWT へ書き戻されないことを検証する。
 
 - **失敗時のクリア**: `join_refresh` は `RefreshOutcome::Failed` のとき
   `clear_refreshed_jwt()` を呼ぶ。失効済み JWT を後続の試行へ渡さず、元の 401
@@ -301,7 +305,7 @@ auth 3件・export 3件・全体69件を維持する。
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "deny"` + `allow-wildcard-paths = true` でレジストリ依存の wildcard を拒否し、public crate（client / server）の path 依存のみ skip で例外許可 |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor54・migrations14・tests148 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor54・migrations14・tests152 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -500,7 +504,7 @@ doctor のテスト数は 53 のままだった（R2-ENV で 54 へ追随）。
    合わせる。doctor / CI の toolchain 指定変更は不要（不一致なし）。
 
 1・2 のアサーションは既存 `secret_values_are_never_printed_in_problems` 内へ追加し、
-当時はテスト関数数を変更していない（現行 doctor54 / tests148 / E2E69 / migrations14）。
+当時はテスト関数数を変更していない（現行 doctor54 / tests152 / E2E69 / migrations14）。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
@@ -712,7 +716,7 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 「未設定 / 非 UTF-8 の固定文言警告 / 有効な UTF-8」を返す。
 `run()` は JWT の非 UTF-8 を起動拒否、IPFS / 決済の非 UTF-8 を固定文言警告へ倒し、
 `doctor` は `common::env::classify(lookup(..))` で同じ分類を共有する。
-新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests148 不変）。
+新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests152 不変）。
 
 本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
@@ -1863,6 +1867,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `allows_retry_stops_after_one_refresh` | 更新後の再試行は1回で打ち止め |
 | `refresh_slot_single_flights_and_broadcasts_one_outcome` | 同時更新は単一フライトで1結果を配信 |
 | `refresh_slot_waker_is_registered_once_and_cleared_on_completion` | waker は1度だけ登録し完了時に解除 |
+| `refresh_slot_epoch_mismatch_discards_stale_token` | epoch 不一致時に古い JWT を捨て Failed を配信し REFRESHED_JWT へ書き戻さない |
 | `claim_submission_rejects_clicks_while_busy_and_recovers_after_release` | ビジー中の二重送信を拒否し解除で復帰 |
 | `file_picker_activates_only_on_enter_or_space` | ファイル選択は Enter/Space のみ活性化 |
 | `favorite_error_message_uses_dedicated_401_text` | お気に入り401は専用固定文言 |
@@ -1955,7 +1960,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor54 / migrations14 / tests148 は doc→code テスト名照合の現行値（実テスト総数ではない）。
+  （拒否値は非エコー）。check23 / doctor54 / migrations14 / tests152 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 - R2-SERVER の原子性・クリーンアップ契約（既存ケース内で担保、新規 test 関数なし）:
   `pin_to_ipfs` 成功後に DB コミットが失敗したら `unpin` 補償を試み、解除失敗は
   固定文言の警告ログのみへ記録してトークン値・レスポンス本文・CID をエコーしない。
@@ -1964,7 +1969,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   行う。UNBAN は `revoked_subs` を削除せず sub epoch を進めて旧 JWT の復活を防ぎ、
   back-channel logout 由来の閾値を保持する。backup / restore は中途失敗の部分ファイル
   を削除し、restore は staging 検証後に `rename` する。E2E69 / check23 / doctor54 /
-  migrations14 / tests148 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
+  migrations14 / tests152 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1985,7 +1990,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor54 / migrations14 / tests148 は doc→code テスト名照合の現行値（実テスト総数ではない）。
+  check23 / doctor54 / migrations14 / tests152 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -2043,8 +2048,10 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   Result 伝播へ置換し、準備失敗時は既存固定文言 `ネットワークエラーが発生しました。` を
   `data-testid="login-error"` の `role=alert` に表示してボタンを再活性化する。
   `auth.spec.ts` の既存 SEC-03 ケース内で role / 文言 / ボタン有効化を検証する。
-- **本番 wasm からのハッシュ依存除外**: `sha2` / `hex` は `client/Cargo.toml` の
-  `[dev-dependencies]` へ移し、本番 wasm には含めない（`cargo test` は従来どおり動作）。
+- **client 直接依存からのハッシュ依存除外**: `sha2` / `hex` は `client/Cargo.toml` の
+  `[dev-dependencies]` へ移した。なお `common` が通常依存として保持し `client` も
+  `common::verify_checksum` を呼ぶため、推移的には本番 wasm 依存グラフへ残る
+  （完全除外は common の feature 分離が必要で未実施）。`cargo test` は従来どおり動作。
 - **英文 UI の言語宣言（追加分）**: アップロード各ラベル、通報フォームの
   `aria-label` / `placeholder`（TARGET CID / REASON）、お気に入りボタンの英文 `aria-label`、
   監査 dialog の `aria-label`、Ledger の英文警告へ `lang="en"` を付与する。
@@ -2068,7 +2075,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - **R2-A11Y アップロード送信中の busy 告知**: `Sign & Submit to Evidence Ledger` ボタンへ
   `aria-busy=move || loading.get()` を付け、送信中フェーズの属性の付与・解除を
   `upload.spec.ts` の既存成功ケース内で検証する。新規 `test()` は追加しない。
-- 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests148 は不変。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 / tests152 は不変。
 
 ## R2-CLIENT（第2次）の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -2102,7 +2109,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `<form on:submit>` で Enter 経路も同じ `submit_report` 検証へ集約し、
   `moderation.spec.ts` の REPORT-ERR-01 内で POST 0 本を検証する。
 - 新規 `test()` は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
-  tests148 は不変。
+  tests152 は不変。
 
 ## R2-ENV の受け入れ契約（2026-11-23）
 
@@ -2130,7 +2137,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
    （`numeric_env_value` の3分類と固定文言）と `server/src/bin/doctor.rs` の
    `secret_values_are_never_printed_in_problems` 内（5変数の非 UTF-8 警告と
    生バイト非漏洩）で行う。新規テスト関数は doctor の1件のみで、
-   E2E69件 / check23 / migrations14 / tests148 は不変（doctor は 53→54 へ追随）。
+   E2E69件 / check23 / migrations14 / tests152 は不変（doctor は 53→54 へ追随）。
 
 ## R2-SERVER の受け入れ契約（2026-11-23）
 
@@ -2163,7 +2170,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
    と同じ順序に統一する。既存の `test_audit_log_chain_integrity` および
    自動確定・投票の回帰テストで連鎖と結果が不変であることを確認する。
    新規テスト関数は追加しないため、E2E69件 / check23 / doctor54 /
-   migrations14 / tests148 の各数値は不変。
+   migrations14 / tests152 の各数値は不変。
 
 ## R2-SERVER（第2次）の受け入れ契約（2026-11-23）
 
@@ -2200,7 +2207,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 新規テスト関数は `test_logout_rejects_revoked_sub` と
 `test_cors_exposes_request_id_header` の2件のみ。doc→code テスト名照合値は
-tests148 → tests150 へ追随し、E2E69件 / check23 / doctor54 / migrations14 は
+tests152 → tests152 へ追随し、E2E69件 / check23 / doctor54 / migrations14 は
 不変（履歴記載の数値は変更しない）。
 
 ## R2-SERVER（第2次・部分適用）の受け入れ契約（2026-11-23）
@@ -2225,7 +2232,7 @@ tests148 → tests150 へ追随し、E2E69件 / check23 / doctor54 / migrations1
    不変であることを確認する。
 
 新規テスト関数は追加しない（既存テスト内への回帰追加のみ）。doc→code テスト名
-照合値は tests150 のまま、E2E69件 / check23 / doctor54 / migrations14 も不変
+照合値は tests152 のまま、E2E69件 / check23 / doctor54 / migrations14 も不変
 （履歴記載の数値は変更しない）。
 
 ## R2-CLIENT（第3次）の受け入れ契約（2026-11-23）

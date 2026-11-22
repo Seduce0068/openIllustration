@@ -4,13 +4,19 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
   test('should login successfully with mock JPKI token', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('h1')).toContainText('OPENILLUSTRATION');
+    // 初回マウントではフォーカスを奪わない（view 変更時のみ #main-content へ移す）。
+    await expect(page.locator('#main-content')).not.toBeFocused();
 
     const loginButton = page.getByRole('button', { name: 'CONNECT WITH JPKI' });
     await expect(loginButton).toBeVisible();
     await loginButton.click();
 
     await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
-    
+
+    // R2-A11Y: view が login → dashboard へ変わったら本文へフォーカスが移る。
+    // 初回マウントでは奪わず、実際の view 変更時だけ移す契約を検証する。
+    await expect(page.locator('#main-content')).toBeFocused();
+
     const userHash = page.getByTestId('user-hash');
     await expect(userHash).toBeVisible();
     const hashText = await userHash.innerText();

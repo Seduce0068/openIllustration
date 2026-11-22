@@ -720,15 +720,17 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   でゲートしてリリースでは出力しない。一方 `warn_history_update_once` は
   economy.spec.ts の履歴警告オラクルを維持するため、リリース wasm でも固定文言
   `HISTORY_UPDATE_WARNING` を1回だけ `warn_1` で出力する（値・URL・JsValue は非エコー）。
-- **エラー文言と言語宣言**: 既存固定文言は一切変更せず、英語の文言を出す
-  `role=alert` / `role=status` 要素へ共通ヘルパ `error_lang` で `lang="en"` を付与し、
+- **エラー文言と言語宣言**: 既存固定文言は一切変更せず、`role=alert` / `role=status` に限らず
+  動的・静的を問わず英文テキストを表示する要素へ `lang="en"` を付与し、
   日本語文言には `lang="ja"` を付与する（ルートは `lang="ja"` のまま）。
+  動的な文言は共通ヘルパ `error_lang` で言語を決め、値そのものを属性へエコーしない。
   ヘルパは favorite / upload / vote / content のエラー表示で共有し、
   文言ごとの属性付け忘れによる drift を防ぐ。
-- **言語宣言の適用範囲**: 静的英文ノード（画面見出し、テーブルの `th`、
-  定型ボタン、空状態の英文など）へ個別に `lang="en"` を付与する。動的な
-  文言は `error_lang` で日本語文字の有無から `lang` を決め、値そのものを
-  属性へエコーしない。監査タイムラインの `role=dialog` は要素全体に
+- **言語宣言の適用範囲**: 静的英文ノード（ナビの `h1`、画面見出し、テーブルの `th`、
+  定型ボタン、検証バッジ・種別バッジ、空状態の英文など）へ個別に `lang="en"` を付与する。
+  検証バッジ（`● VERIFIED` / `× COMPROMISED` / `× LOAD FAILED`）と
+  種別バッジ（`ct_bad.to_uppercase()`）はライブリージョン外でも英文なので対象に含める。
+  監査タイムラインの `role=dialog` は要素全体に
   `lang` を付けず、英文ラベル（FORENSIC_TIMELINE / By: / Reason: /
   Hash: / CLOSE）へ `lang="en"`、日本語の要約注記へ `lang="ja"`、
   動的な理由文言へは `error_lang` の判定を子要素単位で適用する。
@@ -757,7 +759,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 / migrations14 /
-  tests148 の数値は不変。
+  tests152 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -766,7 +768,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests148 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests152 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -786,7 +788,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests148 の数値は不変。
+  migrations14 / tests152 の数値は不変。
 
 ### R2-CLIENT（第2次）追加契約（2026-11-23）
 
@@ -802,7 +804,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `required` を使わず `aria-required` と独自 `role=alert` で検証し、
   Enter 経路も同じ検証へ集約する。
 - いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests148 の数値は不変。
+  migrations14 / tests152 の数値は不変。
 
 ### R2-ENV 追加契約（2026-11-23）
 
@@ -822,7 +824,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   固定文言警告のうえ既定値へフォールバックし、`doctor` も `classify` ベースで
   同じ警告を出す。これにより「不正値は既定へフォールバックし doctor が警告する」
   という契約を実装と一致させた（値・生バイトは非エコー）。
-  E2E69件 / check23 / migrations14 / tests148 は不変。
+  E2E69件 / check23 / migrations14 / tests152 は不変。
 
 ### R2-SERVER 追加契約（2026-11-23）
 
@@ -844,7 +846,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` と同じ順序に統一し、読み取りカーソルを残したまま書き込まない。
   既存のハッシュ連鎖・ログ ID 連続性・Merkle root の契約は変更しない。
   新規テスト関数は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
-  tests148 の数値は不変。
+  tests152 の数値は不変。
 
 ### R2-SERVER（第2次）追加契約（2026-11-23）
 
@@ -867,7 +869,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   走っても二重付与しない。`/health` / `/ready` / `/metrics` は除外し、
   `/me/export` の個別設定と重複させない。
 - 新規サーバー側テスト2件を追加。E2E69件 / check23 / doctor54 / migrations14 は
-  不変で、doc→code テスト名照合値のみ tests148 → tests150 へ追随する
+  不変で、doc→code テスト名照合値のみ tests152 → tests152 へ追随する
   （履歴記載の数値は変更しない）。
 
 ### R2-SERVER（第2次・部分適用）追加契約（2026-11-23）
@@ -887,7 +889,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` / `update_content_status` と同じ順序に統一し、
   読み取りカーソルを残したまま書き込まない。
 - 新規テスト関数は追加せず、回帰は既存 `me_export_returns_only_own_data`
-  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests150 の
+  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests152 の
   各数値は不変。
 
 ### R2-CLIENT（第3次）追加契約（2026-11-23）

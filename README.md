@@ -169,9 +169,9 @@ cargo run -p server --bin verify_audit_log -- --database-url file:/path/to/local
 初回に `pre-commit install` を実行し、定期的に `pre-commit autoupdate` でフックを更新してください。
 `.pre-commit-config.yaml` は Betterleaks v1 系（v1.10.1）にピン留めしています。
 ローカルフックは回避され得るため、CI の extra_gates でも `betterleaks git . --redact
---log-opts="<範囲>..HEAD"` を最終ゲートとして併設しています。CI は checkout 直後に
-ステージングエリアが空のため `--staged` は使わず、PR 範囲（push は直近コミット）を明示して
-走査します。
+--log-opts="<範囲>"` を最終ゲートとして併設しています。CI は checkout 直後に
+ステージングエリアが空のため `--staged` は使わず、pull_request では base..head、
+push では before..HEAD を明示して走査します（マルチコミット PR も漏らしません）。
 
 ## 年齢/地域ポリシー（DEC-02 方針、公開設定）
 

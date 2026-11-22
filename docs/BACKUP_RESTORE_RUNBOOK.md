@@ -268,7 +268,12 @@ systemctl list-timers openillustration-backup.timer
 - バックアップ窓の間はアプリ unit が停止しているため `/ready` は応答しない（接続拒否が正常）。
   停止確認は `systemctl is-active <APP_UNIT>` が `inactive` であることで行う。
   `/ready` が 503 を返すのは SIGTERM 直後の graceful drain 窓だけであり、窓全体ではない。
-- 再起動後は `/health` 200 と `/ready` 200 を確認する。これが窓 unit 完了の条件。
+- 再起動後は `/health` 200 と `/ready` 200 を**手動で**確認する。
+  `ExecStopPost` の `systemctl start` は起動ジョブの受付成否しか unit 結果へ反映せず、
+  ヘルス確認は unit 側で行わない（`systemctl start` が 0 を返しても起動直後に
+  クラッシュし得る）。"/health と /ready の 200 が窓 unit 完了の条件" という表現は
+  誤りで、これらは手動確認の必須ステップである。自動検知が必要なら
+  `OnFailure=` で通知 unit を実装するか、ヘルスチェックを unit の Exec へ組み込むこと。
 - バックアップ失敗は `ALERT_CMD`（設定時）が通知する。さらに再起動（`ExecStopPost`）が
   失敗した場合は窓 unit の結果が失敗となるため、`OnFailure=` または journald の unit 結果
   監視をアラート対象に含め、アプリが停止したまま放置されないようにする。

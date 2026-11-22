@@ -55,7 +55,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ## 3. 指摘一覧
 
-### 3.1 libsql 0.10.0 の TLS / gRPC スタック（10 件）
+### 3.1 libsql 0.10.0 の TLS / gRPC スタック（現行 8 件＋解消済み履歴 2 件）
 
 - `RUSTSEC-2025-0141`（2026-11-22 解消済み・履歴） bincode 1.3.3（unmaintained）
   - 経路: `libsql 0.10.0` → `bincode 1.3.3`

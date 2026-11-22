@@ -50,10 +50,19 @@ jobs:
         cargo test -p client --all-features --quiet
         # シークレットスキャン（pre-commit 主軸・CI は最終ゲート）。
         # --staged は checkout 直後に index が HEAD と一致し 0 バイト走査になるため、
-        # CI では --log-opts で PR 範囲（push は直近コミット）を明示して走査する。
+        # CI では --log-opts でイベント別の範囲を明示して走査する。
+        # pull_request は base..head（マルチコミット PR を漏らさない）、push は before..HEAD。
         # ランナーに betterleaks が無い環境では go install で固定版を導入する。
         if ! command -v betterleaks >/dev/null 2>&1; then go install github.com/betterleaks/betterleaks@v1.10.1; fi
-        betterleaks git . --redact --log-opts="${{ github.event.before || 'HEAD~1' }}..HEAD"
+        case "${{ github.event_name }}" in
+          pull_request)
+            scan_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+            ;;
+          *)
+            scan_range="${{ github.event.before || 'HEAD~1' }}..HEAD"
+            ;;
+        esac
+        betterleaks git . --redact --log-opts="$scan_range"
         npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。
         # いずれも devDependency で本番ランタイムへは入らない。

@@ -82,6 +82,12 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     const verifiedBadge = page.locator('span', { hasText: '● VERIFIED' });
     await expect(verifiedBadge).toBeVisible({ timeout: 30000 });
 
+    // R2-A11Y: ナビの英文 h1 と検証バッジ / 種別バッジは lang="en" を宣言する。
+    await expect(page.locator('nav h1')).toHaveAttribute('lang', 'en');
+    await expect(verifiedBadge).toHaveAttribute('lang', 'en');
+    const badgeRow = page.getByTestId('content-verification-badge').locator('..');
+    await expect(badgeRow.locator('span[lang="en"]', { hasText: 'NOVEL' })).toBeVisible();
+
     // タイトル空のとき canvas の aria-label は cid 先頭8文字のフォールバックになる
     // （illustration_aria_label）。小説カードでも canvas は role="img" で描画される。
     await expect(page.locator('canvas[role="img"]')).toHaveAttribute(
@@ -121,6 +127,9 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page.locator('[data-testid="content-load-error"][role="alert"]')).toBeVisible();
     await expect(page.getByTestId('content-load-error')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('content-load-error')).toHaveText('Content Load Failed');
+    // R2-A11Y: × LOAD FAILED バッジの英文 span も lang="en" を宣言する。
+    await expect(page.getByTestId('content-verification-badge')).toHaveAttribute('lang', 'en');
+    await expect(page.getByTestId('content-verification-badge')).toHaveText('× LOAD FAILED');
 
     // 追加フェーズ: 検証待ちスパンの role=status / aria-live / lang を既存検証フロー内で検証する。
     // 本文レスポンスを遅延させ、verified === None の表示を確実に捕捉する（既存 test 内のみ）。
@@ -206,6 +215,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // 「COMPROMISED」が表示されることを確認
     const compromisedBadge = page.locator('span', { hasText: '× COMPROMISED' });
     await expect(compromisedBadge).toBeVisible({ timeout: 30000 });
+    // R2-A11Y: × COMPROMISED バッジの英文 span も lang="en" を宣言する。
+    await expect(compromisedBadge).toHaveAttribute('lang', 'en');
     
     // 詳細メッセージの確認
     await expect(page.locator('text=Integrity Breach Detected')).toBeVisible();

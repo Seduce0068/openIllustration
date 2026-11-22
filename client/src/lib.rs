@@ -2021,6 +2021,27 @@ pub fn App() -> impl IntoView {
         }
     });
 
+    // SPA のビュー切替後に本文へフォーカスを移す。ログイン成功・ログアウト・
+    // タブ切替・popstate はいずれも set_view を通るため、この Effect 1つで
+    // 全経路を同じ契約へ集約する。初回マウントは直前の view が無いため
+    // フォーカスを奪わず、文字列が実際に変わったときだけ移す。
+    let previous_view = Cell::new(None::<String>);
+    Effect::new(move |_| {
+        let current = view.get();
+        let previous = previous_view.replace(Some(current.clone()));
+        if !previous.is_some_and(|prev| prev != current) {
+            return;
+        }
+        // main は常に DOM 上にあるため、動的ビューのマウントを待たずにフォーカスできる。
+        if let Some(el) = web_sys::window()
+            .and_then(|window| window.document())
+            .and_then(|doc| doc.get_element_by_id("main-content"))
+            .and_then(|el| el.dyn_into::<web_sys::HtmlElement>().ok())
+        {
+            let _ = el.focus();
+        }
+    });
+
     let handle_login_success = move |hash: String, jwt: String| {
         set_logout_error.set(String::new());
         set_user_hash.set(Some(hash));
@@ -2092,7 +2113,7 @@ pub fn App() -> impl IntoView {
                 "本文へスキップ"
             </a>
             <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
-                <h1 class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
+                <h1 lang="en" class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
                         <button lang="en" on:click=move |_| navigate("dashboard", NavigateMode::Push)
@@ -2788,10 +2809,11 @@ mod jxl;
 
 /// エラー／進捗文言の言語を判定し、要素の `lang` 属性へ渡す共通ヘルパ。
 ///
-/// 契約: すべての `role="alert"` / `role="status"` 要素は、動的な文言だけでなく
-/// 固定の英文見出しも含めて必ずこのヘルパを経由して `lang` を宣言する
-/// （ルートの `lang="ja"` に依存した暗黙宣言は使わない）。英語の文言は
-/// `lang="en"`、日本語（既定）は `lang="ja"` を明示する。
+/// 契約: `role="alert"` / `role="status"` に限らず、動的・静的を問わず英文テキストを
+/// 表示する要素は必ず `lang="en"` を宣言し、日本語テキストは `lang="ja"` を宣言する
+/// （ルートの `lang="ja"` に依存した暗黙宣言は使わない）。固定の英文見出しや
+/// 検証バッジ・種別バッジのような非ライブリージョンの英文もこの契約の対象であり、
+/// 要素単位で言語を明示する。動的な文言はこのヘルパを経由して言語を決める。
 /// 既存固定文言は一切変更しない。判定は文言に日本語文字（ひらがな・カタカナ・
 /// 漢字）が含まれるかだけを見るため、個々の文言追加・変更で drift しない。
 /// HTTP ステータス番号は判定に影響しない。
@@ -3328,7 +3350,7 @@ where
             </div>
             <div class="text-[10px] tracking-widest font-bold mt-auto flex justify-between items-center">
                 <div class="flex items-center gap-4">
-                    <span data-testid="content-verification-badge" class=move || match verified.get() {
+                    <span data-testid="content-verification-badge" lang="en" class=move || match verified.get() {
                         Some(true) => "text-green-500",
                         Some(false) => "text-red-500",
                         None => "text-gray-600",
@@ -3339,7 +3361,7 @@ where
                             !content_load_error.get().is_empty(),
                         )}
                     </span>
-                    <span class="text-gray-500 border border-gray-500/20 px-1">{ct_bad.to_uppercase()}</span>
+                    <span lang="en" class="text-gray-500 border border-gray-500/20 px-1">{ct_bad.to_uppercase()}</span>
                 </div>
                 <span class="text-green-500 font-mono">{price} " JPYC"</span>
             </div>
