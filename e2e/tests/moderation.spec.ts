@@ -44,6 +44,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   // 固定文言。serde の生エラー（フィールド名・解析位置・型情報・レスポンス本文）は
   // 画面へ出さない契約を検証する。
   const statsParseErrorText = '集計の解析に失敗しました。';
+  // client/src/lib.rs の PUBLIC_STATS_UNAUTHORIZED（公開集計 401 専用の固定文言）。
+  // 403 / 5xx / network は従来どおり「集計の取得に失敗しました。」を維持する。
+  const publicStatsUnauthorizedText = '再ログインが必要です。';
+  const publicStatsReloginHintText = 'LOG OUT からログアウトし、再度 JPKI でログインしてください。';
   // client/src/lib.rs の 403 固定文言。一般画面へ漏れないことの否定オラクルとして使う。
   const statsForbiddenText = '運用者権限が必要です';
 
@@ -334,8 +338,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     // 同じテスト内で 200 → 403 を切り替える（ボタン押下でプローブさせる）。
     let forbidStats = false;
-    // 公開集計も同じケース内で 200 → 不正 JSON へ切り替える（Parse 分類の回帰）。
+    // 公開集計も同じケース内で 200 → 不正 JSON → 401 → 403 へ切り替える
+    // （Parse / 401 / 403 分類の回帰）。403/5xx/network は従来文言を維持する。
     let brokenPublicStats = false;
+    let unauthorizedPublicStats = false;
+    let forbiddenPublicStats = false;
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
     // ADR-0008 段階2: 初期表示と再マウントで送られる公開集計のリクエストを記録する。
     const publicStatsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
@@ -360,6 +367,24 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         path: new URL(route.request().url()).pathname,
         authorization: route.request().headers()['authorization'],
       });
+      if (unauthorizedPublicStats) {
+        // 401 は dedicated 固定文言＋LOG OUT からの再ログイン案内を出す。
+        await route.fulfill({
+          status: 401,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'UNAUTHORIZED_SENTINEL_DO_NOT_SHOW' }),
+        });
+        return;
+      }
+      if (forbiddenPublicStats) {
+        // 403 は 401 専用文言へ切り替えず、従来の取得失敗文言を維持する。
+        await route.fulfill({
+          status: 403,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'FORBIDDEN_SENTINEL_DO_NOT_SHOW' }),
+        });
+        return;
+      }
       if (brokenPublicStats) {
         // totals を文字列にして PublicModerationStats の deserialization を失敗させる。
         // センチネルは生エラーに含まれ得る値で、画面へ出ないことを検証する。
@@ -482,6 +507,30 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // オプイン押下はしていないので /mod/stats は増えず、公開集計だけ3本目が送られる。
     expect(statsRequests).toHaveLength(2);
     expect(publicStatsRequests).toHaveLength(3);
+
+    // フェーズ5: 公開集計が 401 のときだけ dedicated 固定文言と LOG OUT からの
+    // 再ログイン案内を出し、403 / 5xx / network の従来文言へは切り替えない。
+    // サーバー本文（センチネル）は画面へ出さない。既存ケース内で完結する。
+    brokenPublicStats = false;
+    unauthorizedPublicStats = true;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(publicStatsError).toBeVisible({ timeout: 10000 });
+    await expect(publicStatsError).toHaveText(publicStatsUnauthorizedText);
+    await expect(publicStatsError).not.toContainText('UNAUTHORIZED_SENTINEL_DO_NOT_SHOW');
+    await expect(page.getByTestId('public-mod-stats-relogin-hint')).toHaveText(publicStatsReloginHintText);
+    await expect(page.getByTestId('public-mod-stats-content')).toHaveCount(0);
+    expect(statsRequests).toHaveLength(2);
+    expect(publicStatsRequests).toHaveLength(4);
+
+    // 403 は 401 専用文言へ切り替えず、従来の「集計の取得に失敗しました。」を維持する（回帰）。
+    unauthorizedPublicStats = false;
+    forbiddenPublicStats = true;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(publicStatsError).toHaveText('集計の取得に失敗しました。', { timeout: 10000 });
+    await expect(publicStatsError).not.toContainText('FORBIDDEN_SENTINEL_DO_NOT_SHOW');
+    await expect(page.getByTestId('public-mod-stats-relogin-hint')).toHaveCount(0);
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
     // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。

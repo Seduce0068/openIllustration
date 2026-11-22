@@ -41,15 +41,15 @@ allow = [
 # 失敗させる。見直しは四半期ごと、依存更新時、本番化判断時に行う。
 # 評価の詳細は docs/SECURITY_ADVISORIES.md を参照する。
 #
-# 受容は 12 件（脆弱性 8 件 / unmaintained 4 件）。内訳は libsql 系 10 件、
-# leptos 経由のビルド時マクロ paste 1 件、chrono 1 件。
+# 受容は 10 件（脆弱性 9 件 / unmaintained 1 件）。内訳は libsql 系 8 件、
+# chrono 1 件、url 1 件（paste は解消済みで ignore から削除）。
 # libsql 系の受容根拠は、本番が production_database_url_error のゲートで
 # リモート DSN を禁止し、`file:` 絶対パスのみ受理する（fail-closed）点にある。
 [advisories]
 # 依存から消えた勧告の ignore が残っていないか検査する。
 unused-ignored-advisory = "deny"
 ignore = [
-  # libsql 0.10.0 の TLS / gRPC スタック（上流の更新待ち、10 件）
+  # libsql 0.10.0 の TLS / gRPC スタック（上流の更新待ち、8 件）
   # 本番はリモート DSN をゲートで禁止するため、下記の受容根拠はゲートに拠る。
   { id = "RUSTSEC-2026-0258", reason = "h2 0.3.27 は libsql/tonic 経由。本番はリモートDSNをゲートで禁止する" },
   { id = "RUSTSEC-2026-0346", reason = "rustls 0.22.4 は libsql 経由。本番はリモートDSNをゲートで禁止する" },
@@ -59,7 +59,6 @@ ignore = [
   { id = "RUSTSEC-2026-0099", reason = "rustls-webpki 0.102.8 は libsql 経由。誤発行が前提。本番はリモートDSNをゲートで禁止する" },
   { id = "RUSTSEC-2026-0104", reason = "rustls-webpki 0.102.8 は libsql 経由。CRL 未使用。本番はリモートDSNをゲートで禁止する" },
   { id = "RUSTSEC-2026-0382", reason = "rustls-webpki 0.102.8 は libsql 経由。本番はリモートDSNをゲートで禁止する" },
-  # ビルド時のみ使われるマクロ（既知の脆弱性なし、paste 1 件）
   # 2026-11-17 発行: unmaintained（情報区分）で脆弱性ではない。修正版なし（chrono 1 件）。
   # common/age・server・libsql 経由で使用。jiff/time への移行を別途計画する。
   { id = "RUSTSEC-2026-0543", reason = "chrono 0.4.45 は unmaintained 情報勧告。修正版なし。jiff/time 移行を計画中" },

@@ -54,7 +54,7 @@ status: historical
 | R1-02 | E2E がほぼ全テストで API をモックし、実サーバーとの結合が未検証 | 中 | `e2e/tests/economy.spec.ts:17-83` 他 — 実 API を通すのは `auth.spec.ts:4-18` のみ | 0.80 |
 | R1-03 | バックアップのローテーション本体（保持期間・MIN_KEEP 削除）が自動テスト未カバー | 中 | `scripts/test-backup-rotate.sh:55-133`、`scripts/backup-rotate.sh:116-133` | 0.90 |
 | R1-04 | clippy の警告ポリシーがローカルと CI で逆方向に差分 | 中 | `.github/workflows/ci.yml:31` vs `AGENTS.md:47` | 0.70 |
-| R1-05 | cron 例の `MAILTO` がプレースホルダ `admin@example.com` のまま | 低 | `deploy/openillustration-backup.cron:5` | 0.75 |
+| R1-05 | cron 例の `MAILTO` プレースホルダ（対応済み: 現在は `__SET_ME__`、Runbook で差し替え手順を記載） | 低 | `deploy/openillustration-backup.cron:11` | 0.75 |
 | R1-06 | markdownlint ゲートが `docs/` 配下のみでルート直下 Markdown を検査しない | 低 | `.github/workflows/ci.yml:34` の glob が `"docs/**/*.md"` | 0.80 |
 | R1-07 | `test-backup-rotate.sh` のテスト名が実際の検証内容と一致しない | 低 | `scripts/test-backup-rotate.sh:83` | 0.95 |
 | R1-08 | Playwright の並列度が CI（workers=1）とローカル（CPU数）で異なる | 低 | `e2e/playwright.config.ts:31-34` | 0.65 |

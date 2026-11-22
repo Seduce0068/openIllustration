@@ -17,6 +17,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     const invalidUtf8Bytes = Buffer.from([0xff, 0xfe, 0xfd]);
     const invalidUtf8Hash = crypto.createHash('sha256').update(invalidUtf8Bytes).digest('hex');
     let invalidUtf8Phase = false;
+    // 追加フェーズ用: コンテンツ実体の取得失敗（Content Load Failed の lang 検証）。
+    let loadFailedPhase = false;
 
     // 1. コンテンツインデックスのモック (ログイン前に登録)
     await page.route('**/content', async route => {
@@ -40,6 +42,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     // 2. コンテンツ実体のモック
     await page.route(`**/content/${MOCK_CID}`, async route => {
+      if (loadFailedPhase) {
+        await route.fulfill({ status: 500, contentType: 'text/plain', body: 'server error' });
+        return;
+      }
       const checksum = invalidUtf8Phase ? invalidUtf8Hash : hash;
       await route.fulfill({
         status: 200,
@@ -92,6 +98,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page.getByTestId('novel-decode-error-detail')).toBeVisible({ timeout: 30000 });
     await expect(page.getByTestId('content-verification-error')).toBeVisible();
     await expect(page.locator('[data-testid="novel-decode-error"][role="alert"]')).toBeVisible();
+    // R2-LEGACY-LANG: 英語固定見出しの role=alert は lang="en" を宣言する。
+    await expect(page.getByTestId('novel-decode-error')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('novel-decode-error')).toHaveText('Novel Decode Failed');
     await expect(page.getByTestId('novel-decode-error-detail')).toHaveText('小説本文の UTF-8 デコードに失敗しました。');
     await expect(page.getByTestId('content-verification-badge')).toHaveText('× DECODE FAILED', { timeout: 10000 });
@@ -102,6 +110,17 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect
       .poll(() => page.getByText('Integrity Breach Detected').count(), { timeout: 5000 })
       .toBe(0);
+
+    // 追加フェーズ: コンテンツ実体の取得失敗では "Content Load Failed" の
+    // dedicated role=alert が lang="en" を宣言することを確認する（既存ケース内へ統合）。
+    loadFailedPhase = true;
+    await page.reload();
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+
+    await expect(page.getByTestId('content-load-error-detail')).toBeVisible({ timeout: 30000 });
+    await expect(page.locator('[data-testid="content-load-error"][role="alert"]')).toBeVisible();
+    await expect(page.getByTestId('content-load-error')).toHaveAttribute('lang', 'en');
+    await expect(page.getByTestId('content-load-error')).toHaveText('Content Load Failed');
   });
 
   test('should detect and block tampered content', async ({ page }) => {
@@ -240,6 +259,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // role="alert" はライブリージョンでアクセシブル名が本文から決まらないため、
     // 名前ではなく role 属性と testid の両方をセレクタで確認する。
     await expect(page.locator('[data-testid="jxl-decode-error"][role="alert"]')).toBeVisible();
+    // R2-LEGACY-LANG: 英語固定見出しの role=alert は lang="en" を宣言する。
+    await expect(page.getByTestId('jxl-decode-error')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('jxl-decode-error')).toHaveText('JXL Decode Failed');
     await expect(page.getByTestId('jxl-decode-error-detail')).toHaveText('JXL のデコードに失敗しました。');
     await expect(page.getByTestId('content-verification-badge')).toHaveText('× DECODE FAILED');
@@ -445,6 +466,11 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     });
 
     await page.goto('/');
+    // R2-LEGACY-LANG: ログイン画面の英語パラグラフも lang="en" を宣言する。
+    await expect(page.getByText('IPv6-ONLY ACCESS: Legacy IPv4-only networks are rejected at the API layer (SEC-01).'))
+      .toHaveAttribute('lang', 'en');
+    await expect(page.getByText('JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY.'))
+      .toHaveAttribute('lang', 'en');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
 

@@ -32,7 +32,7 @@ base64 = "0.23"
 jxl-oxide = "0.12"
 pulldown-cmark = { version = "0.13.4", features = ["default"] }
 
-# rsa 0.10 と uuid が getrandom 0.4 を要求する。
+# rsa 0.10 が getrandom 0.4 を要求する。
 # wasm32 では wasm_js バックエンドを明示的に有効化する。
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.4", features = ["wasm_js"] }

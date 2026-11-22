@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-22T22:25:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-22T22:25:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -1031,7 +1031,7 @@ cargo test -p server test_list_contents_null_price_is_returned_as_zero   # CONTE
 cargo test -p client export_parse_failure_uses_fixed_phrase_without_success_status   # EXPORT-11 クライアント側
 cargo run -p server --bin doctor -- --strict   # CFG-01 設定診断（問題ありで exit 1）
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done    # シェル構文検査（対象を glob で明示）
-for f in scripts/*.sh e2e/*.sh; do shellcheck -e SC2016 "$f"; done # シェル静的解析（apt_packages で導入）
+for f in scripts/*.sh e2e/*.sh; do shellcheck "$f"; done # シェル静的解析（apt_packages で導入）
 shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi   # shfmt -l の出力が非空なら失敗（apt_packages で導入）
 cd e2e && npm test
 cd e2e && npm test -- auth.spec.ts   # 認証 E2E（3件: モックJPKIログイン / 年齢ゲート拒否 / LOG OUT 回帰＋501固定文言・verify 未送信）のみ
@@ -1083,7 +1083,7 @@ E2E 用 JWT シークレットは実行ごとに生成する。型検査
 シェル静的ゲート（`bash -n` / `shellcheck` / `shfmt -l`）も同じ `extra_gates` に追加し、
 対象は `scripts/*.sh` と `e2e/*.sh` を glob で明示する（上記「4. 実行コマンド」参照）。
 `shfmt` は `shfmt -l` の出力が非空（未整形ファイルあり）のとき失敗とし、`bash -n` / `shellcheck` の行は維持する。
-`shellcheck -e SC2016` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
+`shellcheck` / `shfmt` の runner 導入は共通ワークフロー側で対応し、導入済みなら
 本リポジトリ側の追加導入は不要とする（本リポジトリに install 手順は置かない）。
 SC2034 はファイル単位の `-e` 対象から外し、nameref を受け取る関数直前に
 `# shellcheck disable=SC2034` を置いて関数単位で除外する（`e2e/ci-e2e.sh`）。
@@ -1788,3 +1788,24 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
   （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests131 の数値は不変。
+
+## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
+
+- **ファイル選択の accept と送信前ゲート**: `input[type=file]` は
+  `accept=".jxl,.md,.markdown,.txt,image/jxl,text/markdown"` を宣言する。
+  `upload_media_type` が空（MIME／拡張子が受理対象外）のときは送信前に
+  固定文言 `ERROR: Unsupported file type. Select a JXL or Markdown file.` を
+  dedicated `role=alert` で出し、`/content/upload` への HTTP 400 遠回りをしない。
+  Playwright の `setInputFiles` は `accept` を迂回するため、`upload.spec.ts` の
+  INT-02 内で属性と送信前拒否（リクエスト0本）を併せて検証する。
+- **英語 fixed 文言の言語宣言**: `Content Load Failed` / `JXL Decode Failed` /
+  `Novel Decode Failed` の3つの `role=alert` 見出しと、ログイン画面の
+  英語パラグラフ2つへ `lang="en"` を付与する。既存固定文言・data-testid は不変。
+  `integrity.spec.ts` の既存 ARIA／デコード失敗ケース内へ `lang` アサーションを追加し、
+  新規 `test()` は追加しない（E69件を維持）。
+- **公開集計401の分岐**: `/mod/stats/public` が401のときだけ dedicated 固定文言
+  `再ログインが必要です。` と `LOG OUT からログアウトし、再度 JPKI でログインしてください。`
+  を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
+  `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
+  新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
+  check23 / doctor53 / migrations14 / tests131 の数値は不変。

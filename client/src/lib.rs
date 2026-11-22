@@ -1910,10 +1910,10 @@ where
     view! {
         <div class="max-w-md mx-auto mt-20 border border-white/10 p-8 text-center">
             <h2 class="text-2xl font-bold mb-8 tracking-tighter italic">"本人確認が必要です。"</h2>
-            <p class="text-[10px] text-gray-500 mb-4 leading-relaxed">
+            <p lang="en" class="text-[10px] text-gray-500 mb-4 leading-relaxed">
                 "IPv6-ONLY ACCESS: Legacy IPv4-only networks are rejected at the API layer (SEC-01)."
             </p>
-            <p class="text-[10px] text-gray-500 mb-8 leading-relaxed">
+            <p lang="en" class="text-[10px] text-gray-500 mb-8 leading-relaxed">
                 "JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY."
             </p>
             <Show when=move || MOCK_AUTH_ENABLED>
@@ -2821,7 +2821,7 @@ where
                     Some(false) => view! {
                         <div class="text-center p-4" data-testid="content-verification-error">
                             <Show when=move || !content_load_error.get().is_empty() fallback=|| ()>
-                                <p role="alert" data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang="en" data-testid="content-load-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Content Load Failed"
                                 </p>
                                 <p data-testid="content-load-error-detail" lang=move || error_lang(&content_load_error.get()) class="text-gray-500 text-[8px]">
@@ -2829,7 +2829,7 @@ where
                                 </p>
                             </Show>
                             <Show when=move || content_load_error.get().is_empty() && decode_error.get() fallback=|| ()>
-                                <p role="alert" data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang="en" data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "JXL Decode Failed"
                                 </p>
                                 <p data-testid="jxl-decode-error-detail" class="text-gray-500 text-[8px]">
@@ -2838,7 +2838,7 @@ where
                             </Show>
                             // 小説本文の UTF-8 失敗は JXL とは別の dedicated role=alert で告知する。
                             <Show when=move || content_load_error.get().is_empty() && novel_decode_error.get() fallback=|| ()>
-                                <p role="alert" data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
+                                <p role="alert" lang="en" data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Novel Decode Failed"
                                 </p>
                                 <p data-testid="novel-decode-error-detail" class="text-gray-500 text-[8px]">
@@ -2946,6 +2946,11 @@ fn upload_error_message(status: Option<u16>) -> String {
 
 /// 価格の送信前検証に使う固定文言。生入力値は決め打ちで混入させない。
 const PRICE_RANGE_ERROR: &str = "Price must be between 0 and 1000000 JPY.";
+
+/// 選択ファイルの MIME／拡張子がサーバー受理対象外のときの送信前固定文言。
+/// サーバーへ 400 の遠回りをせず、この文言を dedicated `role=alert` で告知する。
+const UNSUPPORTED_UPLOAD_TYPE_ERROR: &str =
+    "ERROR: Unsupported file type. Select a JXL or Markdown file.";
 
 /// サーバー契約 `0..=1_000_000` の範囲外なら dedicated エラーを返す純粋関数。
 /// 入力途中で丸めない `price_from_number` の分、送信直前にこれでゲートする。
@@ -3058,6 +3063,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
             set_failed.set("ERROR: Select a file first.".to_string());
             return;
         };
+        // 選択ファイルの MIME／拡張子を送信前にゲートする。空ならサーバー400の
+        // 遠回りをせず、専用の固定文言を dedicated role=alert で告知して通信しない。
+        if upload_media_type(&f.type_(), &f.name()).is_empty() {
+            set_failed.set(UNSUPPORTED_UPLOAD_TYPE_ERROR.to_string());
+            return;
+        }
         let user_hash = user_hash.clone();
         let token = token.clone();
         let price_val = price.get();
@@ -3180,6 +3191,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 <div class="border-2 border-dashed border-white/20 p-12 text-center hover:border-white/40 transition-colors">
                     // 視覚的に隠すがタブ停止点にはしない（ラベル側を唯一のタブ停止点にする）。
                     <input type="file" on:change=on_file_change
+                        accept=".jxl,.md,.markdown,.txt,image/jxl,text/markdown"
                         node_ref=file_input_ref
                         tabindex="-1"
                         aria-hidden="true"
@@ -3422,6 +3434,10 @@ enum StatsFailure {
     Fetch,
 }
 
+/// 公開集計が 401 のときだけ表示する dedicated 固定文言。
+/// 403 / 5xx / ネットワークエラーは従来どおり `stats_error_message(Fetch)` を維持する。
+const PUBLIC_STATS_UNAUTHORIZED: &str = "再ログインが必要です。";
+
 /// 集計取得失敗時に画面へ表示する固定文言を返す純粋ヘルパー。
 /// 生エラー（`reqwest::Error` / `serde_json::Error`）を引数に取らないため、
 /// フィールド名・解析位置・サーバー本文などの機微情報が露出する余地がない。
@@ -3592,7 +3608,14 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         }
                     }
                 }
-                // 401 / 403 / 5xx / ネットワークエラー: 生情報やステータス詳細は出さない。
+                // 401 は再ログインが必要なため専用固定文言＋LOG OUT 案内を出す。
+                // 403 / 5xx / ネットワークエラーは従来どおり取得失敗文言を維持する。
+                // いずれも生情報やステータス詳細は出さない。
+                Ok(response) if response.status() == 401 => {
+                    set_public_stats_html.set(String::new());
+                    set_public_stats_loaded.set(false);
+                    set_public_stats_error.set(PUBLIC_STATS_UNAUTHORIZED.to_string());
+                }
                 _ => {
                     set_public_stats_html.set(String::new());
                     set_public_stats_loaded.set(false);
@@ -3786,6 +3809,12 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 <Show when=move || !public_stats_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="public-mod-stats-error" class="text-xs text-red-500">
                         {move || public_stats_error.get()}
+                    </p>
+                </Show>
+                // 401 のときだけ、既存の LOG OUT ボタンからの再ログインを案内する。
+                <Show when=move || public_stats_error.get() == PUBLIC_STATS_UNAUTHORIZED fallback=|| ()>
+                    <p data-testid="public-mod-stats-relogin-hint" class="text-xs text-gray-400">
+                        "LOG OUT からログアウトし、再度 JPKI でログインしてください。"
                     </p>
                 </Show>
                 <Show when=move || public_stats_loaded.get() fallback=|| ()>

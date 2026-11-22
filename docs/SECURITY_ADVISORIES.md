@@ -9,10 +9,10 @@ tags:
   - triage
 generated:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-22T22:25:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-22T22:25:00+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
@@ -23,8 +23,8 @@ stale_after: "2027-02-15T00:00:00+09:00"
   失敗する（初回は 14 件）。内訳は脆弱性 9 件、unmaintained 1 件。
 - 10件は 3 系統に集約できる。
   - libsql 0.10.0 の TLS / gRPC スタック: 8 件
-  - leptos 経由のビルド時依存 paste: 1 件
   - chrono の unmaintained 情報勧告: 1 件
+  - url 2.5.8 の blob: URL スタックオーバーフロー（RUSTSEC-2026-0592）: 1 件
 - RustCrypto 0.13 系（RUSTSEC-2023-0071、RUSTSEC-2026-0387）は
   2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
@@ -117,13 +117,13 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ### 3.3 ビルド時・未使用依存（2 件、うち ttf-parser は解消済み）
 
-- `RUSTSEC-2024-0436` paste 1.0.15（unmaintained）
+- `RUSTSEC-2024-0436` paste 1.0.15（unmaintained・2026-11-22 解消済み、履歴）
   - 経路: `leptos 0.8.22`（`either_of` / `reactive_graph` / `tachys`）
   - 修正版: なし（pastey / with_builtin_macros への移行）
   - 評価: 手続きマクロ。ビルド時にのみ使われ、実行時コードに残らない。
   - 対応: leptos 0.8.23 と 0.9.0-rc1 も `paste ^1.0` に依存するため
     削除は不可。既知の脆弱性がないため ignore で受容し、leptos の
-    更新時に再評価する（§5）。
+    更新時に再評価する（§5）。現行は DB 上検出されず ignore から削除済み。
 - `RUSTSEC-2026-0192` ttf-parser 0.25.1（unmaintained）— 解消済み
   - 経路: `imageproc 0.27.0` → `ab_glyph 0.2.32` → `ttf-parser 0.25.1`
   - 対応: `image` / `imageproc` / `image-webp` を 2026-11-15 に削除。
@@ -173,8 +173,9 @@ stale_after: "2027-02-15T00:00:00+09:00"
 - ttf-parser は `imageproc` → `ab_glyph` 経由で入る。`client/Cargo.toml`
   は `image`（28 行目）、`imageproc`（29 行目）、`image-webp`（30 行目）を
   宣言するが、`client/src` から参照されていない。
-- したがって 3.3 の paste は実行時影響がない。ttf-parser は未使用依存の
-  削除により依存グラフから外れた（2026-11-15）。
+- paste（RUSTSEC-2024-0436）は RustSec DB 上で検出されなくなり、2026-11-22 に
+  ignore から削除済み（解消）。ttf-parser は未使用依存の削除により
+  依存グラフから外れた（2026-11-15）。
 
 ## 5. 対応方針
 

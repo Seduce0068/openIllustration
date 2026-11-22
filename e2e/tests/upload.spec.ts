@@ -77,7 +77,18 @@ test.describe('Content Upload Flow', () => {
   test('INT-02: should reject ZIP files', async ({ page }) => {
     await page.getByRole('button', { name: 'UPLOAD' }).click();
 
+    // R2-ACCEPT: file input に受理 MIME/拡張子の accept 属性を宣言する。
+    // 禁止ファイルはブラウザのピッカー段階で弾むが、setInputFiles は accept を
+    // 迂回して直接ファイルを設定できるため、送信前ゲートも併せて検証する。
+    const fileInput = page.locator('input[type="file"]');
+    await expect(fileInput).toHaveAttribute(
+      'accept',
+      '.jxl,.md,.markdown,.txt,image/jxl,text/markdown',
+    );
+
+    let uploadAttempted = false;
     await page.route('**/content/upload', async route => {
+      uploadAttempted = true;
       await route.fulfill({
         status: 400,
         contentType: 'application/json',
@@ -85,7 +96,6 @@ test.describe('Content Upload Flow', () => {
       });
     });
 
-    const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles({
       name: 'malicious.zip',
       mimeType: 'application/zip',
@@ -95,7 +105,12 @@ test.describe('Content Upload Flow', () => {
     const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
     await submitButton.click();
 
-    await expect(page.locator('text=Failed to upload content (HTTP 400).')).toBeVisible({ timeout: 10000 });
+    // 送信前ゲートが dedicated role=alert の固定文言を出し、HTTP 400 へ遠回りしない。
+    const failed = page.getByTestId('upload-failed');
+    await expect(failed).toBeVisible({ timeout: 10000 });
+    await expect(failed).toHaveAttribute('role', 'alert');
+    await expect(failed).toContainText('ERROR: Unsupported file type. Select a JXL or Markdown file.');
+    expect(uploadAttempted).toBe(false);
   });
 
   test('R1-14: shows an error and re-enables the button when arrayBuffer() rejects', async ({ page }) => {

@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-22T22:25:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -17,8 +17,8 @@ generated:
 
 - `ALLOW_MOCK_AUTH=1` はローカル開発・隔離テスト専用。本番環境では設定しない。
 - クライアントのビルドでは本番成果物に `OIL_MOCK_AUTH=0` を指定し、
-  ログイン画面の開発用モック認証注記（`data-testid="mock-auth-notice"`）を出さない。未設定（既定）は注記を表示する開発用契約で、`"0"` のみが無効化する。`ALLOW_MOCK_AU
-  TH` がサーバー起動時の設定であるのに対し、`OIL_MOCK_AUTH` はクライアントのビルド時設定である。
+  ログイン画面の開発用モック認証注記（`data-testid="mock-auth-notice"`）を出さない。
+  未設定（既定）は注記を表示する開発用契約で、`"0"` のみが無効化する。`ALLOW_MOCK_AUTH` がサーバー起動時の設定であるのに対し、`OIL_MOCK_AUTH` はクライアントのビルド時設定である。
   
 - `JWT_SECRET` は必須。32バイト未満は起動時に拒否する。十分な強度のランダム値を秘密管理基盤から注入し、ソース・ログ・配布物に含めない。
 - `JWT_RSA_PRIVATE_KEY_PEM` を設定すると RS256 で署名する。検証用の公開鍵は
@@ -519,7 +519,7 @@ CI は共通ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` の `ext
 E2E69件 / check23 / doctor53 / migrations14 の各数値は不変である。
 `shfmt` は `shfmt -l scripts/*.sh e2e/*.sh` の出力が非空（未整形ファイルあり）のとき失敗とし、
 未整形ファイル名をエラー出力へ出す（`bash -n` / `shellcheck` の行は維持する）。
-runner への `shellcheck -e SC2016` / `shfmt` の導入は、
+runner への `shellcheck` / `shfmt` の導入は、
 呼び出し側 `.github/workflows/ci.yml` の `apt_packages` で指定する（共通ワークフローの
 apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない
 （未導入時に CI が赤化する構成を避けるため、導入要否はワークフロー側のコメントで明示する）。
@@ -568,3 +568,21 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   本番ランタイムへはインストールしない。
   Dependabot は外部サービス設定（`.github/dependabot.yml`）のため本方針では追加せず、
   CI ゲート側で検出を担保する。
+
+### R2-CLIENT-UX の契約（2026-11-22）
+
+- **アップロード入力の絞り込み**: ファイル選択 UI の `input[type=file]` は
+  JXL / Markdown の拡張子・MIME（`accept` 属性）のみを提示する。ブラウザが
+  `accept` を迂回する経路（テストからの直接設定等）に備え、送信前にも
+  `upload_media_type` を判定し、空なら専用固定文言を `role=alert` で出す。
+  サーバー400へ遠回りさせず、生ファイル名や MIME はエラー文言へ含めない。
+- **アクセシブル名と言語宣言の整合**: 英語固定見出し（Content Load Failed /
+  JXL Decode Failed / Novel Decode Failed）とログイン画面の英語パラグラフは
+  `lang="en"` を宣言し、日本語の詳細文言は `lang="ja"`（ルート既定）を維持する。
+  既存固定文言・data-testid は変更しない。
+- **認証失効の案内分岐**: 公開集計 `/mod/stats/public` が401のときだけ
+  「再ログインが必要です。」と LOG OUT からの再ログイン案内を表示する。
+  403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
+  権限情報やサーバー本文（センチネル等）を画面へ出さない。
+  既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
+  tests131 の数値は不変。

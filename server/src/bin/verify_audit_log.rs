@@ -124,7 +124,8 @@ async fn main() -> anyhow::Result<()> {
     let database_url = resolve_database_url(args.database_url, read_env("DATABASE_URL"))
         .map_err(|error| anyhow!(error.to_string()))?;
     // argv はプロセス一覧に露出するため、トークンは環境変数からのみ読む。
-    let database_token = std::env::var("DATABASE_TOKEN").unwrap_or_default();
+    let database_token =
+        server::database_token_from_env_value(common::env::read_env("DATABASE_TOKEN"))?;
 
     let db = open_db(database_url, database_token)
         .await

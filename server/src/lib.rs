@@ -1303,7 +1303,7 @@ const DATABASE_TOKEN_INVALID: &str = "DATABASE_TOKEN must be a valid UTF-8 strin
 
 /// `read_env` の結果から DB トークンを取り出す純粋版。
 /// 未設定は空文字、非 UTF-8 は固定文言で拒否し、生バイトを保持しない。
-fn database_token_from_env_value(value: common::env::EnvValue) -> anyhow::Result<String> {
+pub fn database_token_from_env_value(value: common::env::EnvValue) -> anyhow::Result<String> {
     match value {
         common::env::EnvValue::Utf8(token) => Ok(token),
         common::env::EnvValue::Missing => Ok(String::new()),
@@ -1406,9 +1406,10 @@ pub async fn run() -> anyhow::Result<()> {
     ));
     // ALLOWED_ORIGINS も同じ設定フェーズで検証する。本番相当では未設定・非 UTF-8・
     // 空・全不正を fail-closed で起動拒否し、doctor の allowed_origins と共有判定する。
+    let allowed_origins_env = common::env::read_env("ALLOWED_ORIGINS");
     config_errors.extend(production_allowed_origins_error(
         allow_mock_auth,
-        common::env::read_env("ALLOWED_ORIGINS"),
+        allowed_origins_env.clone(),
     ));
     if !config_errors.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1645,7 +1646,15 @@ pub async fn run() -> anyhow::Result<()> {
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
         rate_limit,
-        allowed_origins: Vec::new(),
+        // 起動時の read_env 結果を唯一の情報源として解決済みの許可リストを保持する
+        // （build_router は環境変数を再読せず、この値のみを使う）。
+        allowed_origins: allowed_origins(
+            match &allowed_origins_env {
+                common::env::EnvValue::Utf8(value) => Some(value.as_str()),
+                common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+            },
+            allow_mock_auth,
+        ),
     });
 
     let worker_db = Arc::clone(&shared_state.db);
@@ -2552,13 +2561,11 @@ pub async fn get_age_policy(State(state): State<Arc<AppState>>) -> Json<PublicAg
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
-    let allowed_origins_env = std::env::var("ALLOWED_ORIGINS").ok();
     // CORS と refresh の Origin 検証で同じ許可リストを使う（片方だけ緩い設定にしない）。
-    // AppState に明示的な許可リストが入っていれば（テスト／埋め込み利用）尊重し、
-    // 空のときだけ環境変数／開発既定から埋める。本番は run() が空で渡すため
-    // これまでどおり ALLOWED_ORIGINS が唯一の情報源となる。
+    // 環境変数は起動時に read_env で一度だけ読み AppState へ保持済み。
+    // テスト／埋め込み利用で明示リストが空のときだけ開発既定を用いる。
     let allowed_origin_values = if state.allowed_origins.is_empty() {
-        allowed_origins(allowed_origins_env.as_deref(), state.allow_mock_auth)
+        allowed_origins(None, state.allow_mock_auth)
     } else {
         state.allowed_origins.clone()
     };
