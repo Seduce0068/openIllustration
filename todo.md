@@ -750,6 +750,16 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-22 コンボ第16ラウンド（review4+discovery3）: 全7担当完了。R6 で重複排除のうえ
+  以下を即時是正: npm audit 常時失敗（markdownlint-cli2 0.24.2）、DATABASE_TOKEN 非UTF-8
+  のbackup_db/verify_audit_log格下げ、ALLOWED_ORIGINSの二重読取、ALLOW_MOCK_AUTH改行再発、
+  deny/SECURITY_ADVISORIESのadvisory内訳（10件=libsql8+chrono1+url1）。
+  review/discovery で得た残項目（auth_verify BAN原子的、CI shellcheck契約、REVIEW_REPORT履歴、
+  バックアップ通知、TRUSTED_PROXY_CIDRS/TZのread_env統一、真偽値ヘルパ共通化、
+  監査reasons_masked検証、sign_audit_export atomic publish、client/jxl.rsテストのゲート漏れ、
+  E2E test()抽出の堅牢性 等）は次ラウンドで処理する。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests131、npm audit 含む）。残り高2（外部要因）。
+
 - 2026-11-22 coding（中1+低16）: back-channel logout の iat/nbf 新鮮性と再送冪等、
   gpg CI FAIL化、CIクロスブラウザ選定、IPFS http本番拒否、週次監査+npm audit、
   aria-live件数ゲート、ファイル選択タブ統合、error_lang一方針化、warn_historyは
