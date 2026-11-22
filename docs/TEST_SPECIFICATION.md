@@ -2164,3 +2164,41 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
    自動確定・投票の回帰テストで連鎖と結果が不変であることを確認する。
    新規テスト関数は追加しないため、E2E69件 / check23 / doctor54 /
    migrations14 / tests148 の各数値は不変。
+
+## R2-SERVER（第2次）の受け入れ契約（2026-11-23）
+
+1. **logout の sub 失効検査**: `/auth/logout` は `jwt_keys.decode` で署名・期限を
+   検証した後、`AuthClaims` 抽出器と同じ
+   `is_sub_revoked(&state.db, &claims.sub, claims.iat)` を呼ぶ。失効済み sub は
+   401（`"Session revoked"`）とし、sid の失効書き込みを行わない。sid 側の
+   `INSERT OR IGNORE` と二重 logout の 200 は従来どおり維持する。
+   検証は `server/src/tests.rs` の `test_logout_rejects_revoked_sub` で行い、
+   `revoked_subs` に閾値がある sub の logout が 401 で、`revoked_sessions` に
+   行が残らないことを確認する。
+2. **レート制限キーの周期回収**: 周期 finalizer の tick で governor 0.10.4 の
+   `limiter.retain_recent()` / `shrink_to_fit()` を呼び、`limiter.len()` を
+   `openillustration_rate_limiter_keys`（gauge）、sweep 回数を
+   `openillustration_rate_limiter_sweeps_total`（counter）として公開する。
+   レート制限未構成時は no-op。検証は既存
+   `test_finalizer_metrics_increment` へ `RateLimitState` を注入し、
+   `rate_limiter_sweeps` が進むことを固定する（既存の tick / 処理件数 /
+   最終成功時刻のアサートは維持）。
+3. **CORS の相関 ID 露出**: `CorsLayer` へ
+   `.expose_headers([header::HeaderName::from_static("x-request-id")])` を追加し、
+   クロスオリジンの通常レスポンスで `Access-Control-Expose-Headers` から
+   `x-request-id` を読めるようにする。許可オリジンは明示リストのまま。
+   検証は `server/src/tests.rs` の `test_cors_exposes_request_id_header` で行う
+   （`Access-Control-Expose-Headers` はプリフライトではなく通常レスポンスに
+   付与される点に注意）。
+4. **Cache-Control: no-store**: `security_headers` が `/health` / `/ready` /
+   `/metrics` 以外のレスポンスへ `no-store` を付与する。既存ヘッダは上書きせず、
+   `/me/export` の個別設定（`export.rs`）と重複させない。検証は既存
+   `assert_security_headers` へ `no-store` を追加し、全レスポンス経路
+   （エラー / プリフライト / 429 / 500 / 204）で付与を固定する。監視パスの
+   除外は `test_metrics_expose_finalizer_counters` 内で
+   `Cache-Control` が無いことを確認する。
+
+新規テスト関数は `test_logout_rejects_revoked_sub` と
+`test_cors_exposes_request_id_header` の2件のみ。doc→code テスト名照合値は
+tests148 → tests150 へ追随し、E2E69件 / check23 / doctor54 / migrations14 は
+不変（履歴記載の数値は変更しない）。

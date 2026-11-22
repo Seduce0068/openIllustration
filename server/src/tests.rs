@@ -1814,6 +1814,12 @@ fn assert_security_headers(response: &Response) {
         response.headers()["Content-Security-Policy"],
         "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     );
+    // R2-SERVER: 機微 API のレスポンスは保存しない（/health /ready /metrics は別途除外）。
+    assert_eq!(
+        response.headers()["cache-control"],
+        "no-store",
+        "sensitive API response must not be cached"
+    );
 }
 
 /// SEC-01: CORS プリフライト（OPTIONS）にもセキュリティヘッダを付与する。
@@ -1878,6 +1884,40 @@ async fn test_cors_preflight_allows_delete() {
     assert!(
         !allow_methods.contains("PUT") && !allow_methods.contains("PATCH"),
         "only GET/POST/DELETE must be allowed: {allow_methods}"
+    );
+}
+
+/// R2-SERVER: クロスオリジンの通常レスポンスで x-request-id が露出され、
+/// JS から相関 ID を読めることを検証する（許可オリジンは明示リストのまま）。
+#[tokio::test]
+async fn test_cors_exposes_request_id_header() {
+    let app = setup_app().await;
+    let response = app
+        .oneshot(with_peer(
+            Request::get("/health")
+                .header(header::ORIGIN, "http://localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let exposed = response
+        .headers()
+        .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+        .expect("cross-origin response must expose x-request-id")
+        .to_str()
+        .unwrap();
+    assert!(
+        exposed
+            .split(',')
+            .any(|name| name.trim().eq_ignore_ascii_case("x-request-id")),
+        "unexpected Access-Control-Expose-Headers: {exposed}"
+    );
+    assert!(
+        response.headers().contains_key("x-request-id"),
+        "exposed header must actually be present"
     );
 }
 
@@ -8924,6 +8964,7 @@ async fn test_moderation_finalizer_sweeps_expired_oidc_pending_on_startup() {
         Duration::from_secs(3600),
         shutdown_rx,
         Arc::new(crate::Metrics::default()),
+        None,
     ));
     tokio::time::timeout(Duration::from_secs(2), async {
         while oidc.pending_nonce("stale-startup").is_some() {
@@ -8969,17 +9010,26 @@ async fn test_finalizer_metrics_increment() {
 
     let metrics = Arc::new(crate::Metrics::default());
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    // R2-SERVER: 周期 tick のレート制限キー回収をこのテストで固定する。
+    let rate_limit = Arc::new(crate::RateLimitState {
+        limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
+            std::num::NonZeroU32::new(60).unwrap(),
+        )),
+        concurrency: Arc::new(tokio::sync::Semaphore::new(1)),
+    });
     let finalizer = tokio::spawn(crate::run_moderation_finalizer(
         db,
         None,
         Duration::from_millis(20),
         shutdown_rx,
         Arc::clone(&metrics),
+        Some(rate_limit),
     ));
 
     tokio::time::timeout(Duration::from_secs(5), async {
         while metrics.finalizer_ticks.load(Ordering::Relaxed) == 0
             || metrics.finalizer_processed.load(Ordering::Relaxed) == 0
+            || metrics.rate_limiter_sweeps.load(Ordering::Relaxed) == 0
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -8993,6 +9043,8 @@ async fn test_finalizer_metrics_increment() {
     assert!(metrics.finalizer_ticks.load(Ordering::Relaxed) >= 1);
     assert!(metrics.finalizer_processed.load(Ordering::Relaxed) >= 1);
     assert!(metrics.finalizer_last_success_secs.load(Ordering::Relaxed) > 0);
+    // キー回収 sweep が回ったことと、キー数ゲージが更新されたことを固定する。
+    assert!(metrics.rate_limiter_sweeps.load(Ordering::Relaxed) >= 1);
 }
 
 /// R1-23: 上限近くまで埋まっていても OIDC start/callback フローは成立する。
@@ -9402,6 +9454,57 @@ async fn test_logout_revokes_session() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// R2-SERVER: 失効済み sub の JWT は /auth/logout でも 401 となり、
+/// sid の失効書き込みを行わない（sid 側の冪等性は従来どおり維持）。
+#[tokio::test]
+async fn test_logout_rejects_revoked_sub() {
+    let (app, db) = setup_app_with_db().await;
+    let sid = "logout-revoked-sub-sid";
+    let claims = Claims {
+        sub: "test_user".to_string(),
+        exp: 10000000000,
+        sid: Some(sid.to_string()),
+        iat: None,
+    };
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(TEST_JWT_SECRET.as_ref()).unwrap(),
+    )
+    .unwrap();
+    // iat=None は 0 として扱われるため、閾値 1 で確実に失効と判定される。
+    db.execute(
+        "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('test_user', 1)",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let mut rows = db
+        .query(
+            "SELECT 1 FROM revoked_sessions WHERE sid = ?",
+            [sid.to_string()],
+        )
+        .await
+        .unwrap();
+    assert!(
+        rows.next().await.unwrap().is_none(),
+        "revoked sub must not write a sid on logout"
+    );
 }
 
 /// R1-18: ログアウト時に refresh_token Cookie を Max-Age=0 で削除する。
@@ -14988,6 +15091,11 @@ async fn test_metrics_expose_finalizer_counters() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    // R2-SERVER: 監視用パスは no-store の付与対象外（スクレイプを阻害しない）。
+    assert!(
+        !response.headers().contains_key(header::CACHE_CONTROL),
+        "monitoring endpoint must not be forced to no-store"
+    );
     let body =
         String::from_utf8(to_bytes(response.into_body(), 8192).await.unwrap().to_vec()).unwrap();
 
@@ -19814,6 +19922,7 @@ async fn test_periodic_finalize_lock_wait_is_bounded() {
             Duration::from_millis(100),
             shutdown_rx,
             Arc::clone(&metrics),
+            None,
         ));
         // 起動時の purge/finalize（ここでは対象 0 件）が終わるのを待つ。
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -20096,6 +20205,7 @@ async fn test_startup_lock_wait_is_bounded_and_startup_continues() {
         Duration::from_millis(300), // テスト用の短い上限
         shutdown_rx,
         Arc::new(crate::Metrics::default()),
+        None,
     ));
 
     // 4 つの起動時回収すべてが上限で打ち切られ、warn が出ること。
@@ -20207,6 +20317,7 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
         Duration::from_millis(100), // 起動時 finalize はビジーでスキップさせる
         shutdown_rx,
         Arc::clone(&metrics),
+        None,
     ));
 
     // 起動時回収（purge 3 件 + finalize 1 件）が上限で打ち切られた時点を同期点にする。

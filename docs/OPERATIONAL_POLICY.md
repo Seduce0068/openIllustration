@@ -837,3 +837,27 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   既存のハッシュ連鎖・ログ ID 連続性・Merkle root の契約は変更しない。
   新規テスト関数は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
   tests148 の数値は不変。
+
+### R2-SERVER（第2次）追加契約（2026-11-23）
+
+- **logout の sub 失効検査**: `/auth/logout` は `jwt_keys.decode` による署名・期限
+  検証に加え、`AuthClaims` 抽出器と同じ
+  `is_sub_revoked(&state.db, &claims.sub, claims.iat)` を呼び、失効済み sub を
+  401 で拒否する。DB エラーは fail-closed として扱う。sid 側は `INSERT OR IGNORE`
+  と二重 logout の 200 を維持し、失効 sub では sid の書き込み自体を行わない。
+- **レート制限キーの周期回収**: 周期 finalizer の tick で governor 0.10.4 の
+  `limiter.retain_recent()` と `shrink_to_fit()` を呼び、IP キーの単調増加を防ぐ。
+  回収後のキー数と sweep 回数は `/metrics` の
+  `openillustration_rate_limiter_keys` /
+  `openillustration_rate_limiter_sweeps_total` で公開する（未構成時は no-op）。
+- **CORS の相関 ID 露出**: `CorsLayer` へ
+  `.expose_headers([HeaderName::from_static("x-request-id")])` を追加し、
+  クロスオリジンでも JS から相関 ID を読めるようにする。許可オリジンは
+  明示リストのまま変更しない。
+- **Cache-Control: no-store**: `security_headers` が認証済み機微 API の
+  レスポンスへ `no-store` を付与する。既存値は上書きせず、CORS 内外の2段で
+  走っても二重付与しない。`/health` / `/ready` / `/metrics` は除外し、
+  `/me/export` の個別設定と重複させない。
+- 新規サーバー側テスト2件を追加。E2E69件 / check23 / doctor54 / migrations14 は
+  不変で、doc→code テスト名照合値のみ tests148 → tests150 へ追随する
+  （履歴記載の数値は変更しない）。

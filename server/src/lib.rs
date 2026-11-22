@@ -271,6 +271,10 @@ pub struct Metrics {
     pub finalizer_failures: std::sync::atomic::AtomicU64,
     /// 直近の回収処理が成功した時刻（Unix秒）。未実行なら 0。
     pub finalizer_last_success_secs: std::sync::atomic::AtomicU64,
+    /// 直近の周期 tick で観測したレート制限キー数（IP キーの単調増加監視用）。
+    pub rate_limiter_keys: std::sync::atomic::AtomicU64,
+    /// レート制限キー回収 sweep の実行回数。
+    pub rate_limiter_sweeps: std::sync::atomic::AtomicU64,
 }
 
 /// レート制限キーを決定する。
@@ -339,6 +343,9 @@ async fn security_headers(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    // 機微な API レスポンスをブラウザ／中間キャッシュへ保存させない。
+    // 監視用の 3 パスはスクレイプ用途のため除外する。
+    let is_monitoring = matches!(request.uri().path(), "/health" | "/ready" | "/metrics");
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     if !headers.contains_key("X-Content-Type-Options") {
@@ -357,6 +364,12 @@ async fn security_headers(
                 "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             ),
         );
+    }
+    // R2-SERVER: 認証済み機微 API のレスポンスは保存しない。
+    // /me/export は個別に no-store を付与済みなので上書きせず、
+    // 二重挿入も contains_key で防ぐ（ミドルウェアは CORS 内外の2段で走る）。
+    if !is_monitoring && !headers.contains_key(header::CACHE_CONTROL) {
+        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     }
     response
 }
@@ -461,7 +474,7 @@ async fn observe_metrics(
 
 /// Prometheus 形式の最小化されたメトリクス（外部クレートなし）。
 pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
-    let body = format!(
+    let mut body = format!(
         "# HELP openillustration_http_requests_total Total HTTP requests.\n\
          # TYPE openillustration_http_requests_total counter\n\
          openillustration_http_requests_total {}\n\
@@ -519,6 +532,28 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
             .finalizer_last_success_secs
             .load(std::sync::atomic::Ordering::Relaxed),
     );
+    // R2-SERVER: レート制限キーの単調増加を監視するためのゲージと sweep 回数。
+    // 既存の format! 本文は変更せず、ここで追記して Prometheus 形式を維持する。
+    use std::fmt::Write as _;
+    write!(
+        body,
+        "# HELP openillustration_rate_limiter_keys Number of rate limiter keys observed at the latest periodic sweep.
+# TYPE openillustration_rate_limiter_keys gauge
+openillustration_rate_limiter_keys {}
+# HELP openillustration_rate_limiter_sweeps_total Total periodic rate limiter key reclamation sweeps.
+# TYPE openillustration_rate_limiter_sweeps_total counter
+openillustration_rate_limiter_sweeps_total {}
+",
+        state
+            .metrics
+            .rate_limiter_keys
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .rate_limiter_sweeps
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+    .expect("writing metrics to a String cannot fail");
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
@@ -1830,6 +1865,8 @@ pub async fn run() -> anyhow::Result<()> {
     let worker_db = Arc::clone(&shared_state.db);
     let worker_oidc = shared_state.oidc.clone();
     let worker_metrics = Arc::clone(&shared_state.metrics);
+    // 周期 finalizer がレート制限キーを回収できるよう共有状態を渡す。
+    let worker_rate_limit = shared_state.rate_limit.clone();
     // finalizer の JoinHandle 結果を検査する際に使う Metrics（shared_state は build_router へ move される）。
     let shutdown_metrics = Arc::clone(&shared_state.metrics);
     let shutdown_flag = Arc::clone(&shared_state.shutting_down);
@@ -1849,6 +1886,7 @@ pub async fn run() -> anyhow::Result<()> {
         finalize_interval,
         shutdown_rx,
         worker_metrics,
+        worker_rate_limit,
     ));
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
@@ -2481,6 +2519,27 @@ fn note_finalizer_failure(metrics: Option<&Metrics>) {
     }
 }
 
+/// 周期 tick でキー付きレート制限の古い IP キーを回収する。
+///
+/// governor 0.10.4 の `retain_recent()` は、バケットが初期状態と区別できない
+/// （=直近の利用から十分な時間が経過した）キーを破棄する。続く
+/// `shrink_to_fit()` でバッキング store の容量も縮める。キー数はメトリクスへ
+/// 記録し、IP キーの単調増加を監視できるようにする。
+fn sweep_rate_limiter_keys(rate_limit: Option<&RateLimitState>, metrics: &Metrics) {
+    let Some(limit) = rate_limit else {
+        return;
+    };
+    limit.limiter.retain_recent();
+    limit.limiter.shrink_to_fit();
+    metrics.rate_limiter_keys.store(
+        limit.limiter.len() as u64,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    metrics
+        .rate_limiter_sweeps
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
@@ -2488,6 +2547,7 @@ async fn run_moderation_finalizer(
     interval: Duration,
     shutdown: tokio::sync::watch::Receiver<()>,
     metrics: Arc<Metrics>,
+    rate_limit: Option<Arc<RateLimitState>>,
 ) {
     run_moderation_finalizer_with_startup_wait(
         db,
@@ -2496,6 +2556,7 @@ async fn run_moderation_finalizer(
         STARTUP_LOCK_WAIT,
         shutdown,
         metrics,
+        rate_limit,
     )
     .await;
 }
@@ -2508,6 +2569,7 @@ async fn run_moderation_finalizer_with_startup_wait(
     startup_lock_wait: Duration,
     mut shutdown: tokio::sync::watch::Receiver<()>,
     metrics: Arc<Metrics>,
+    rate_limit: Option<Arc<RateLimitState>>,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2544,6 +2606,8 @@ async fn run_moderation_finalizer_with_startup_wait(
                 metrics
                     .finalizer_ticks
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // 機微 API のレート制限は IP キーが増え続けるため、同じ tick で回収する。
+                sweep_rate_limiter_keys(rate_limit.as_deref(), metrics.as_ref());
                 tokio::select! {
                     _ = run_periodic_cleanup(db.as_ref(), oidc.as_ref(), metrics.as_ref()) => {}
                     _ = tick_shutdown.changed() => {
@@ -2922,7 +2986,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
                     axum::http::Method::POST,
                     axum::http::Method::DELETE,
                 ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]),
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                // クロスオリジンの JS から相関 ID を読めるようにする。
+                // 許可オリジンは上の明示リストのまま（wildcard は使わない）。
+                .expose_headers([header::HeaderName::from_static("x-request-id")]),
         )
         // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
         // CorsLayer の外側にもう一段置く。これで 429/403/500/204 に加え
@@ -3483,9 +3550,10 @@ pub async fn logout(
     State(state): State<Arc<AppState>>,
     headers: axum::http::HeaderMap,
 ) -> Result<Response, AppError> {
-    // AuthClaims 抽出器は失効済み sid を 401 で弾くため、logout では署名・期限
-    // のみを検証し、失効判定は下の冪等分岐で行う。検証ロジックは抽出器と同じ
+    // AuthClaims 抽出器は失効済み sid を 401 で弾くため、logout では署名・期限を
+    // 直接検証し、sid の失効判定は下の冪等分岐で行う。検証ロジックは抽出器と同じ
     // jwt_keys.decode を使うため、改ざん・期限切れトークンは従来どおり拒否される。
+    // sub の失効閾値は抽出器と同じ is_sub_revoked を呼び、先に 401 を返す。
     let claims = {
         let auth_header = headers
             .get(header::AUTHORIZATION)
@@ -3502,6 +3570,13 @@ pub async fn logout(
             .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?
             .claims
     };
+    // R2-SERVER: 署名・期限だけでなく AuthClaims 抽出器と同じ sub 閾値を検査する。
+    // 抽出器を通さない理由は sid 側の冪等性（二重 logout も 200）を維持するため。
+    // BAN / back-channel logout 済みの sub はここで 401 とし、sid の書き込みも行わない。
+    // DB エラーは fail-closed（AppError::Internal）として失効なし扱いにしない。
+    if is_sub_revoked(&state.db, &claims.sub, claims.iat).await? {
+        return Err(AppError::Unauthorized("Session revoked".to_string()));
+    }
     if let Some(sid) = &claims.sid {
         // メモリ/DB の両方を確認し、既に失効済みなら二重 logout として成功扱い。
         // revoke_session は INSERT OR IGNORE なので再記録自体は安全だが、

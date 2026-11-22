@@ -787,6 +787,32 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第35ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  AGE_COUNTRY_OVERRIDES重複国コードfail-closed拒否、CI concurrencyへevent_name追加
+  （週次監査がpushでキャンセルされないように）、Runbook timer手順の文途切れ修正、
+  logoutがsub失効閾値を検査（AuthClaimsと同判定で401）、rate limiterキー回収
+  （retain_recent+キー数/スイープメトリクス）、CORS expose_headers x-request-id、
+  機微APIへCache-Control no-store（監視パス除外）。
+  R4 指摘なし。全ゲート green（E2E69/check23/doctor54/migrations14/tests150、
+  npm audit3lockfile、markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/chain構築、OIDC署名鍵403/501化+azp検証、
+  第三者監査アンカー、公開ledger意図、起動設定一括Config化、BIND_ADDR/PORT設定化、
+  workspace依存バージョン集約、孤立Pinataピン補償、OnFailure alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict の
+  CIゲート化、GPG復号訓練、Dependabot方針、axe自動スキャン、MSRV下限CI検証、
+  コミット後二次処理の5xx伝播、finalizer異常終了readiness/失敗メトリクス、
+  back-channel logoutのsid/sub別tx、動的alertアナウンス、401復帰導線共通化、
+  クライアントエラーテレメトリ、.audit-rootオフサイト、CORSスタブOriginエコー、
+  E2E artifact回収/結果分離、Chromeバージョン固定、OIL_MOCK_AUTH=0ビルド検証、
+  BUILD-02負のビルドゲート、retries方針、warn_history1回だけ検証、
+  prepare-distribution親ディレクトリ権限、assert_major_numericデッドコード、
+  公開集計鮮度境界/shorten_export_sub境界テスト、error-paths行番号コメント、
+  warn_history完了記録の実態漂移、投票キュー要約注記/lang、検証待ちrole=status、
+  systemd/cron二重有効化検出、日時UTC明示、.geminiignore drift、
+  backup-cron-wrapper owner/mode分岐テスト）は記録のみで保留。
+
 - 2026-11-23 コンボ第34ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   CI all-features clippyへundocumented_unsafe_blocks追加、バックアップtimer Persistent=false

@@ -236,8 +236,9 @@ refusing restore: a live server instance holds the <side> instance lock (<lock p
 systemd 版ではタイマーが窓 unit を起動し、次の順で実行する。
 
 1. `deploy/openillustration-backup.timer` が `OnCalendar=*-*-* 03:17:00`
-   （`Persistent=false`、`RandomizedDelaySec=300`）で。ホスト停止中に逃した実行は補完せず、手動バックアップで取得する
-   `openillustration-backup-window.service` を起動する。
+   （`Persistent=false`、`RandomizedDelaySec=300`）で
+   `openillustration-backup-window.service` を起動する。ホスト停止中に逃した実行は補完しないため、
+   必要なら手動バックアップで取得する。
 1. `ExecStartPre=+/usr/bin/systemctl stop ${APP_UNIT}` でアプリ unit を停止する。
 1. `ExecStart=/opt/openIllustration/scripts/backup-rotate.sh` で取得・検証・ローテーションを行う。
 1. `ExecStopPost=+/usr/bin/systemctl start ${APP_UNIT}` でアプリ unit を起動する。

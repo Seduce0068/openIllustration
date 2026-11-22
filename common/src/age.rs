@@ -353,6 +353,11 @@ fn parse_country_minimums(value: &str) -> Result<BTreeMap<String, u32>, String> 
             .parse::<u32>()
             .map_err(|_| format!("AGE_COUNTRY_OVERRIDES has invalid age for '{code}'"))?;
         let age = validate_minimum_age(age, &format!("AGE_COUNTRY_OVERRIDES age for '{code}'"))?;
+        // 重複国コードは黙って後勝ちにせず fail-closed で拒否する。
+        // 値・国コードはエラーへエコーしない（設定の機微性と一貫性のため）。
+        if map.contains_key(&code) {
+            return Err("AGE_COUNTRY_OVERRIDES contains a duplicate country code".to_string());
+        }
         map.insert(code, age);
     }
     Ok(map)
@@ -1045,5 +1050,19 @@ mod tests {
                 "raw={raw:?}"
             );
         }
+    }
+
+    #[test]
+    fn duplicate_country_override_is_rejected_without_echo() {
+        let err = parse_country_minimums("JP=20,JP=18").unwrap_err();
+        assert_eq!(
+            err,
+            "AGE_COUNTRY_OVERRIDES contains a duplicate country code"
+        );
+        // 国コード・値はエラーへエコーしない。
+        assert!(!err.contains("JP"));
+        assert!(!err.contains("20"));
+        assert!(!err.contains("18"));
+        assert!(parse_country_minimums("JP=20,US=21").is_ok());
     }
 }
