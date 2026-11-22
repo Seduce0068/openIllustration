@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T02:55:00+09:00"
+  at: "2026-11-23T03:25:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T02:55:00+09:00"
+  at: "2026-11-23T03:25:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -124,7 +124,9 @@ SHA-256 の算出は旧 `sha256` 便宜 crate を廃止し、`server/src/lib.rs`
 
 `client/src/lib.rs` の `api_fetch` / `api_fetch_request` は共有 JWT signal から試行ごとにトークンを読み、
 401 のときだけ `/auth/refresh` を単一フライトで1回呼び、新トークンで1回だけ再送する基盤を持つ。
-refresh 失敗時は元の 401 Response をそのまま返す。`auth/login` / `auth/verify` /
+refresh 失敗時は元の 401 Response をそのまま返す。`WWW-Authenticate` ヘッダ付き 401
+  （Basic 認証等を要求する応答）は refresh 対象外で固定文言へ委ねる
+  （`should_refresh_requires_401_and_auth` がオラクル）。`auth/login` / `auth/verify` /
 `metrics/client-events`（再帰防止・認証不要）と既存契約を維持する `auth/logout` は対象外。
 ボディ付きの `/content/upload` / `/mod/report` / `/mod/vote` は `api_fetch_request` を使い、
 FormData / JSON を試行ごとに作り直して再送する。
@@ -299,7 +301,7 @@ auth 3件・export 3件・全体69件を維持する。
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "deny"` + `allow-wildcard-paths = true` でレジストリ依存の wildcard を拒否し、public crate（client / server）の path 依存のみ skip で例外許可 |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests142 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests145 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -498,7 +500,7 @@ doctor53 も不変である。
    合わせる。doctor / CI の toolchain 指定変更は不要（不一致なし）。
 
 1・2 のアサーションは既存 `secret_values_are_never_printed_in_problems` 内へ追加し、
-テスト関数数は変更していない（doctor53 / tests142 / E2E69 / migrations14 不変）。
+テスト関数数は変更していない（doctor53 / tests145 / E2E69 / migrations14 不変）。
 
 ### 3CLIの純粋関数化と自動テスト（CLI-01〜03）
 
@@ -707,7 +709,7 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 「未設定 / 非 UTF-8 の固定文言警告 / 有効な UTF-8」を返す。
 `run()` は JWT の非 UTF-8 を起動拒否、IPFS / 決済の非 UTF-8 を固定文言警告へ倒し、
 `doctor` は `common::env::classify(lookup(..))` で同じ分類を共有する。
-新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests142 不変）。
+新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests145 不変）。
 
 本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
@@ -803,6 +805,13 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   `DELETE FROM revoked_subs WHERE sub = ? AND revoked_at <= ?` で古い閾値以下のみ削除する。
   これにより削除前に back-channel logout が登録した新しい失効が残る。既存の関連テストは
   `test_backchannel_logout_for_sub_allows_reauthentication` と `test_purge_stale_revoked_subs`。
+- OIDC callback の `revoked_subs` メモリ巻き戻し（R2-SERVER）: callback は先にメモリの
+  旧閾値を `remove` してから `delete_superseded_revocation` を呼ぶため、DB 削除失敗時に
+  旧閾値が失われる窓があった。失敗時に `auth_verify` と同じ
+  `entry(user_hash).or_insert(old_threshold)` でメモリを復元し、DB 成功時のみ削除を
+  確定する。並行して新しい閾値が登録済みなら上書きしない。既存
+  `test_auth_verify_clears_db_revocation_before_restart` が DB 削除と再起動後 refresh
+  の契約を検証し、復元パスはコードレビューで担保する（新規 test 関数なし・数値不変）。
 - リフレッシュ回転（R2-REFRESH-MAXAUTH）: `/auth/refresh` は write_lock → `BEGIN` → 消費 `UPDATE` → `changes()` 判定 → `INSER
   T`（`issue_refresh_token_in_tx`）→ `COMMIT` の単一 tx で実行する。変更0件（競合による再利用）は `tx.rollback()` の後にガードを解放し、別tx の `rev
   oke_refresh_family` へつなぐ（ガードを保持したまま再取得するとデッドロックするため、refresh 内では別tx を取る `issue_refresh_token` を呼ばない）。BAN チェック
@@ -814,6 +823,19 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   事前チェック通過後に BAN がコミットされても `iat` 採番号前に発行が止まることを、
   既存 `test_auth_verify_write_waits_for_write_lock` 内へのアサーション追加で検証する
   （新規 test 関数なし、test 数不変）。正常 200・BAN 後 401 等の既存期待値は不変。
+- upload_content BAN 原子性（R2-SERVER）: 事前 `ensure_user_not_banned` の後に
+  `pin_to_ipfs`（最大30秒の外部 I/O）があるため、`begin_write_tx` 取得後の tx 内で
+  `users.is_banned` / `ban_until` を `auth_verify` と同一述語で再読し、有効 BAN
+  なら `contents` / `signatures` の INSERT 前に rollback して 403 を返す。
+  ピン留め済みの失敗では `compensate_unpin` を必ず通す。既存
+  `test_upload_rejects_banned_user` が固定文言・StatusCode を検証し、
+  競合窓の再読パスはコードレビューで担保する（既存期待値・数値は不変）。
+- mod_vote BAN 原子性（R2-SERVER）: `begin_write_tx` 取得後の tx 内で
+  `users.is_banned` / `ban_until` を `auth_verify` と同一述語で再読し、有効 BAN
+  なら `votes` / `signatures` の INSERT 前に rollback して 403 を返す。集計側の
+  BAN 除外（`VOTE_NOT_FROM_BANNED_VOTER_SQL`）は既存どおり維持する。既存
+  `test_banned_juror_cannot_vote` が BAN 投票の拒否と未記録を検証し、
+  競合窓の再読パスはコードレビューで担保する（既存期待値・数値は不変）。
 - 専用テスト名は確定済みで、PAY-04 は `test_payment_verify_stage2_cas_rejects_race_after_detected`、
   ID-05 は `test_reauthentication_delete_keeps_newer_revocation_threshold` が検証する。
 - R2-LOGOUT-TOKEN: logout token の `iat` を失効閾値 `revoked_subs.revoked_at` として扱い、UPSERT の
@@ -1685,7 +1707,10 @@ last_success_timestamp）について、公開形式と実際の進捗を下記�
 - 自動確定は `BEGIN` / `COMMIT` を一件ごとに回し、途中で失敗しても確定済み件数を失わない。
   成功件は `COMMIT` ごとに `note_finalizer_success(metrics, 1)` で `finalizer_processed` へ加算し、
   失敗件は `finalizer_failures` へ分離計上する（成功件と失敗件の混同を防ぐ契約）。
-  既存の finalize_due_reports 系テストのアサーション内でこの部分コミット契約を確認する。
+  `note_finalizer_success(metrics, 0)` は対象 0 件（`failed == 0 && finalized == 0`）の
+  ときだけ呼び、`failed > 0` かつ `finalized == 0` のときは成功 0 件を記録せず
+  `finalizer_failures` のみへ加算する。既存の finalize_due_reports 系テストの
+  アサーション内でこの部分コミット契約を確認する（新規 test 関数なし・数値不変）。
 - `test_client_events_neutralized_url_increments_counter`: `count` 指定7・省略時1・上限1000で
   204（本文なし）を返し、加算は1固定でカウンタが before+1 / +2 / +3 と進むことをオラクルとする。
 - `test_client_events_rejects_invalid_payloads`: 不正 event（固定値以外）・`count` の 0 / 1001 /
@@ -1908,9 +1933,9 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `report_reason_byte_error_enforces_utf8_boundary` | 通報理由の UTF-8 境界を検査 |
 | `content_empty_state_message_switches_on_active_filters` | 空状態文言が絞り込みで切り替わる |
 | `illustration_aria_label_uses_cid_prefix_when_title_blank` | 無題時に CID 接頭辞を aria ラベルへ使用 |
-| `client_metrics_enabled_only_disabled_by_zero` | 0 のみクライアントメトリクスを無効化 |
+| `client_metrics_enabled_disabled_by_zero_or_false` | 0 のみクライアントメトリクスを無効化 |
 | `client_metrics_gate_controls_payload` | ゲートがペイロード送信を制御 |
-| `mock_auth_enabled_only_disabled_by_zero` | 0 のみモック認証を無効化（未設定は有効） |
+| `mock_auth_enabled_disabled_by_zero_or_false` | 0 のみモック認証を無効化（未設定は有効） |
 
 ## CI 前提条件の検証契約（数値不変）
 
@@ -1926,7 +1951,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests142 の数値は不変。
+  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests145 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 - R2-SERVER の原子性・クリーンアップ契約（既存ケース内で担保、新規 test 関数なし）:
   `pin_to_ipfs` 成功後に DB コミットが失敗したら `unpin` 補償を試み、解除失敗は
   固定文言の警告ログのみへ記録してトークン値・レスポンス本文・CID をエコーしない。
@@ -1935,7 +1960,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   行う。UNBAN は `revoked_subs` を削除せず sub epoch を進めて旧 JWT の復活を防ぎ、
   back-channel logout 由来の閾値を保持する。backup / restore は中途失敗の部分ファイル
   を削除し、restore は staging 検証後に `rename` する。E2E69 / check23 / doctor53 /
-  migrations14 / tests142 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
+  migrations14 / tests145 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1956,7 +1981,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor53 / migrations14 / tests142 の数値は不変。
+  check23 / doctor53 / migrations14 / tests145 は doc→code テスト名照合の現行値（実テスト総数ではない）。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -2008,4 +2033,4 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `public-mod-stats-stale` に日本語の鮮度警告を出し、`public-mod-stats-refresh` で
   公開集計のみ再取得する。認証付きオプイン集計 `/mod/stats` の状態は変更しない。
   `moderation.spec.ts` の R5-09 内で警告・更新・オプイン集計の本数不変を検証する。
-- 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests142 は不変。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests145 は不変。

@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T03:05:00+09:00"
+  at: "2026-11-23T03:25:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -99,6 +99,25 @@ generated:
   拒否を担保し、事前チェック通過後に BAN がコミットされてもセッションが発行
   されない。判定述語・固定文言は既存の `ensure_user_not_banned` と同一で、
   期限切れ BAN は従来どおり通過する。
+- コンテンツ投稿（`/content/upload` の `upload_content`）の BAN 判定も原子的に適用する。
+  事前 `ensure_user_not_banned` は `pin_to_ipfs`（最大30秒の外部 I/O）より前にあり、
+  その間に BAN がコミットされる窓があるため、`begin_write_tx` 取得後の tx 内で
+  `users.is_banned` / `ban_until` を `auth_verify` と同一述語
+  （`ban_until IS NULL OR ban_until > datetime('now')`）で再読し、有効 BAN なら
+  rollback して 403 `User is banned` を返す。期限切れ BAN は従来どおり通過する。
+  ピン留め済みの失敗では `compensate_unpin` を必ず通し、孤立ピンを残さない。
+  既存の補償経路・固定文言・状态码は不変。
+- モデレーション投票（`/mod/vote` の `mod_vote`）の BAN 判定も原子的に適用する。
+  事前 `ensure_user_not_banned` に加え、`begin_write_tx` 取得後の tx 内で
+  `users.is_banned` / `ban_until` を `auth_verify` と同一述語で再読し、有効 BAN
+  なら `votes` / `signatures` の INSERT 前に rollback して 403 `User is banned`
+  を返す。集計側の BAN 除外（`VOTE_NOT_FROM_BANNED_VOTER_SQL`）は既存どおり維持し、
+  期限切れ BAN の票は従来どおり定足数へ算入する。
+- OIDC callback の `revoked_subs` メモリ削除は DB 削除（`delete_superseded_revocation`）
+  の成功後に確定する。先にメモリを `remove` した設計では DB 削除失敗時に旧閾値が
+  失われ、再起動後の refresh が古い閾値で塞がり得るため、失敗時は `auth_verify`
+  と同じ `entry(...).or_insert(old_threshold)` でメモリを元の状態へ復元する。
+  並行して新しい閾値が登録済みなら上書きしない（fail-closed を維持）。
 - 失効レコードの保持期間は共通の `REVOCATION_RETENTION_SECS`（refresh TTL 30 日
   ＋マージン 60 秒）とする。refresh は `revoked_subs` の存在だけでセッション
   延長を拒否するため、refresh token が有効な 30 日間は失効閾値を残さないと
@@ -445,6 +464,9 @@ generated:
   途中で一件が失敗しても既に確定済みの件数を失わず、成功件は `COMMIT` ごとに
   `note_finalizer_success(metrics, 1)` で `finalizer_processed` へ加算する。
   失敗件は `finalizer_failures` へ分離計上し、成功件と失敗件を混同しない。
+  成功 0 件の記録（`note_finalizer_success(metrics, 0)`）は対象 0 件の正常終了の
+  ときだけ行う。`failed > 0` かつ `finalized == 0`（対象はあるが一件も確定でき
+  なかった）場合は成功 0 件を記録せず、`finalizer_failures` へ加算するだけに留める。
 - finalizer／purge の観測: `GET /metrics` は `openillustration_finalizer_ticks_total`（周期 tick の実行回数）、
   `openillustration_finalizer_processed_total`（finalizer と周期 purge の処理件数）、
   `openillustration_finalizer_lock_busy_total`（書き込みロック取得失敗でスキップした回数）、
@@ -710,7 +732,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
-  tests142 の数値は不変。
+  tests145 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -719,7 +741,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests142 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests145 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -739,4 +761,4 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests142 の数値は不変。
+  migrations14 / tests145 の数値は不変。

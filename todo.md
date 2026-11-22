@@ -787,6 +787,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第27ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  doc-numbers へ test.describe.only/skip/fixme 検出を追加（親が実測で fail 確認）、
+  backup-rotate.sh の on_failure trap を ALERT_CMD 定義直後へ前移（設定エラーでも通知）、
+  window unit へ OnFailure、cron へ MAILTO 明記と二者択一手順、
+  OIL_MOCK_AUTH/OIL_CLIENT_METRICS の false/FALSE 無効化を共通 build_flag_enabled へ集約、
+  upload_content/mod_vote の tx 内 BAN 再読、OIDC callback の revoked_subs 失敗時復元。
+  finalizer の success(0) 条件は既に満たされていた（コメントのみ追記）。
+  R4 指摘で tests145 追随とテスト名を *_disabled_by_zero_or_false へ改名。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests145、npm audit3lockfile、
+  markdownlint 39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化、公開ledger意図、
+  起動設定一括Config化、E2E_SERVER_PORT設定化、監査エクスポート自動スケジューラ、
+  doctor --strict の CI ゲート化、GPG復号訓練、Dependabot方針、MSRV下限CI検証、
+  cron/systemd の通知unit実体、BUILD-01/MSRV/HANDOFF の残存記述）は記録のみで保留。
+
 - 2026-11-23 コンボ第26ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   doc-numbers へ test.only/skip/fixme 残存検出を追加、client の未使用 base64 依存を削除、

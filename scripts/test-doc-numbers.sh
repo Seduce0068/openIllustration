@@ -36,9 +36,9 @@ count_e2e_tests() {
 	' "$1" | grep -Ec '(^|[^.[:alnum:]_])test\(' || true
 }
 
-# test.only / test.skip / test.fixme の残存を検出（CI の全テスト実行前提を守る）。
+# test.only / test.skip / test.fixme と describe 単位のフォーカスを検出（CI の全テスト実行前提を守る）。
 # count_e2e_tests は test( のみを数えるため、これらは件数に含まれない。
-focused_tests="$(grep -rEn '(^|[^.[:alnum:]_])test\.(only|skip|fixme)\(' e2e/tests/*.spec.ts || true)"
+focused_tests="$(grep -rEn '(^|[^.[:alnum:]_])(test|test\.describe)\.(only|skip|fixme)\(' e2e/tests/*.spec.ts || true)"
 if [[ -n "$focused_tests" ]]; then
 	echo "FAIL focused/skipped E2E tests found:" >&2
 	echo "$focused_tests" >&2

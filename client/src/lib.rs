@@ -177,16 +177,32 @@ const API_BASE: ApiOrigin = ApiOrigin;
 /// 未設定（既定）は送信を継続する（未リリース機能の既定契約を維持するため）。
 const CLIENT_METRICS_ENABLED: bool = metrics_enabled_from_env(option_env!("OIL_CLIENT_METRICS"));
 
-/// ビルド時設定値から監視送信の可否を決める（純粋関数）。
-/// `"0"` だけを無効とみなし、未設定・その他の値は有効とする。
-const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
+/// ビルド時真偽値の共通判定（const fn）。サーバ側の受理値方針に合わせ、
+/// `"0"` / `"false"`（大小文字無視）を無効、未設定とその他を有効とみなす。
+const fn build_flag_enabled(value: Option<&str>) -> bool {
     match value {
         Some(v) => {
             let bytes = v.as_bytes();
-            !(bytes.len() == 1 && bytes[0] == b'0')
+            let zero = bytes.len() == 1 && bytes[0] == b'0';
+            let false_word = match bytes.len() {
+                5 => {
+                    (bytes[0] == b'f' || bytes[0] == b'F')
+                        && (bytes[1] == b'a' || bytes[1] == b'A')
+                        && (bytes[2] == b'l' || bytes[2] == b'L')
+                        && (bytes[3] == b's' || bytes[3] == b'S')
+                        && (bytes[4] == b'e' || bytes[4] == b'E')
+                }
+                _ => false,
+            };
+            !zero && !false_word
         }
         None => true,
     }
+}
+
+/// ビルド時設定値から監視送信の可否を決める（純粋関数）。
+const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
+    build_flag_enabled(value)
 }
 
 /// 開発用モック認証の有効/無効。ビルド時に `OIL_MOCK_AUTH=0` を指定すると注記を止める。
@@ -194,15 +210,8 @@ const fn metrics_enabled_from_env(value: Option<&str>) -> bool {
 const MOCK_AUTH_ENABLED: bool = mock_auth_enabled_from_env(option_env!("OIL_MOCK_AUTH"));
 
 /// ビルド時設定値からモック認証の可否を決める（純粋関数）。
-/// `"0"` だけを無効とみなし、未設定・その他の値は有効とする。
 const fn mock_auth_enabled_from_env(value: Option<&str>) -> bool {
-    match value {
-        Some(v) => {
-            let bytes = v.as_bytes();
-            !(bytes.len() == 1 && bytes[0] == b'0')
-        }
-        None => true,
-    }
+    build_flag_enabled(value)
 }
 
 /// サーバーの本文制限と同じ 10 MiB。選択時に拒否して無駄な送信を避ける。
@@ -6080,15 +6089,17 @@ mod tests {
 
     /// 監視送信は "0" のときだけ止まり、未設定・他値は有効（既定継続）。
     #[test]
-    fn client_metrics_enabled_only_disabled_by_zero() {
+    fn client_metrics_enabled_disabled_by_zero_or_false() {
         assert_eq!(
             super::CLIENT_METRICS_ENABLED,
-            option_env!("OIL_CLIENT_METRICS") != Some("0")
+            super::metrics_enabled_from_env(option_env!("OIL_CLIENT_METRICS"))
         );
         assert!(super::metrics_enabled_from_env(None));
         assert!(super::metrics_enabled_from_env(Some("1")));
         assert!(super::metrics_enabled_from_env(Some("")));
         assert!(!super::metrics_enabled_from_env(Some("0")));
+        assert!(!super::metrics_enabled_from_env(Some("false")));
+        assert!(!super::metrics_enabled_from_env(Some("FALSE")));
     }
 
     /// ビルド設定に応じてペイロード作成が止まること。既定では既存契約を維持する。
@@ -6104,17 +6115,19 @@ mod tests {
         }
     }
 
-    /// モック認証は "0" のときだけ止まり、未設定・他値は有効（既定継続）。
+    /// モック認証は "0" / "false"（大小文字無視）で止まり、未設定・他値は有効。
     #[test]
-    fn mock_auth_enabled_only_disabled_by_zero() {
+    fn mock_auth_enabled_disabled_by_zero_or_false() {
         assert_eq!(
             super::MOCK_AUTH_ENABLED,
-            option_env!("OIL_MOCK_AUTH") != Some("0")
+            super::mock_auth_enabled_from_env(option_env!("OIL_MOCK_AUTH"))
         );
         assert!(super::mock_auth_enabled_from_env(None));
         assert!(super::mock_auth_enabled_from_env(Some("1")));
         assert!(super::mock_auth_enabled_from_env(Some("")));
         assert!(!super::mock_auth_enabled_from_env(Some("0")));
+        assert!(!super::mock_auth_enabled_from_env(Some("false")));
+        assert!(!super::mock_auth_enabled_from_env(Some("FALSE")));
     }
 }
 

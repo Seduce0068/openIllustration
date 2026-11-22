@@ -1350,7 +1350,19 @@ pub async fn callback(
     // 古い閾値より新しい値が back-channel logout で登録された場合は残す
     // （メモリ削除と DB 削除の間のレースで直近の失効が消えないようにする）。
     if let Some(old_threshold) = old_threshold {
-        delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await?;
+        if let Err(err) =
+            delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await
+        {
+            // DB が失敗したら先に remove したメモリを旧閾値へ戻す（auth_verify と同じ）。
+            // 並行して新しい閾値が登録済みなら or_insert は上書きしない。
+            state
+                .revoked_subs_before
+                .lock()
+                .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?
+                .entry(user_hash.clone())
+                .or_insert(old_threshold);
+            return Err(err);
+        }
     }
     let session_claims = Claims {
         sub: user_hash.clone(),

@@ -8,7 +8,7 @@ tags:
   - open-illustration
 generated:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-23T03:25:00+09:00"
 ---
 
 ## 1. リポジトリ状態
@@ -136,7 +136,8 @@ cargo run -p server --bin verify_audit_log -- \
 CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現できる
 （2026-11-17 に9件成功、当時値。現在値は TEST_SPECIFICATION を参照）。
 固定 trunk 0.21.14 は `NO_COLOR=1` の環境だと `--no-color`
-解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。8080 が他プロセスに占拠されても動くよう `E2E_CLIENT_PORT` の既定値は 18080。
+解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。CI ゲート（`e2e/ci-e2e.sh`）では 8080 が他プロセスに占拠されても動くよう
+`E2E_CLIENT_PORT=18080` を export する。ローカル `npm test` の既定は 8080。
 
 E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
 再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が `MIN_NODE_MAJOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。`MAX_NODE_MAJOR` /

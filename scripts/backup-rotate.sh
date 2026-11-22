@@ -26,6 +26,30 @@ offsitecopy="${OFFSITE_COPY_CMD:-}"
 offsitedest="${OFFSITE_DEST:-}"
 # 失敗通知: 実行ファイルのパス。呼び出しは <メッセージ> の1引数（eval 不使用）。
 alert_cmd="${ALERT_CMD:-}"
+
+rotation_list=""
+tmp_dir=""
+tmp_db=""
+# 失敗通知に添える段階名。初期値は setup とし、各検証・公開段階の直前で更新する。
+stage="setup"
+on_failure() {
+	local code=$?
+	if [[ -n "$tmp_dir" ]]; then
+		rm -rf -- "$tmp_dir" || true
+	fi
+	if [[ -n "$rotation_list" ]]; then
+		rm -f -- "$rotation_list" || true
+	fi
+	if ((code == 0)); then
+		return 0
+	fi
+	if [[ -n "$alert_cmd" ]]; then
+		"$alert_cmd" "openIllustration backup failed at ${stage} (exit ${code}) on $(hostname)" >/dev/null 2>&1 || true
+	fi
+	return "$code"
+}
+trap on_failure EXIT
+
 # 別経路で保存した監査 Merkle root（hex、非機微）。設定時は verify_audit_log の
 # --expect-root へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。
 # 未設定時は内部整合性チェックのみ（既存運用を壊さない後方互換）。
@@ -142,29 +166,6 @@ fi
 # 失敗時に通知する。通知自体が失敗しても元の終了コードを維持する。
 # mktemp の作業ディレクトリ（平文 tmp_db を含む）とローテーション列挙の
 # 一時ファイルは、成否にかかわらず EXIT 時に必ず削除する。
-rotation_list=""
-tmp_dir=""
-tmp_db=""
-# 失敗通知に添える段階名。初期値は setup とし、各検証・公開段階の直前で更新する。
-stage="setup"
-on_failure() {
-	local code=$?
-	if [[ -n "$tmp_dir" ]]; then
-		rm -rf -- "$tmp_dir" || true
-	fi
-	if [[ -n "$rotation_list" ]]; then
-		rm -f -- "$rotation_list" || true
-	fi
-	if ((code == 0)); then
-		return 0
-	fi
-	if [[ -n "$alert_cmd" ]]; then
-		"$alert_cmd" "openIllustration backup failed at ${stage} (exit ${code}) on $(hostname)" >/dev/null 2>&1 || true
-	fi
-	return "$code"
-}
-trap on_failure EXIT
-
 # 既存のバックアップ先が 0700 より開いている場合は暗黙に修正せず拒否する（fail-closed）。
 if [[ -e "$backup_dir" ]]; then
 	existing_mode="$(stat -c %a "$backup_dir")"

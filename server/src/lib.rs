@@ -2237,7 +2237,9 @@ async fn finalize_due_reports_with_guard(
         && finalized == 0
         && let Some(metrics) = metrics
     {
-        // 対象 0 件の正常終了も従来どおり「最後の成功」として記録する。
+        // 成功 0 件の記録は対象 0 件のときだけ。failed > 0（＝対象はあるが
+        // 一件も確定できなかった）場合は finalizer_failures へ加算するだけに留め、
+        // note_finalizer_success(0) を呼ばない。成功件は COMMIT ごとに既に計上済み。
         note_finalizer_success(metrics, 0);
     }
     Ok(finalized)
@@ -4616,6 +4618,27 @@ pub async fn mod_vote(
 
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
+    // BAN 原子化: 事前 ensure_user_not_banned から write tx 取得の間に BAN が
+    // コミットされても votes / signatures を記録しない。write_lock 保持下で
+    // auth_verify と同一述語で再読し、有効 BAN なら 403 で拒否する
+    // （tx は drop でロールバック）。集計側の BAN 除外は既存どおり維持する。
+    let mut ban_rows = tx
+        .query(
+            "SELECT 1 FROM users
+             WHERE user_hash = ?
+               AND is_banned = TRUE
+               AND (ban_until IS NULL OR ban_until > datetime('now'))",
+            [vote.juror_hash.clone()],
+        )
+        .await?;
+    if ban_rows.next().await?.is_some() {
+        drop(ban_rows);
+        drop(tx);
+        drop(_write_guard);
+        return Err(AppError::Forbidden("User is banned".to_string()));
+    }
+    drop(ban_rows);
+
     // Report must exist, still be under review, and be inside its voting
     // window. Votes on concluded or expired reports are rejected so that a
     // re-tally can never flip an already-decided status.
@@ -5059,6 +5082,26 @@ pub async fn upload_content(
     // 元のエラーを返し、DB 未確定（＝アップロード失敗）を正とする。
     let result: Result<Json<String>, AppError> = async {
         let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+
+        // BAN 原子化: 事前 ensure_user_not_banned から pin_to_ipfs（最大30秒の外部 I/O）
+        // の間に BAN がコミットされても contents / signatures を登録しない。
+        // write_lock を保持した tx 内で auth_verify と同一述語で再読し、有効 BAN なら
+        // 403 で拒否する（tx は drop でロールバック）。ピン留め済みの失敗なので
+        // 補償は呼び出し側の compensate_unpin が必ず通す。
+        let mut ban_rows = tx
+            .query(
+                "SELECT 1 FROM users
+                 WHERE user_hash = ?
+                   AND is_banned = TRUE
+                   AND (ban_until IS NULL OR ban_until > datetime('now'))",
+                [owner_hash.clone()],
+            )
+            .await?;
+        if ban_rows.next().await?.is_some() {
+            drop(ban_rows);
+            return Err(AppError::Forbidden("User is banned".to_string()));
+        }
+        drop(ban_rows);
 
         // The same bytes resolve to the same CID and contents is keyed by CID,
         // so a re-upload would otherwise surface as a primary-key 500.
