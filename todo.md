@@ -787,6 +787,20 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第23ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で high2件+medium2件を是正:
+  sid-only Logout Token を sub必須でfail-closed拒否（refresh復活防止）、
+  appealを元通報者/所有者に限定+30日クールダウン、
+  get_contentのIPFS I/O後status再SELECT（通報中配信防止）、
+  verify_user_signatureのNULL公開鍵を401へ載せる。
+  R4 指摘で appeal の元通報者判定を appeal_of 対象通報の created_at に最も近い監査行へ
+  紐付け（最古行固定による誤認可を解消）、docs の tests142 追随。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests142、npm audit3lockfile）。
+  tests142 は doc→code テスト名照合値であり実テスト総数ではない点に注意。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵未登録の403/501化、公開ledgerの設計意図、
+  npm audit moderate 方針）は記録のみで保留。
+
 - 2026-11-23 コンボ第22ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し、新規タスクが得られたためループ継続。R6 で以下を是正・記録:
   MISMATCH→EXPIRED 上書き防止、IPFS孤立ピン補償、favorite/注文tx原子化、UNBAN旧JWT復活防止、

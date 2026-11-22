@@ -5,7 +5,7 @@ description: 通報・投票・確定・異議・BAN・IPFS削除の手続を決
 tags: [adr, moderation, governance, accepted]
 generated:
   by: dsh
-  at: "2026-11-21T21:33:39+09:00"
+  at: "2026-11-23T02:15:00+09:00"
 ---
 
 ## ADR-0004: モデレーション手続
@@ -94,6 +94,7 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
     棄却理由は `content_audit_log` に記録する。
   - 確定から30日以内の再通報は `appeal_of` に元通報を記録する異議として受理し、
     元の確定を直接上書きしない。
+  - R2-AUTHZ: 異議の提出主体を元通報者またはコンテンツ所有者へ限定する（下記「異議の認可」参照）。
   - 通報・確定・異議の理由を `content_audit_log` に、投票署名を `signatures` に記録する。
 - **採用済み・実装済み（2026-11-17 追加）**:
   - `MODERATION_OPERATOR_HASHES` で運用者を設定する。未設定・未登録の主体は
@@ -150,6 +151,21 @@ ADR-0001 は、反検閲性が違法・有害コンテンツ対応を無効化�
     運用者は各デプロイが設定するため、プロジェクト側の運営主体決定は不要。
 - 実装が本ADRに追いつくまで、モデレーション結果を本番の最終判断として
   扱わない（[DOCUMENT_STATUS.md](../DOCUMENT_STATUS.md) の DEC-05 を参照）。
+
+### 異議の認可（R2-AUTHZ）
+
+- `appeal_of` を付けた異議は、元通報者またはコンテンツ所有者だけが申し立てられる。
+  元通報者は `reports` 表に `reporter_hash` 列がないため、通報時に記録された
+  `content_audit_log` の `changed_by`（reason が `User report:` の行）から導出する。
+  監査行を持たない既存データでは fail-closed でコンテンツ所有者のみを受理する。
+- 該当しない主体は固定文言 `Appeal is restricted to the original reporter or content owner`
+  の 403 で拒否し、通報行を作成しない。
+- 同一 CID の異議は 30 日以内に 1 回までとし、クールダウン中の再異議は固定文言
+  `Appeal cooldown: only one appeal per CID within 30 days` の 403 で拒否する。
+- 却下した代替案: 誰でも異議を提出できる現行挙動は、第三者の繰り返し申し立てで
+  複数の審査が並行し、確定が事実上無効化されるため採用しない。また「運用者承認を
+  必須とする」案は、手続が運用者の稼働に依存して遅延するため、自動的な
+  クールダウン（30 日 1 回）を採用した。
 
 ## Consequences
 

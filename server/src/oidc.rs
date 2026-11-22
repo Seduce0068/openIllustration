@@ -1154,9 +1154,13 @@ async fn verify_logout_token(
             "logout token must not contain a nonce".to_string(),
         ));
     }
-    if claims.sid.is_none() && claims.sub.is_none() {
+    // OIDC Back-Channel Logout 仕様では sub は任意クレーム（sid のみでも可）だが、
+    // 本システムのリフレッシュ失効は revoked_subs の sub に依存している。
+    // sid のみを受理すると refresh から新しいセッションが発行され、
+    // ログアウトしたはずのセッションが復活するため、fail-closed で sub を必須化する。
+    if claims.sub.is_none() {
         return Err(AppError::Unauthorized(
-            "logout token has neither sid nor sub".to_string(),
+            "logout token requires sub".to_string(),
         ));
     }
 

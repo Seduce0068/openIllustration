@@ -6263,6 +6263,37 @@ async fn test_zero_signature_rejected_when_mock_auth_disabled() {
         response_body.contains("Invalid digital signature"),
         "rejection must come from signature verification: {response_body}"
     );
+
+    // public_key_der が NULL のモック作成ユーザーが実署名を提示しても
+    // NULL デコードで 500 にならず、既存の 401 経路へ載る。
+    let null_key_user = "null_key_user";
+    db.execute(
+        "INSERT INTO users (user_hash, public_key_der) VALUES (?, NULL)",
+        [null_key_user],
+    )
+    .await
+    .unwrap();
+    let null_key_token = generate_token(TEST_JWT_SECRET, null_key_user).await;
+    let boundary = "auth01-null-public-key";
+    let body = multipart_upload_body_full(
+        boundary,
+        "upload.jxl",
+        "image/jxl",
+        &[0xFF, 0x0A, 0x01, 0x00],
+        None,
+        null_key_user,
+        &[0x11u8; 256],
+    );
+    let (status, response_body) = send_upload(&app, &null_key_token, boundary, body).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "NULL public_key_der must yield 401, not 500: {response_body}"
+    );
+    assert!(
+        response_body.contains("Invalid digital signature"),
+        "NULL public_key_der must ride the existing 401 path: {response_body}"
+    );
 }
 
 /// ALLOW_MOCK_AUTH=1 でも空署名・不正長の全ゼロ署名はアップロードで受理しない。
@@ -9607,6 +9638,15 @@ async fn test_backchannel_logout_rejects_malformed_claims() {
             "missing_sid_and_sub",
             json!({"events": {"http://schemas.openid.net/event/backchannel-logout": {}}}),
         ),
+        // R2-AUTHZ: 仕様上 sub は任意だが、本システムは refresh 失効を sub に
+        // 依存するため sid-only の logout token を 401 で拒否する。
+        (
+            "sid_only_without_sub",
+            json!({
+                "sid": "some-sid",
+                "events": {"http://schemas.openid.net/event/backchannel-logout": {}},
+            }),
+        ),
         (
             "non_empty_events",
             json!({
@@ -9653,6 +9693,21 @@ async fn test_backchannel_logout_rejects_malformed_claims() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "case={name}");
     }
+
+    // 専用ヘルパーが生成する sid-only トークン（sub 無し）も401で拒否する。
+    let logout_token = mock.logout_token("sid-only");
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/backchannel-logout")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("logout_token={logout_token}")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 }
 
 /// ADR-0002: back-channel logout で sid を失効させる。
@@ -9670,7 +9725,9 @@ async fn test_backchannel_logout_revokes_session() {
     .unwrap()
     .claims;
     let sid = claims.sid.expect("session id");
-    let logout_token = mock.logout_token(&sid);
+    // R2-AUTHZ: sub 無しの sid-only logout token は拒否されるため、
+    // セッション失効の回帰では sid と sub の両方を付与する。
+    let logout_token = mock.logout_token_for_sid_and_sub(&sid, &claims.sub);
 
     let response = app
         .clone()
@@ -11777,6 +11834,59 @@ async fn test_get_content_hides_reported_and_rejected() {
             "status={status} must not be directly retrievable"
         );
     }
+
+    // IPFS I/O の間に status が Reported へ更新された場合も、取得開始時の
+    // Approved 判定を使い回してバイトを返さない（レスポンス直前の再検証）。
+    let body = b"mid-flight reported".to_vec();
+    let checksum = sha256_hex(&body);
+    let changed_cid = "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111s";
+    let gateway = MockGateway::start(MockResponse {
+        status: StatusCode::OK,
+        body,
+        delay: Duration::from_millis(800),
+        expected_cid: Some(changed_cid.to_string()),
+        inflated_content_length: None,
+    })
+    .await;
+    let (delayed_app, delayed_db) =
+        setup_app_with_options(vec![gateway.template.clone()], Duration::from_secs(3), true).await;
+    delayed_db
+        .execute(
+            "INSERT INTO contents (cid, type, owner_hash, checksum, status)
+             VALUES (?, 'Illustration', 'test_user', ?, 'Approved')",
+            [changed_cid.to_string(), checksum],
+        )
+        .await
+        .unwrap();
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let updater_db = Arc::clone(&delayed_db);
+    let updater_cid = changed_cid.to_string();
+    let updater = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        updater_db
+            .execute(
+                "UPDATE contents SET status = 'Reported' WHERE cid = ?",
+                [updater_cid],
+            )
+            .await
+            .unwrap();
+    });
+    let response = delayed_app
+        .oneshot(with_peer(
+            Request::get(format!("/content/{changed_cid}"))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    updater.await.unwrap();
+    assert_eq!(
+        response.status(),
+        StatusCode::NOT_FOUND,
+        "status changed during IPFS I/O must not be served with the stale Approved decision"
+    );
 }
 
 #[tokio::test]
@@ -12116,7 +12226,9 @@ async fn test_appeal_within_30_days_creates_new_report() {
             &app,
             "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
             "Appeal: new evidence",
-            "appellant"
+            // R2-AUTHZ: 異議は元通報者またはコンテンツ所有者のみ。
+            // 本フィクスチャのコンテンツ所有者は "owner" なのでその sub で申し立てる。
+            "owner"
         )
         .await,
         StatusCode::OK,
@@ -12155,6 +12267,92 @@ async fn test_appeal_within_30_days_creates_new_report() {
     assert!(
         reason.contains("appeal"),
         "audit must record the appeal: {reason}"
+    );
+}
+
+/// R2-AUTHZ: 元通報者でもコンテンツ所有者でもない主体の異議は 403 で拒否する。
+#[tokio::test]
+async fn test_appeal_by_unauthorized_user_is_forbidden() {
+    let (app, db) = setup_mod_app().await;
+    for _ in 0..3 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+    }
+    force_conclude(&db, 1).await;
+
+    assert_eq!(
+        send_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
+            "Appeal by a stranger",
+            "stranger"
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "only the original reporter or content owner may appeal"
+    );
+
+    let mut rows = db.query("SELECT COUNT(*) FROM reports", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(count, 1, "a rejected appeal must not create a report row");
+}
+
+/// R2-AUTHZ: 同一 CID の異議は 30 日以内に 1 回までとする。
+#[tokio::test]
+async fn test_second_appeal_within_30_days_is_rejected() {
+    let (app, db) = setup_mod_app().await;
+    // report 1 を確定させる。
+    for _ in 0..3 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 1, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+    }
+    force_conclude(&db, 1).await;
+
+    // 1 回目の異議（所有者による申し立て）は受理される。
+    assert_eq!(
+        send_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
+            "First appeal",
+            "owner"
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    // 異議（report 2）を確定させ、再度の異議を試みる。
+    for _ in 0..3 {
+        let (juror, key) = insert_juror(&db).await;
+        assert_eq!(
+            send_signed_vote(&app, 2, "Reject", &juror, &key).await,
+            StatusCode::OK
+        );
+    }
+    force_conclude(&db, 2).await;
+
+    assert_eq!(
+        send_report(
+            &app,
+            "QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111T",
+            "Second appeal",
+            "owner"
+        )
+        .await,
+        StatusCode::FORBIDDEN,
+        "a second appeal for the same CID within 30 days must be rejected"
+    );
+
+    let mut rows = db.query("SELECT COUNT(*) FROM reports", ()).await.unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 2,
+        "the cooled-down appeal must not create a report row"
     );
 }
 

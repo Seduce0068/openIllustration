@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T01:50:00+09:00"
+  at: "2026-11-23T02:15:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -55,6 +55,11 @@ generated:
   session Cookie は発行しないため削除対象に含まない。JWT は応答本文のみで搬送する。back-channel logout では logout token の `iat` を更新時刻とみなし、
   `revoked_subs.revoked_at` は受け取った `iat` からのみ導出する（サーバー時刻 `Utc::now()` では上書きしない）。
   `iat > now + OIDC_CLOCK_SKEW_SECS` と未来 `nbf` は401で拒否し、nbf クレーム欠落は受理する。
+  R2-AUTHZ により logout token は `sub` の存在を必須とする（`sub` 欠落は固定文言 `logout token requires sub` で401）。
+  OIDC Back-Channel Logout 仕様上 `sub` は任意クレーム（後続の `sid` セッション失効のみでも仕様適合）だが、
+  本システムはリフレッシュトークン失効を `revoked_subs`（`sub` キー）に依存しているため、
+  `sid` のみを受理すると refresh 経由で新しいセッション JWT が発行され、ログアウト済みセッションが復活する。
+  仕様の任意性より fail-closed を優先し、`sid` のみのログアウト要求を拒否する（却下理由）。
 - クライアントの自動 refresh は単一フライトの完了値を無批判に採用しない。`/auth/refresh` の
   `VerifyResponse` は `authorized` / `user_hash` / `token` を契約とし、`user_hash` が
   現在のログインユーザーと不一致なら JWT を採用せず `Failed` として元の 401 を返す。
@@ -105,6 +110,12 @@ generated:
   が NULL デコードで 500 になるため、鍵未登録は固定文言の 403/501 として扱う方針（未実装）。
   既に実鍵が登録済みの主体は上書きせず、upload / vote の既存署名検証の期待値は
   不変である。
+- モック経路で作成されたユーザーは `public_key_der` が NULL であり得る。
+  `verify_user_signature` は NULL を `Option<Vec<u8>>` として読み、鍵が無ければ
+  検証不能として `false` を返し、upload / vote の既存 401 経路へ載せる。
+  NULL デコードによる 500 は発生させない。OIDC の「署名鍵未登録」プレースホルダ
+  （`oidc-no-signing-key:`）は現行どおり 401 とし、403 / 501 化は設計判断待ちのため
+  変更しない。
 
 ## 2. コンテンツ・個人データ
 
@@ -120,6 +131,11 @@ generated:
   `contents.status = 'Approved'` の存在確認と `favorites` の INSERT / DELETE を行う。
   確認後に状態が変わる競合を排除し、存在しない・非 Approved の CID は従来どおり
   404（有無を識別子で区別しない）とする。
+- `GET /content/{cid}` も取得開始時の `status = 'Approved'` 確認だけを根拠に配信しない。
+  IPFS バイト取得の間に `mod_report` で `Reported` / `Rejected` へ更新され得るため、
+  レスポンス組み立て直前に `SELECT status FROM contents WHERE cid = ?` を再実行し、
+  `Approved` でなければ 404 を返す。共有 `Connection` の制約上、読み取り tx ではなく
+  再 SELECT で最新状態を確認する。チェックサム検証やヘッダ契約は変更しない。
 - `GET /me/export` は認証必須（`AuthClaims`）。`version:1` / `generated_at` / `sub` と12表
   （`users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` /
   `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` /
@@ -131,6 +147,13 @@ generated:
 
 - MVPではDBを正本とする。投票期間は通報から7日とし、期限到達後に集計する。定足数3票未達なら通報を棄却して `Approved` に復帰し、3票以上なら多数決（同数は `Rejected`、ADR-0004、
   公開継続リスクを避ける安全側判断）で確定する。期限前の即時確定は行わない。
+  R2-AUTHZ により `appeal_of` を付けた異議（確定から30日以内の再通報）は、
+  元通報者（`reports` に `reporter_hash` 列はないため `content_audit_log` の `changed_by`、
+  reason が `User report:` の行から導出）またはコンテンツ所有者（`contents.owner_hash`）に限定する。
+  それ以外の主体は固定文言 `Appeal is restricted to the original reporter or content owner` で403とし、通報行を作成しない。
+  さらに同一 CID の異議は30日以内に1回までとし、クールダウン中の再異議は固定文言
+  `Appeal cooldown: only one appeal per CID within 30 days` で403とする（運用者承認を要求する代替案の代わりに、
+  自動的な再通報による審査の並行を防ぐ）。いずれも fail-closed であり、監査行が存在しない既存データでは所有者のみを受理する。
 - 期限到達はバックグラウンドワーカーが自動検知して確定する（周期は `MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、範囲30〜3600秒）。手動の
   `POST /mod/reports/{report_id}/finalize` も可能で、両者は冪等。複数インスタンス運用時は同じDBに対する simultaneous finalize を避けるため、
   現状は単一ライター運用を前提とする。
@@ -677,7 +700,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
-  tests136 の数値は不変。
+  tests142 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -686,7 +709,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests136 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests142 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -706,4 +729,4 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
-  migrations14 / tests136 の数値は不変。
+  migrations14 / tests142 の数値は不変。

@@ -3526,19 +3526,20 @@ pub async fn get_content(
 
     // 一覧と同じく Approve 済みのみ配信する。通報中（Reported）/却下（Rejected）は
     // CID を知っていても直接取得できないようにする（暫定非表示の実効化）。
-    let mut rows = state
-        .db
-        .query(
-            "SELECT checksum, type FROM contents WHERE cid = ? AND status = 'Approved'",
-            [cid.clone()],
-        )
-        .await?;
-
-    let (expected_checksum, content_kind): (String, String) = if let Some(row) = rows.next().await?
-    {
-        (row.get(0)?, row.get(1)?)
-    } else {
-        return Err(AppError::NotFound);
+    // rows をこのスコープで閉じ、後続の IPFS I/O 中は共有 Connection を保持しない。
+    let (expected_checksum, content_kind): (String, String) = {
+        let mut rows = state
+            .db
+            .query(
+                "SELECT checksum, type FROM contents WHERE cid = ? AND status = 'Approved'",
+                [cid.clone()],
+            )
+            .await?;
+        if let Some(row) = rows.next().await? {
+            (row.get(0)?, row.get(1)?)
+        } else {
+            return Err(AppError::NotFound);
+        }
     };
 
     // 保存済みのコンテンツ種別に応じた MIME を返す。
@@ -3640,6 +3641,25 @@ pub async fn get_content(
                     redact_url(&gateway_url)
                 );
                 return Err(AppError::BadGateway);
+            }
+
+            // 取得開始時に Approved を読んだ後も、IPFS I/O の間に mod_report で
+            // Reported / Rejected へ更新される可能性がある。共有 Connection の
+            // 制約上 read tx は使わず、レスポンス組み立て直前に status を再 SELECT
+            // して最新状態を確認する。Approved でなければ古い判定で返さず 404。
+            let current_status: Option<String> = {
+                let mut status_rows = state
+                    .db
+                    .query("SELECT status FROM contents WHERE cid = ?", [cid.clone()])
+                    .await?;
+                if let Some(row) = status_rows.next().await? {
+                    row.get::<Option<String>>(0)?
+                } else {
+                    None
+                }
+            };
+            if current_status.as_deref() != Some("Approved") {
+                return Err(AppError::NotFound);
             }
 
             return Response::builder()
@@ -4026,17 +4046,83 @@ pub async fn mod_report(
     // 元の確定を上書きせず、新しい通報行を appeal_of で関連付ける。
     let mut prior_rows = tx
         .query(
-            "SELECT report_id FROM reports
+            "SELECT report_id, created_at FROM reports
              WHERE target_cid = ? AND concluded_at IS NOT NULL
                AND datetime('now') <= datetime(concluded_at, '+30 days')
              ORDER BY concluded_at DESC, report_id DESC LIMIT 1",
             [report.target_cid.clone()],
         )
         .await?;
-    let appeal_of: Option<i64> = match prior_rows.next().await? {
-        Some(row) => Some(row.get(0)?),
-        None => None,
-    };
+    let (appeal_of, prior_created_at): (Option<i64>, Option<String>) =
+        match prior_rows.next().await? {
+            Some(row) => (Some(row.get(0)?), row.get(1)?),
+            None => (None, None),
+        };
+
+    // ADR-0004 R2-AUTHZ: 異議（appeal_of 付き再通報）は元通報者または
+    // コンテンツ所有者だけが申し立てられる。それ以外の主体は 403 の固定文言で拒否する。
+    // reports 表に reporter_hash 列はないため、元通報者は通報時に更新された
+    // content_audit_log の changed_by（reason が "User report:" の行）から導出する。
+    // appeal_of が指す通報に紐づく通報者を特定するため、その通報の created_at に
+    // 最も近い監査行を選ぶ（CID 内で最古の行を選ぶと別審査の通報者を誤認する）。
+    // 監査行が存在しない（既存データ）場合は fail-closed で所有者のみを受理する。
+    if appeal_of.is_some() {
+        let mut owner_rows = tx
+            .query(
+                "SELECT owner_hash FROM contents WHERE cid = ?",
+                [report.target_cid.clone()],
+            )
+            .await?;
+        let owner_hash: Option<String> = match owner_rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => None,
+        };
+        let is_content_owner = owner_hash.as_deref() == Some(_claims.sub.as_str());
+
+        let mut reporter_rows = tx
+            .query(
+                "SELECT changed_by FROM content_audit_log
+                 WHERE cid = ? AND reason LIKE 'User report:%'
+                 ORDER BY abs(julianday(created_at) - julianday(?)) ASC, log_id ASC LIMIT 1",
+                [
+                    report.target_cid.clone(),
+                    prior_created_at.unwrap_or_default(),
+                ],
+            )
+            .await?;
+        // changed_by は NULL 許容列のため Option で読む。
+        let prior_reporter: Option<String> = match reporter_rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => None,
+        };
+        let is_prior_reporter = prior_reporter.as_deref() == Some(_claims.sub.as_str());
+
+        if !is_content_owner && !is_prior_reporter {
+            return Err(AppError::Forbidden(
+                "Appeal is restricted to the original reporter or content owner".to_string(),
+            ));
+        }
+
+        // 同一 CID の異議は 30 日以内に 1 回まで。直近 30 日以内に異議が
+        // 登録済みなら、追加の異議は 403 の固定文言で拒否する（運用者承認の代理）。
+        let mut appeal_rows = tx
+            .query(
+                "SELECT COUNT(*) FROM reports
+                 WHERE target_cid = ? AND appeal_of IS NOT NULL
+                   AND datetime('now') <= datetime(created_at, '+30 days')",
+                [report.target_cid.clone()],
+            )
+            .await?;
+        let recent_appeals: i64 = match appeal_rows.next().await? {
+            Some(row) => row.get(0)?,
+            None => 0,
+        };
+        if recent_appeals > 0 {
+            return Err(AppError::Forbidden(
+                "Appeal cooldown: only one appeal per CID within 30 days".to_string(),
+            ));
+        }
+    }
 
     match appeal_of {
         Some(prior_id) => {
@@ -4617,9 +4703,17 @@ pub async fn verify_user_signature(
             [user_hash],
         )
         .await?;
-    let der: Vec<u8> = if let Some(row) = rows.next().await? {
-        row.get(0)?
+    // mock 経路で作成されたユーザーは public_key_der が NULL であり得る。
+    // NULL を Vec<u8> として読むと 500 になるため Option で受け、鍵が無い場合は
+    // 検証不能として false を返して呼び出し側の 401 経路へ載せる。OIDC の
+    // 「署名鍵未登録」プレースホルダは現行どおり 401 のまま（403/501 化は
+    // 設計判断待ちのため変更しない）。
+    let der: Option<Vec<u8>> = if let Some(row) = rows.next().await? {
+        row.get::<Option<Vec<u8>>>(0)?
     } else {
+        return Ok(false);
+    };
+    let Some(der) = der else {
         return Ok(false);
     };
 

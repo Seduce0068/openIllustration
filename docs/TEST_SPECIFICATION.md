@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T01:50:00+09:00"
+  at: "2026-11-23T02:15:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T01:50:00+09:00"
+  at: "2026-11-23T02:15:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -208,7 +208,7 @@ auth 3件・export 3件・全体69件を維持する。
 | 決済 CID/価格 | 注文作成時に CID 形式・コンテンツ存在・`Approved` 状態・提示価格と `amount_jpy` の一致を検証 | 不一致・不存在・レビュー中・不正 CID を拒否し、注文取得時に CID が保存される | 実装済み。実チェーン上で注文金額と実際の送金額を照合する検証は未実装（実RPC待ち） |
 | CONTENT-02 | IPFS応答が10 MiB超過、遅延、切断 | 上限/タイムアウトを適用し、完全データとして返さない | 実装済み。10 MiB 超過とタイムアウト、次ゲートウェイへのフォールバック、ストリーム途中の切断（Partial ボディを返さない）をローカルモックで検証 |
 | CONTENT-03 | SHA-256不一致 | コンテンツ描画を拒否 | 実装済み。checksum 一致で 200、不一致で 401、Illustration/Novel の Content-Type をローカルモックで検証 |
-| CONTENT-05 | 通報中/却下コンテンツの直接 CID 取得 | 404 で配信しない | 実装済み。`status = 'Approved'` で絞り、Reported/Rejected が 404 になることを mutation テストで確認 |
+| CONTENT-05 | 通報中/却下コンテンツの直接 CID 取得 | 404 で配信しない | 実装済み。`status = 'Approved'` で絞り、Reported/Rejected が 404 になることを mutation テストで確認。IPFS I/O 中に `Reported` へ更新された場合もレスポンス直前の再 SELECT で 404 になることを既存テスト内へアサーション追加で確認（新規 test なし） |
 | CONTENT-04 | 小説に `<script>` 等のraw HTML、`javascript:` / `data:` リンク・画像URL | raw HTMLを実行せず、危険なURLスキームを無効化 | 実装済み、回帰テストあり |
 | CONTENT-06 | `title` / `description` / `tags` の上限超過（UTF-8 バイト数）とメタデータ重複フィールド | 400で拒否し、保存・一覧表示に反映しない | 実装済み。`title` 200 B、`description` 2000 B、`tags` 10個・各50 B の境界値と超過を検証（`test_upload_rejects_oversized_metadata` / `test_content_metadata_validation_bounds`）。省略・空文字は受理（`test_upload_accepts_optional_metadata`）。`tags` はカンマ区切り1フィールドで、空文字は空ベクトルとして保存。具体的な byte 境界は `title` が日本語66文字（198 B）受理／67文字（201 B）拒否、`description` が666文字（1998 B）受理／667文字（2001 B）拒否、各タグが16文字（48 B）受理／17文字（51 B）拒否、タグ個数が10個受理／11個拒否。クライアントは送信前ゲート `metadata_byte_error` でこれらを通信前に拒否し、HTTP リクエストを1本も送らない（HTML の `maxlength` は UTF-16 コードユニット単位のため日本語では上限を守れない）。境界回帰はクライアント側の既存 `#[cfg(test)]` モジュール内の単体テストで検証（E2E `test()` 69件は不変） |
 | CONTENT-07 | `GET /content` の `q` / `tag` / `type` / `limit` / `offset` | 条件に一致する `Approved` のみを `created_at DESC` で返す | 実装済み。`q` は title/description の部分一致（OR）、`tag` はカンマ区切りタグの前方一致、`type` は完全一致（不正値は0件で400にしない）。範囲外・非数値の `limit` は50、負・非数値の `offset` は0へフォールバック（`test_list_contents_filters_by_query_tag_and_type` / `test_list_contents_limit_boundaries_and_offset` / `test_content_query_parser_defaults_and_bounds`） |
@@ -234,6 +234,7 @@ auth 3件・export 3件・全体69件を維持する。
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み。REPORTS-ERR-01 の既存1件内へ、ステータス200だがフィールド型が壊れた JSON（`report_id` が文字列・`reason` が数値）を返すフェーズを追加し、`reports-error` の固定文言 `投票一覧の解析に失敗しました。`・サーバー本文センチネル非表示・`NO_PENDING_VOTES` 非表示を検証（新規 `test()` なし、moderation14件・全体69件を維持） |
 | MOD-13 | `GET /mod/stats/public`（ADR-0008 段階2の公開集計） | 未認証は401。認証済みは運用者未設定・未登録・BAN済みでも200。レスポンスは `generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみで、bans / unbans / unpins と CID・reason・`user_hash` は型に存在しない。`require_moderation_operator` を呼ばない | 実装済み（3表の読み取りは `BEGIN DEFERRED` 単一スナップショット、`/mod/stats` と同一の読み取りトランザクション）。サーバー側テスト5件: `test_public_mod_stats_requires_authentication` / `test_public_mod_stats_allows_general_sub` / `test_public_mod_stats_allows_operator_sub` / `test_public_mod_stats_response_contains_no_forbidden_fields` / `test_build_public_mod_stats_matches_source`。E2E 定義数は69件のまま変更なし（新規 E2E なし）。既存ゲート（E2E69件 / check23 / doctor53 / migrations14）は不変 |
+| MOD-14 | R2-AUTHZ: 異議（appeal_of 付き再通報）の認可とクールダウン | 元通報者（`content_audit_log` の `User report:` 行の `changed_by`）またはコンテンツ所有者（`contents.owner_hash`）のみ異議を提出できる。それ以外の sub は固定文言 `Appeal is restricted to the original reporter or content owner` の403。同一 CID の異議は30日以内1回までで、クールダウン中は固定文言 `Appeal cooldown: only one appeal per CID within 30 days` の403。拒否時は通報行を作成しない | 実装済み。既存 `test_appeal_within_30_days_creates_new_report` の sub を所有者 `owner` へ調整し期待値200を維持。新規2件: `test_appeal_by_unauthorized_user_is_forbidden`（第三者は403・通報行なし）/ `test_second_appeal_within_30_days_is_rejected`（2回目は403・通報行なし）。`test_report_after_appeal_window_is_not_an_appeal` は appeal でないため非対象で期待値不変。E2E / check23 / doctor53 / migrations14 は不変（新規はサーバー側テスト2件のみ） |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -247,7 +248,7 @@ auth 3件・export 3件・全体69件を維持する。
 | SUPPORT-01 | 無効化済み支援APIへのPOST | 501で拒否（未認証は401）、模擬取引を記録しない | 実装済み、JPYC機能への置換要 |
 | ECO-01 | 取引履歴の取得失敗表示（Ledger E2E） | `GET /transactions` の失敗時に `data-testid="ledger-error"`（`role="alert"`）へ固定文言 `取引履歴の取得に失敗しました。` を表示し、`NO_TRANSACTIONS_RECORDED` を出さない。サーバー本文は表示しない | 実装済み・検証済み: `e2e/tests/economy.spec.ts` の HTTP 500 / `route.abort()` の2件が chromium で pass（固定文言は `client/src/lib.rs` の `LEDGER_ERROR`）。下記「E2E 取引履歴エラーシナリオ（ECO-01）」を参照 |
 | ID-01 | JPKI提示、署名、nonce、信頼元、失効、`acr`/`amr` 保証レベル、`auth_time`/`max_age` の検証 | 有効な本人確認だけを受理 | OIDC認証フローをモックOPで検証。`OIDC_REQUIRED_ACR`/`AMR` 設定時に満たさないトークンを401で拒否、`OIDC_MAX_AUTH_AGE_SECS` 設定時に認証要求へ `max_age` を付与し新鮮な `auth_time` を受理・古い値と欠落を401拒否（fail-closed）することを回帰テスト化。`OIDC_MAX_AUTH_AGE_SECS` は上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値（`u64::MAX` 境界を含む）も固定文言のハードエラーで起動拒否し、設定値をエコーしない（fail-closed）。R1-19 の nbf 検証（`validate_nbf`）は `test_oidc_rejects_future_nbf`（未来 nbf は401拒否）/`test_oidc_accepts_missing_nbf`（クレーム欠落は受理）/`test_oidc_accepts_nbf_within_clock_skew`（60秒の clock skew 内は受理）の3件で検証。`server/src/jpki.rs` の SEC-02 証明書エラーパス10件（既存の `invalid_base64_token_is_unauthorized` / `non_x509_bytes_are_rejected` / `expired_certificate_is_rejected` / `envelope_without_credentials_falls_back_to_raw_token` / `empty_token_is_rejected` に、自己署名拒否（DN 一致 + 暗号学的検証）2件 `rejects_self_signed_rcgen_certificate` / `rejects_self_signed_rsa_2048_certificate`、CA署名 ECDSA 拒否 `rejects_ca_signed_ecdsa_certificate`、鍵ポリシー境界 `public_key_policy_requires_rsa_2048`、issuer DN 迂回検知 `rejects_leaf_signed_by_issuer_key_with_different_dn` を追加）を検証。CA署名 RSA 2048 の受理は `accepts_ca_signed_rsa_2048_certificate` で正常系対照を確保。Unauthorized 系はいずれも `AppError::Unauthorized` と固定メッセージ（Invalid JPKI presentation token / X.509 parse failed / Certificate is expired or not yet valid / Self-signed JPKI certificate is not trusted / JPKI leaf public key must be RSA 2048 bits or stronger）を検証。下記「JPKI 証明書エラーパスの検証（ID-01）」を参照。実JPKI実機・失効確認は未検証 |
-| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R2-LOGOUT-TOKEN では logout token の新鮮性（`validate_nbf = true` で未来 nbf を401拒否、`iat > now + clock_skew_secs` も401拒否、nbf 欠落は受理）を `test_backchannel_logout_rejects_future_iat_and_nbf` で検証する。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。リフレッシュトークンの再利用検知は、消費 UPDATE の変更0件を tx ロールバック後に別tx のファミリ失効へつなぐ単一 tx 構成で担保し、`test_refresh_reuse_revokes_family` がファミリ全体の失効を検証する。実JPKIの失効・期限切れは未検証 |
+| ID-02 | JPKI提示拒否・失効・期限切れ・再利用 | 保護機能を拒否 | state再利用とnonce不一致を検証。back-channel logout は `events` 欠落と `sid`/`sub` 両方欠落を401拒否。R2-AUTHZ では `sid` のみで `sub` が無い logout token も固定文言 `logout token requires sub` の401で拒否（`test_backchannel_logout_rejects_malformed_claims` の `sid_only_without_sub` ケース、および `test_backchannel_logout_revokes_session` を sid+sub トークンへ調整）。仕様上 `sub` は任意だが本システムは refresh 失効を `sub` に依存するため fail-closed を優先する。R2-LOGOUT-TOKEN では logout token の新鮮性（`validate_nbf = true` で未来 nbf を401拒否、`iat > now + clock_skew_secs` も401拒否、nbf 欠落は受理）を `test_backchannel_logout_rejects_future_iat_and_nbf` で検証する。R1-23 の pending 登録上限（`MAX_PENDING_AUTH`）は `test_oidc_pending_limit_rejects_excess_registration`（上限超過は429で拒否し保存しない）/`test_oidc_start_returns_429_when_pending_full`（上限到達時に `/auth/oidc/start` が429）/`test_oidc_pending_limit_purges_expired_entries`（期限切れエントリを掃除して空きを作る）/`test_oidc_pending_limit_keeps_start_callback_flow`（上限近くでも start/callback フローが成立）の4件で検証。リフレッシュトークンの再利用検知は、消費 UPDATE の変更0件を tx ロールバック後に別tx のファミリ失効へつなぐ単一 tx 構成で担保し、`test_refresh_reuse_revokes_family` がファミリ全体の失効を検証する。実JPKIの失効・期限切れは未検証 |
 | ID-03 | 認証トランザクションとJWT主体の結合 | 別セッション・クライアント申告IDで主体を偽装できない | PPIDをセッションJWTに結合し、`/auth/logout` の `sid` 失効、back-channel logout の `sid`/`sub` 失効（`sub` は logout token の `iat` を閾値として DB とメモリへ記録し、再認証で新セッション発行可）を検証。R2-LOGOUT-TOKEN の再送冪等は `test_backchannel_logout_replay_keeps_revoked_at_and_reauthenticated_session`（同一 token の再送で `revoked_at` 不変・再認証セッション200維持）と `test_backchannel_logout_stale_iat_does_not_advance_threshold`（古い `iat` の再送で閾値を前進させない）で検証する。R1-18 のログアウト削除 Cookie は `test_logout_clears_refresh_cookie`（空値・`Path=/auth`・`HttpOnly`・`SameSite=Strict`・`Max-Age=0`、提示トークン非エコー、本文 `true` 維持）と `test_logout_deletion_cookie_follows_oidc_cookie_secure`（`OIDC_COOKIE_SECURE` が `0` / `false` では Secure なし、`1` / 未設定では Secure 付き）で検証。リフレッシュの原子的回転（`issue_refresh_token_in_tx`）により旧トークンは消費済み・新トークンは未使用で登録され、`test_refresh_rotates_token_and_issues_new_session` が新旧の `used_at` を検証する。下記「ログアウト削除 Cookie の検証（ID-03）」を参照。永続化・実OP連携は未検証 |
 | ID-04 | 未認証での閲覧APIアクセス | コンテンツ・監査等を拒否。認証開始・health・非秘密の公開ポリシー情報（`GET /policy/age`）は許可 | JWT拒否実装。OIDC実サービスは未接続 |
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
@@ -298,7 +299,7 @@ auth 3件・export 3件・全体69件を維持する。
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "deny"` + `allow-wildcard-paths = true` でレジストリ依存の wildcard を拒否し、public crate（client / server）の path 依存のみ skip で例外許可 |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests136 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests142 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -683,7 +684,7 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は暗
 「未設定 / 非 UTF-8 の固定文言警告 / 有効な UTF-8」を返す。
 `run()` は JWT の非 UTF-8 を起動拒否、IPFS / 決済の非 UTF-8 を固定文言警告へ倒し、
 `doctor` は `common::env::classify(lookup(..))` で同じ分類を共有する。
-新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests136 不変）。
+新規テスト関数は追加せず、既存アサーション内で契約を確認する（tests142 不変）。
 
 本節の各 bin テスト数（`verify_audit_log` 14件を含む）は今回の監査対応でも不変である。
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
@@ -828,6 +829,12 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   で扱う方針とし、upload / vote の既存期待値は不変である。
 - 既存の固定数値（E2E69 / check23 / doctor53 / migrations14）は不変。新規 test 関数は
   上記2件のみで、既存 test 関数名は変更していない。
+- NULL 公開鍵の署名検証: mock 経路で作成され `public_key_der` が NULL のユーザーが
+  実署名を提示しても、`verify_user_signature` が `Option<Vec<u8>>` で受けて
+  `false` を返すため upload / vote の既存 401 経路へ載る（500 にならない）。
+  `oidc-no-signing-key:` プレースホルダは現行どおり 401 で、403 / 501 化は
+  設計判断待ちのため変更しない。既存 test 関数内へのアサーション追加のみで
+  test 関数数は不変。
 
 ### 暗号検証エラーパスの検証（AUDIT-01）
 
@@ -1888,7 +1895,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests136 の数値は不変。
+  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests142 の数値は不変。
 - R2-SERVER の原子性・クリーンアップ契約（既存ケース内で担保、新規 test 関数なし）:
   `pin_to_ipfs` 成功後に DB コミットが失敗したら `unpin` 補償を試み、解除失敗は
   固定文言の警告ログのみへ記録してトークン値・レスポンス本文・CID をエコーしない。
@@ -1897,7 +1904,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   行う。UNBAN は `revoked_subs` を削除せず sub epoch を進めて旧 JWT の復活を防ぎ、
   back-channel logout 由来の閾値を保持する。backup / restore は中途失敗の部分ファイル
   を削除し、restore は staging 検証後に `rename` する。E2E69 / check23 / doctor53 /
-  migrations14 / tests136 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
+  migrations14 / tests142 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1918,7 +1925,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor53 / migrations14 / tests136 の数値は不変。
+  check23 / doctor53 / migrations14 / tests142 の数値は不変。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1970,4 +1977,4 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `public-mod-stats-stale` に日本語の鮮度警告を出し、`public-mod-stats-refresh` で
   公開集計のみ再取得する。認証付きオプイン集計 `/mod/stats` の状態は変更しない。
   `moderation.spec.ts` の R5-09 内で警告・更新・オプイン集計の本数不変を検証する。
-- 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests136 は不変。
+- 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests142 は不変。
