@@ -125,6 +125,19 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
 
+    // R2-CLIENT: 成功時に dedicated 要素で整形済み generated_at と sub の短縮表示を出す。
+    // 生 ISO / 全文 sub / 生 JWT はエクスポート領域へ出さない。
+    const exportGeneratedAt = page.getByTestId('export-generated-at');
+    await expect(exportGeneratedAt).toBeVisible();
+    await expect(exportGeneratedAt).toContainText('GENERATED_AT: ');
+    await expect(exportGeneratedAt).toContainText('2026');
+    await expect(exportGeneratedAt).not.toContainText(exportFixture.generated_at);
+    const exportSub = page.getByTestId('export-sub');
+    await expect(exportSub).toBeVisible();
+    await expect(exportSub).toContainText('SUB: mock_sub…');
+    await expect(exportSub).not.toContainText(exportFixture.sub);
+    await expect(page.getByTestId('export-section')).not.toContainText('mock_jwt_token');
+
     // 追加フェーズ（EXPORT-11）: 同じケース内でレスポンスを不正 JSON へ差し替える。
     // 型として読めないため export-error に固定文言のみを出し、成功文言は出さない。
     malformedResponse = true;
@@ -133,6 +146,8 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByTestId('export-error')).toHaveText(exportParseErrorText, { timeout: 10000 });
     await expect(page.getByTestId('export-error')).toHaveAttribute('role', 'alert');
     await expect(page.getByTestId('export-status')).toHaveCount(0);
+    await expect(page.getByTestId('export-generated-at')).toHaveCount(0);
+    await expect(page.getByTestId('export-sub')).toHaveCount(0);
     expect(requestCount).toBe(2);
   });
 

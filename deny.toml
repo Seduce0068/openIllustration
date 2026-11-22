@@ -77,12 +77,16 @@ ignore = [
 # 新しい重複が出たときは理由を添えて skip を追加すること。
 # sha256 便宜 crate は sha2+hex へ置換して削除済み。sha2 / digest の skip は
 # leptos 経由で重複が残るため維持する（削除すると cargo deny が失敗するため残す）。
-# wildcards = "allow" は workspace の path 依存（common / client / server）を
-# wildcard と誤検知しないための設定であり、レジストリ依存の制約を緩めるものではない。
+# wildcards = "deny" でレジストリ依存の無制約 version = "*" を拒否する。
+# client / server は public crate のため path 依存が wildcard と判定され、
+# allow-wildcard-paths が効かない。skip でこの2クレートのみ例外的に許可する。
 [bans]
 multiple-versions = "deny"
-wildcards = "allow"  # workspace の path 依存を wildcard と誤検知しないため
+wildcards = "deny"
+allow-wildcard-paths = true  # workspace の path 依存（common 等）のみ例外的に許可
 skip = [
+  { name = "client", version = "*" },  # public crate の workspace path 依存
+  { name = "server", version = "*" },  # public crate の workspace path 依存
   { name = "axum", version = "=0.6.20" },
   { name = "axum", version = "=0.8.9" },
   { name = "axum-core", version = "=0.3.4" },

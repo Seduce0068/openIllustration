@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T22:50:00+09:00"
+  at: "2026-11-23T01:50:00+09:00"
 ---
 
 ## 目的
@@ -51,6 +51,9 @@ cargo run -p server --bin backup_db -- \
 成功時は `backup_ok: output=... tables=... migrations=...` を出力する。
 取得直後にテーブル数と `_migrations` 台帳の存在を検証し、欠けていれば失敗する
 （`verify_backup` はさらに `PRAGMA integrity_check` も実施する二段構え）。
+`VACUUM INTO` が失敗した場合は途中まで作られた出力ファイルを削除する。取得後の
+検証（テーブル数 / `_migrations`）に失敗した場合も出力を削除し、壊れた
+スナップショットや部分ファイルを残さない（元の失敗理由はそのまま伝わる）。
 
 定期実行には `scripts/backup-rotate.sh` を使う。取得→`verify_backup` 検証→
 `verify_audit_log` 検証→古い世代の削除を一行で行う。取得は停止済みサーバーを前提とし、
@@ -382,6 +385,11 @@ cargo run -p server --bin restore_db -- \
 `<target>.pre-restore-<timestamp>` に安全コピーを作成してから原子的に置換する。
 バックアップの `PRAGMA integrity_check` と `_migrations` の存在を検証し、
 置換後にも再検証する。`-journal` サイドカーの拒否も実確認済み。
+safety copy / staging tmp の作成が途中失敗した場合は部分ファイルを削除する。
+`restore_db` は staging に対して `PRAGMA integrity_check` と `_migrations` の検証を
+先に行い、成功したファイルだけを `rename` で公開する。置換後の再検証が失敗した
+場合は safety copy へ自動で書き戻し（権限 `0600` を維持）、失敗理由と出所パスを
+併記する。safety copy が無い場合は検証失敗をそのまま報告する。
 `sign_audit_export` の監査スナップショット公開も、この staging + safety copy と同じ方式で
 同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` する。
 書き込み・fsync・rename の失敗時は一時ファイルを削除し、既存の最終パスは上書きしない。

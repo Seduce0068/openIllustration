@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Locator } from '@playwright/test';
+import * as crypto from 'crypto';
 
 test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
   const mockCID = 'QmVPyxX9eKoR9LaKp2Hgt9rVkAffptArJ3zW5hvPLE713h';
@@ -181,6 +182,47 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
       });
     });
 
+    // 投票前に本文・監査を確認できることを検証するためのカード／監査モック。
+    const targetCid = reportFixture(summarizedReason).target_cid;
+    const targetBody = 'Body to confirm before vote';
+    const targetChecksum = crypto.createHash('sha256').update(targetBody).digest('hex');
+    const targetTitle = 'Deep Link Fixture';
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          cid: targetCid,
+          checksum: targetChecksum,
+          type: 'Novel',
+          status: 'Reported',
+          price: 0,
+          title: targetTitle,
+          description: 'Content to inspect before voting',
+          tags: ['review'],
+          is_favorite: false,
+        }]),
+      });
+    });
+    await page.route(`**/content/${targetCid}`, async route => {
+      await route.fulfill({ status: 200, contentType: 'text/markdown', body: targetBody });
+    });
+    await page.route(`**/content/${targetCid}/audit`, async route => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([{
+          log_id: 1,
+          old_status: null,
+          new_status: 'Reported',
+          changed_by: 'SYSTEM',
+          reason: 'Initial report',
+          created_at: '2026-11-18T00:00:00Z',
+          entry_hash: 'abc123',
+        }]),
+      });
+    });
+
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
     await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
@@ -191,6 +233,27 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     const reasonLine = page.locator('p:has-text("Reason:")').first();
     await expect(reasonLine).toContainText(summarizedReason, { timeout: 10000 });
     await expect(page.getByText('QmRRTBnaNs7jwYiWadPrEDgrs9a199VZUD3ftVLEJ5DJw5')).toBeVisible();
+
+    // 投票キーの target_cid が BROWSE の該当カードへのディープリンクになっていること。
+    const targetLink = page.getByTestId('report-target-link');
+    await expect(targetLink).toHaveAttribute(
+      'href',
+      /cid=QmRRTBnaNs7jwYiWadPrEDgrs9a199VZUD3ftVLEJ5DJw5#dashboard$/,
+    );
+    await targetLink.click();
+    await expect(page).toHaveURL(/#dashboard$/);
+    await expect(page).toHaveURL(/cid=QmRRTBnaNs7jwYiWadPrEDgrs9a199VZUD3ftVLEJ5DJw5/);
+    const linkedCard = page.locator(`[data-testid="content-card"][data-cid="${targetCid}"]`);
+    await expect(linkedCard).toBeVisible({ timeout: 10000 });
+    // 本文（検証済みコンテンツ）と監査タイムラインを投票前に確認できること。
+    await expect(linkedCard).toContainText(targetTitle);
+    await expect(linkedCard).toContainText(targetBody);
+    await linkedCard.getByRole('button', { name: 'Audit' }).click();
+    await expect(page.getByText('FORENSIC_TIMELINE')).toBeVisible();
+    await expect(page.getByText('Initial report')).toBeVisible();
+    // 確認後は MODERATION へ戻り、投票可能な状態が維持されていること。
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
 
     await page.locator('input[placeholder="TARGET CID"]').fill('QmTtdWPtHiGyv92HS8cisWMXVh8afyrRUJPDYUraxfCFm2');
     await page.locator('textarea[placeholder="REASON"]').fill('Illegal content detected');
@@ -357,6 +420,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     let brokenPublicStats = false;
     let unauthorizedPublicStats = false;
     let forbiddenPublicStats = false;
+    // 鮮度警告の検証用: 生成時刻を「現在」に差し替えて警告が消えることを確認する。
+    let freshPublicStats = false;
     const statsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
     // ADR-0008 段階2: 初期表示と再マウントで送られる公開集計のリクエストを記録する。
     const publicStatsRequests: Array<{ method: string; path: string; authorization: string | undefined }> = [];
@@ -416,6 +481,17 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
           body: JSON.stringify({
             generated_at: publicStatsFixture.generated_at,
             totals: 'RAW_SERDE_ERROR_SENTINEL_DO_NOT_SHOW',
+          }),
+        });
+        return;
+      }
+      if (freshPublicStats) {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            ...publicStatsFixture,
+            generated_at: new Date().toISOString(),
           }),
         });
         return;
@@ -553,6 +629,26 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(publicStatsError).toHaveText('集計の取得に失敗しました。', { timeout: 10000 });
     await expect(publicStatsError).not.toContainText('FORBIDDEN_SENTINEL_DO_NOT_SHOW');
     await expect(page.getByTestId('public-mod-stats-relogin-hint')).toHaveCount(0);
+
+    // フェーズ6: 公開集計の鮮度警告と「更新」ボタン。GENERATED_AT が古い fixture では
+    // dedicated 警告を出し、ボタン押下で公開集計だけ再取得する。認証付きオプイン集計の
+    // /mod/stats は一切増えない（状態変更なし）。
+    forbiddenPublicStats = false;
+    freshPublicStats = false;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await assertGeneratedAt(page.getByTestId('public-mod-stats'), 'public-mod-stats-generated-at');
+    await expect(page.getByTestId('public-mod-stats-stale')).toBeVisible({ timeout: 10000 });
+    const statsCountBeforeRefresh = statsRequests.length;
+    const publicCountBeforeRefresh = publicStatsRequests.length;
+    await page.getByTestId('public-mod-stats-refresh').click();
+    await expect.poll(() => publicStatsRequests.length).toBe(publicCountBeforeRefresh + 1);
+    expect(statsRequests).toHaveLength(statsCountBeforeRefresh);
+    // 生成時刻を現在へ差し替えて更新すると鮮度警告が消える。
+    freshPublicStats = true;
+    await page.getByTestId('public-mod-stats-refresh').click();
+    await expect(page.getByTestId('public-mod-stats-stale')).toHaveCount(0, { timeout: 10000 });
+    expect(statsRequests).toHaveLength(statsCountBeforeRefresh);
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
     // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。

@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T01:05:00+09:00"
+  at: "2026-11-23T01:50:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -111,7 +111,15 @@ generated:
 - 投稿バイト列、CID、チェックサム、ユーザーハッシュ、公開鍵、通報・投票記録を取り扱う。
 - ユーザーハッシュは匿名化を保証しない。アクセス制御、保持期間、削除・訂正手続、バックアップ消去方針を本番前に定める。
 - IPFSへの投稿は外部から取得可能になり得る。削除要請・違法コンテンツ対応・ピン解除の運用を整備するまで、永続公開を前提としたデータを安易に登録しない。
+  `pin_to_ipfs` が実 Pinata へのピン留めに成功した後、アップロードの DB コミットが失敗した場合は
+  `unpin` による補償を試みる。解除失敗は固定文言の警告ログのみへ記録し、トークン値・
+  レスポンス本文・CID はエコーしない（手動解除が必要）。補償の成否にかかわらず元の
+  エラーを返し、DB 未確定（＝アップロード失敗）を正とする。
 - アップロード形式・10 MiB上限・外部取得10 MiB上限を守り、コンテンツ内容の合法性をハッシュ検証で保証しない。
+- `POST` / `DELETE /content/{cid}/favorite` は `write_lock` 配下の同一 tx で
+  `contents.status = 'Approved'` の存在確認と `favorites` の INSERT / DELETE を行う。
+  確認後に状態が変わる競合を排除し、存在しない・非 Approved の CID は従来どおり
+  404（有無を識別子で区別しない）とする。
 - `GET /me/export` は認証必須（`AuthClaims`）。`version:1` / `generated_at` / `sub` と12表
   （`users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` /
   `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` /
@@ -136,9 +144,11 @@ generated:
 - BAN によるセッション失効も DB の `revoked_subs.revoked_at` を正本として判定する（認証時に毎回 SELECT し `iat` と比較）。BAN と back-channel logo
   ut のどちらも `iat` を更新時刻とみなし、同一トークンの再送や古い `iat` では `revoked_at` を前進させない（UPSERT の `changes() == 0` でメモリ更新とリフレッシュ消費をスキップする）。
   メモリの失効閾値は positive-only キャッシュに留め、書き込みは DB コミットを先に行うため、他インスタンスへ即時に反映される。
-  UNBAN は `users` の BAN フラグ解除に加え、BAN で記録した `revoked_subs` の失効閾値を
-  同じ write tx 内で削除し、コミット後に positive-only キャッシュからも除去する。
-  これにより BAN 解除後に refresh / 再認証が失効閾値で塞がったままにならない。
+  UNBAN は `users` の BAN フラグ解除に加え、`revoked_subs` の失効閾値を削除せず
+  `MAX(revoked_at, now)` で sub epoch を進め、コミット後に positive-only キャッシュも
+  同じ epoch へ更新する。BAN 以前の JWT（`iat <= 旧閾値`）は復活せず、back-channel
+  logout 由来の閾値も後退させずに保持する。refresh は `revoked_subs` の存在中は拒否され、
+  再認証で新しい `iat` が発行されたときだけセッションが復活する（再ログイン必須）。
 - DB内監査ハッシュは現状の変更検知補助であり、必須要件の第三者検証可能な監査を満たさない。
 - 認証済みユーザーは `GET /mod/reports`（通報対象 CID・要約済み理由・状態）と `GET /transactions`（sender/receiver hash・金額・tx_hash）を参照できる。
   通報一覧は認証必須・Reported 限定・新着順を維持し、運用者限定にはしない。理由は `common::summarize_reason` で要約して返す。
@@ -228,6 +238,10 @@ generated:
   0 件更新（status が PENDING 以外へ進行した競合）は 409（CONFLICT、固定文言
   `order status changed during wallet binding`）で拒否し、`verify_order` と同じ
   単一ライター契約とする。正常系は 1 件更新で従来どおり成功する。
+- `create_order` は `contents.price` / `status` の検証と `payment_orders` への INSERT を
+  同じ `write_lock` 配下の tx で行う。事前検証は早期 400 と derivation index の
+  無駄な消費防止のために残し、tx 内でも再検証して検証後の価格・状態変更（TOCTOU）を
+  拒否する。HD / 固定アドレス分岐のどちらにも適用する。
 
 ## 5. 運用準備・未整備事項
 
@@ -422,7 +436,8 @@ generated:
   重複は skip に一致しないためビルドを失敗させ、理由を添えて skip を追加する運用とする。
   `version = "*"` の skip は新規重複まで黙って通すため使用しない。
   `sources` は crates.io インデックスのみを許可し、未知レジストリ・Git 起源は拒否する。
-  `wildcards = "allow"` は workspace の path 依存を誤検知しないための設定であり、
+  `wildcards = "deny"` でレジストリ依存の無制約 `version = "*"` を拒否し、
+  workspace の path 依存（client / server）は skip と `allow-wildcard-paths` で例外的に許可する。
   取得元やライセンス検査を緩めるものではない。
 
 ## 6. 本番移行ゲート
@@ -673,3 +688,22 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
   migrations14 / tests136 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
+
+### R2-CLIENT 追加契約（2026-11-23）
+
+- **投票前の本文確認と通報導線**: 投票キューの `target_cid` は BROWSE の該当カードへ
+  ディープリンクし、同じセッションで本文と監査タイムラインを確認してから投票する。
+  カード側の `Report` ボタンは CID を `report_cid` クエリで渡し、MODERATION の
+  通報フォームへプリフィルする。hash / query の正規化は両キーを保持し、
+  未知キーやエンコード差でリンクが壊れないようにする。
+- **英文 UI と言語宣言**: 検索フォームと Support オーバーレイの英文には静的な
+  `lang="en"` を付与する。エラー文言の `error_lang` / `role=alert` 方針は変更せず、
+  新規の英文は非エラー UI に限る。
+- **エクスポート表示の機微情報方針**: 成功通知には整形済み `generated_at` と
+  短縮 `sub` だけを dedicated 要素で出す。生 ISO、全文 `sub`、JWT、
+  トークンハッシュは画面へ一切出さず、ダウンロード JSON の保存契約は不変。
+- **公開集計の鮮度とオプインの分離**: 公開集計の `GENERATED_AT` が15分を超えた場合に
+  鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
+  （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
+  いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 /
+  migrations14 / tests136 の数値は不変。

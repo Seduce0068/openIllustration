@@ -190,23 +190,20 @@ fn create_safety_copy(src: &Path, dst: &Path, label: &str) -> anyhow::Result<()>
     let mut dest = opts
         .open(dst)
         .with_context(|| format!("failed to create {label}: {}", dst.display()))?;
-    std::io::copy(&mut source, &mut dest)
-        .with_context(|| format!("failed to write {label}: {}", dst.display()))?;
+    if let Err(error) = std::io::copy(&mut source, &mut dest) {
+        // 中途失敗で部分的なコピーを残さない。create_new により既存ファイルは
+        // ここへ到達する前に拒否されているため、他者のファイルを消すことはない。
+        drop(dest);
+        let _ = std::fs::remove_file(dst);
+        return Err(error).with_context(|| format!("failed to write {label}: {}", dst.display()));
+    }
     Ok(())
 }
 
-/// rename 失敗時に safety copy を target へ書き戻す。
-/// 復元に成功した場合は元の rename エラーへ「safety copy から復元できた」旨と
-/// safety_copy のパスを併記し、失敗した場合は握り潰さずパスと rename エラーを
-/// 併せたメッセージを返す（safety copy 作成の fail-closed と対称）。
-fn rollback_safety_copy(
-    safety_copy: Option<&Path>,
-    target: &Path,
-    rename_error: std::io::Error,
-) -> anyhow::Error {
-    let Some(copy) = safety_copy else {
-        return anyhow::Error::new(rename_error).context("failed to replace target database");
-    };
+/// `cause` を保持したまま safety copy を target へ書き戻す。
+/// 書き戻しに成功した場合は出所パスを併記し、失敗した場合は握り潰さず
+/// 元の原因と safety copy の成否を合わせたメッセージを返す。
+fn restore_safety_copy(cause: String, copy: &Path, target: &Path) -> anyhow::Error {
     match std::fs::copy(copy, target) {
         Ok(_) => {
             // 書き戻し後も 0600 を維持（平文 DB の権限緩和を防ぐ）。
@@ -217,24 +214,39 @@ fn rollback_safety_copy(
                     std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o600))
                 {
                     return anyhow!(
-                        "failed to replace target database ({rename_error}); \
-                         safety copy was restored from {} but failed to set 0600: {chmod_error}",
+                        "{cause}; safety copy was restored from {} but failed to set 0600: {chmod_error}",
                         copy.display()
                     );
                 }
             }
-            anyhow::Error::new(rename_error).context(format!(
-                "failed to replace target database; \
-                 safety copy was restored successfully from {}",
+            anyhow!(
+                "{cause}; safety copy was restored successfully from {}",
                 copy.display()
-            ))
+            )
         }
         Err(copy_error) => anyhow!(
-            "failed to replace target database ({rename_error}); \
-             additionally failed to restore safety copy from {}: {copy_error}",
+            "{cause}; additionally failed to restore safety copy from {}: {copy_error}",
             copy.display()
         ),
     }
+}
+
+/// rename 失敗時に safety copy を target へ書き戻す。
+/// 復元に成功した場合は元の rename エラーへ「safety copy から復元できた」旨と
+/// safety_copy のパスを併記する（safety copy 作成の fail-closed と対称）。
+fn rollback_safety_copy(
+    safety_copy: Option<&Path>,
+    target: &Path,
+    rename_error: std::io::Error,
+) -> anyhow::Error {
+    let Some(copy) = safety_copy else {
+        return anyhow::Error::new(rename_error).context("failed to replace target database");
+    };
+    restore_safety_copy(
+        format!("failed to replace target database ({rename_error})"),
+        copy,
+        target,
+    )
 }
 
 /// ステージ済みファイルを target へ原子的に置き換える。
@@ -325,9 +337,23 @@ async fn main() -> anyhow::Result<()> {
         return Err(anyhow!("staging file already exists: {}", tmp.display()));
     }
     create_safety_copy(&backup, &tmp, "staging file").context("failed to stage backup")?;
+    // 壊れた staging を target へ公開しないよう、rename の前に検証する。
+    validate_backup(&tmp)
+        .await
+        .context("staged backup verification failed")?;
     replace_target(&tmp, &target, safety_copy.as_deref())?;
 
-    let (t, m) = validate_backup(&target).await?;
+    // rename 後の再検証。ここで失敗した場合は safety copy へロールバックする。
+    let (t, m) = match validate_backup(&target).await {
+        Ok(result) => result,
+        Err(error) => {
+            let failure = format!("restored target failed verification: {error}");
+            return Err(match safety_copy.as_deref() {
+                Some(copy) => restore_safety_copy(failure, copy, &target),
+                None => anyhow!(failure),
+            });
+        }
+    };
     println!(
         "restore_ok: target={} tables={t} migrations={m}",
         target.display()

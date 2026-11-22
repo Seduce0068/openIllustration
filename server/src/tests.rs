@@ -12633,9 +12633,10 @@ async fn test_unban_restores_user_with_audit() {
     assert_eq!(reason, "appeal accepted");
 }
 
-/// UNBAN は BAN で記録した revoked_subs の失効閾値も削除する。
-/// refresh は revoked_subs の存在だけで延長を拒否するため、閾値が残ると
-/// 正当な BAN 解除がセッション更新へ反映されない（DB 正本を検証）。
+/// UNBAN は BAN 由来の revoked_subs 閾値を削除せず、sub epoch を現在時刻へ進める。
+/// 旧 JWT（iat <= 旧閾値）は失効のまま残り、refresh も再認証まで拒否される。
+/// back-channel logout 由来の閾値も消さずに保持する（DB 正本を検証）。
+/// 関数名は既存契約の名前を維持したまま、oracle を epoch 前進へ更新している。
 #[tokio::test]
 async fn test_unban_clears_revoked_subs_threshold() {
     let (app, db) = setup_mod_app_with_operators(&["operator"]).await;
@@ -12645,9 +12646,10 @@ async fn test_unban_clears_revoked_subs_threshold() {
     )
     .await
     .unwrap();
+    let old_threshold = chrono::Utc::now().timestamp();
     db.execute(
         "INSERT INTO revoked_subs (sub, revoked_at) VALUES ('target', ?)",
-        [chrono::Utc::now().timestamp()],
+        [old_threshold],
     )
     .await
     .unwrap();
@@ -12664,11 +12666,23 @@ async fn test_unban_clears_revoked_subs_threshold() {
     );
 
     let mut rows = db
-        .query("SELECT COUNT(*) FROM revoked_subs WHERE sub = 'target'", ())
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = 'target'",
+            (),
+        )
         .await
         .unwrap();
-    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-    assert_eq!(count, 0, "UNBAN で失効閾値が削除されること");
+    let epoch: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert!(
+        epoch >= old_threshold,
+        "UNBAN で失効閾値が削除されず epoch が進むこと"
+    );
+    assert!(
+        crate::is_sub_revoked(&db, "target", Some(old_threshold as usize))
+            .await
+            .unwrap(),
+        "旧 JWT の iat は UNBAN 後も失効したままであること"
+    );
 }
 
 // ---- BAN 期限（ban_until）: duration_days から期限を設定し、判定側で時刻比較する ----

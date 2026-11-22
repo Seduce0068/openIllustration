@@ -787,6 +787,19 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第22ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し、新規タスクが得られたためループ継続。R6 で以下を是正・記録:
+  MISMATCH→EXPIRED 上書き防止、IPFS孤立ピン補償、favorite/注文tx原子化、UNBAN旧JWT復活防止、
+  backup_db/restore_db中途失敗クリーンアップ、投票キュー本文導線、card→通報プリフィル、
+  英文UI lang、export生成時刻/sub表示、公開集計鮮度警告、deny wildcards=deny+skip例外、
+  npm audit 3 lockfile（ルート/e2e/client）。
+  R4 指摘（docs旧値・backup_db検証cleanup漏れ・MISMATCH期限文言・restore safety_copy None・
+  URLコメント・E2E2E69タイポ）も修正。子の「OPERATIONAL_POLICY:22 行末空白」は
+  親が markdownlint exit 0 を確認し却下。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests136、npm audit 3 lockfile 含む）。
+  設計判断待ち（本人確認監査対象、通知/再審査、UNPIN手順、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、client lockfile既知脆弱性の解消方針）は記録のみで保留。
+
 - 2026-11-23 coding（21件）: server側はfinalizer部分コミット計上・readinessドレイン窓・
   EnvValue取りこぼし・RSA kid整合・UNIQUEカラム判定・doctor文言・tokio-test削除。
   client側は投票一覧error時disabled・監査再取得・upload loading固定・popstate正規化・

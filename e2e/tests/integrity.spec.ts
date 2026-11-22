@@ -481,6 +481,21 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       await expect(page.getByRole('button', { name: label })).toHaveAttribute('lang', 'en');
     }
     await expect(page.getByTestId('logout-button')).toHaveAttribute('lang', 'en');
+    // 検索フォームの主要英文 UI と言語宣言を整合させる（既存 ARIA ケース内で検証）。
+    for (const selector of [
+      'label[for="content-q"]',
+      'label[for="content-tag"]',
+      'label[for="content-type"]',
+      'label[for="favorite-only"]',
+    ]) {
+      await expect(page.locator(selector)).toHaveAttribute('lang', 'en');
+    }
+    await expect(page.getByRole('button', { name: 'Search', exact: true }))
+      .toHaveAttribute('lang', 'en');
+    // Support オーバーレイの英文も lang="en" を宣言する。
+    await expect(page.getByTestId('support-overlay')).toHaveAttribute('lang', 'en');
+    await expect(page.getByTestId('support-overlay').getByText('Support Creator'))
+      .toHaveAttribute('lang', 'en');
 
     const card = page.getByTestId('content-card').first();
     const auditToggle = card.getByRole('button', { name: 'Audit' });
@@ -507,6 +522,19 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(auditToggle).toHaveAttribute('aria-expanded', 'false');
     await expect(dialog).toHaveCount(0);
     await expect(auditToggle).toBeFocused();
+
+    // カード → 通報導線: Report ボタンで MODERATION へ遷移し、CID が自動入力される。
+    await page.route('**/mod/reports', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/mod/stats/public', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+    await card.getByTestId('content-report-button').click();
+    await expect(page).toHaveURL(/#moderation$/);
+    await expect(page).toHaveURL(/report_cid=/);
+    const prefilledCid = page.locator('input[placeholder="TARGET CID"]');
+    await expect(prefilledCid).toHaveValue(MOCK_CID);
   });
 
   test('R2: Audit toggle dialog closes via CLOSE button and restores focus', async ({ page }) => {

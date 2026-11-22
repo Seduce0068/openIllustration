@@ -599,6 +599,32 @@ fn url_encode(input: &str) -> String {
     out
 }
 
+/// 既存クエリへ単一パラメータを追加する（空値は追加しない）。
+/// 同じキーが既に存在しても末尾へ追加し、読み側の「最後の値を採用」規則で上書きする。
+/// カード詳細／通報プリフィル用のキーは `/content` の検索条件とは分けて扱う。
+fn append_query_param(base: &str, key: &str, value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        return base.to_string();
+    }
+    let param = format!("{}={}", key, url_encode(value));
+    if base.is_empty() {
+        format!("?{param}")
+    } else {
+        format!("{base}&{param}")
+    }
+}
+
+/// BROWSE の該当カードへ戻るディープリンクのクエリ（`#dashboard` と組み合わせる）。
+fn card_link_query(cid: &str) -> String {
+    append_query_param("", "cid", cid)
+}
+
+/// MODERATION の通報フォームをプリフィルするクエリ（`#moderation` と組み合わせる）。
+fn report_prefill_query(cid: &str) -> String {
+    append_query_param("", "report_cid", cid)
+}
+
 /// 省略可能な絞り込み条件から `/content` のクエリ文字列を組み立てる。
 /// 空の条件は送らず、条件が無い場合は既存と同じ `/content` を返す。
 /// `favorite_only` は値を取らないフラグで、他の条件と併用できる。
@@ -698,6 +724,10 @@ struct ContentQuery {
     tag: String,
     content_type: String,
     favorite_only: bool,
+    /// BROWSE の該当カードを指すディープリンク用。`/content` の検索条件ではない。
+    cid: String,
+    /// MODERATION の通報フォームをプリフィルする CID。検索条件ではない。
+    report_cid: String,
 }
 
 /// クエリ文字列（先頭の `?` は任意）から既知の 4 条件だけを読み出す。
@@ -718,6 +748,8 @@ fn parse_content_query(query: &str) -> ContentQuery {
             // build_content_query は `favorite_only=1` を書き出す。値なしの
             // `favorite_only` もフラグとして受け取る（旧リンクの許容）。
             "favorite_only" => parsed.favorite_only = matches!(value, "" | "1"),
+            "cid" => parsed.cid = url_decode(value),
+            "report_cid" => parsed.report_cid = url_decode(value),
             _ => {}
         }
     }
@@ -731,12 +763,15 @@ fn parse_content_query(query: &str) -> ContentQuery {
 #[cfg(any(test, target_arch = "wasm32"))]
 fn canonical_content_query(raw: &str) -> String {
     let parsed = parse_content_query(raw);
-    build_content_query(
+    let mut query = build_content_query(
         &parsed.q,
         &parsed.tag,
         &parsed.content_type,
         parsed.favorite_only,
-    )
+    );
+    // ディープリンク用のキーは検索条件の後ろへ固定順で書き出す。
+    query = append_query_param(&query, "cid", &parsed.cid);
+    append_query_param(&query, "report_cid", &parsed.report_cid)
 }
 
 /// ブラウザの `location.search` を読み、`canonical_content_query` で正規化する。
@@ -1579,6 +1614,37 @@ fn export_status_message(payload: &serde_json::Value) -> Result<String, String> 
     ))
 }
 
+/// エクスポートの生成日時を集計カードと同じ整形書式で表示する（非 wasm は生 ISO を保持）。
+#[cfg(target_arch = "wasm32")]
+fn format_export_generated_at(iso: &str) -> String {
+    format_local_datetime(iso)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn format_export_generated_at(iso: &str) -> String {
+    iso.to_string()
+}
+
+/// `sub` は識別子なので先頭8文字だけを出す。全文・生 JWT・トークンハッシュは一切描画しない。
+fn shorten_export_sub(sub: &str) -> String {
+    let mut chars = sub.chars();
+    let prefix: String = chars.by_ref().take(8).collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
+
+/// 成功時に dedicated 要素へ出す生成日時と sub 短縮表示。解析失敗時は None。
+fn export_status_details(payload: &serde_json::Value) -> Option<(String, String)> {
+    let data = serde_json::from_value::<DataExport>(payload.clone()).ok()?;
+    Some((
+        format_export_generated_at(&data.generated_at),
+        shorten_export_sub(&data.sub),
+    ))
+}
+
 /// ダウンロード開始に失敗したときに表示する固定文言。
 /// JS 側の例外メッセージは機微情報を含み得るため表示には使わない。
 fn download_start_error_message() -> &'static str {
@@ -1695,11 +1761,18 @@ fn warn_history_update_once() {
     });
 }
 
+/// hash から view トークンだけを取り出す。カード詳細ディープリンクは
+/// `?cid=...#dashboard` のような形を許容するため、`?` 以降はクエリとして扱う。
+fn hash_view_token(hash: &str) -> &str {
+    let body = hash.strip_prefix('#').unwrap_or(hash);
+    body.split('?').next().unwrap_or(body)
+}
+
 /// `#` 付き hash から許可された view を取り出す。許可リスト外は dashboard 固定。
 /// `login` は認証画面であってナビの view ではないため、ここでは dashboard へ
 /// 正規化する（ログアウト後の直接リンクも認証画面から始まる）。
 fn view_from_hash(hash: &str) -> &'static str {
-    match hash.strip_prefix('#').unwrap_or(hash) {
+    match hash_view_token(hash) {
         "upload" => "upload",
         "moderation" => "moderation",
         "ledger" => "ledger",
@@ -1712,7 +1785,7 @@ fn view_from_hash(hash: &str) -> &'static str {
 /// `history.state` マーカーは使わず、hash の許可リストだけを根拠にする。
 fn is_known_view_hash(hash: &str) -> bool {
     matches!(
-        hash.strip_prefix('#').unwrap_or(hash),
+        hash_view_token(hash),
         "dashboard" | "upload" | "moderation" | "ledger" | "login"
     )
 }
@@ -1720,6 +1793,24 @@ fn is_known_view_hash(hash: &str) -> bool {
 /// ログアウト API の失敗時に dedicated role=alert で出す固定文言。
 /// 画面遷移は現行契約どおり即座にログインへ戻す（失敗で戻さないことはしない）。
 const LOGOUT_FAILED_MESSAGE: &str = "ログアウト処理が完了しませんでした。再試行してください。";
+
+/// 指定 view とクエリで履歴を更新する。通常の `navigate` と、
+/// 投票キュー／カードからのディープリンクで同じ契約を共有する。
+/// 生 URL や失敗内容は返さず、成否だけを呼び出し側へ渡す。
+fn write_view_history(next: &str, query: &str, mode: NavigateMode) -> Result<(), ()> {
+    let window = web_sys::window().ok_or(())?;
+    let pathname = window.location().pathname().map_err(|_| ())?;
+    let url = format!("{pathname}{query}#{next}");
+    let history = window.history().map_err(|_| ())?;
+    match mode {
+        NavigateMode::Push => history
+            .push_state_with_url(&JsValue::NULL, "", Some(&url))
+            .map_err(|_| ()),
+        NavigateMode::Replace => history
+            .replace_state_with_url(&JsValue::NULL, "", Some(&url))
+            .map_err(|_| ()),
+    }
+}
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -1755,21 +1846,8 @@ pub fn App() -> impl IntoView {
     let navigate = move |next: &str, mode: NavigateMode| {
         // URL を先に組み、履歴 API の結果を保持する（view 更新より前）。
         // 失敗内容の JsValue は保持せず、警告は固定文言だけにする。
-        let history_result: Result<(), ()> = (|| {
-            let window = web_sys::window().ok_or(())?;
-            let pathname = window.location().pathname().map_err(|_| ())?;
-            // 生 search ではなく current_content_query() を埋め、未知キーを落とす。
-            let url = format!("{pathname}{}#{next}", current_content_query());
-            let history = window.history().map_err(|_| ())?;
-            match mode {
-                NavigateMode::Push => history
-                    .push_state_with_url(&JsValue::NULL, "", Some(&url))
-                    .map_err(|_| ()),
-                NavigateMode::Replace => history
-                    .replace_state_with_url(&JsValue::NULL, "", Some(&url))
-                    .map_err(|_| ()),
-            }
-        })();
+        // 生 search ではなく current_content_query() を埋め、未知キーを落とす。
+        let history_result = write_view_history(next, &current_content_query(), mode);
         match mode {
             // タブ切替（Push）は履歴更新が成功したときだけ view を進める。
             // 失敗時は view を保ち、固定文言の警告を 1 回だけ出す。
@@ -1789,6 +1867,28 @@ pub fn App() -> impl IntoView {
                     warn_history_update_once();
                 }
             }
+        }
+    };
+
+    // 投票キューから BROWSE の該当カードへ戻るディープリンク。
+    // 認証状態は触らず、投票前の本文・監査確認を同じセッションで行えるようにする。
+    let open_content_from_report = move |cid: String| {
+        let query = card_link_query(&cid);
+        if write_view_history("dashboard", &query, NavigateMode::Push).is_ok() {
+            set_view.set("dashboard".to_string());
+        } else {
+            warn_history_update_once();
+        }
+    };
+
+    // ContentViewer の Report ボタンから MODERATION の通報フォームへ遷移する。
+    // CID はクエリで渡し、Moderation 側がプリフィルする。
+    let open_report_for_content = move |cid: String| {
+        let query = report_prefill_query(&cid);
+        if write_view_history("moderation", &query, NavigateMode::Push).is_ok() {
+            set_view.set("moderation".to_string());
+        } else {
+            warn_history_update_once();
         }
     };
 
@@ -1981,10 +2081,10 @@ pub fn App() -> impl IntoView {
                 </Show>
                 {move || match view.get().as_str() {
                     "login" => view! { <Login on_success=handle_login_success /> }.into_any(),
-                    "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() /> }.into_any(),
+                    "dashboard" => view! { <Dashboard token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() on_report=open_report_for_content /> }.into_any(),
                     "upload" => view! { <Upload user_hash=user_hash.get().unwrap_or_default() token=token.get().unwrap_or_default() /> }.into_any(),
                     "moderation" => view! {
-                        <Moderation token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() />
+                        <Moderation token=token.get().unwrap_or_default() user_hash=user_hash.get().unwrap_or_default() on_open_content=open_content_from_report />
                     }.into_any(),
                     "ledger" => view! {
                         <Ledger token=token.get().unwrap_or_default() />
@@ -2099,12 +2199,18 @@ where
 }
 
 #[component]
-fn Dashboard(token: String, user_hash: String) -> impl IntoView {
+fn Dashboard<R>(token: String, user_hash: String, on_report: R) -> impl IntoView
+where
+    R: Fn(String) + 'static + Clone + Send,
+{
     let (items, set_items) = signal(Vec::<ContentMeta>::new());
     let (error, set_error) = signal(String::new());
     // URL は signal 定義位置で一度だけ同期読みする。Effect 内で set すると
     // 初期値の通知が fetch Effect を再加熱し、二重 GET になるため避ける。
     let initial_query = parse_content_query(&current_content_query());
+    // 投票キューからのディープリンクで指定された CID。検索条件には使わず、
+    // URL の正規化と該当カードの強調表示だけに使う。
+    let (deep_link_cid, _set_deep_link_cid) = signal(initial_query.cid);
     let (q, set_q) = signal(initial_query.q);
     let (tag, set_tag) = signal(initial_query.tag);
     let (content_type, set_content_type) = signal(initial_query.content_type);
@@ -2187,6 +2293,8 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
             &content_type.get(),
             favorite_only.get(),
         );
+        // ディープリンクの cid を落とさずに正規化する（raw_search との比較もこの形で行う）。
+        let query = append_query_param(&query, "cid", &deep_link_cid.get());
         if raw_search == query {
             return;
         }
@@ -2332,7 +2440,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                     class="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto_auto] gap-4 items-end border border-white/10 p-4"
                 >
                     <div class="space-y-1">
-                        <label for="content-q" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                        <label for="content-q" lang="en" class="block text-[9px] uppercase tracking-widest text-gray-500">
                             "Search"
                         </label>
                         <input
@@ -2349,7 +2457,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                         />
                     </div>
                     <div class="space-y-1">
-                        <label for="content-tag" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                        <label for="content-tag" lang="en" class="block text-[9px] uppercase tracking-widest text-gray-500">
                             "Tag"
                         </label>
                         <input
@@ -2366,7 +2474,7 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                         />
                     </div>
                     <div class="space-y-1">
-                        <label for="content-type" class="block text-[9px] uppercase tracking-widest text-gray-500">
+                        <label for="content-type" lang="en" class="block text-[9px] uppercase tracking-widest text-gray-500">
                             "Type"
                         </label>
                         <select
@@ -2392,12 +2500,12 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                             prop:checked=favorite_only
                             class="h-4 w-4 accent-green-500 cursor-pointer"
                         />
-                        <label for="favorite-only"
+                        <label for="favorite-only" lang="en"
                             class="text-[9px] uppercase tracking-widest text-gray-500 cursor-pointer">
                             "Favorites only"
                         </label>
                     </div>
-                    <button type="submit"
+                    <button type="submit" lang="en"
                         class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors">
                         "Search"
                     </button>
@@ -2442,6 +2550,8 @@ fn Dashboard(token: String, user_hash: String) -> impl IntoView {
                                 tags=item.tags.clone()
                                 is_favorite=item.is_favorite
                                 on_favorite_changed=on_favorite_changed
+                                on_report=on_report.clone()
+                                highlighted=deep_link_cid.get() == item.cid
                             />
                         }
                     }
@@ -2480,6 +2590,9 @@ fn ExportMyData(token: String) -> impl IntoView {
     let (error, set_error) = signal(String::new());
     let (status, set_status) = signal(String::new());
     let (busy, set_busy) = signal(false);
+    // 成功時にだけ出す dedicated 要素。生 ISO / 全文 sub / トークンは保持しない。
+    let (generated_at, set_generated_at) = signal(String::new());
+    let (sub_label, set_sub_label) = signal(String::new());
     // ダウンロード開始失敗のときだけ出す dedicated 案内（既存エラー文言は不変）。
     let (download_hint, set_download_hint) = signal(String::new());
     let token_stored = StoredValue::new(token);
@@ -2488,6 +2601,8 @@ fn ExportMyData(token: String) -> impl IntoView {
         let token = token_stored.get_value();
         set_error.set(String::new());
         set_status.set(String::new());
+        set_generated_at.set(String::new());
+        set_sub_label.set(String::new());
         set_download_hint.set(String::new());
         set_busy.set(true);
         spawn_local(async move {
@@ -2518,6 +2633,10 @@ fn ExportMyData(token: String) -> impl IntoView {
                 // 型定義で後方互換を確認し、画面には件数だけを出す。
                 // 解析失敗時は「0 件」成功にせず、固定エラーだけを表示する。
                 let message = export_status_message(&payload)?;
+                if let Some((formatted, sub)) = export_status_details(&payload) {
+                    set_generated_at.set(formatted);
+                    set_sub_label.set(sub);
+                }
                 download_json_file(&payload, EXPORT_FILENAME)?;
                 Ok(message)
             }
@@ -2572,6 +2691,16 @@ fn ExportMyData(token: String) -> impl IntoView {
             <Show when=move || !status.get().is_empty() fallback=|| ()>
                 <p role="status" data-testid="export-status" class="text-xs text-gray-400">
                     {move || status.get()}
+                </p>
+            </Show>
+            <Show when=move || !generated_at.get().is_empty() fallback=|| ()>
+                <p data-testid="export-generated-at" class="text-xs text-gray-400">
+                    "GENERATED_AT: " {move || generated_at.get()}
+                </p>
+            </Show>
+            <Show when=move || !sub_label.get().is_empty() fallback=|| ()>
+                <p data-testid="export-sub" class="text-xs text-gray-400">
+                    "SUB: " {move || sub_label.get()}
                 </p>
             </Show>
         </div>
@@ -2637,7 +2766,7 @@ fn favorite_error_message(status: Option<u16>) -> String {
 }
 
 #[component]
-fn ContentViewer<F>(
+fn ContentViewer<F, R>(
     cid: String,
     expected_checksum: String,
     content_type: String,
@@ -2648,11 +2777,17 @@ fn ContentViewer<F>(
     tags: Vec<String>,
     is_favorite: bool,
     on_favorite_changed: F,
+    on_report: R,
+    highlighted: bool,
 ) -> impl IntoView
 where
     F: Fn() + 'static + Clone,
+    R: Fn(String) + 'static + Clone,
 {
     let cid_label = cid.clone();
+    let data_cid = cid.clone();
+    let report_click_cid = cid.clone();
+    let report_click = on_report;
     // 一覧の複数カードが同じ markdown を描画しても DOM id / TOC アンカーが衝突しないよう、
     // cid 由来の属性安全なトークンを名前空間として使う。
     let cid_token = cid_scope_token(&cid);
@@ -2930,6 +3065,7 @@ where
 
     view! {
         <div data-testid="content-card"
+            data-cid=move || data_cid.clone()
             on:keydown=move |ev: web_sys::KeyboardEvent| {
                 // ダイアログ内（トグル含む）で Escape が押されたら閉じてフォーカスを戻す。
                 if ev.key() == "Escape" && show_audit.get() {
@@ -2947,7 +3083,7 @@ where
                     }
                 }
             }
-            class="p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full">
+            class=move || format!("p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full {}", if highlighted { "ring-1 ring-green-500" } else { "" })>
             <div class="flex justify-between items-start">
                 <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
                 <div class="flex gap-2">
@@ -2973,6 +3109,14 @@ where
                         aria-controls=move || audit_controls_id.get_value().to_string()
                         class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
+                    </button>
+                    <button
+                        type="button"
+                        lang="en"
+                        on:click=move |_| report_click(report_click_cid.clone())
+                        data-testid="content-report-button"
+                        class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
+                        "Report"
                     </button>
                 </div>
             </div>
@@ -3002,15 +3146,15 @@ where
 
                 {move || match verified.get() {
                     Some(true) => view! {
-                        <div data-testid="support-overlay" tabindex="0"
+                        <div data-testid="support-overlay" tabindex="0" lang="en"
                             class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
-                            <p class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
-                            <p class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
-                            <button disabled
+                            <p lang="en" class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
+                            <p lang="en" class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
+                            <button disabled lang="en"
                                 class="px-6 py-2 border border-white/20 text-gray-500 cursor-not-allowed font-bold text-[10px] uppercase">
                                 "Settlement Pending"
                             </button>
-                            <p class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
+                            <p lang="en" class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
                         </div>
                     }.into_any(),
                     Some(false) => view! {
@@ -3710,9 +3854,30 @@ impl Drop for BusyGuard {
     }
 }
 
+/// 公開集計の鮮度判定閾値（15分）。GENERATED_AT がこれより古ければ鮮度警告を出す。
+/// 認証付きオプイン集計（`/mod/stats`）の状態には一切影響しない。
+const PUBLIC_STATS_FRESHNESS_MAX_AGE_MS: f64 = 15.0 * 60.0 * 1000.0;
+
+/// 生成時刻が閾値を超えて古いか。パース不能時は誤検知を避けるため警告を出さない。
+#[cfg(target_arch = "wasm32")]
+fn public_stats_is_stale(generated_at: &str, max_age_ms: f64) -> bool {
+    let generated = js_sys::Date::parse(generated_at);
+    !generated.is_nan() && js_sys::Date::now() - generated > max_age_ms
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn public_stats_is_stale(_generated_at: &str, _max_age_ms: f64) -> bool {
+    false
+}
+
 #[component]
-fn Moderation(token: String, user_hash: String) -> impl IntoView {
-    let (cid, set_cid) = signal(String::new());
+fn Moderation<O>(token: String, user_hash: String, on_open_content: O) -> impl IntoView
+where
+    O: Fn(String) + 'static + Clone + Send,
+{
+    // ContentViewer の Report ボタンから渡された CID を通報フォームへプリフィルする。
+    let initial_cid = parse_content_query(&current_content_query()).report_cid;
+    let (cid, set_cid) = signal(initial_cid);
     let (reason, set_reason) = signal(String::new());
     let (status, set_status) = signal(String::new());
     // 送信失敗は dedicated role="alert" で告知する。成功・進捗は status のまま。
@@ -3733,6 +3898,9 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     let (public_stats_html, set_public_stats_html) = signal(String::new());
     let (public_stats_error, set_public_stats_error) = signal(String::new());
     let (public_stats_loaded, set_public_stats_loaded) = signal(false);
+    // 公開集計の鮮度警告と明示的な「更新」トリガ。オプイン集計の状態とは独立。
+    let (public_stats_stale, set_public_stats_stale) = signal(false);
+    let (public_stats_refresh, set_public_stats_refresh) = signal(0u32);
     // 運用者パネルのマウント条件。`/mod/stats` が 200 を返したというサーバ応答だけを根拠にし、
     // トークン内容やクライアント状態から運用者を推測しない。
     let (stats_authorized, set_stats_authorized) = signal(false);
@@ -3788,9 +3956,11 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
         fetch_reports();
     });
 
-    // ADR-0008 段階2: 認証済み利用者向けの公開集計をマウント時に一度だけ取得する。
+    // ADR-0008 段階2: 認証済み利用者向けの公開集計をマウント時に取得する。
     // オプイン押下を待たず、一般画面へ無条件に描画するためのデータ取得。
+    // 「更新」ボタンの押下でも同じ経路を通り、オプイン集計（/mod/stats）には触れない。
     Effect::new(move |_| {
+        let _refresh = public_stats_refresh.get();
         let token = token_stored.get_value();
         spawn_local(async move {
             match api_fetch(
@@ -3809,12 +3979,18 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                             set_public_stats_html.set(render_public_mod_stats_html(&stats));
                             set_public_stats_error.set(String::new());
                             set_public_stats_loaded.set(true);
+                            // GENERATED_AT の鮮度だけを警告し、オプイン集計の状態は変更しない。
+                            set_public_stats_stale.set(public_stats_is_stale(
+                                &stats.generated_at,
+                                PUBLIC_STATS_FRESHNESS_MAX_AGE_MS,
+                            ));
                         }
                         Err(_) => {
                             // 解析エラーの詳細（フィールド名・位置・生エラー）は出さず、
                             // 運用者向け /mod/stats と同じ Parse 分類の固定文言を表示する。
                             set_public_stats_html.set(String::new());
                             set_public_stats_loaded.set(false);
+                            set_public_stats_stale.set(false);
                             set_public_stats_error
                                 .set(stats_error_message(StatsFailure::Parse).to_string());
                         }
@@ -3826,11 +4002,13 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 Ok(response) if response.status() == 401 => {
                     set_public_stats_html.set(String::new());
                     set_public_stats_loaded.set(false);
+                    set_public_stats_stale.set(false);
                     set_public_stats_error.set(PUBLIC_STATS_UNAUTHORIZED.to_string());
                 }
                 _ => {
                     set_public_stats_html.set(String::new());
                     set_public_stats_loaded.set(false);
+                    set_public_stats_stale.set(false);
                     set_public_stats_error
                         .set(stats_error_message(StatsFailure::Fetch).to_string());
                 }
@@ -4021,7 +4199,17 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
     view! {
         <div class="max-w-4xl mx-auto mt-12 grid grid-cols-1 md:grid-cols-2 gap-12">
             <section data-testid="public-mod-stats" class="md:col-span-2 border border-white/10 p-8 space-y-4">
-                <h2 class="text-xl font-bold tracking-widest uppercase">"PUBLIC STATS"</h2>
+                <div class="flex items-center justify-between gap-4">
+                    <h2 class="text-xl font-bold tracking-widest uppercase">"PUBLIC STATS"</h2>
+                    <button
+                        type="button"
+                        lang="en"
+                        on:click=move |_| set_public_stats_refresh.update(|n| *n += 1)
+                        data-testid="public-mod-stats-refresh"
+                        class="py-2 px-4 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white hover:text-black">
+                        "REFRESH PUBLIC STATS"
+                    </button>
+                </div>
                 <Show when=move || !public_stats_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="public-mod-stats-error" class="text-xs text-red-500">
                         {move || public_stats_error.get()}
@@ -4035,6 +4223,12 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                 </Show>
                 <Show when=move || public_stats_loaded.get() fallback=|| ()>
                     <div data-testid="public-mod-stats-content" inner_html=move || public_stats_html.get() />
+                </Show>
+                // GENERATED_AT が閾値を超えて古いときだけ出す鮮度警告（オプイン集計には触れない）。
+                <Show when=move || public_stats_stale.get() fallback=|| ()>
+                    <p data-testid="public-mod-stats-stale" class="text-[10px] text-yellow-500">
+                        "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。"
+                    </p>
                 </Show>
             </section>
             <div data-testid="moderation-stats-optin" class="md:col-span-2 border border-white/10 p-8 space-y-4">
@@ -4073,6 +4267,7 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                     required=true
                     maxlength=REPORT_CID_MAX_LEN
                     on:input=move |ev| set_cid.set(event_target_value(&ev))
+                    prop:value=cid
                     class="w-full bg-black border border-white/20 p-3 text-sm"
                 />
                 <textarea
@@ -4127,10 +4322,24 @@ fn Moderation(token: String, user_hash: String) -> impl IntoView {
                         key=|report| report.report_id
                         children=move |report| {
                             let rid = report.report_id;
+                            // 投票前に本文・監査を確認できるよう、target_cid から
+                            // BROWSE の該当カードへディープリンクを張る（認証状態は維持）。
+                            let target_cid = report.target_cid.clone();
+                            let target_href = format!("/?cid={}#dashboard", url_encode(&report.target_cid));
+                            let open_content = on_open_content.clone();
                             view! {
                                 <div class="border border-white/5 p-4 space-y-3">
                                     <div class="flex justify-between items-center">
-                                        <span class="text-[8px] text-gray-500 truncate mr-2">{report.target_cid.clone()}</span>
+                                        <a
+                                            href=target_href
+                                            on:click=move |ev: web_sys::MouseEvent| {
+                                                ev.prevent_default();
+                                                open_content(target_cid.clone());
+                                            }
+                                            data-testid="report-target-link"
+                                            class="text-[8px] text-green-500 truncate mr-2 underline hover:text-white">
+                                            {report.target_cid.clone()}
+                                        </a>
                                         <span class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
                                     </div>
                                     <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
@@ -5111,6 +5320,8 @@ mod tests {
             tag: "夏&祭".to_string(),
             content_type: "Novel".to_string(),
             favorite_only: true,
+            cid: String::new(),
+            report_cid: String::new(),
         };
         let query = super::build_content_query(
             &expected.q,

@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T01:05:00+09:00"
+  at: "2026-11-23T01:50:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T01:05:00+09:00"
+  at: "2026-11-23T01:50:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -35,7 +35,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
    EXPORT-11 の解析失敗フェーズは `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ、
    REPORTS-ERR の解析失敗フェーズは `moderation.spec.ts` の REPORTS-ERR-01 内へ、
    監査注記のアサーション更新は `integrity.spec.ts` の既存 test 内へ追加した
-   （いずれも既存テスト内へ統合、新規 `test()` なし、E2E2E69件を維持）。
+   （いずれも既存テスト内へ統合、新規 `test()` なし、E2E69件を維持）。
    `moderation.spec.ts` は REPORT-ERR-01 内へ
   空 CID / 空 reason の検証フェーズを、`search.spec.ts` は既存1件内へ `q='Ghost'` の
   0件表示とクリア復帰フェーズを、`integrity.spec.ts` は既存2件内へ
@@ -168,7 +168,7 @@ auth 3件・export 3件・全体69件を維持する。
   `SHOW STATS` / `SUBMIT FORENSIC REPORT` / `DOWNLOAD ALL OF YOUR DATA AS JSON` 等である。
   これによりスクリーンリーダーの発音と言語宣言が整合する。ボタンの `textContent` と
   `data-testid` は不変で、E2E は `e2e/tests/integrity.spec.ts` の既存 ARIA テスト内へ
-  `lang="en"` のアサーションを追加するのみ（新規 `test()` なし、E2E2E69件を維持）。
+  `lang="en"` のアサーションを追加するのみ（新規 `test()` なし、E2E69件を維持）。
 - **リリース無ログ**: `client/src/lib.rs` の `EXPORT_RESULT` コンソール出力は
   `#[cfg(feature = "dev-console")]` でゲートし、`dev-console` を明示した開発ビルド以外では
   コンソールへ出力しない。エクスポート結果（件数・成功可否）や内部 URL・リクエストデータを
@@ -297,7 +297,7 @@ auth 3件・export 3件・全体69件を維持する。
 | MOD-12 | 投票署名 v2 と投票者束縛（旧形式拒否） | 署名対象は `domain: "moderation-vote-v2"` / `report_id` / `result` / `juror_hash`。旧 v1 形式の署名と別投票者向けに束縛された署名は401で拒否し票を記録しない。正常系は受理され1票が記録される | 実装済み。サーバー側テスト4件（`test_moderation_vote_message_v2_binds_all_fields` / `test_vote_v2_signature_accepted` / `test_vote_rejects_legacy_v1_signature` / `test_vote_rejects_signature_bound_to_other_juror`）。下記同節を参照 |
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
-| BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "allow"` は workspace の path 依存に対する誤検知回避のみ |
+| BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "deny"` + `allow-wildcard-paths = true` でレジストリ依存の wildcard を拒否し、public crate（client / server）の path 依存のみ skip で例外許可 |
 | BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests136 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
@@ -389,6 +389,12 @@ R5-04 の12表エクスポートを単一時点のスナップショットにす
 | `test_fixed_receiving_address_parallel_orders_all_saved` | `PAYMENT_RECEIVING_XPRV` 未設定（固定受取アドレス）で並行注文が全件成功し、全注文が保存される（`derivation_index` は NULL のまま） |
 | `test_fixed_address_order_waits_for_write_transaction` | 固定アドレス分岐の INSERT も HD 分岐と同じく `write_lock` 経由。ロック保持中は完了せず、解放後に成功する。`insert_payment_order(&state.db, ...)` に戻す mutation で失敗 |
 | `test_payment_verify_rechecks_expiry_after_verification` | verifier が `expires_at` を過去へ書き換えても、CAS 前に tx 内の最新値で再判定し、EXPIRED＋400を返す。FINALIZED へ進まず `tx_hash` / `confirmations` も書き込まれない。再判定を外す mutation で失敗 |
+
+- 注文生成の原子性（R2-SERVER）: `create_order` は `contents.price` / `status` の
+  検証と `payment_orders` への INSERT を同じ `write_lock` 配下の tx で行う
+  （`ensure_orderable_content_in_tx`）。HD / 固定アドレス両分岐へ適用し、事前検証
+  （早期 400・derivation index の消費防止）を維持したうえで tx 内再検証により
+  検証後の価格・状態変更（TOCTOU）を拒否する。新規 test 関数は追加しない。
 
 ### 決済 DB エラー判別のオラクル（PAY）
 
@@ -699,6 +705,12 @@ published rollback の5ケースを追加した。実 `repo_root` を壊さな�
 stop→wrapper→start を併設してから有効化し、配置後に手動1回実行して成功ログを確認する。
 本節の各 bin テスト数は変更しない。
 
+- R2-SERVER の `backup_db` / `restore_db` 中途失敗クリーンアップと staging 検証も
+  既存 CLI テスト数（`backup_db` 17件 / `restore_db` 20件）を維持する。`backup_db` は
+  `VACUUM INTO` 失敗時に部分出力を削除し、`restore_db` は safety copy / staging tmp の
+  中途失敗で部分ファイルを削除して staging 検証後に `rename` する。置換後検証が失敗
+  した場合は safety copy へロールバックする。新規 test 関数は追加しない。
+
 ### レート制限キーの検証（NET-03）
 
 `server/src/tests.rs` の3テストで、解決済みクライアント IP の優先とピア IP への
@@ -804,9 +816,12 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   `test_oidc_callback_rejects_banned_user` が固定文言・トークン非発行を検証する。
   同テストは送信前に BAN をコミットするため事前チェックで拒否され、事前チェック通過
   後の BAN コミットという競合窓の再読パスは未カバー（原子性はコードレビューで担保）。
-- UNBAN の失効解除: `unban_user` は BAN 由来の `revoked_subs` 閾値を同じ tx 内で
-  削除し、コミット後に positive-only キャッシュからも除去する。新規
-  `test_unban_clears_revoked_subs_threshold` が DB 側の削除を検証する。
+- UNBAN の失効維持: `unban_user` は BAN 由来の `revoked_subs` 閾値を削除せず、同じ
+  write tx 内で `MAX(revoked_at, now)` へ sub epoch を進め、コミット後に
+  positive-only キャッシュも同じ epoch へ更新する。旧 JWT（`iat <= 旧閾値`）は
+  失効のまま、back-channel logout 由来の閾値も後退させず保持する。refresh は
+  再認証まで拒否され、再ログインが必須。`test_unban_clears_revoked_subs_threshold`
+  が DB の epoch 前進と旧 iat の失効を検証する（関数名は既存を維持）。
 - OIDC 署名フロー: callback 初回登録で `public_key_der` に subject 由来の
   「署名鍵未登録」プレースホルダを保存し、NULL による下流署名検証の 500 を回避する。
   実鍵登録済みの主体は上書きしない。鍵未登録の固定文言 403/501 は下流の署名検証側
@@ -1874,6 +1889,15 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
   （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests136 の数値は不変。
+- R2-SERVER の原子性・クリーンアップ契約（既存ケース内で担保、新規 test 関数なし）:
+  `pin_to_ipfs` 成功後に DB コミットが失敗したら `unpin` 補償を試み、解除失敗は
+  固定文言の警告ログのみへ記録してトークン値・レスポンス本文・CID をエコーしない。
+  favorite の `status = 'Approved'` 確認と INSERT / DELETE、注文生成の `price` /
+  `status` 検証と `payment_orders` INSERT はそれぞれ `write_lock` 配下の同一 tx で
+  行う。UNBAN は `revoked_subs` を削除せず sub epoch を進めて旧 JWT の復活を防ぎ、
+  back-channel logout 由来の閾値を保持する。backup / restore は中途失敗の部分ファイル
+  を削除し、restore は staging 検証後に `rename` する。E2E69 / check23 / doctor53 /
+  migrations14 / tests136 の数値は不変（検証は fmt / clippy / test / backup 回帰で行う）。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1893,7 +1917,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `再ログインが必要です。` と `LOG OUT からログアウトし、再度 JPKI でログインしてください。`
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
-  新規 `test()` は追加しない（moderation14件・E2E2E69件を維持）。
+  新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
   check23 / doctor53 / migrations14 / tests136 の数値は不変。
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
@@ -1928,4 +1952,22 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 - **CI E2E ゲート**: `README.md` のテスト手順へ `bash e2e/ci-e2e.sh` と前提
   （本番相当 env・trunk v0.21.14・Google Chrome・Node 22 以上）を追記し、
   `npm test` は開発用であることを明記する。
+- **投票キュー本文導線**: `Report.target_cid` から `/?cid=<target_cid>#dashboard` へ
+  ディープリンク（`data-testid="report-target-link"`）を張り、投票前に本文と監査を確認する。
+  `hash_view_token` は `#view?...` のクエリを分離し、`parse_content_query` /
+  `canonical_content_query` は `cid` と `report_cid` を既知キーとして保持する。
+  `moderation.spec.ts` の GOV-01 内でリンク先・投票前確認・投票可能状態の維持を検証する。
+- **card → 通報告線**: ContentViewer の `Report` ボタンで
+  `/?report_cid=<cid>#moderation` へ遷移し、Moderation の TARGET CID をプリフィルする。
+  `integrity.spec.ts` の既存 ARIA ケース内で CID の自動入力を検証する。
+- **英文 UI の言語宣言**: 検索フォームの Search / Tag / Type / Favorites only / Search ボタンと
+  Support オーバーレイの英文へ静的な `lang="en"` を付与する（error_lang は使わない）。
+  `integrity.spec.ts` の既存 ARIA ケース内で `lang` を検証する。
+- **エクスポート状態の詳細表示**: 成功時に `export-generated-at`（整形済み日時）と
+  `export-sub`（先頭8文字＋`…`）を dedicated 要素で出し、生 ISO / 全文 sub / 生 JWT /
+  トークンハッシュは描画しない。失敗時は両要素を消す。`export.spec.ts` の既存ケース内で検証する。
+- **公開集計の鮮度**: `/mod/stats/public` の `GENERATED_AT` が15分を超過すると
+  `public-mod-stats-stale` に日本語の鮮度警告を出し、`public-mod-stats-refresh` で
+  公開集計のみ再取得する。認証付きオプイン集計 `/mod/stats` の状態は変更しない。
+  `moderation.spec.ts` の R5-09 内で警告・更新・オプイン集計の本数不変を検証する。
 - 新規 `test()` は追加せず、E2E69件 / check23 / doctor53 / migrations14 / tests136 は不変。

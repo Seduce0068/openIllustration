@@ -112,6 +112,13 @@ fn ensure_no_live_instance(db_path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 部分的に生成されたバックアップ出力を片付けてからエラーを返す。
+/// 削除自体が失敗しても元のエラーを隠さず、利用者へは元の失敗理由を伝える。
+fn fail_backup_with_cleanup<T>(path: &Path, error: impl Into<anyhow::Error>) -> anyhow::Result<T> {
+    let _ = std::fs::remove_file(path);
+    Err(error.into())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = parse_args()?;
@@ -162,47 +169,86 @@ async fn main() -> anyhow::Result<()> {
     let db = open_db(database_url, database_token)
         .await
         .context("failed to open database")?;
-    db.execute(&format!("VACUUM INTO '{output}'"), ())
-        .await
-        .context("VACUUM INTO failed")?;
+    if let Err(error) = db.execute(&format!("VACUUM INTO '{output}'"), ()).await {
+        // VACUUM INTO が途中まで出力を作った場合、部分スナップショットを残さない。
+        return fail_backup_with_cleanup(
+            output_path,
+            anyhow::Error::new(error).context("VACUUM INTO failed"),
+        );
+    }
 
     // Verify the snapshot can be opened and the migration ledger is intact.
     let snapshot = Builder::new_local(&output)
         .build()
         .await
-        .context("failed to open backup for verification")?
-        .connect()?;
-    let mut rows = snapshot
+        .map_err(|e| anyhow::Error::new(e).context("failed to open backup for verification"));
+    let snapshot = match snapshot {
+        Ok(builder) => match builder.connect() {
+            Ok(conn) => conn,
+            Err(e) => return fail_backup_with_cleanup(output_path, e),
+        },
+        Err(e) => return fail_backup_with_cleanup(output_path, e),
+    };
+    let mut rows = match snapshot
         .query(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'",
             (),
         )
         .await
-        .context("failed to inspect backup")?;
-    let tables: i64 = rows
-        .next()
-        .await
-        .context("failed to read backup inspection")?
-        .context("no inspection row")?
-        .get(0)?;
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            return fail_backup_with_cleanup(
+                output_path,
+                anyhow::Error::new(e).context("failed to inspect backup"),
+            );
+        }
+    };
+    let tables: i64 = match rows.next().await {
+        Ok(Some(row)) => match row.get(0) {
+            Ok(value) => value,
+            Err(e) => return fail_backup_with_cleanup(output_path, e),
+        },
+        Ok(None) => return fail_backup_with_cleanup(output_path, anyhow!("no inspection row")),
+        Err(e) => {
+            return fail_backup_with_cleanup(
+                output_path,
+                anyhow::Error::new(e).context("failed to read backup inspection"),
+            );
+        }
+    };
     if tables == 0 {
-        return Err(anyhow!("backup has no tables"));
+        return fail_backup_with_cleanup(output_path, anyhow!("backup has no tables"));
     }
 
     // マイグレーション台帳がスナップショットへ含まれていることを確認する
     // （コメント/ヘルプの「ledger is intact」を実際に保証する）。
-    let mut rows = snapshot
-        .query("SELECT COUNT(*) FROM _migrations", ())
-        .await
-        .context("migration ledger missing in backup")?;
-    let migrations: i64 = rows
-        .next()
-        .await
-        .context("failed to read migration ledger")?
-        .context("no migration ledger row")?
-        .get(0)?;
+    let mut rows = match snapshot.query("SELECT COUNT(*) FROM _migrations", ()).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            return fail_backup_with_cleanup(
+                output_path,
+                anyhow::Error::new(e).context("migration ledger missing in backup"),
+            );
+        }
+    };
+    let migrations: i64 = match rows.next().await {
+        Ok(Some(row)) => match row.get(0) {
+            Ok(value) => value,
+            Err(e) => return fail_backup_with_cleanup(output_path, e),
+        },
+        Ok(None) => {
+            return fail_backup_with_cleanup(output_path, anyhow!("no migration ledger row"));
+        }
+        Err(e) => {
+            return fail_backup_with_cleanup(
+                output_path,
+                anyhow::Error::new(e).context("failed to read migration ledger"),
+            );
+        }
+    };
     if migrations == 0 {
-        return Err(anyhow!("backup has no applied migrations"));
+        return fail_backup_with_cleanup(output_path, anyhow!("backup has no applied migrations"));
     }
     println!("backup_ok: output={output} tables={tables} migrations={migrations}");
     Ok(())

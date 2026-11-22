@@ -3839,6 +3839,8 @@ pub struct FavoriteResponse {
 /// ユーザー識別は `Claims.sub` のみ。リクエスト本文やクエリの ID は受け取らない。
 /// 既存行への再追加・未登録行の削除はどちらも成功として扱う（冪等）。
 /// DB 由来のエラー詳細は sub を含み得るため、公開・ログ出力とも固定文言にする。
+/// コンテンツの存在確認（`status = 'Approved'`）と INSERT / DELETE は同じ
+/// write_lock 配下の tx で行い、確認後に状態が変わる競合を排除する。
 async fn change_favorite(
     state: &Arc<AppState>,
     sub: &str,
@@ -3848,10 +3850,13 @@ async fn change_favorite(
     if !is_safe_cid(cid) {
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
-    // 読み取りは従来どおり。カーソルを閉じてから BEGIN する。
+    // ロック取得・BEGIN・存在確認・書き込み・COMMIT を一つの tx に載せる。
+    // ロック取得 / BEGIN / COMMIT が失敗しても DB 詳細を出さず固定文言で返す。
+    let (_write_guard, tx) = begin_write_tx(&state.db)
+        .await
+        .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
     let exists = {
-        let mut rows = state
-            .db
+        let mut rows = tx
             .query(
                 "SELECT 1 FROM contents WHERE cid = ? AND status = 'Approved'",
                 [cid.to_string()],
@@ -3867,28 +3872,24 @@ async fn change_favorite(
         // 存在しない / Approved でないコンテンツの有無を識別子で区別しない。
         return Err(AppError::NotFound);
     }
-    // 書き込みは write_lock 配下の tx に載せる。ロック取得・BEGIN・COMMIT の
-    // いずれが失敗しても、DB 詳細を出さず既存と同じ固定文言で返す。
-    let write_result: Result<(), AppError> = async {
-        let (_write_guard, tx) = begin_write_tx(&state.db).await?;
-        if add {
-            tx.execute(
-                "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES (?, ?)",
-                (sub.to_string(), cid.to_string()),
-            )
-            .await?;
-        } else {
-            tx.execute(
-                "DELETE FROM favorites WHERE user_hash = ? AND cid = ?",
-                (sub.to_string(), cid.to_string()),
-            )
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
+    if add {
+        tx.execute(
+            "INSERT OR IGNORE INTO favorites (user_hash, cid) VALUES (?, ?)",
+            (sub.to_string(), cid.to_string()),
+        )
+        .await
+        .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
+    } else {
+        tx.execute(
+            "DELETE FROM favorites WHERE user_hash = ? AND cid = ?",
+            (sub.to_string(), cid.to_string()),
+        )
+        .await
+        .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
     }
-    .await;
-    write_result.map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|_| AppError::Internal("favorite update failed".to_string()))?;
     Ok(FavoriteResponse { is_favorite: add })
 }
 
@@ -4394,22 +4395,32 @@ pub async fn unban_user(
         [user_hash],
     )
     .await?;
-    // BAN で記録された sub 失効閾値を削除する。refresh は revoked_subs の
-    // 存在だけでセッション延長を拒否するため、UNBAN 後も閾値が残ると
-    // 正当な BAN 解除が反映されない。DB を正本として users 更新と同じ tx
-    // で確定し、コミット前に戻せばロールバックで閾値も復活する。
-    tx.execute("DELETE FROM revoked_subs WHERE sub = ?", [user_hash])
-        .await?;
+    // BAN 由来の失効閾値を削除すると、BAN 以前に発行された JWT（iat <= 旧閾値）が
+    // UNBAN を境に復活してしまう。閾値は削除せず、sub epoch を現在時刻へ進めて
+    // 旧 JWT を失効のままにする。back-channel logout 由来の閾値も同じ行で保持され、
+    // MAX により後退させない。refresh は revoked_subs の存在を理由に拒否され続け、
+    // 再認証が新しい iat で閾値を上書きしたときだけセッションが復活する（再ログイン必須）。
+    // DB を正本として users 更新と同じ tx で確定する。
+    let epoch = chrono::Utc::now().timestamp();
+    tx.execute(
+        "UPDATE revoked_subs SET revoked_at = MAX(revoked_at, ?), updated_at = CURRENT_TIMESTAMP WHERE sub = ?",
+        libsql::params![epoch, user_hash.to_string()],
+    )
+    .await?;
     record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
-    // DB コミットが先に確定した後に positive-only キャッシュも更新する。
-    state
+    // DB コミットが先に確定した後に positive-only キャッシュも同じ epoch へ更新する。
+    // より新しい閾値が並行して登録されていた場合は上書きしない。
+    let mut revoked_subs = state
         .revoked_subs_before
         .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .remove(user_hash);
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+    let cached = revoked_subs
+        .entry(user_hash.to_string())
+        .or_insert(epoch as usize);
+    *cached = std::cmp::max(*cached, epoch as usize);
     Ok(Json(true))
 }
 
@@ -4730,6 +4741,39 @@ pub async fn pin_to_ipfs(
     cid_from_pinata_response(&json)
 }
 
+/// 実 Pinata へのピン留め後に DB 側の確定が失敗したときの補償。
+/// ピンだけが外部に残る孤立を避けるため unpin を一度だけ試みる。
+/// トークン値・レスポンス本文・CID はログへ出さず、失敗時は手動解除が必要な
+/// 固定文言だけを記録する。アップロード側の元エラーは常にそのまま返す。
+async fn compensate_unpin(state: &AppState, cid: &str) {
+    let pinata_jwt_env = common::env::read_env("PINATA_JWT");
+    if !pinata_jwt_production_like(pinata_jwt_env.clone()) {
+        // モック経路では外部ピンを作っていないため解除不要。
+        return;
+    }
+    let pinata_jwt = match pinata_jwt_env {
+        common::env::EnvValue::Utf8(value) => value,
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => return,
+    };
+    // cid は pin_to_ipfs の厳密検証（is_safe_cid）を通した値だけが渡される。
+    let url = format!("https://api.pinata.cloud/pinning/unpin/{cid}");
+    match state
+        .http_client
+        .delete(url)
+        .bearer_auth(pinata_jwt)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+    {
+        Ok(response) if response.status().is_success() => {
+            tracing::info!("Unpin compensation completed");
+        }
+        _ => {
+            tracing::warn!("Unpin compensation failed; manual unpin is required");
+        }
+    }
+}
+
 pub async fn upload_content(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -4902,45 +4946,54 @@ pub async fn upload_content(
     };
     let cid = pin_to_ipfs(&state, data.to_vec(), filename).await?;
 
-    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+    // DB 側の確定が失敗したら外部に残ったピンを解除する。補償の成否にかかわらず
+    // 元のエラーを返し、DB 未確定（＝アップロード失敗）を正とする。
+    let result: Result<Json<String>, AppError> = async {
+        let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
-    // The same bytes resolve to the same CID and contents is keyed by CID,
-    // so a re-upload would otherwise surface as a primary-key 500.
-    let mut existing = tx
-        .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
-        .await?;
-    if existing.next().await?.is_some() {
-        return Err(AppError::BadRequest("Content already exists".to_string()));
-    }
+        // The same bytes resolve to the same CID and contents is keyed by CID,
+        // so a re-upload would otherwise surface as a primary-key 500.
+        let mut existing = tx
+            .query("SELECT 1 FROM contents WHERE cid = ?", [cid.clone()])
+            .await?;
+        if existing.next().await?.is_some() {
+            return Err(AppError::BadRequest("Content already exists".to_string()));
+        }
 
-    tx.execute(
-        "INSERT INTO contents (cid, type, owner_hash, checksum, price, title, description, tags)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            cid.clone(),
-            content_kind.to_string(),
-            owner_hash.clone(),
-            checksum,
-            price,
-            title,
-            description,
-            stored_tags,
-        ),
-    )
-    .await
-    .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
-
-    tx.execute(
-        "INSERT INTO signatures (target_id, signer_hash, signature_blob, algorithm) VALUES (?, ?, ?, ?)",
-        (cid.clone(), owner_hash, signature.to_vec(), "JPKI-RSASSA-PKCS1-v1_5")
-    ).await
-        .map_err(|e| AppError::Internal(format!("Signature Insert failed: {}", e)))?;
-
-    tx.commit()
+        tx.execute(
+            "INSERT INTO contents (cid, type, owner_hash, checksum, price, title, description, tags)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                cid.clone(),
+                content_kind.to_string(),
+                owner_hash.clone(),
+                checksum,
+                price,
+                title,
+                description,
+                stored_tags,
+            ),
+        )
         .await
-        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+        .map_err(|e| AppError::Internal(format!("DB Insert failed: {}", e)))?;
 
-    Ok(Json(cid))
+        tx.execute(
+            "INSERT INTO signatures (target_id, signer_hash, signature_blob, algorithm) VALUES (?, ?, ?, ?)",
+            (cid.clone(), owner_hash, signature.to_vec(), "JPKI-RSASSA-PKCS1-v1_5")
+        ).await
+            .map_err(|e| AppError::Internal(format!("Signature Insert failed: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+
+        Ok(Json(cid.clone()))
+    }
+    .await;
+    if result.is_err() {
+        compensate_unpin(&state, &cid).await;
+    }
+    result
 }
 
 pub async fn ensure_user_not_banned(db: &Connection, user_hash: &str) -> Result<(), AppError> {

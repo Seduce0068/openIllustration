@@ -400,6 +400,37 @@ async fn insert_payment_order(
     Ok(())
 }
 
+/// 書き込み tx 内で contents の価格・状態を再検証する。
+/// create_order の事前検証と INSERT の間で status / price が変わる TOCTOU を塞ぎ、
+/// 検証と payment_orders INSERT を同一 tx に載せる。エラー文言は事前検証と同じ。
+async fn ensure_orderable_content_in_tx(
+    tx: &libsql::Transaction,
+    cid: &str,
+    amount_jpy: u64,
+) -> Result<(), AppError> {
+    let mut rows = tx
+        .query(
+            "SELECT COALESCE(price, 0) AS price, status FROM contents WHERE cid = ?",
+            [cid.to_string()],
+        )
+        .await?;
+    let (content_price, content_status): (i64, String) = match rows.next().await? {
+        Some(row) => (row.get(0)?, row.get(1)?),
+        None => return Err(AppError::NotFound),
+    };
+    if content_status != "Approved" {
+        return Err(AppError::BadRequest(
+            "Content is not available for purchase".to_string(),
+        ));
+    }
+    if content_price <= 0 || content_price as u64 != amount_jpy {
+        return Err(AppError::BadRequest(
+            "amount_jpy must match the content price".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn create_order(
     State(state): State<Arc<AppState>>,
     claims: AuthClaims,
@@ -409,6 +440,8 @@ pub async fn create_order(
         return Err(AppError::BadRequest("Invalid CID".to_string()));
     }
     // 提示価格と支払額を照合する。存在しない/レビュー中のコンテンツは注文できない。
+    // これは早期 400 応答と index 消費防止のための事前検証であり、INSERT と同一 tx
+    // 内でも ensure_orderable_content_in_tx で再検証して TOCTOU を塞ぐ。
     let mut content_rows = state
         .db
         .query(
@@ -453,6 +486,8 @@ pub async fn create_order(
         // ライトロックが同一プロセスの並行注文を直列化し、UNIQUE(derivation_index) が
         // それをすり抜けた場合の受取アドレス再利用も拒否する。
         let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        // 価格・status の検証を INSERT と同じ tx 内で再確認する。
+        ensure_orderable_content_in_tx(&tx, &payload.cid, payload.amount_jpy).await?;
         let index: i64 = {
             let mut rows = tx
                 .query(
@@ -494,6 +529,8 @@ pub async fn create_order(
         // derivation_index は NULL のまま従前どおり。
         let recipient_address = normalize_address(address);
         let (_write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+        // HD 分岐と同じく、検証と INSERT を同じ tx 内で行う。
+        ensure_orderable_content_in_tx(&tx, &payload.cid, payload.amount_jpy).await?;
         insert_payment_order(
             &tx,
             &order_id,
@@ -561,11 +598,27 @@ async fn reject_if_expired(
 ) -> Result<bool, AppError> {
     if is_order_expired(expires_at, &chrono::Utc::now().to_rfc3339()) {
         tx.execute(
-            "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?)",
-            (STATUS_EXPIRED, order_id, STATUS_FINALIZED, STATUS_EXPIRED),
+            // MISMATCH は確定済みの不一致判定なので EXPIRED で上書きしない。
+            "UPDATE payment_orders SET status = ? WHERE order_id = ? AND status NOT IN (?, ?, ?)",
+            (
+                STATUS_EXPIRED,
+                order_id,
+                STATUS_FINALIZED,
+                STATUS_EXPIRED,
+                STATUS_MISMATCH,
+            ),
         )
         .await?;
-        return Ok(true);
+        // MISMATCH は確定済みの不一致判定なので期限切れ扱いにしない。
+        let mut mismatch_rows = tx
+            .query(
+                "SELECT 1 FROM payment_orders WHERE order_id = ? AND status = ?",
+                (order_id, STATUS_MISMATCH),
+            )
+            .await?;
+        let is_mismatch = mismatch_rows.next().await?.is_some();
+        drop(mismatch_rows);
+        return Ok(!is_mismatch);
     }
     Ok(false)
 }
