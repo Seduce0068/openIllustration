@@ -657,7 +657,9 @@ where
     results.push(("expose_internal_errors", expose_internal_errors_errors));
 
     // ALLOWED_ORIGINS: 起動ゲートと同じ共有ヘルパ production_allowed_origins_error で判定する。
-    // mock 無効時に実パーサ allowed_origins() が空ベクタなら全 CORS オリジンが拒否される。
+    // 本番相当（mock 無効）は https かつオリジンのみを受理する共通ヘルパ
+    // is_production_https_origin を実パーサ allowed_origins() が使うため、
+    // http / userinfo / path / query / loopback は空ベクタとなり警告対象になる。
     // オリジン値・生バイトは出力しない。既定は警告のみ（check23・文言・件数は不変）。
     const ALLOWED_ORIGINS_WARNING: &str = "ALLOWED_ORIGINS has no valid http(s) origin (unset, empty, or all entries invalid) while mock auth is disabled; all CORS origins are rejected";
     let allowed_origins_errors = if production_allowed_origins_error(
@@ -1655,6 +1657,18 @@ mod tests {
         assert_eq!(errors.len(), 1, "errors={errors:?}");
         assert_eq!(errors[0], EXPECTED);
         assert!(!errors[0].contains(INVALID), "オリジン値が漏洩: {errors:?}");
+
+        // 本番相当は https のみ。http は起動ゲートと同じ共有判定で拒否され、
+        // 固定文言警告になる（設定値はエコーしない）。
+        const HTTP_ORIGIN: &str = "http://api.example.org";
+        let results = check_all_with(lookup_from(&[("ALLOWED_ORIGINS", HTTP_ORIGIN)]));
+        let errors = errors_for(&results, "allowed_origins");
+        assert_eq!(errors.len(), 1, "errors={errors:?}");
+        assert_eq!(errors[0], EXPECTED);
+        assert!(
+            !errors[0].contains(HTTP_ORIGIN),
+            "オリジン値が漏洩: {errors:?}"
+        );
 
         // 有効なオリジン（複数指定）は警告なし。null opaque origin は受け付けない。
         let value = "https://a.example,https://b.example";

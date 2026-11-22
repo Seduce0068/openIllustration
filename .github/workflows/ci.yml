@@ -48,18 +48,30 @@ jobs:
         # dev-console feature 配下（初期化・EXPORT_RESULT）もコンパイル/テストして未検証経路を残さない。
         cargo clippy -p client --all-targets --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         cargo test -p client --all-features --quiet
+        # wasm 専用 cfg 分岐（format_stats_generated_at / public_stats_is_stale 等）も lint 対象にする。
+        cargo clippy -p client --target wasm32-unknown-unknown --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         # シークレットスキャン（pre-commit 主軸・CI は最終ゲート）。
         # --staged は checkout 直後に index が HEAD と一致し 0 バイト走査になるため、
         # CI では --log-opts でイベント別の範囲を明示して走査する。
         # pull_request は base..head（マルチコミット PR を漏らさない）、push は before..HEAD。
-        # ランナーに betterleaks が無い環境では go install で固定版を導入する。
-        if ! command -v betterleaks >/dev/null 2>&1; then go install github.com/betterleaks/betterleaks@v1.10.1; fi
+        # ランナーに betterleaks が無い環境では go install で固定版を導入し PATH を更新する。
+        if ! command -v betterleaks >/dev/null 2>&1; then
+          go install github.com/betterleaks/betterleaks@v1.10.1
+          export PATH="$(go env GOPATH)/bin:${PATH}"
+        fi
+        command -v betterleaks && betterleaks --version
         case "${{ github.event_name }}" in
           pull_request)
             scan_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
             ;;
           push)
-            scan_range="${{ github.event.before || 'HEAD~1' }}..HEAD"
+            # 新規ブランチ初回 push / force push の all-zero before は範囲解決不能なので全履歴へ。
+            before="${{ github.event.before }}"
+            if [[ -z "$before" || "$before" =~ ^0{40}$ ]]; then
+              scan_range=""
+            else
+              scan_range="${before}..HEAD"
+            fi
             ;;
           *)
             # schedule / workflow_dispatch: 定期再スキャンなので全到達可能履歴を対象にする。

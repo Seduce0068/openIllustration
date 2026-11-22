@@ -1064,6 +1064,42 @@ fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
     }
 }
 
+/// `instance.lock` のエラー経路確実削除ガード。
+///
+/// ロック取得後に migration / FK 検査 / 設定検証などで `?` 早期 return しても、
+/// Drop がロックファイルを削除する（成功経路は既存の明示削除を維持し、
+/// `disarm()` で二重削除を避ける）。これにより設定エラーで起動失敗しても
+/// 部分適用 DB/ロックが残らないことを保証する。
+struct InstanceLockGuard {
+    path: Option<String>,
+}
+
+impl InstanceLockGuard {
+    fn new(path: String) -> Self {
+        Self { path: Some(path) }
+    }
+
+    fn disarm(&mut self) {
+        self.path = None;
+    }
+}
+
+impl Drop for InstanceLockGuard {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path
+            && let Err(error) = std::fs::remove_file(path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                "Failed to remove instance lock file {} on error path: kind={:?}, error={}",
+                path,
+                error.kind(),
+                error
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod instance_lock_tests {
     use super::{parse_instance_lock, read_proc_starttime};
@@ -1274,13 +1310,14 @@ pub fn production_audit_expect_root_error(
     }
 }
 
-/// 本番相当（モック認証無効）で `ALLOWED_ORIGINS` が有効な http(s) オリジンを
+/// 本番相当（モック認証無効）で `ALLOWED_ORIGINS` が有効な https オリジンを
 /// 1 つでも持つかを検証する純粋関数。
 ///
 /// 開発（`allow_mock_auth = true`）では従来どおり `None`。本番相当では未設定・
-/// 非 UTF-8・空・全不正（scheme なしや `null` 等）を固定文言で拒否する（fail-closed）。
-/// 実パーサ `allowed_origins` の結果をそのまま使い、doctor の `allowed_origins`
-/// カテゴリと同じ判定を共有する。オリジン値も生バイトも一切エコーしない。
+/// 非 UTF-8・空・全不正（`http://` / userinfo / path / query / loopback / scheme なし /
+/// `null` 等）を固定文言で拒否する（fail-closed）。実パーサ `allowed_origins` の
+/// 結果をそのまま使い、doctor の `allowed_origins` カテゴリと同じ判定を共有する。
+/// オリジン値も生バイトも一切エコーしない。固定文言の `http(s)` は既存契約として維持する。
 pub fn production_allowed_origins_error(
     allow_mock_auth: bool,
     value: common::env::EnvValue,
@@ -1546,6 +1583,49 @@ pub async fn run() -> anyhow::Result<()> {
         ));
     }
 
+    // R2-SERVER: JWT 鍵（HS256 秘密長 / RSA PEM / 検証鍵 / JWT_REQUIRE_KID 整合）と
+    // AGE ポリシーは DB 接続・マイグレーション・instance.lock・FK 検査より前の
+    // この設定フェーズで確定させる。設定エラーで起動失敗しても部分適用 DB/ロックが
+    // 残らないことを保証する（ロック取得後のエラー経路は下流の guard で保険をかける）。
+    let rsa_pem_env = common::env::read_env("JWT_RSA_PRIVATE_KEY_PEM");
+    let jwt_secret_env = common::env::read_env("JWT_SECRET");
+    let verification_keys_env = common::env::read_env("JWT_RSA_VERIFICATION_KEYS");
+    // JWT の非 UTF-8 を「未設定」と混同すると RS256 → HS256 へ黙って倒れるため起動拒否する。
+    // 分類は doctor と同じ env_value_for_use を使い、固定文言のみを返す。
+    for (name, value) in [
+        ("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env),
+        ("JWT_SECRET", &jwt_secret_env),
+        ("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env),
+    ] {
+        if let Some(warning) = env_value_for_use(name, value).1 {
+            return Err(anyhow::anyhow!("{warning}; refusing to start"));
+        }
+    }
+    let (rsa_pem, _) = env_value_for_use("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env);
+    let (jwt_secret, _) = env_value_for_use("JWT_SECRET", &jwt_secret_env);
+    let (verification_keys, _) =
+        env_value_for_use("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env);
+    let jwt_keys = jwt_keys_from_env(
+        rsa_pem.map(ToString::to_string),
+        jwt_secret.map(ToString::to_string),
+        verification_keys,
+        require_kid,
+    )
+    .map_err(|e| anyhow::anyhow!(e))?;
+    tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
+
+    let age_policy = common::age::AgePolicy::from_env()
+        .map_err(|e| anyhow::anyhow!("Invalid age policy configuration: {e}"))?;
+    tracing::info!(
+        "Age policy: default_minimum_age={}, country_overrides={}, configuration_satisfied={}, require_explicit_configuration={}, enforcement_mode={}, settings_always_public={}",
+        age_policy.default_minimum_age,
+        age_policy.country_minimums.len(),
+        age_policy.configuration_satisfied(),
+        age_policy.require_explicit_configuration,
+        age_policy.enforcement_mode,
+        age_policy.settings_always_public
+    );
+
     let db_url = match &database_url_env {
         // 検証側（production_database_url_error）と同じ trim を適用し、
         // 受理した値と実際に接続へ使う値を一致させる（前後空白でスキーム解釈が壊れないように）。
@@ -1596,6 +1676,11 @@ pub async fn run() -> anyhow::Result<()> {
         warn!("remote DB configured: single-writer lock is not enforced; ensure only one writer");
         None
     };
+    // R2-SERVER: ここからの早期 return（migration / FK 検査 / リスナ bind 等）でも
+    // instance.lock を残さないためのガード。成功経路の明示削除は末尾で維持する。
+    let mut instance_lock_guard = instance_lock
+        .as_ref()
+        .map(|path| InstanceLockGuard::new(path.clone()));
 
     // Run database migrations
     migration::run_migrations(&db).await?;
@@ -1626,40 +1711,14 @@ pub async fn run() -> anyhow::Result<()> {
         }
     }
 
-    // JWT / IPFS / 決済の環境変数は read_env で一度だけ読み、
+    // IPFS / 決済の環境変数は read_env で一度だけ読み、
     // 「未設定」「非 UTF-8」「有効な UTF-8」を区別する（値・生バイトはエコーしない）。
-    let rsa_pem_env = common::env::read_env("JWT_RSA_PRIVATE_KEY_PEM");
-    let jwt_secret_env = common::env::read_env("JWT_SECRET");
-    let verification_keys_env = common::env::read_env("JWT_RSA_VERIFICATION_KEYS");
+    // JWT 鍵と AGE ポリシーは DB 接触前の設定フェーズへ移動済み。
     let ipfs_gateways_env = common::env::read_env("IPFS_GATEWAYS");
     let ipfs_timeout_env = common::env::read_env("IPFS_TIMEOUT_SECS");
     let ipfs_attempts_env = common::env::read_env("IPFS_MAX_ATTEMPTS");
     let payment_address_env = common::env::read_env("PAYMENT_RECEIVING_ADDRESS");
     let payment_xprv_env = common::env::read_env("PAYMENT_RECEIVING_XPRV");
-
-    // JWT の非 UTF-8 を「未設定」と混同すると RS256 → HS256 へ黙って倒れるため起動拒否する。
-    // 分類は doctor と同じ env_value_for_use を使い、固定文言のみを返す。
-    for (name, value) in [
-        ("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env),
-        ("JWT_SECRET", &jwt_secret_env),
-        ("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env),
-    ] {
-        if let Some(warning) = env_value_for_use(name, value).1 {
-            return Err(anyhow::anyhow!("{warning}; refusing to start"));
-        }
-    }
-    let (rsa_pem, _) = env_value_for_use("JWT_RSA_PRIVATE_KEY_PEM", &rsa_pem_env);
-    let (jwt_secret, _) = env_value_for_use("JWT_SECRET", &jwt_secret_env);
-    let (verification_keys, _) =
-        env_value_for_use("JWT_RSA_VERIFICATION_KEYS", &verification_keys_env);
-    let jwt_keys = jwt_keys_from_env(
-        rsa_pem.map(ToString::to_string),
-        jwt_secret.map(ToString::to_string),
-        verification_keys,
-        require_kid,
-    )
-    .map_err(|e| anyhow::anyhow!(e))?;
-    tracing::info!("JWT signing algorithm: {}", jwt_keys.algorithm_name());
 
     // IPFS の非 UTF-8 は固定文言の警告のうえ未設定として扱う（fail-closed）。
     let (gateways_value, warning) = env_value_for_use("IPFS_GATEWAYS", &ipfs_gateways_env);
@@ -1737,23 +1796,13 @@ pub async fn run() -> anyhow::Result<()> {
         }
     }
 
-    let age_policy = common::age::AgePolicy::from_env()
-        .map_err(|e| anyhow::anyhow!("Invalid age policy configuration: {e}"))?;
-    tracing::info!(
-        "Age policy: default_minimum_age={}, country_overrides={}, configuration_satisfied={}, require_explicit_configuration={}, enforcement_mode={}, settings_always_public={}",
-        age_policy.default_minimum_age,
-        age_policy.country_minimums.len(),
-        age_policy.configuration_satisfied(),
-        age_policy.require_explicit_configuration,
-        age_policy.enforcement_mode,
-        age_policy.settings_always_public
-    );
+    // AGE ポリシーは前述の DB 接触前フェーズで解決済み（age_policy はそこで束縛）。
 
     // R2-REMOTE-REVOKE: 起動時ロードのメモリは positive-only 失効キャッシュとして残す。
     // 失効済みの sub 閾値 / sid のみを保持し、認証時の判定は DB を正本として行う。
     // miss 時に必ず DB を照会し、否定結果はキャッシュしない（他インスタンスの
-    // 失効を取りこぼさないため）。purge で DB 行が消えてもメモリに残り得るが、
-    // 対象 JWT は SESSION_TTL_SECS で期限切れになるため自然解消する。
+    // 失効を取りこぼさないため）。周期/起動 purge が同じカットオフで DB 行を削除した
+    // ときは、削除 sid をこの positive-only キャッシュからも反映的に削除する。
     // 永続化済みの sub 失効閾値を起動時にロードする。
     let revoked_subs_before = {
         let mut rows = db
@@ -1865,6 +1914,8 @@ pub async fn run() -> anyhow::Result<()> {
     let worker_db = Arc::clone(&shared_state.db);
     let worker_oidc = shared_state.oidc.clone();
     let worker_metrics = Arc::clone(&shared_state.metrics);
+    // 周期 purge が revoked_sessions の positive-only キャッシュも回収できるよう渡す。
+    let worker_revoked_sessions = Arc::clone(&shared_state.revoked_sessions);
     // 周期 finalizer がレート制限キーを回収できるよう共有状態を渡す。
     let worker_rate_limit = shared_state.rate_limit.clone();
     // finalizer の JoinHandle 結果を検査する際に使う Metrics（shared_state は build_router へ move される）。
@@ -1880,13 +1931,16 @@ pub async fn run() -> anyhow::Result<()> {
     }
     let finalize_interval = moderation_finalize_interval(finalize_interval_input);
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-    let finalizer = tokio::spawn(run_moderation_finalizer(
+    let finalizer = tokio::spawn(run_moderation_finalizer_with_cleanup(
         worker_db,
         worker_oidc,
         finalize_interval,
         shutdown_rx,
         worker_metrics,
-        worker_rate_limit,
+        FinalizerCleanupContext {
+            rate_limit: worker_rate_limit,
+            revoked_sessions: Some(worker_revoked_sessions),
+        },
     ));
 
     let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
@@ -1945,6 +1999,10 @@ pub async fn run() -> anyhow::Result<()> {
                 );
             }
         }
+    }
+    // 成功経路の明示削除が済んだのでエラー経路ガードを解除する（二重削除しない）。
+    if let Some(guard) = &mut instance_lock_guard {
+        guard.disarm();
     }
     Ok(())
 }
@@ -2010,6 +2068,33 @@ fn is_origin_shape(origin: &str) -> bool {
     origin.starts_with("http://") || origin.starts_with("https://")
 }
 
+/// 本番相当（mock 無効）で受理するオリジンかを判定する共通ヘルパ。
+///
+/// `client/src/lib.rs::is_https_non_local_origin` と同じ「https かつオリジンのみ」判定:
+/// `https://` で始まり、オリジン区切り（`/` `?` `#` `@`）を含まず、loopback /
+/// wildcard 宿主（`127.0.0.1` / `[::1]` / `0.0.0.0` / `localhost`）を大小文字無視で
+/// 含まないこと。`production_allowed_origins_error` と doctor の `allowed_origins`
+/// 診断は両者ともこの判定を実パーサ `allowed_origins` 経由で共有する。
+/// 値・オリジンは一切エコーしない（戻り値は真偽のみ）。
+pub fn is_production_https_origin(origin: &str) -> bool {
+    const SCHEME: &str = "https://";
+    if !origin.starts_with(SCHEME) {
+        return false;
+    }
+    let authority = &origin[SCHEME.len()..];
+    if authority.is_empty()
+        || authority
+            .bytes()
+            .any(|byte| matches!(byte, b'/' | b'?' | b'#' | b'@'))
+    {
+        return false;
+    }
+    let lowered = origin.to_ascii_lowercase();
+    !["127.0.0.1", "[::1]", "0.0.0.0", "localhost"]
+        .iter()
+        .any(|forbidden| lowered.contains(forbidden))
+}
+
 /// 起動時警告へ出す ALLOWED_ORIGINS エントリのマスク表現。
 /// IPFS 用の `redact_url` と同じ方針で生の設定値をログへ残さず、オリジン値そのものは
 /// 出力しない（区分だけを返す）。
@@ -2040,7 +2125,17 @@ pub fn allowed_origins(env_value: Option<&str>, allow_dev_defaults: bool) -> Vec
                 if origin.is_empty() {
                     return None;
                 }
-                if !is_origin_shape(origin) {
+                if !allow_dev_defaults {
+                    // 本番相当は https かつオリジンのみ。http / userinfo / path / query /
+                    // loopback は共通ヘルパで拒否する（client の判定と同基準）。
+                    if !is_production_https_origin(origin) {
+                        warn!(
+                            "Ignoring ALLOWED_ORIGINS entry that is not an https origin ({}; value redacted)",
+                            redact_origin(origin)
+                        );
+                        return None;
+                    }
+                } else if !is_origin_shape(origin) {
                     warn!(
                         "Ignoring ALLOWED_ORIGINS entry without an http(s) scheme ({}; value redacted)",
                         redact_origin(origin)
@@ -2437,29 +2532,73 @@ async fn purge_expired_refresh_tokens(db: &Connection) -> Result<Option<u64>, Ap
     purge_expired_refresh_tokens_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
 
+/// revoked_sessions の purge に使う共通カットオフ（DB とメモリで同じ閾値を使う単一情報源）。
+fn revoked_session_purge_cutoff() -> String {
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(oidc::SESSION_TTL_SECS + 60);
+    cutoff.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
 /// 古い失効 sid を回収する。失効sid を持つ JWT は最大 SESSION_TTL_SECS で
 /// 期限切れになるため、それより古いレコードを削除しても失効は復活しない。
 /// リフレッシュ時は常に新しい sid が発行されるため再利用の心配もない。
+#[cfg(test)]
 async fn purge_stale_revoked_sessions_with_wait(
     db: &Connection,
     lock_wait: Option<Duration>,
 ) -> Result<Option<u64>, AppError> {
+    purge_stale_revoked_sessions_with_cache(db, lock_wait, None).await
+}
+
+/// DB の DELETE が成功したとき、同じカットオフで削除された sid を positive-only
+/// キャッシュ（メモリの revoked_sessions）からも反映的に削除する。
+///
+/// DB が正本なので `is_session_revoked` の miss 時 DB 照会は維持する。コミット前に
+/// 削除対象 sid を読み取り、コミット成功後だけメモリへ反映する（purge 失敗時は
+/// キャッシュを残す）。`cache = None` の既存呼び出しは DB のみを回収する。
+async fn purge_stale_revoked_sessions_with_cache(
+    db: &Connection,
+    lock_wait: Option<Duration>,
+    cache: Option<&Mutex<HashSet<String>>>,
+) -> Result<Option<u64>, AppError> {
     let Some(guard) = acquire_purge_lock(db, lock_wait).await? else {
         return Ok(None);
     };
-    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(oidc::SESSION_TTL_SECS + 60);
+    let cutoff = revoked_session_purge_cutoff();
+    // write_lock ガードを保持しているため、この読み取りと後続 DELETE の間に
+    // 他ライターが BEGIN して割り込むことはない。
+    let mut stale_sids = Vec::new();
+    if cache.is_some() {
+        let mut rows = db
+            .query(
+                "SELECT sid FROM revoked_sessions WHERE revoked_at <= ?",
+                [cutoff.clone()],
+            )
+            .await?;
+        while let Some(row) = rows.next().await? {
+            stale_sids.push(row.get::<String>(0)?);
+        }
+    }
     let (_write_guard, tx) = begin_write_tx_sql_with_guard(db, guard).await?;
     tx.execute(
         "DELETE FROM revoked_sessions WHERE revoked_at <= ?",
-        [cutoff.format("%Y-%m-%d %H:%M:%S").to_string()],
+        [cutoff],
     )
     .await?;
     let deleted = tx.changes();
     tx.commit().await?;
+    if let Some(cache) = cache {
+        let mut sessions = cache
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        for sid in stale_sids {
+            sessions.remove(&sid);
+        }
+    }
     Ok(Some(deleted))
 }
 
 /// 周期用: ロック取得だけ `PURGE_LOCK_WAIT` を待ち、ビジーならスキップする。
+#[cfg(test)]
 async fn purge_stale_revoked_sessions(db: &Connection) -> Result<Option<u64>, AppError> {
     purge_stale_revoked_sessions_with_wait(db, Some(PURGE_LOCK_WAIT)).await
 }
@@ -2541,6 +2680,13 @@ fn sweep_rate_limiter_keys(rate_limit: Option<&RateLimitState>, metrics: &Metric
 }
 
 /// 起動中に動作する自動確定ワーカー。停止シグナルで終了する。
+/// 周期 finalizer が共有する回収対象（引数数を 7 以下に保つためのまとめ）。
+struct FinalizerCleanupContext {
+    rate_limit: Option<Arc<RateLimitState>>,
+    revoked_sessions: Option<Arc<Mutex<HashSet<String>>>>,
+}
+
+#[cfg(test)]
 async fn run_moderation_finalizer(
     db: Arc<Connection>,
     oidc: Option<Arc<oidc::OidcState>>,
@@ -2549,27 +2695,77 @@ async fn run_moderation_finalizer(
     metrics: Arc<Metrics>,
     rate_limit: Option<Arc<RateLimitState>>,
 ) {
-    run_moderation_finalizer_with_startup_wait(
+    run_moderation_finalizer_with_cleanup(
+        db,
+        oidc,
+        interval,
+        shutdown,
+        metrics,
+        FinalizerCleanupContext {
+            rate_limit,
+            revoked_sessions: None,
+        },
+    )
+    .await;
+}
+
+/// revoked_sessions の positive-only キャッシュも周期回収の対象にする版。
+/// 本番の `run()` は `AppState::revoked_sessions` を渡す。既存シグネチャは維持する。
+async fn run_moderation_finalizer_with_cleanup(
+    db: Arc<Connection>,
+    oidc: Option<Arc<oidc::OidcState>>,
+    interval: Duration,
+    shutdown: tokio::sync::watch::Receiver<()>,
+    metrics: Arc<Metrics>,
+    cleanup: FinalizerCleanupContext,
+) {
+    run_moderation_finalizer_with_startup_wait_and_cleanup(
         db,
         oidc,
         interval,
         STARTUP_LOCK_WAIT,
         shutdown,
         metrics,
-        rate_limit,
+        cleanup,
+    )
+    .await;
+}
+
+/// 既存テスト呼び出し互換のラッパー（キャッシュ反映なし）。
+#[cfg(test)]
+async fn run_moderation_finalizer_with_startup_wait(
+    db: Arc<Connection>,
+    oidc: Option<Arc<oidc::OidcState>>,
+    interval: Duration,
+    startup_lock_wait: Duration,
+    shutdown: tokio::sync::watch::Receiver<()>,
+    metrics: Arc<Metrics>,
+    rate_limit: Option<Arc<RateLimitState>>,
+) {
+    run_moderation_finalizer_with_startup_wait_and_cleanup(
+        db,
+        oidc,
+        interval,
+        startup_lock_wait,
+        shutdown,
+        metrics,
+        FinalizerCleanupContext {
+            rate_limit,
+            revoked_sessions: None,
+        },
     )
     .await;
 }
 
 /// 本体。起動時ロック待ちの上限を差し替えられるようにしてある（テストは短い値で呼ぶ）。
-async fn run_moderation_finalizer_with_startup_wait(
+async fn run_moderation_finalizer_with_startup_wait_and_cleanup(
     db: Arc<Connection>,
     oidc: Option<Arc<oidc::OidcState>>,
     interval: Duration,
     startup_lock_wait: Duration,
     mut shutdown: tokio::sync::watch::Receiver<()>,
     metrics: Arc<Metrics>,
-    rate_limit: Option<Arc<RateLimitState>>,
+    cleanup: FinalizerCleanupContext,
 ) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -2594,6 +2790,7 @@ async fn run_moderation_finalizer_with_startup_wait(
             oidc.as_ref(),
             startup_lock_wait,
             metrics.as_ref(),
+            cleanup.revoked_sessions.as_deref(),
         ) => {}
     }
 
@@ -2607,9 +2804,14 @@ async fn run_moderation_finalizer_with_startup_wait(
                     .finalizer_ticks
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // 機微 API のレート制限は IP キーが増え続けるため、同じ tick で回収する。
-                sweep_rate_limiter_keys(rate_limit.as_deref(), metrics.as_ref());
+                sweep_rate_limiter_keys(cleanup.rate_limit.as_deref(), metrics.as_ref());
                 tokio::select! {
-                    _ = run_periodic_cleanup(db.as_ref(), oidc.as_ref(), metrics.as_ref()) => {}
+                    _ = run_periodic_cleanup(
+                        db.as_ref(),
+                        oidc.as_ref(),
+                        metrics.as_ref(),
+                        cleanup.revoked_sessions.as_deref(),
+                    ) => {}
                     _ = tick_shutdown.changed() => {
                         tracing::info!("Moderation finalizer stopped");
                         break;
@@ -2630,6 +2832,7 @@ async fn run_periodic_cleanup(
     db: &Connection,
     oidc: Option<&Arc<oidc::OidcState>>,
     metrics: &Metrics,
+    revoked_sessions: Option<&Mutex<HashSet<String>>>,
 ) {
     // 周期実行は purge 関数側で write_lock 取得だけを短時間待ち、
     // 取得できたら SQL はタイムアウトなしで完了させる（外側からは timeout で包まない）。
@@ -2651,7 +2854,8 @@ async fn run_periodic_cleanup(
             tracing::warn!("Refresh token purge failed: {}", error);
         }
     }
-    match purge_stale_revoked_sessions(db).await {
+    match purge_stale_revoked_sessions_with_cache(db, Some(PURGE_LOCK_WAIT), revoked_sessions).await
+    {
         Ok(Some(0)) => note_finalizer_success(metrics, 0),
         Ok(Some(count)) => {
             note_finalizer_success(metrics, count);
@@ -2730,6 +2934,7 @@ async fn run_startup_cleanup(
     oidc: Option<&Arc<oidc::OidcState>>,
     lock_wait: Duration,
     metrics: &Metrics,
+    revoked_sessions: Option<&Mutex<HashSet<String>>>,
 ) {
     // 起動時に一度、期限切れリフレッシュトークンを回収する。
     match purge_expired_refresh_tokens_with_wait(db, Some(lock_wait)).await {
@@ -2751,7 +2956,7 @@ async fn run_startup_cleanup(
             tracing::warn!("Refresh token purge failed on startup: {}", error);
         }
     }
-    match purge_stale_revoked_sessions_with_wait(db, Some(lock_wait)).await {
+    match purge_stale_revoked_sessions_with_cache(db, Some(lock_wait), revoked_sessions).await {
         Ok(Some(0)) => note_finalizer_success(metrics, 0),
         Ok(Some(count)) => {
             note_finalizer_success(metrics, count);

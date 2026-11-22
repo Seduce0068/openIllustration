@@ -787,6 +787,31 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第40ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  BetterleaksのPATH更新/all-zero beforeフォールバック/wasm target clippy追加、
+  revoked_sessionsメモリを周期purgeと同じcutoffで回収、JWT鍵+AGE検証のDB接触前移動と
+  InstanceLockGuard(Drop削除)、ALLOWED_ORIGINS本番https強制(doctor共通判定)、
+  JXL/小説detailへlang=ja、鮮度警告文言の定数化、低コントラスト色をgray-400以上へ、
+  6pxハッシュ表示を10pxへ。
+  親が旧4関数を#[cfg(test)]化してlib dead_code解消、tests153追随。
+  R4指摘（8px残存）は元から8pxの箇所で6px→10px要件は充足と判定し却下。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests153、npm audit3lockfile、
+  markdownlint39ファイル、betterleaks全履歴no leaks）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  GPG復号訓練、Dependabot、axe自動スキャン、MSRV下限CI、二次処理5xx伝播、
+  finalizer異常終了readiness、動的alert、401復帰導線共通化、クライアントエラーテレメトリ、
+  .audit-rootオフサイト、E2E artifact回収、Chromeバージョン固定、OIL_MOCK_AUTH=0検証、
+  BUILD-02負のビルドゲート、retries方針、TOC scroll-margin、日時ja-JP+UTC不整合、
+  公開集計鮮度の端末時計依存/復旧経路、backup-cron-wrapper owner/mode分岐、
+  cargo-deny aarch64/licenses方針、docs/log.md運用、HANDOFF CI記述、
+  restore safety copy原子性、OIDC閾値削除と発行の原子化、ALERT_CMD死活観測、
+  cron allowlistログキー、license_file相対パス解決、集計/投票キュー英文lang、
+  logout再試行文言、Sizes超過再選択、Back-ChannelLogout部分失敗テスト）は記録のみで保留。
+
 - 2026-11-23 コンボ第39ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   Betterleaksをschedule/workflow_dispatchで全履歴走査へ（PR=base..head/push=before..HEADは維持）、

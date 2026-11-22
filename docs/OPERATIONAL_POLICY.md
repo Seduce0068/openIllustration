@@ -124,6 +124,11 @@ generated:
   失効が復活する。purge はこの保持期間より古い閾値だけを回収し、セッション TTL
   （24h）を超えても refresh 有効期間内のエントリは維持する。境界は doctor /
   dry-run で確認する。
+- `revoked_sessions` の positive-only メモリキャッシュも周期/起動 purge の対象にする。
+  DB 側の `purge_stale_revoked_sessions`（セッション TTL + 60 秒のカットオフ）と同じ
+  `revoked_session_purge_cutoff` を共有し、DELETE のコミット成功後に削除対象 sid
+  だけをメモリからも除去する。DB が正本のため、`is_session_revoked` の miss 時
+  DB 照会と否定結果の非キャッシュ化は維持する（他インスタンスの失効を取りこぼさない）。
 - OIDC 経由の初回登録では署名鍵を配布しないため、`public_key_der` に subject
   由来の「署名鍵未登録」プレースホルダを保存する。NULL を残すと下流の署名検証
   が NULL デコードで 500 になるため、鍵未登録は固定文言の 403/501 として扱う方針（未実装）。
@@ -532,7 +537,7 @@ generated:
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。`add_verification_key` は引数 `kid` と`kid_from_public_pem`（SPKI DER の SHA-256 先頭16バイト）の導出値を照合し、不一致なら登録を拒否する。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
-| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り、有効な `http(s)://` オリジンのみ、末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `http(s)` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
+| `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り。開発 mock 時は有効な `http(s)://` のみ、本番相当では `https://` で始まり userinfo / path / query / loopback を含まないオリジンのみ。末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `https` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、実パーサは `is_production_https_origin`（`client` の `is_https_non_local_origin` と同基準）を共有する。`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。読取は `common::env::read_env` に一本化し、未設定と `json` / `text`（大小文字不問）のみ受理。タイポ・非 UTF-8 は固定文言 `LOG_FORMAT must be json or text; using text (invalid value)` の警告のうえテキスト形式へフォールバックし、`doctor` の `production` カテゴリが同じ判定で `--strict` の警告対象にする（値・生バイトはエコーしない）。 |
 | `RETENTION_DAYS` | バックアップ運用 | 30 | `backup-rotate.sh` の保持日数。0 以上で先頭ゼロなし。 |
 | `MIN_KEEP` | バックアップ運用 | 3 | 最低保持世代数。1 以上。 |
@@ -639,6 +644,12 @@ generated:
 - 起動時に受理値を検証し不正値を起動拒否するフラグ4種（`ALLOW_MOCK_AUTH` / `EXPOSE_INTERNAL_ERRORS` / `OIDC_COOKIE_SECURE` / `JWT_REQUIRE_KID`）
   は設定フェーズ（`run()` の OIDC 検証直後）へ集約して検証する。
   DB 接続・マイグレーション・`instance.lock` 取得・FK 検査より前に起動拒否が確定し、失敗時にこれらを残さない。
+- `JWT_SECRET` 長・`JWT_RSA_PRIVATE_KEY_PEM`・`JWT_RSA_VERIFICATION_KEYS`・`JWT_REQUIRE_KID`
+  の整合（非 UTF-8 の起動拒否を含む）と `AGE_*` ポリシーも同じ DB 接触前フェーズへ移動した。
+  `production_config_errors` と同じ場所で `config_errors` を確定させるため、設定エラーで
+  起動失敗しても部分適用 DB / `instance.lock` は残らない。さらにロック取得後の
+  migration / FK 検査 / リスナ bind 等の早期 return にも `InstanceLockGuard::drop` が
+  ファイルを削除する（成功経路の明示削除は維持し、`disarm()` で二重削除しない）。
 - `AUDIT_EXPECT_ROOT` も同じ設定フェーズの起動ゲートへ加える。`run()` は `PINATA_JWT` 読込直後に
   `read_env("AUDIT_EXPECT_ROOT")` し、`production_config_errors` と同じ箇所で `config_errors` へ追加する。
   判定は共有ヘルパ `production_audit_expect_root_error` に委譲し、本番相当では未設定・非 UTF-8・
@@ -759,7 +770,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 / migrations14 /
-  tests152 の数値は不変。
+  tests153 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -768,7 +779,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests152 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests153 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -788,7 +799,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests152 の数値は不変。
+  migrations14 / tests153 の数値は不変。
 
 ### R2-CLIENT（第2次）追加契約（2026-11-23）
 
@@ -804,7 +815,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `required` を使わず `aria-required` と独自 `role=alert` で検証し、
   Enter 経路も同じ検証へ集約する。
 - いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests152 の数値は不変。
+  migrations14 / tests153 の数値は不変。
 
 ### R2-ENV 追加契約（2026-11-23）
 
@@ -824,7 +835,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   固定文言警告のうえ既定値へフォールバックし、`doctor` も `classify` ベースで
   同じ警告を出す。これにより「不正値は既定へフォールバックし doctor が警告する」
   という契約を実装と一致させた（値・生バイトは非エコー）。
-  E2E69件 / check23 / migrations14 / tests152 は不変。
+  E2E69件 / check23 / migrations14 / tests153 は不変。
 
 ### R2-SERVER 追加契約（2026-11-23）
 
@@ -846,7 +857,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` と同じ順序に統一し、読み取りカーソルを残したまま書き込まない。
   既存のハッシュ連鎖・ログ ID 連続性・Merkle root の契約は変更しない。
   新規テスト関数は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
-  tests152 の数値は不変。
+  tests153 の数値は不変。
 
 ### R2-SERVER（第2次）追加契約（2026-11-23）
 
@@ -869,7 +880,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   走っても二重付与しない。`/health` / `/ready` / `/metrics` は除外し、
   `/me/export` の個別設定と重複させない。
 - 新規サーバー側テスト2件を追加。E2E69件 / check23 / doctor54 / migrations14 は
-  不変で、doc→code テスト名照合値のみ 当時 tests148 → tests150 へ追随（現行照合値は tests152）する
+  不変で、doc→code テスト名照合値のみ 当時 tests148 → tests150 へ追随（現行照合値は tests153）する
   （履歴記載の数値は変更しない）。
 
 ### R2-SERVER（第2次・部分適用）追加契約（2026-11-23）
@@ -889,7 +900,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` / `update_content_status` と同じ順序に統一し、
   読み取りカーソルを残したまま書き込まない。
 - 新規テスト関数は追加せず、回帰は既存 `me_export_returns_only_own_data`
-  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests152 の
+  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests153 の
   各数値は不変。
 
 ### R2-CLIENT（第3次）追加契約（2026-11-23）

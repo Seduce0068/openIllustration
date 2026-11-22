@@ -2595,8 +2595,36 @@ fn test_production_config_fail_closed() {
             Some(ORIGINS_ERROR)
         );
     }
-    // 有効な http(s) オリジンが1つでもあれば受理（不正要素が混じっても捨てて残す）。
-    for valid in ["https://example.jp", "http://localhost:8080, null"] {
+    // 本番相当は https かつオリジンのみ。http / userinfo / path / query /
+    // loopback は client の is_https_non_local_origin と同じ基準で拒否する。
+    for invalid in [
+        "http://example.jp",
+        "https://user@example.jp",
+        "https://example.jp/v1",
+        "https://example.jp/?key=1",
+        "https://example.jp#top",
+        "https://127.0.0.1:8443",
+        "https://[::1]:8443",
+        "https://0.0.0.0",
+        "https://LOCALHOST",
+        "http://localhost:8080, null",
+    ] {
+        assert_eq!(
+            crate::production_allowed_origins_error(
+                false,
+                common::env::EnvValue::Utf8(invalid.to_string())
+            ),
+            Some(ORIGINS_ERROR),
+            "invalid={invalid:?}"
+        );
+    }
+    // 有効な https オリジンが1つでもあれば受理（不正要素が混じっても捨てて残す）。
+    for valid in [
+        "https://example.jp",
+        "https://api.example.org:8443",
+        "http://localhost:8080, https://example.jp",
+        "https://example.jp/, null",
+    ] {
         assert_eq!(
             crate::production_allowed_origins_error(
                 false,
@@ -14018,7 +14046,16 @@ async fn test_purge_stale_revoked_sessions() {
     .await
     .unwrap();
 
-    let purged = crate::purge_stale_revoked_sessions(&db).await.unwrap();
+    // メモリの positive-only キャッシュにも同じ sid を入れておき、purge 成功時に
+    // 同じカットオフの sid だけが反映的に削除されることを固定する。
+    let cache = Arc::new(std::sync::Mutex::new(std::collections::HashSet::from([
+        "old".to_string(),
+        "recent".to_string(),
+        "other-instance".to_string(),
+    ])));
+    let purged = crate::purge_stale_revoked_sessions_with_cache(&db, None, Some(cache.as_ref()))
+        .await
+        .unwrap();
     assert_eq!(purged, Some(1), "only the stale revocation must be purged");
 
     let mut rows = db
@@ -14030,6 +14067,17 @@ async fn test_purge_stale_revoked_sessions() {
         remaining.push(row.get::<String>(0).unwrap());
     }
     assert_eq!(remaining, vec!["recent"]);
+
+    let cached = cache.lock().unwrap();
+    assert!(
+        !cached.contains("old"),
+        "purge した sid はメモリからも消える"
+    );
+    assert!(cached.contains("recent"), "生存 sid はメモリに残る");
+    assert!(
+        cached.contains("other-instance"),
+        "DB の削除対象ではない sid は維持する"
+    );
 }
 
 // ---- liveness / readiness ----

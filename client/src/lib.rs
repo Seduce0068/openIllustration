@@ -967,7 +967,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html.push_str("</tbody></table>");
     if stats.monthly.is_empty() {
         html.push_str(
-            "<p class=\"mt-2 text-[9px] text-gray-600 italic\">月次集計はありません。</p>",
+            "<p class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
         );
     }
     html
@@ -1034,7 +1034,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     html.push_str("</tbody></table>");
     if stats.monthly.is_empty() {
         html.push_str(
-            "<p class=\"mt-2 text-[9px] text-gray-600 italic\">月次集計はありません。</p>",
+            "<p class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
         );
     }
     html
@@ -2165,7 +2165,7 @@ pub fn App() -> impl IntoView {
                     "ledger" => view! {
                         <Ledger token=token.get().unwrap_or_default() />
                     }.into_any(),
-                    _ => view! { <div class="text-center mt-20 text-gray-600">"不明な画面です。"</div> }.into_any(),
+                    _ => view! { <div class="text-center mt-20 text-gray-400">"不明な画面です。"</div> }.into_any(),
                 }}
             </main>
         </div>
@@ -2655,7 +2655,7 @@ where
                     }
                 />
                 <Show when=move || items.get().is_empty() fallback=|| ()>
-                    <div class="border border-white/10 p-4 flex flex-col items-center justify-center text-[10px] text-gray-600 col-span-full gap-2">
+                    <div class="border border-white/10 p-4 flex flex-col items-center justify-center text-[10px] text-gray-400 col-span-full gap-2">
                         <span class="italic opacity-50">
                             {move || content_empty_state_message(&q.get(), &tag.get(), &content_type.get(), favorite_only.get())}
                         </span>
@@ -2827,6 +2827,10 @@ fn error_lang(message: &str) -> &'static str {
         "en"
     }
 }
+
+/// 公開集計の鮮度警告文言。error_lang 判定と DOM 描画の双方で同じ値を参照する。
+const PUBLIC_STATS_STALE_MESSAGE: &str =
+    "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。";
 
 /// コンテンツ本文の取得失敗時に表示する固定文言を HTTP ステータスから選ぶ。
 /// `None` はバイナリ読取失敗や通信エラー（ステータスが無い）を表す。
@@ -3187,7 +3191,7 @@ where
             }
             class=move || format!("p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full {}", if highlighted { "ring-1 ring-green-500" } else { "" })>
             <div class="flex justify-between items-start">
-                <p class="text-[8px] text-gray-600 truncate flex-1 mr-2">{cid_label.clone()}</p>
+                <p class="text-[8px] text-gray-400 truncate flex-1 mr-2">{cid_label.clone()}</p>
                 <div class="flex gap-2">
                     <button
                         type="button"
@@ -3274,7 +3278,7 @@ where
                                 <p role="alert" lang=move || error_lang("JXL Decode Failed") data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "JXL Decode Failed"
                                 </p>
-                                <p data-testid="jxl-decode-error-detail" class="text-gray-500 text-[8px]">
+                                <p data-testid="jxl-decode-error-detail" lang="ja" class="text-gray-500 text-[8px]">
                                     "JXL のデコードに失敗しました。"
                                 </p>
                             </Show>
@@ -3283,7 +3287,7 @@ where
                                 <p role="alert" lang=move || error_lang("Novel Decode Failed") data-testid="novel-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">
                                     "Novel Decode Failed"
                                 </p>
-                                <p data-testid="novel-decode-error-detail" class="text-gray-500 text-[8px]">
+                                <p data-testid="novel-decode-error-detail" lang="ja" class="text-gray-500 text-[8px]">
                                     "小説本文の UTF-8 デコードに失敗しました。"
                                 </p>
                             </Show>
@@ -3293,7 +3297,7 @@ where
                             </Show>
                         </div>
                     }.into_any(),
-                    None => view! { <span role="status" aria-live="polite" lang="en" class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
+                    None => view! { <span role="status" aria-live="polite" lang="en" class="text-[10px] text-gray-400 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
                 }}
 
                 // このパネルは画像エリアに重なる non-modal disclosure（non-modal dialog）であり、
@@ -3329,7 +3333,7 @@ where
                                             <p lang="en" class="text-gray-300">"By: " {log.changed_by.clone()}</p>
                                             <p class="italic"><span lang="en">"Reason: "</span><span lang=move || error_lang(&reason_for_lang)>{reason}</span></p>
                                             <p lang="ja" class="text-[8px] text-gray-500">"※ 表示は要約です。全文は運用者へお問い合わせください"</p>
-                                            <p lang="en" class="text-[6px] text-gray-700 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
+                                            <p lang="en" class="text-[10px] text-gray-400 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
                                         </div>
                                     }
                                 }
@@ -3353,7 +3357,7 @@ where
                     <span data-testid="content-verification-badge" lang="en" class=move || match verified.get() {
                         Some(true) => "text-green-500",
                         Some(false) => "text-red-500",
-                        None => "text-gray-600",
+                        None => "text-gray-400",
                     }>
                         {move || verification_badge_text(
                             verified.get(),
@@ -3880,7 +3884,7 @@ fn Ledger(token: String) -> impl IntoView {
                                         <td class="p-4 text-blue-400">{sender_prefix} "..."</td>
                                         <td class="p-4 text-green-400">{receiver_prefix} "..."</td>
                                         <td class="p-4 text-right font-bold">{tx.amount} " JPYC"</td>
-                                        <td class="p-4 text-gray-600 text-[6px] break-all max-w-[200px]">{tx.tx_hash}</td>
+                                        <td class="p-4 text-gray-400 text-[10px] break-all max-w-[200px]">{tx.tx_hash}</td>
                                     </tr>
                                 }
                             }
@@ -3889,7 +3893,7 @@ fn Ledger(token: String) -> impl IntoView {
                 </table>
                 // 取得が完了する前は空状態を出さない（読み込み中を「記録なし」と誤告知しない）。
                 <Show when=move || !loading.get() && txs.get().is_empty() && ledger_error.get().is_empty() fallback=|| ()>
-                    <div class="p-12 text-center text-gray-600 italic">"NO_TRANSACTIONS_RECORDED"</div>
+                    <div class="p-12 text-center text-gray-400 italic">"NO_TRANSACTIONS_RECORDED"</div>
                 </Show>
             </div>
         </div>
@@ -4422,10 +4426,10 @@ where
                 </Show>
                 // GENERATED_AT が閾値を超えて古いときだけ出す鮮度警告（オプイン集計には触れない）。
                 <Show when=move || public_stats_stale.get() fallback=|| ()>
-                    <p role="status" data-testid="public-mod-stats-stale" lang=move || error_lang("公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。") class="text-[10px] text-yellow-500">
+                    <p role="status" data-testid="public-mod-stats-stale" lang=move || error_lang(PUBLIC_STATS_STALE_MESSAGE) class="text-[10px] text-yellow-500">
                         // 色に依存しない手がかり。既存固定文言は変更せず dedicated 要素を前置する。
                         <span data-testid="public-mod-stats-stale-icon" aria-hidden="true">"⚠ "</span>
-                        "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。"
+                        {PUBLIC_STATS_STALE_MESSAGE}
                     </p>
                 </Show>
             </section>
@@ -4579,7 +4583,7 @@ where
                         }
                     />
                     <Show when=move || reports.get().is_empty() && reports_error.get().is_empty() fallback=|| ()>
-                        <div lang="en" class="text-center py-12 text-[10px] text-gray-600 italic">"NO_PENDING_VOTES"</div>
+                        <div lang="en" class="text-center py-12 text-[10px] text-gray-400 italic">"NO_PENDING_VOTES"</div>
                     </Show>
                 </div>
             </div>
