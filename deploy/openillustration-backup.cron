@@ -1,5 +1,9 @@
 # cron 版（systemd を使わない環境向け）
 # /etc/cron.d/openillustration-backup に配置する（末尾に改行が必要）。
+# 定期実行スケジューラは systemd timer＋window unit と cron の二者択一。
+# 両方を有効にしないこと（二重バックアップ・停止/起動の競合を防ぐ）。
+# cron を選ぶ場合は openillustration-backup.timer を無効化しておくこと。
+#   systemctl disable --now openillustration-backup.timer
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 # 配置前に実際の通知先へ差し替えること（未差し替え場合は失敗通知が届かない）。

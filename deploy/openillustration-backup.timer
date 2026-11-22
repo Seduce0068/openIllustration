@@ -1,6 +1,10 @@
 [Unit]
 Description=Daily OpenIllustration database backup window (stop -> backup -> start)
 Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+# 定期実行スケジューラは本 timer＋window unit と cron の二者択一。
+# 両方を有効にしないこと（二重バックアップ・停止/起動の競合を防ぐ）。
+# cron を使う場合は本 timer を無効化しておくこと。
+#   systemctl disable --now openillustration-backup.timer
 
 [Timer]
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
