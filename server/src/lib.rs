@@ -955,7 +955,7 @@ mod instance_lock_tests {
 pub fn production_config_errors(
     allow_mock_auth: bool,
     oidc_configured: bool,
-    pinata_jwt: Option<&str>,
+    pinata_jwt: common::env::EnvValue,
 ) -> Vec<&'static str> {
     if allow_mock_auth {
         return Vec::new();
@@ -965,17 +965,36 @@ pub fn production_config_errors(
         errors.push("OIDC is not configured (OIDC_* environment variables are required)");
     }
     match pinata_jwt {
-        None => errors.push("PINATA_JWT is not configured"),
-        Some("") => errors.push("PINATA_JWT is empty"),
-        // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
-        Some(v) if v.trim().is_empty() => errors.push("PINATA_JWT is empty"),
-        // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
-        Some(v) if v.trim() == "mock_jwt" => {
-            errors.push("PINATA_JWT is the development mock value")
+        common::env::EnvValue::Missing => errors.push("PINATA_JWT is not configured"),
+        // 非 UTF-8 は「未設定」と混同せず、既存固定文言で拒否（生バイトはエコーしない）。
+        common::env::EnvValue::NonUtf8 => errors.push("PINATA_JWT is empty"),
+        common::env::EnvValue::Utf8(raw) => {
+            // 空白・タブ・改行のみの値も空とみなし fail-closed（値はエコーしない）。
+            if raw.trim().is_empty() {
+                errors.push("PINATA_JWT is empty");
+            }
+            // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
+            else if raw.trim() == "mock_jwt" {
+                errors.push("PINATA_JWT is the development mock value");
+            }
         }
-        Some(_) => {}
     }
     errors
+}
+
+/// PINATA_JWT が本番相当の実値かを判定する共通ヘルパ。
+///
+/// `run()` / `doctor` / `pin_to_ipfs` が同じ `common::env::EnvValue` 分類を共有する
+/// 単一情報源。未設定・非 UTF-8・空白のみ・開発用 `mock_jwt`（前後空白を含む）は
+/// 「本番用ではない」とみなす（fail-closed）。値やトークンは保持・出力しない。
+pub fn pinata_jwt_production_like(value: common::env::EnvValue) -> bool {
+    match value {
+        common::env::EnvValue::Utf8(raw) => {
+            let trimmed = raw.trim();
+            !trimmed.is_empty() && trimmed != "mock_jwt"
+        }
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => false,
+    }
 }
 
 /// `DATABASE_URL` がリモート DSN かを判定する純粋ヘルパ。
@@ -1030,6 +1049,32 @@ pub fn production_database_url_error(
                 None
             }
         }
+    }
+}
+
+/// `AUDIT_EXPECT_ROOT` の生値が非空かつ全バイト ASCII hex かを判定する純粋ヘルパ。
+///
+/// `backup-rotate.sh` の `[0-9a-fA-F]+` 判定と同じく前後の空白を trim しない。
+/// 判定結果だけを返し、値や生バイトは保持・出力しない。
+pub fn is_hex_merkle_root(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// 本番相当（モック認証無効）で `AUDIT_EXPECT_ROOT` が必須設定を満たすかを検証する純粋関数。
+///
+/// 開発（`allow_mock_auth = true`）では従来どおり `None`。本番相当では未設定・非 UTF-8・
+/// 不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で拒否する（fail-closed）。
+/// doctor の `audit_expect_root` カテゴリと同じ判定を共有し、生値もバイトも一切エコーしない。
+pub fn production_audit_expect_root_error(
+    allow_mock_auth: bool,
+    value: common::env::EnvValue,
+) -> Option<&'static str> {
+    if allow_mock_auth {
+        return None;
+    }
+    match value {
+        common::env::EnvValue::Utf8(raw) if is_hex_merkle_root(&raw) => None,
+        _ => Some("AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)"),
     }
 }
 
@@ -1181,6 +1226,8 @@ pub async fn run() -> anyhow::Result<()> {
     // OIDC 未構成時も OidcState::from_env_with は cookie_secure を見ないため、
     // ここでも受理値を検証して不正値を起動拒否する（fail-closed）。
     bool_env_at_startup("OIDC_COOKIE_SECURE")?;
+    // JWT_REQUIRE_KID も共通 parse_bool_env で検証し、不正値は起動拒否する。
+    let require_kid = bool_env_at_startup("JWT_REQUIRE_KID")?;
     // ALLOW_IPV4_LOCALHOST は per-request 読込のため起動拒否ではなく警告に留める。
     // network::ipv4_permitted で Valid(true) 以外→false（fail-closed）とする二段構えの理由を参照。
     // 非 UTF-8 も Invalid として同じ固定文言で警告し、生バイトはエコーしない。
@@ -1199,13 +1246,12 @@ pub async fn run() -> anyhow::Result<()> {
     let oidc_validation = validate_oidc_config_with(|name: &str| std::env::var(name));
     let oidc = oidc::OidcState::from_env_with(|name: &str| std::env::var(name))
         .map_err(|message| anyhow::anyhow!("invalid OIDC configuration: {message}"))?;
-    // 非 UTF-8 は「未設定」として飲まず、不正値として production_config_errors の
-    // 起動拒否へつなぐ（空文字を渡して固定文言のエラーを出し、値はエコーしない）。
-    let pinata_jwt = match common::env::read_env("PINATA_JWT") {
-        common::env::EnvValue::Utf8(value) => Some(value),
-        common::env::EnvValue::NonUtf8 => Some(String::new()),
-        common::env::EnvValue::Missing => None,
-    };
+    // PINATA_JWT は共通分類器の EnvValue をそのまま production_config_errors へ渡す。
+    // 非 UTF-8 は「未設定」として飲まず、同じ固定文言の起動拒否へつなぐ（値はエコーしない）。
+    let pinata_jwt_env = common::env::read_env("PINATA_JWT");
+    // AUDIT_EXPECT_ROOT は PINATA_JWT と同じ設定フェーズで一度だけ読み、
+    // 未設定 / 非 UTF-8 を「未設定」と混同しない。hex 検証は共有ヘルパへ委譲する。
+    let audit_expect_root_env = common::env::read_env("AUDIT_EXPECT_ROOT");
     // DATABASE_URL は read_env で一度だけ読み、未設定 / 非 UTF-8 を「未設定」と混同しない。
     // 本番相当では production_database_url_error が固定文言で起動拒否し、開発（mock 有効）では
     // 従来どおり file:local.db へフォールバックする（値はエコーしない）。
@@ -1213,11 +1259,17 @@ pub async fn run() -> anyhow::Result<()> {
     let mut config_errors = production_config_errors(
         allow_mock_auth,
         oidc_validation.required_present,
-        pinata_jwt.as_deref(),
+        pinata_jwt_env,
     );
     config_errors.extend(production_database_url_error(
         allow_mock_auth,
         database_url_env.clone(),
+    ));
+    // AUDIT_EXPECT_ROOT も DB 接続・マイグレーション・instance.lock・FK 検査より前に
+    // 起動拒否を確定させる（doctor の audit_expect_root と同じ共有判定）。
+    config_errors.extend(production_audit_expect_root_error(
+        allow_mock_auth,
+        audit_expect_root_env,
     ));
     if !config_errors.is_empty() {
         return Err(anyhow::anyhow!(
@@ -1304,8 +1356,6 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     let verification_keys_env = std::env::var("JWT_RSA_VERIFICATION_KEYS").ok();
-    // JWT_REQUIRE_KID も共通 parse_bool_env で検証し、不正値は起動拒否する。
-    let require_kid = bool_env_at_startup("JWT_REQUIRE_KID")?;
     let jwt_keys = jwt_keys_from_env(
         std::env::var("JWT_RSA_PRIVATE_KEY_PEM").ok(),
         std::env::var("JWT_SECRET").ok(),
@@ -4251,13 +4301,20 @@ pub async fn pin_to_ipfs(
     data: Vec<u8>,
     filename: &str,
 ) -> Result<String, AppError> {
-    let pinata_jwt = std::env::var("PINATA_JWT").unwrap_or_else(|_| "mock_jwt".to_string());
-
-    // production_config_errors / doctor と統一し、前後の空白装飾付きモック値も
-    // モック経路へ流す（外部 Pinata API への送信を避ける）。
-    if pinata_jwt.trim() == "mock_jwt" {
+    // production_config_errors / doctor と同じ共通分類器・ヘルパで判定する。
+    // 未設定・非 UTF-8・空白のみ・モック値（前後空白付きを含む）はモック経路へ流し、
+    // 外部 Pinata API への送信を避ける（値はエコーしない）。
+    let pinata_jwt_env = common::env::read_env("PINATA_JWT");
+    if !pinata_jwt_production_like(pinata_jwt_env.clone()) {
         return Ok(mock_cid_for_data(&data));
     }
+    // 上の判定を通ったのは Utf8 の実トークンのみ（Bearer 送信に使用）。
+    let pinata_jwt = match pinata_jwt_env {
+        common::env::EnvValue::Utf8(value) => value,
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
+            return Ok(mock_cid_for_data(&data));
+        }
+    };
 
     let form = reqwest::multipart::Form::new().part(
         "file",
@@ -4830,9 +4887,21 @@ pub async fn mod_stats(
 ) -> Result<Json<ModStatsResponse>, AppError> {
     require_moderation_operator(&state, &claims.sub).await?;
 
-    let audits = load_mod_audit_counts(&state.db).await?;
-    let governance = load_mod_governance_counts(&state.db).await?;
-    let conclusions = load_mod_conclusion_counts(&state.db).await?;
+    // 3 表の読み取りを単一の BEGIN DEFERRED スナップショットで包む
+    // （R5-04 / me_export と同じ形）。共有 Connection は同時に 1 つの BEGIN
+    // しか保持できないため write_lock 配下で開始し、ガードを tx より後に
+    // ドロップする（宣言順 (_write_guard, tx) を維持）。
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+
+    let audits = load_mod_audit_counts(&tx).await?;
+    let governance = load_mod_governance_counts(&tx).await?;
+    let conclusions = load_mod_conclusion_counts(&tx).await?;
+
+    // 読み取りのみだが明示的にコミットしてトランザクションを終了する。
+    // 途中のクエリが `?` で早期 return した場合は Drop が ROLLBACK する。
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
 
     Ok(Json(build_mod_stats(
         &chrono::Utc::now().to_rfc3339(),
@@ -4850,9 +4919,19 @@ pub async fn public_mod_stats(
     State(state): State<Arc<AppState>>,
     _claims: AuthClaims,
 ) -> Result<Json<PublicModStatsResponse>, AppError> {
-    let audits = load_mod_audit_counts(&state.db).await?;
-    let governance = load_mod_governance_counts(&state.db).await?;
-    let conclusions = load_mod_conclusion_counts(&state.db).await?;
+    // 認証（AuthClaims extractor）は BEGIN より前に解決済み。
+    // 3 表の読み取りを単一の BEGIN DEFERRED スナップショットで包む
+    // （R5-04 / me_export と同じ形）。宣言順 (_write_guard, tx) を維持し、
+    // コミット後にガードをドロップして write_lock を解放する。
+    let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+
+    let audits = load_mod_audit_counts(&tx).await?;
+    let governance = load_mod_governance_counts(&tx).await?;
+    let conclusions = load_mod_conclusion_counts(&tx).await?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
 
     Ok(Json(build_public_mod_stats(&build_mod_stats(
         &chrono::Utc::now().to_rfc3339(),
@@ -4862,24 +4941,41 @@ pub async fn public_mod_stats(
     ))))
 }
 
-/// `TZ` が固定オフセット形式のときに使うオフセットを解釈する。
+/// `TZ` から実効 UTC オフセット（時間）を求める単一情報源。
 ///
-/// 外部依存（chrono-tz）を追加せず、`Etc/GMT±N` のみを FixedOffset に変換する。
-/// POSIX の `Etc/GMT` は符号が直観と逆で、`Etc/GMT-9` が UTC+9（JST）を表す。
-fn policy_fixed_offset(tz: Option<&str>) -> Option<chrono::FixedOffset> {
+/// 外部依存（chrono-tz）を追加せず、`Asia/Tokyo`（前後の空白は除去・大小文字無視）と
+/// `Etc/GMT±N` のみを受理する。POSIX の `Etc/GMT` は符号が直観と逆で、
+/// `Etc/GMT-9` が UTC+9（JST）を表す。数値は parse 後に符号を反転し、
+/// `chrono::FixedOffset` が構築できない範囲（絶対値 24 時間以上）や未対応名は `None`。
+/// `run()` の年齢境界判定と doctor の設定診断が同じ関数を共有する。
+pub fn policy_utc_offset_hours(tz: Option<&str>) -> Option<i32> {
     let tz = tz?.trim();
     if tz.eq_ignore_ascii_case("Asia/Tokyo") {
-        // 例外的に日本の固定オフセット +9 として扱う。日本に夏時間はなく、
-        // オフセットが変化しないため固定値でも「今日」の境界は安全に求められる。
-        return chrono::FixedOffset::east_opt(9 * 3600);
+        // 日本に夏時間はなくオフセットが変化しないため固定値 +9 として扱う。
+        return Some(9);
     }
     let hours = tz.strip_prefix("Etc/GMT")?.parse::<i32>().ok()?;
     // POSIX 規約: Etc/GMT-N = UTC+N, Etc/GMT+N = UTC-N。
-    chrono::FixedOffset::east_opt(-hours * 3600)
+    let offset = hours.checked_neg()?;
+    // 範囲外（Etc/GMT±25 等）は FixedOffset が構築できないため None とする。
+    offset
+        .checked_mul(3600)
+        .and_then(chrono::FixedOffset::east_opt)?;
+    Some(offset)
+}
+
+/// `TZ` が固定オフセット形式のときに使うオフセットを `FixedOffset` へ変換する。
+///
+/// 判定は `policy_utc_offset_hours` に一本化し、ここは変換だけを行う。
+pub fn policy_fixed_offset(tz: Option<&str>) -> Option<chrono::FixedOffset> {
+    let hours = policy_utc_offset_hours(tz)?;
+    // 共有関数が east_opt で範囲検証済みのため必ず Some。
+    chrono::FixedOffset::east_opt(hours * 3600)
 }
 
 /// 年齢判定の基準日（ローカル TZ での「今日」）を求める純粋関数。
 ///
+/// TZ オフセットの判定は `policy_utc_offset_hours` に一本化し、doctor も同じ関数を共有する。
 /// 既知の固定オフセットが解決できない場合は現在どおり UTC の日付を返す
 /// （未対応 TZ で年齢境界を意図せず早めない fail-safe な既定）。
 pub fn today_for_policy(now: chrono::DateTime<chrono::Utc>, tz: Option<&str>) -> chrono::NaiveDate {

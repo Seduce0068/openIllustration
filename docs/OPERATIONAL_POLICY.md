@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -112,11 +112,15 @@ generated:
   第三者検証可能な監査方式・公開範囲・運用の代替ではない。root の外部保存・公開は各デプロイの運用者が行う。
   `scripts/backup-rotate.sh` は `AUDIT_EXPECT_ROOT` が設定されていれば同じ root を
   `verify_audit_log --expect-root` へ自動で渡し、取得直後の検証で空化・末尾切詰めを検出する。
-  本番では `AUDIT_EXPECT_ROOT` の設定を必須とする。未設定時は内部整合性チェックのみを行い
-  （既存運用を壊さない）、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。
-   `doctor` は本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら
-   `audit_expect_root` カテゴリに固定文言の警告を出し、値はエコーしない（既定は警告のみ、
-   `--strict` のときだけ失敗）。共有の起動判定 `production_config_errors` は変更しない。
+  本番では `AUDIT_EXPECT_ROOT` の設定が必須（本番起動ゲート）。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・
+   不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否し、値・バイトはエコーしない。
+   判定は共有ヘルパ `production_audit_expect_root_error` が担い、`production_config_errors` と
+   同じ設定フェーズ（DB 接続・マイグレーション・instance.lock・FK 検査より前）で検証する。
+   `backup-rotate.sh` 自体は未設定時も内部整合性チェックのみで動作する従来契約を維持し、
+  （既存運用を壊さない）うえで、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。
+   `doctor` は同じ共有判定を `audit_expect_root` カテゴリの固定文言警告へ反映し、
+   値はエコーしない（既定は警告のみ、
+   `--strict` のときだけ失敗）。
 - 監査スナップショットは `sign_audit_export` で署名し、`verify_audit_export` で公開鍵検証する（[AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)
   ）。秘密鍵はファイルで厳重管理し、CLI 引数や環境変数へ内容を渡さない。
   `sign_audit_export` は起動時に署名鍵 PEM を `canonicalize` して権限を検査し、owner-only
@@ -310,7 +314,7 @@ generated:
 | ---- | ---- | ---- | ---- |
 | `JWT_SECRET` | 必須 | なし | HS256署名鍵。未設定・32バイト未満は起動を拒否する。秘密管理基盤から注入する。`JWT_RSA_PRIVATE_KEY_PEM` 設定時は使われない。 |
 | `JWT_RSA_PRIVATE_KEY_PEM` | 任意 | なし | PKCS#8 PEM の RSA 秘密鍵。設定時は RS256 で署名する。署名ヘッダには公開鍵由来の `kid` を付与する。2048bit 未満・不正な PEM は、`JWT_SECRET` が有効でも黙ってフォールバックせず起動を拒否する。秘密管理基盤から注入し、ログ・配布物へ出さない。 |
-| `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。 |
+| `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。 |
@@ -346,14 +350,14 @@ generated:
 | `OIDC_SCOPES` | 任意 | `openid` | 要求スコープ。属性取得時は対象スコープを追加する。 |
 | `OIDC_COOKIE_SECURE` | 任意 | 有効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`0`/`false` で session / refresh / OIDC state Cookie の `Secure` を外す（開発時のみ）。受理値外は起動拒否、`doctor` の `oidc_cookie_secure` カテゴリで警告し、Secure は外さない。本番の state Cookie は `__Host-` プレフィックス（Secure 必須）で保存される。 |
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
-| `PINATA_JWT` | 本番では必須 | `mock_jwt`（模擬、開発用） | IPFSピン用トークン。本番相当（`ALLOW_MOCK_AUTH` 無効）では実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。`doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。 |
+| `PINATA_JWT` | 本番では必須 | `mock_jwt`（模擬、開発用） | IPFSピン用トークン。本番相当（`ALLOW_MOCK_AUTH` 無効）では実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。非 UTF-8 は `common::env` 分類器が `EnvValue::NonUtf8` として区別し、`run()` と `doctor` が同じ固定文言 `PINATA_JWT is empty` を返す（生バイトはエコーしない）。`doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |
 | `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。受理値外は起動拒否、`doctor` の `expose_internal_errors` カテゴリで警告。 |
 | `ALLOW_MOCK_AUTH` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で模擬JPKI・ゼロ署名を受理する。本番では設定しない。受理値外は起動拒否、`doctor` の `mock_auth_enabled` カテゴリで警告。 |
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。受理値外は起動時に警告のうえ per-request 判定で `false`（IPv4 不許可、fail-closed）とし、`doctor` の `ipv4_localhost` カテゴリでも警告。 |
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
-| `AUDIT_EXPECT_ROOT` | 本番では必須 | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。未設定時は内部整合性チェックのみ（既存運用を壊さない）。verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。本番相当（`ALLOW_MOCK_AUTH` 無効）で未設定・空白のみ・不正 hex なら `doctor` の `audit_expect_root` カテゴリで固定文言の警告（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。 |
+| `AUDIT_EXPECT_ROOT` | 本番起動必須（開発 mock 時のみ任意） | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否（fail-closed、値・バイトはエコーしない）。判定は共有ヘルパ `production_audit_expect_root_error` が担い、DB 接続・マイグレーション・instance.lock・FK 検査より前に検証する。`doctor` は同じ判定を `audit_expect_root` カテゴリの固定文言警告へ反映する（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。`backup-rotate.sh` 自体は未設定時も内部整合性チェックのみで動作する従来契約を維持し、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。 |
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | cron 版は `backup-cron-wrapper.sh` がこのパスを読む。systemd 版はこの変数を使わず、`EnvironmentFile=` の固定パス（同パス）から読む。権限600・所有者固定、秘密情報は配布物へ含めない。 |
 | `APP_UNIT` | 任意（systemd 窓 unit） | `openillustration.service` | `deploy/openillustration-backup-window.service` が停止/起動するアプリ unit 名。`deploy/` にはアプリ unit を置いていないため、導入環境の実 unit 名へ drop-in 等で上書きする。バックアップ失敗時も `ExecStopPost` が起動を保証する。 |
 | `BACKUP_DIR` | 任意 | リポジトリルートの `backups/` | バックアップ出力先。deploy 設定例では `/var/backups/openillustration`。事前に存在させ、権限を適切に設定する。 |
@@ -390,13 +394,24 @@ generated:
   `OIDC configuration values must be valid UTF-8` をハードエラーとして起動拒否し、`doctor` の
   `oidc_endpoint_urls` カテゴリで同じ固定文言の警告を出す（生バイトはエコーしない）。
 - `PINATA_JWT` は本番相当では実トークン必須。未設定・空・空白のみ・開発用 `mock_jwt`
-  （前後空白を含む）は起動拒否（fail-closed）。`doctor` の `production` カテゴリでも
-  同じ判定で警告し、設定値は出力しない（[DETAILED_DESIGN.md](DETAILED_DESIGN.md) と整合）。
+  （前後空白を含む）は起動拒否（fail-closed）。非 UTF-8 は `common::env` 分類器が
+  `EnvValue::NonUtf8` を区別し、`run()` と `doctor` が同じ固定文言
+  `PINATA_JWT is empty` を返す（生バイトはエコーしない）。`doctor` の `production`
+  カテゴリでも同じ判定で警告し、設定値は出力しない
+  （[DETAILED_DESIGN.md](DETAILED_DESIGN.md) と整合）。
 - 真偽値は全フラグ共通で `1` / `true`（真）と `0` / `false`（偽）のみ受理する
   （trim・小文字化は維持）。`yes` / `no` / 空文字を含むそれ以外の値は
   拒否し、ランタイムは起動拒否、起動後に read するフラグは安全側（`false` または
   Secure 付与）へ倒す。`doctor` は既存カテゴリ内で固定文言の警告を出し、不正値そのものは
   エコーしない。`common::age::parse_bool_env` が共通基準である。
+- 起動時に受理値を検証し不正値を起動拒否するフラグ4種（`ALLOW_MOCK_AUTH` / `EXPOSE_INTERNAL_ERRORS` / `OIDC_COOKIE_SECURE` / `JWT_REQUIRE_KID`）
+  は設定フェーズ（`run()` の OIDC 検証直後）へ集約して検証する。
+  DB 接続・マイグレーション・`instance.lock` 取得・FK 検査より前に起動拒否が確定し、失敗時にこれらを残さない。
+- `AUDIT_EXPECT_ROOT` も同じ設定フェーズの起動ゲートへ加える。`run()` は `PINATA_JWT` 読込直後に
+  `read_env("AUDIT_EXPECT_ROOT")` し、`production_config_errors` と同じ箇所で `config_errors` へ追加する。
+  判定は共有ヘルパ `production_audit_expect_root_error` に委譲し、本番相当では未設定・非 UTF-8・
+  不正 hex を固定文言で起動拒否する。DB 接続・マイグレーション・`instance.lock` 取得・FK 検査より
+  前に確定し、値も生バイトもエコーしない。
 - 非 UTF-8 の環境変数値は「未設定」ではなく不正値として扱う。`common::env::read_env` が
   `EnvValue::NonUtf8` を返し、`bool_env_state` は `BoolEnvState::Invalid` に分類する
   （受理値の基準は既存 `parse_bool_env` に委譲）。必須設定（`PINATA_JWT` 等）は

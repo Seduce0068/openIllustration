@@ -5,7 +5,7 @@ description: API、認証、データ設計および未実装事項を記録す�
 tags: [detailed-design, api, security]
 generated:
   by: dsh
-  at: "2026-11-22T06:00:00+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 ---
 
 ## 詳細設計書 (Detailed Design Document)
@@ -169,7 +169,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - 年齢判定の基準日は `TZ` 環境変数で指定したローカルの「今日」。`validate_age`（`/auth/verify`）は
   `std::env::var("TZ")` を読み、`validate_age_at` → `today_for_policy` で日付を求める。`Asia/Tokyo` は
   日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号を反転（`Etc/GMT-9` = UTC+9）して解釈し、
-  未設定・未対応の TZ 名は UTC の日付へフォールバックする（fail-safe）。例: UTC 2024-01-01T16:00Z は
+  未設定・未対応の TZ 名は UTC の日付へフォールバックする（fail-safe）。この符号反転と範囲判定は
+  `server/src/lib.rs` の `policy_utc_offset_hours` に一本化され、`run()` と `doctor` が **同じ関数を共有** する
+  （`Etc/GMT±25` のように `FixedOffset` の範囲を超える値は両者とも `None`→UTC 扱い）。
+  例: UTC 2024-01-01T16:00Z は
   JST では 2024-01-02 01:00 となり、2003-01-02 生まれは JST 基準で 21 歳、UTC 基準では 20 歳として判定される。
 - 年齢ゲートは fail-closed。セッションを発行する全経路が共通ゲート `ensure_age_policy_configured`
   （`server/src/lib.rs`）を通る。`AGE_ENFORCEMENT_MODE=trusted_attribute_required` では

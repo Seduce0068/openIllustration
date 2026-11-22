@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 ---
 
 ## 目的
@@ -76,9 +76,28 @@ DATABASE_URL=file:/var/lib/openillustration/local.db \
 Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotate.sh` が
 `verify_audit_log --database-url file:<平文 DB> --expect-root <値>` を実行し、
 外部 root との照合まで自動化する（引数ログやエラー文言へ root 値をエコーしない
-既存契約は維持）。**本番では `AUDIT_EXPECT_ROOT` の設定が必須**である。
-未設定時は内部整合性チェックのみを行い、外部 root 照合は行わない
+既存契約は維持）。**本番起動では `AUDIT_EXPECT_ROOT` の設定が必須**で、未設定・非 UTF-8・
+不正 hex は固定文言で起動拒否（fail-closed）となる。
+`backup-rotate.sh` 自体は未設定時も内部整合性チェックのみを行い、外部 root 照合は行わない
 （既存運用を壊さないための後方互換動作）。
+
+### `AUDIT_EXPECT_ROOT` の段階ロールアウト
+
+本番へ一括で設定を投入せず、次の順で段階的にゲートを効かせる。
+
+1. **空ログ root provision**: 監査ログが空の状態で `verify_audit_log --database-url <DB>` を
+   実行し、出力された Merkle root を別経路（秘密管理基盤等、root は非機微な hex）へ保存する。
+   この時点では `AUDIT_EXPECT_ROOT` をサーバー環境へ設定しない（`backup-rotate.sh` は未設定
+   でも内部整合性チェックのみで動作する従来契約を維持する）。
+2. **`doctor --strict`**: 保存した root を `AUDIT_EXPECT_ROOT` へ設定し、本番相当の環境変数を
+   注入して `cargo run -p server --bin doctor -- --strict` を実行する。`audit_expect_root`
+   カテゴリが警告なし（hex 生値で前後空白なし）であることを確認する。未設定・非 UTF-8・
+   不正 hex はここで検出され、終了コード1でゲート失敗となる。
+3. **起動ゲート**: `doctor --strict` 通過後にサーバーを起動する。`run()` は `PINATA_JWT` 読込
+   直後に `AUDIT_EXPECT_ROOT` を読み、共有ヘルパ `production_audit_expect_root_error` で検証
+   する。本番相当（モック認証無効）で未設定・非 UTF-8・不正 hex は固定文言で起動拒否し、
+   DB 接続・マイグレーション・instance.lock・FK 検査より前に失敗を確定させる。
+   値や生バイトはエラー文言へエコーしない。
 
 `BIN_DIR` に `backup_db` / `verify_backup` / `verify_audit_log` があればそれを使い、
 無ければ `cargo run` にフォールバックする（開発用）。設定例:

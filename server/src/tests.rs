@@ -2198,27 +2198,45 @@ fn test_jwt_secret_minimum_length() {
 #[test]
 fn test_production_config_fail_closed() {
     // モック認証が有効な開発環境では警告のみ（既存の開発フローを壊さない）。
-    assert!(crate::production_config_errors(true, false, None).is_empty());
+    assert!(
+        crate::production_config_errors(true, false, common::env::EnvValue::Missing).is_empty()
+    );
 
     // 本番相当では不足を列挙する。
-    let errors = crate::production_config_errors(false, false, None);
+    let errors = crate::production_config_errors(false, false, common::env::EnvValue::Missing);
     assert_eq!(errors.len(), 2);
     assert!(errors.iter().any(|e| e.contains("OIDC")));
     assert!(errors.iter().any(|e| e.contains("PINATA_JWT")));
 
     assert_eq!(
-        crate::production_config_errors(false, true, Some("real-jwt")),
+        crate::production_config_errors(
+            false,
+            true,
+            common::env::EnvValue::Utf8("real-jwt".to_string())
+        ),
         Vec::<&str>::new()
     );
-    assert!(!crate::production_config_errors(false, true, Some("")).is_empty());
     assert!(
-        !crate::production_config_errors(false, true, Some("mock_jwt")).is_empty(),
+        !crate::production_config_errors(false, true, common::env::EnvValue::Utf8(String::new()))
+            .is_empty()
+    );
+    assert!(
+        !crate::production_config_errors(
+            false,
+            true,
+            common::env::EnvValue::Utf8("mock_jwt".to_string())
+        )
+        .is_empty(),
         "the development mock JWT must not be accepted in production"
     );
     // 前後の空白付きモック値も開発用として拒否（値はエコーしない）。
     for mock in [" mock_jwt ", "\tmock_jwt"] {
         assert_eq!(
-            crate::production_config_errors(false, true, Some(mock)),
+            crate::production_config_errors(
+                false,
+                true,
+                common::env::EnvValue::Utf8(mock.to_string())
+            ),
             vec!["PINATA_JWT is the development mock value"],
             "mock={mock:?} must be rejected without echoing the value"
         );
@@ -2227,28 +2245,35 @@ fn test_production_config_fail_closed() {
     // 空白・タブ・改行のみの値も空とみなし fail-closed。固定文言のみで値はエコーしない。
     for blank in [" ", "\t", "\n", "\r\n", " \t\n "] {
         assert_eq!(
-            crate::production_config_errors(false, true, Some(blank)),
+            crate::production_config_errors(
+                false,
+                true,
+                common::env::EnvValue::Utf8(blank.to_string())
+            ),
             vec!["PINATA_JWT is empty"],
             "blank={blank:?} must be rejected without echoing the value"
         );
     }
-    // 非 UTF-8 は run() で Some("") へ変換され、固定文言の起動拒否へつながる。
+    // 非 UTF-8 は common::env 分類器の NonUtf8 として区別され、
+    // run() / doctor と同じ固定文言「PINATA_JWT is empty」になる（値はエコーしない）。
     let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
         std::ffi::OsString::from_vec(vec![0xff]),
     )));
     assert_eq!(non_utf8, common::env::EnvValue::NonUtf8);
-    let converted = match non_utf8 {
-        common::env::EnvValue::Utf8(value) => Some(value),
-        common::env::EnvValue::NonUtf8 => Some(String::new()),
-        common::env::EnvValue::Missing => None,
-    };
     assert_eq!(
-        crate::production_config_errors(false, true, converted.as_deref()),
+        crate::production_config_errors(false, true, non_utf8),
         vec!["PINATA_JWT is empty"]
     );
 
     // 実値は従来どおり警告なし（前後の空白があっても非空なら許可）。
-    assert!(crate::production_config_errors(false, true, Some("  real-jwt  ")).is_empty());
+    assert!(
+        crate::production_config_errors(
+            false,
+            true,
+            common::env::EnvValue::Utf8("  real-jwt  ".to_string())
+        )
+        .is_empty()
+    );
 
     // R2-DBURL-SERVER: 本番相当では DATABASE_URL が必須（既定なし、値はエコーしない）。
     assert_eq!(
@@ -2335,6 +2360,56 @@ fn test_production_config_fail_closed() {
         common::env::EnvValue::Utf8("file:local.db".to_string()),
     ] {
         assert_eq!(crate::production_database_url_error(true, value), None);
+    }
+
+    // R1-CF: AUDIT_EXPECT_ROOT を起動ゲートへ昇格。共有ヘルパの判定を直接検証する。
+    const AUDIT_ROOT_ERROR: &str =
+        "AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)";
+    assert_eq!(
+        crate::production_audit_expect_root_error(false, common::env::EnvValue::Missing),
+        Some(AUDIT_ROOT_ERROR)
+    );
+    let non_utf8_root = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+        std::ffi::OsString::from_vec(vec![0xff]),
+    )));
+    assert_eq!(non_utf8_root, common::env::EnvValue::NonUtf8);
+    assert_eq!(
+        crate::production_audit_expect_root_error(false, non_utf8_root),
+        Some(AUDIT_ROOT_ERROR)
+    );
+    for invalid in [
+        "",
+        " \t ",
+        "deadbeefcafebabe-nothex-ZZZZ",
+        "  ABCDEF0123456789  ",
+    ] {
+        assert_eq!(
+            crate::production_audit_expect_root_error(
+                false,
+                common::env::EnvValue::Utf8(invalid.to_string())
+            ),
+            Some(AUDIT_ROOT_ERROR),
+            "invalid root must be rejected without echoing: {invalid:?}"
+        );
+        assert!(!crate::is_hex_merkle_root(invalid));
+    }
+    for valid in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+        assert!(crate::is_hex_merkle_root(valid));
+        assert_eq!(
+            crate::production_audit_expect_root_error(
+                false,
+                common::env::EnvValue::Utf8(valid.to_string())
+            ),
+            None
+        );
+    }
+    // 開発（mock 有効）では従来どおり全て受理。
+    for value in [
+        common::env::EnvValue::Missing,
+        common::env::EnvValue::NonUtf8,
+        common::env::EnvValue::Utf8(String::new()),
+    ] {
+        assert_eq!(crate::production_audit_expect_root_error(true, value), None);
     }
 }
 
@@ -11117,6 +11192,17 @@ fn test_today_for_policy_uses_configured_local_timezone() {
     assert_eq!(today_for_policy(now, Some("Asia/Tokyo")), jst_next_day);
     // 未対応の TZ 名は現行どおり UTC にフォールバックする。
     assert_eq!(today_for_policy(now, Some("America/New_York")), utc_day);
+    // 範囲外・数値なしの Etc/GMT はオフセット解決不可として UTC へフォールバックする。
+    // doctor と同じ共有関数を直接検証し、境界（±25 / 数値なし）の差分が無いことを確認する。
+    assert_eq!(crate::policy_utc_offset_hours(Some("Asia/Tokyo")), Some(9));
+    assert_eq!(crate::policy_utc_offset_hours(Some("Etc/GMT-9")), Some(9));
+    assert_eq!(crate::policy_utc_offset_hours(Some("Etc/GMT+5")), Some(-5));
+    assert_eq!(crate::policy_utc_offset_hours(Some("Etc/GMT-25")), None);
+    assert_eq!(crate::policy_utc_offset_hours(Some("Etc/GMT+25")), None);
+    assert_eq!(crate::policy_utc_offset_hours(Some("Etc/GMT")), None);
+    assert_eq!(today_for_policy(now, Some("Etc/GMT-25")), utc_day);
+    assert_eq!(today_for_policy(now, Some("Etc/GMT+25")), utc_day);
+    assert_eq!(today_for_policy(now, Some("Etc/GMT")), utc_day);
 }
 
 /// 年齢境界がローカルの「今日」で判定されることの回帰テスト。

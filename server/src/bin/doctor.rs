@@ -6,6 +6,7 @@ use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, allowed_origins,
     graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
     max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
+    pinata_jwt_production_like, policy_utc_offset_hours, production_audit_expect_root_error,
     production_config_errors, rate_limit_per_min, validate_jwt_secret, validate_oidc_config_with,
 };
 
@@ -55,23 +56,6 @@ fn is_executable_file(path: &str) -> bool {
     {
         true
     }
-}
-
-/// TZ の実効 UTC オフセット（時間）。未設定・未対応名は UTC（0）へフォールバックする。
-/// `server::today_for_policy` の `policy_fixed_offset` と同じ判定を診断専用に再現し、
-/// 設定値そのものは返さない。
-fn tz_utc_offset_hours(tz: Option<&str>) -> i32 {
-    let Some(value) = tz.map(str::trim).filter(|part| !part.is_empty()) else {
-        return 0;
-    };
-    if value.eq_ignore_ascii_case("Asia/Tokyo") {
-        return 9;
-    }
-    value
-        .strip_prefix("Etc/GMT")
-        .and_then(|hours| hours.parse::<i32>().ok())
-        .map(|hours| -hours) // POSIX 規約: Etc/GMT-9 = UTC+9
-        .unwrap_or(0)
 }
 
 /// 明示設定必須なのに必須設定値が未充足で年齢検証が拒否される設定への固定警告（値はエコーしない）。
@@ -156,10 +140,12 @@ where
     // 本番必須設定は既存の fail-closed 判定へ委譲する（再実装しない）。
     // required_present は必須 7 変数の存在と trim 後非空を反映するため、
     // 空文字の必須値も「未設定」と同じく警告対象になる。値は結果へ含めない。
+    // PINATA_JWT は classify で EnvValue へ変換して共通判定へ渡す。
+    // 非 UTF-8 は NonUtf8 として区別され、run() と同じ固定文言を警告する（値は非エコー）。
     let mut production: Vec<String> = production_config_errors(
         allow_mock_auth,
         validation.required_present,
-        lookup("PINATA_JWT").ok().as_deref(),
+        common::env::classify(lookup("PINATA_JWT")),
     )
     .into_iter()
     .map(str::to_string)
@@ -219,13 +205,8 @@ where
         "OIDC_JWKS_URI",
     ];
     let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_ok());
-    let pinata_production = lookup("PINATA_JWT")
-        .ok()
-        .map(|v| {
-            let trimmed = v.trim();
-            !trimmed.is_empty() && trimmed != "mock_jwt"
-        })
-        .unwrap_or(false);
+    // run() / pin_to_ipfs と同じ共通ヘルパで本番相当かを判定する（単一情報源）。
+    let pinata_production = pinata_jwt_production_like(common::env::classify(lookup("PINATA_JWT")));
     let mut mock_auth_errors = Vec::new();
     if allow_mock_auth
         && (pinata_production || oidc_any || lookup("JWT_RSA_PRIVATE_KEY_PEM").is_ok())
@@ -489,7 +470,9 @@ where
                 .collect()
         })
         .unwrap_or_default();
-    let offset_hours = tz_utc_offset_hours(tz_raw.as_deref());
+    // run() と同じ共有関数を使う。未解決・範囲外は None なので UTC（0）へ倒し、
+    // 既存の警告条件を維持する（Etc/GMT±25 等の境界差分を解消）。
+    let offset_hours = policy_utc_offset_hours(tz_raw.as_deref()).unwrap_or(0);
     let jp_targeted = regions
         .iter()
         .any(|region| region.eq_ignore_ascii_case("JP"));
@@ -581,25 +564,21 @@ where
     results.push(("allowed_origins", allowed_origins_errors));
 
     // AUDIT_EXPECT_ROOT: 本番相当（mock 無効）では別経路保存の Merkle root（hex）が必須。
-    // 未設定・空白のみ・前後空白付き・不正 hex なら固定文言で警告する。値はエコーしない。
-    // backup-rotate.sh は未設定でも内部整合性チェックのみで動作する既存契約を維持し、
-    // doctor は既定で警告のみ（`--strict` のときだけ失敗）。共有の
-    // production_config_errors は起動判定へ影響するため変更しない。
+    // 未設定・非 UTF-8・不正 hex（空白のみ・前後空白付きを含む）なら固定文言で警告する。
+    // 値はエコーしない。backup-rotate.sh は未設定でも内部整合性チェックのみで動作する
+    // 既存契約を維持し、doctor は既定で警告のみ（`--strict` のときだけ失敗）。
+    // 判定は起動ゲートと同じ共有ヘルパ production_audit_expect_root_error へ委譲する。
     const AUDIT_EXPECT_ROOT_WARNING: &str =
         "AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)";
-    let audit_expect_root_errors = if allow_mock_auth {
-        Vec::new()
+    let audit_expect_root_errors = if production_audit_expect_root_error(
+        allow_mock_auth,
+        common::env::classify(lookup("AUDIT_EXPECT_ROOT")),
+    )
+    .is_some()
+    {
+        vec![AUDIT_EXPECT_ROOT_WARNING.to_string()]
     } else {
-        // backup-rotate.sh と同じく生値へ [0-9a-fA-F]+ を適用する（trim しない）。
-        let valid = lookup("AUDIT_EXPECT_ROOT")
-            .ok()
-            .map(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
-            .unwrap_or(false);
-        if valid {
-            Vec::new()
-        } else {
-            vec![AUDIT_EXPECT_ROOT_WARNING.to_string()]
-        }
+        Vec::new()
     };
     results.push(("audit_expect_root", audit_expect_root_errors));
 
@@ -1661,6 +1640,45 @@ mod tests {
         }
         let results = check_all_with(lookup_from(&[("ALLOW_MOCK_AUTH", "1")]));
         assert!(errors_for(&results, "audit_expect_root").is_empty());
+
+        // 共有ヘルパ production_audit_expect_root_error の直接アサーション（起動ゲートと同一判定）。
+        assert_eq!(
+            production_audit_expect_root_error(false, common::env::EnvValue::Missing),
+            Some(EXPECTED)
+        );
+        let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
+            std::ffi::OsString::from_vec(vec![0xff]),
+        )));
+        assert_eq!(
+            production_audit_expect_root_error(false, non_utf8),
+            Some(EXPECTED)
+        );
+        for value in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+            assert_eq!(
+                production_audit_expect_root_error(
+                    false,
+                    common::env::EnvValue::Utf8(value.to_string())
+                ),
+                None,
+                "value={value}"
+            );
+        }
+        // 前後空白付き hex は trim しないため不正（backup-rotate と統一）。
+        assert_eq!(
+            production_audit_expect_root_error(
+                false,
+                common::env::EnvValue::Utf8(PADDED.to_string())
+            ),
+            Some(EXPECTED)
+        );
+        // 開発（mock 有効）では値の有無を問わず受理（後方互換）。
+        for value in [
+            common::env::EnvValue::Missing,
+            common::env::EnvValue::NonUtf8,
+            common::env::EnvValue::Utf8(PADDED.to_string()),
+        ] {
+            assert_eq!(production_audit_expect_root_error(true, value), None);
+        }
     }
 
     // --- 2h. 明示設定必須と必須設定値の充足結果の整合 ----------------------
@@ -1814,6 +1832,24 @@ mod tests {
         for error in errors {
             assert!(!error.contains("JP"), "設定値が漏洩: {error}");
             assert!(!error.contains("Etc/UTC"), "設定値が漏洩: {error}");
+        }
+
+        // 共有関数の符号規約（Asia/Tokyo = +9, Etc/GMT-9 = +9, Etc/GMT+5 = -5）。
+        assert_eq!(policy_utc_offset_hours(Some("Asia/Tokyo")), Some(9));
+        assert_eq!(policy_utc_offset_hours(Some("Etc/GMT-9")), Some(9));
+        assert_eq!(policy_utc_offset_hours(Some("Etc/GMT+5")), Some(-5));
+        // 範囲外（±25）と数値なしの Etc/GMT は None（→ doctor は 0 として警告条件を維持）。
+        // run() と doctor が同じ Option を共有するため境界で判定が分岐しない。
+        for tz in ["Etc/GMT-25", "Etc/GMT+25", "Etc/GMT"] {
+            assert_eq!(policy_utc_offset_hours(Some(tz)), None, "tz={tz}");
+            let results = check_all_with(lookup_from(&[("AGE_TARGET_REGIONS", "JP"), ("TZ", tz)]));
+            let errors = errors_for(&results, "age_policy");
+            assert!(
+                errors
+                    .iter()
+                    .any(|error| error.as_str() == TZ_REGION_MISMATCH_WARNING),
+                "tz={tz}, errors={errors:?}"
+            );
         }
     }
 

@@ -5,7 +5,7 @@ description: 年齢判定ポリシーの採用方針（DEC-02）、現行実装�
 tags: [age-validation, jpki, privacy, dec-02]
 generated:
   by: dsh
-  at: "2026-11-22T02:38:26+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 ---
 
 ## 年齢判定ポリシー（DEC-02 採用方針・実装制約）
@@ -94,6 +94,11 @@ generated:
 | 未設定 / `UTC` / 未対応名（例: `America/New_York`） | UTC の現在日 | 未知の TZ で境界を意図せず早めない fail-safe な既定 |
 | `Asia/Tokyo`（前後の空白は除去、大文字小文字を問わない） | 固定オフセット UTC+9 の現在日 | 日本に夏時間がなくオフセットが変化しないため |
 | `Etc/GMT±N` | POSIX 規約に従い符号を反転（例: `Etc/GMT-9` = UTC+9、`Etc/GMT+5` = UTC-5） | `chrono::FixedOffset` への変換 |
+| `Etc/GMT±25` / `Etc/GMT`（数値なし） | 範囲外・不正として UTC の現在日へフォールバック | `chrono::FixedOffset` が構築できないため `None` |
+
+この判定は `server/src/lib.rs` の `policy_utc_offset_hours` に一本化され、`run()` の
+`validate_age` / `today_for_policy`（基準日）と `doctor`（TZ 診断）が **同じ関数を共有** する。
+`policy_fixed_offset` も同じ関数へ委譲するため、境界値の解釈が経路ごとにずれることはない。
 
 JST 深夜の境界例: UTC `2024-01-01T16:00:00Z` は JST では `2024-01-02 01:00` になる。
 既定の最低年齢 21 歳に対し、`2003-01-02` 生まれは JST（`Asia/Tokyo` / `Etc/GMT-9`）基準では

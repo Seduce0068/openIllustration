@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T08:45:00+09:00"
+  at: "2026-11-22T09:20:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -163,7 +163,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | MOD-09 | `GET /mod/reports` への要約適用と全文非漏えい | `reason` は要約後の値のみ。全文・メール・URL・4桁以上の数字列がレスポンスへ現れない。DB 全文と監査エクスポートは不変。認証必須・Reported 限定・新着順・運用者非限定を維持 | 実装済み（`server` に統合テストを追加。第三者公開範囲は [ADR-0008](adr/ADR-0008-moderation-stats-publication.md) で決定済み）。E2E ではモック `/mod/reports` に要約済み理由 `不審な投稿です [redacted]` を返し、`[redacted]` は表示、メール `reporter@example.com` / 電話 `090-1234-5678` / URL `https://phish.example.com/login` は `body` 未含有を検証（下記「GOV-01 要約表示の E2E」） |
 | MOD-10 | 投票結果のフィードバック表示（VOTE-FB-01〜03） | `/mod/vote` の失敗時に `data-testid="vote-error"`（`role="alert"`）へ固定文言 `投票に失敗しました (HTTP <status>).` または `Network error submitting vote.` を表示する。成功時は `data-testid="vote-notice"`（`role="status"`）に `投票を記録しました。`。新しい試行で両方クリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の VOTE-FB-01〜03（403 / network error / 成功とクリア。chromium で3件 pass、moderation.spec.ts は VOTE-FB 3件・二重送信ガード2件を含め全14件 pass）。クライアント側単体テスト `vote_feedback_uses_only_fixed_phrases` も追加済み |
 | MOD-11 | 投票一覧取得失敗の表示（REPORTS-ERR-01〜02） | `GET /mod/reports` の失敗時に `data-testid="reports-error"`（`role="alert"`）へ固定文言を表示する。HTTP エラーは `投票一覧の取得に失敗しました (HTTP <status>).`、ネットワークエラーは `Network error loading reports.`、JSON 解析失敗は `投票一覧の解析に失敗しました。`。失敗しても既存データは維持し、`NO_PENDING_VOTES` を誤表示しない。成功時にエラーをクリアし、サーバー本文・生エラーは表示しない | 実装済み・検証済み: `e2e/tests/moderation.spec.ts` の REPORTS-ERR-01（500）/ 02（route.abort）が chromium で2件 pass、moderation.spec.ts 全14件 pass。クライアント側単体テスト `reports_error_uses_only_fixed_phrases` も追加済み |
-| MOD-13 | `GET /mod/stats/public`（ADR-0008 段階2の公開集計） | 未認証は401。認証済みは運用者未設定・未登録・BAN済みでも200。レスポンスは `generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみで、bans / unbans / unpins と CID・reason・`user_hash` は型に存在しない。`require_moderation_operator` を呼ばない | 実装済み。サーバー側テスト5件: `test_public_mod_stats_requires_authentication` / `test_public_mod_stats_allows_general_sub` / `test_public_mod_stats_allows_operator_sub` / `test_public_mod_stats_response_contains_no_forbidden_fields` / `test_build_public_mod_stats_matches_source`。E2E 定義数は69件のまま変更なし（新規 E2E なし）。既存ゲート（E2E69件 / check23 / doctor53 / migrations14）は不変 |
+| MOD-13 | `GET /mod/stats/public`（ADR-0008 段階2の公開集計） | 未認証は401。認証済みは運用者未設定・未登録・BAN済みでも200。レスポンスは `generated_at` / `totals`（`reports` / `concluded` / `approved` / `rejected` / `quorum_not_met`）/ `monthly`（`month` と reports / concluded / approved / rejected）のみで、bans / unbans / unpins と CID・reason・`user_hash` は型に存在しない。`require_moderation_operator` を呼ばない | 実装済み（3表の読み取りは `BEGIN DEFERRED` 単一スナップショット、`/mod/stats` と同一の読み取りトランザクション）。サーバー側テスト5件: `test_public_mod_stats_requires_authentication` / `test_public_mod_stats_allows_general_sub` / `test_public_mod_stats_allows_operator_sub` / `test_public_mod_stats_response_contains_no_forbidden_fields` / `test_build_public_mod_stats_matches_source`。E2E 定義数は69件のまま変更なし（新規 E2E なし）。既存ゲート（E2E69件 / check23 / doctor53 / migrations14）は不変 |
 | EXPORT-01 | `GET /me/export` の全表網羅と他ユーザー非漏えい | `version:1` / `generated_at` / `sub` と12表の配列を返す。他ユーザーの行・IDは混入しない | テスト名確定: `me_export_returns_only_own_data`。12表は `users` / `contents` / `favorites` / `transactions` / `signatures` / `content_audit_log` / `reports` / `votes` / `payment_orders` / `governance_audit_log` / `refresh_tokens` / `revoked_subs`（`revoked_sessions` は除外） |
 | EXPORT-02 | データを持たないユーザーのエクスポート | 12表の配列はすべて空で、メタ3項目（`version` / `generated_at` / `sub`）は通常どおり返る | テスト名確定: `me_export_empty_user_has_empty_arrays` |
 | EXPORT-03 | 機微項目の除外 | `token_hash` / `sid` / `family_id` / 署名鍵 / XPRV / `PINATA_JWT` / 他ユーザーID がJSONに現れない | テスト名確定: `me_export_excludes_sensitive_fields` |
@@ -488,10 +488,11 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 ##### doctor の AUDIT_EXPECT_ROOT 診断（追加1件）
 
 本番相当（`ALLOW_MOCK_AUTH` 無効）では `AUDIT_EXPECT_ROOT` に別経路保存の Merkle root（hex）を
-設定する。`audit_expect_root` カテゴリは `backup-rotate.sh` と同じく `lookup` の生値へ
-`[0-9a-fA-F]+` を適用し（trim しない）、非空で全文字が hex なら警告なし、未設定・空白のみ・
-前後空白付き・不正 hex なら固定文言の警告1件を計上する。
-共有の `production_config_errors` は変更せず、起動判定へ影響しない。
+設定する。`audit_expect_root` カテゴリは `common::env::classify(lookup(...))` と共有ヘルパ
+`production_audit_expect_root_error` へ委譲する（trim しない hex 判定は `is_hex_merkle_root` が共有）。
+非空で全文字が hex なら警告なし、未設定・非 UTF-8・
+前後空白付き・不正 hex なら固定文言の警告1件を計上する。本番起動ゲートも同ヘルパで同じ固定文言の拒否を返す。
+`production_config_errors` のシグネチャは変更せず、独立ヘルパを `run()` の設定フェーズ（DB 接続前）で `config_errors` へ追加し、本番起動ゲートへ昇格した。
 `backup-rotate.sh` は未設定でも内部整合性チェックのみで動作する従来契約を維持し、
 既定の doctor は警告のみで exit 0、`--strict` のときだけ失敗する。
 
@@ -815,6 +816,17 @@ ADR-0008 段階2として、`AuthClaims` のみを要求する公開集計ルー
 `require_moderation_operator` は呼ばず、認証済みなら運用者登録の有無にかかわらず 200 を返す。
 集計は既存の `build_mod_stats` を再利用し、純粋関数 `build_public_mod_stats` が
 公開ホワイトリストへ縮約する（`generated_at` は引き継ぐ）。
+
+`/mod/stats` と `/mod/stats/public` の双方で、3 表（`content_audit_log` /
+`governance_audit_log` / `reports`）の読み取りを `begin_write_tx`（libsql の
+`Connection::transaction()` = `BEGIN DEFERRED`）配下で行い、単一スナップショットとして
+集計する。`require_moderation_operator`（`/mod/stats`）と `AuthClaims` 認証
+（`/mod/stats/public`）は BEGIN より前に解決し、トランザクションは読み取り専用でも
+明示的に `commit` する。宣言順は `(_write_guard, tx)` とし、コミット後にガードを
+ドロップして `write_lock` を解放する。クエリが `?` で早期 return した場合は
+`libsql::Transaction` の Drop が ROLLBACK し、中途半端なトランザクションや共有ロックは
+残らない。これは R5-04 `/me/export` の `collect_export_snapshot` と同じ読み取り
+トランザクション方式である。認可・レスポンス型・集計ロジック・各テストの期待値は不変。
 
 | テスト | 配置 | 検証する test oracle |
 | --- | --- | --- |

@@ -148,14 +148,14 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 ### 優先度: 中
 
-- [ ] **AUDIT_EXPECT_ROOTをサーバ起動ゲートへ**
+- [x] **AUDIT_EXPECT_ROOTをサーバ起動ゲートへ**
   — 根拠 `server/src/bin/doctor.rs` / `server/src/lib.rs` production_config_errors / review R1-CF / 中。
   doctor --strict独自必須で起動は未設定のまま通る。hex検証をproduction_config_errorsへ追加するか「推奨」へ格下げ。
-- [ ] **全bool_env検証をDB接触前に集約** — 根拠 `server/src/lib.rs:1277` JWT_REQUIRE_KID / review R2-ER / 中。
+- [x] **全bool_env検証をDB接触前に集約** — 根拠 `server/src/lib.rs:1277` JWT_REQUIRE_KID / review R2-ER / 中。
   JWT_REQUIRE_KIDだけがmigrate/lock/FK検査後に検証され、不正値で部分適用状態を残す。
-- [ ] **公開集計のSELECTを読み取りトランザクション化** — 根拠 `server/src/lib.rs` public_mod_stats / review R2-DI / 中。
+- [x] **公開集計のSELECTを読み取りトランザクション化** — 根拠 `server/src/lib.rs` public_mod_stats / review R2-DI / 中。
   3クエリが別トランザクションで並行書き込みとスナップショット不一貫。me_exportと境界を統一。
-- [ ] **TZ判定・PINATA_JWT分類の単一情報源化**
+- [x] **TZ判定・PINATA_JWT分類の単一情報源化**
   — 根拠 `server/src/bin/doctor.rs` policy_fixed_offset再実装 / `server/src/lib.rs` production_config_errors / review R1-CF
     中。
 - [ ] **/auth/refreshのOrigin検証とnullオリジン拒否**
@@ -672,6 +672,11 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中優先4件）: AUDIT_EXPECT_ROOTを共有hexバリデータで起動ゲートへ昇格、
+  JWT_REQUIRE_KID検証をDB接触前へ移動、公開/運用者集計をbegin_write_tx単一スナップショット化、
+  TZオフセット判定とPINATA_JWT分類をEnvValueベースの単一情報源へ集約。
+  pub use self重複(E0255)とmarkdownlint行長は親が修正。全ゲート green。残り中7・低5・高2。
 
 - 2026-11-22 coding（高優先3件）: 本番リモートDSNを拒否しis_remote_database_urlを単一情報源化、
   deny受容根拠を「ゲートで禁止」へ変更（件数11→12は履歴として保持）。
