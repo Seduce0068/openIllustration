@@ -623,6 +623,21 @@ impl SignedAuditSnapshot {
                 self.version
             )));
         }
+        // reasons_masked=true のとき、すべての entry の reason がマスク済みであることを検証する。
+        // 署名対象 `signature_payload()` は reasons_masked=true のとき entries_json を
+        // "masked" 印付きで含めるため、この検査は署名対象に含まれるフィールドの整合性確認であり、
+        // 署名検証結果と矛盾しない（署名時に sign_audit_snapshot も同じ判定で拒否する）。
+        // entry_hash は元の理由が無いためマスク版では再計算しない（下の分岐を参照）。
+        if self.reasons_masked {
+            for entry in &self.entries {
+                if !reason_is_masked(&entry.reason) {
+                    return Err(ForensicError::InvalidSignature(format!(
+                        "unmasked entry reason with reasons_masked=true at log_id={}",
+                        entry.log_id
+                    )));
+                }
+            }
+        }
         let mut expected_prev = "GENESIS_HASH".to_string();
         for (index, entry) in self.entries.iter().enumerate() {
             let expected_id = index as i64 + 1;

@@ -11628,6 +11628,14 @@ fn test_today_for_policy_uses_configured_local_timezone() {
     assert_eq!(today_for_policy(now, Some("Etc/GMT-25")), utc_day);
     assert_eq!(today_for_policy(now, Some("Etc/GMT+25")), utc_day);
     assert_eq!(today_for_policy(now, Some("Etc/GMT")), utc_day);
+    // TZ 読込は common::env::read_env ベースの configured_tz に一本化されている。
+    // プロセス環境を汚さず、read_env の分類と同じ結果になることを確認する。
+    let configured = crate::configured_tz();
+    let expected = match common::env::read_env("TZ") {
+        common::env::EnvValue::Utf8(value) => Some(value),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+    };
+    assert_eq!(configured, expected);
 }
 
 /// 年齢境界がローカルの「今日」で判定されることの回帰テスト。
@@ -19472,8 +19480,10 @@ async fn test_auth_verify_write_waits_for_write_lock() {
     let (started, release, writer) = spawn_lock_holding_writer(Arc::clone(&db));
     started.await.unwrap();
 
+    // 後続の BAN 回帰アサーションでも app を使うため、spawn には clone を渡す。
+    let spawn_app = app.clone();
     let mut verify_task = tokio::spawn(async move {
-        app.clone()
+        spawn_app
             .oneshot(with_peer(
                 Request::post("/auth/verify")
                     .header("content-type", "application/json")
@@ -19501,6 +19511,32 @@ async fn test_auth_verify_write_waits_for_write_lock() {
         .expect("auth verify must finish after the write transaction commits")
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+
+    // BAN 原子化の契约回归: BAN 済みユーザーが 403 で拒否されることを確認する。
+    // この顺序では事前 ensure_user_not_banned が先に拒否するため、write tx 内再読
+    // （auth_verify の BAN 原子化）そのものは别途コードレビューで担保する。
+    // 新規 test 関数は追加せず、既存の auth_verify テスト内にアサーションを追加する。
+    let banned_hash = sha256_hex(b"2000-01-01:JP");
+    db.execute(
+        "INSERT INTO users (user_hash, is_banned) VALUES (?, TRUE) \
+         ON CONFLICT(user_hash) DO UPDATE SET is_banned = TRUE, ban_until = NULL",
+        [banned_hash],
+    )
+    .await
+    .unwrap();
+    let banned_response = app
+        .oneshot(with_peer(
+            Request::post("/auth/verify")
+                .header("content-type", "application/json")
+                .body(Body::from(verify_body("2000-01-01", "JP")))
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(banned_response.status(), StatusCode::FORBIDDEN);
+    let banned_body = to_bytes(banned_response.into_body(), 4096).await.unwrap();
+    assert!(String::from_utf8_lossy(&banned_body).contains("User is banned"));
 }
 
 /// `/auth/verify` の再認証で in-memory の失効閾値を消しても DB に残ると、

@@ -191,6 +191,21 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 
 ### 優先度: 中
 
+- [x] **auth_verifyのBANチェックを原子的化** — 根拠 `server/src/lib.rs:3015` / review R2-ER / 中。
+  BANチェックとiat採番が別時点で、同時BANを新規JWTがすり抜ける。
+- [x] **CI shellcheck契約記述を統一** — 根拠 `.github/workflows/ci.yml:65` / review R4 / 中。
+- [x] **REVIEW_REPORTへ2026-11-22レビュー履歴を追記** — 根拠 `docs/REVIEW_REPORT.md:580` / review R4 / 中。
+- [x] **バックアップ失敗通知の実設定手順を必須化** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:490` / review R4 / 中。
+- [x] **TRUSTED_PROXY_CIDRSをread_env分類へ** — 根拠 `server/src/network.rs:98` / review R1-AR / 低。値エコーも廃止。
+- [x] **TZをread_env単一情報源化** — 根拠 `server/src/lib.rs:2921` / review R1-AR / 低。
+- [x] **真偽値env→Result変換をcommonへ集約** — 根拠 `common/src/env.rs` / review R1-AR / 低。3箇所の重複。
+- [x] **監査reasons_maskedの不変条件を検証側でも強制** — 根拠 `common/src/lib.rs:677` / review R2-ER / 低。
+- [x] **sign_audit_exportをatomic publishへ** — 根拠 `server/src/bin/sign_audit_export.rs:137` / review R2-ER / 低。
+- [x] **client/jxl.rsの3テストをdoc-numbers照合へ** — 根拠 `scripts/test-doc-numbers.sh:579` / discovery R3-TQ / 中。
+- [x] **E2E test()抽出をコメント除外へ堅牢化** — 根拠 `scripts/test-doc-numbers.sh:30` / discovery R3-TQ / 低。
+- [x] **UNKNOWN_TASKS R1-05の古い根拠を更新** — 根拠 `docs/UNKNOWN_TASKS_INVESTIGATION.md:57` / review R4 / 低（対応済み・完了扱いで記録）。
+- [x] **client/Cargo.tomlのuuidコメント訂正** — 根拠 `client/Cargo.toml:35` / review R1-AR / 低（対応済み・完了扱いで記録）。
+
 - [x] **リフレッシュトークン回転をアトミック化** — 根拠 `server/src/oidc.rs:1384` / review R2-ER / 中。
   消費コミット後にbanチェック・発行が失敗すると旧トークン消費済み・新規未発行でファミリ失効する。
 - [x] **OIDC_MAX_AUTH_AGE_SECSに上限を設定** — 根拠 `server/src/oidc.rs:42` / review R2-ER / 中。
@@ -749,6 +764,15 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-22 coding（中13件）: auth_verifyのBAN原子的化(tx内再読403)、真偽値判定を
+  common::env::bool_env_resultへ集約、verify_chainのreasons_masked検査、
+  sign_audit_exportのatomic publish、TRUSTED_PROXY_CIDRS/TZのread_env統一、
+  および前ラウンドの残項目13件を消化。
+  R4は「BAN再読テストが事前チェックで終わっており再読経路を検証していない」ことを指摘し、
+  テストの主張を実態（再読はコードレビュー担保）へ修正。docsのtests数値を132へ追随、
+  oidc.rsの独立文言維持を明記。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests132、npm audit 含む）。残り高2（外部要因）。
 
 - 2026-11-22 コンボ第16ラウンド（review4+discovery3）: 全7担当完了。R6 で重複排除のうえ
   以下を即時是正: npm audit 常時失敗（markdownlint-cli2 0.24.2）、DATABASE_TOKEN 非UTF-8

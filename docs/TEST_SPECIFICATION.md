@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-22T22:25:00+09:00"
+  at: "2026-11-22T22:50:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T22:25:00+09:00"
+  at: "2026-11-22T22:50:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)
@@ -176,7 +176,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | AUTH-01 | `ALLOW_MOCK_AUTH` 未設定、`JWT_REQUIRE_KID` 有効 | モック認証とゼロ署名、`kid` 無しトークンを拒否 | 実装済み。`mock_token` とゼロ署名を拒否する回帰テストあり。`JWT_REQUIRE_KID=1` で kid 無し拒否・kid 付き受理、HS256 併用は起動拒否を実プロセスで確認。クライアント側は `OIL_MOCK_AUTH=0` ビルドでモック注記（`data-testid="mock-auth-notice"`）を出さず、`/auth/login` の501では固定文言 `本番認証は未実装です。` を出して `/auth/verify` を送らない（`auth.spec.ts` の既存 LOG OUT テスト内で検証、E2E 定義数69件不変） |
 | AUTH-02 | 不正・期限切れJWT、`exp` 欠落トークン | 認証済みAPIが401を返す | 期限切れ（`exp` が過去）と `exp` 欠落トークンを手組みで署名し、保護 API が 401 を返す回帰テストを追加 |
 | NET-01 | IPv4アクセスと開発ループバック例外 | 設定に応じて拒否/許可 | 一部実装済み |
-| NET-02 | 信頼されないX-Forwarded-For | クライアント入力で接続元判定を迂回できない | 実装済み（IPv4-mapped 正規化、`TRUSTED_PROXY_CIDRS` 未設定時はピアアドレスのみで判定、信頼済みで解決不能時は403。回帰テストあり）。実プロキシ環境・多段構成の試験は要 |
+| NET-02 | 信頼されないX-Forwarded-For | クライアント入力で接続元判定を迂回できない | 実装済み（IPv4-mapped 正規化、`TRUSTED_PROXY_CIDRS` 未設定時はピアアドレスのみで判定、信頼済みで解決不能時は403。回帰テストあり）。実プロキシ環境・多段構成の試験は要。`TRUSTED_PROXY_CIDRS` の読取は `common::env::read_env` に一本化し、非 UTF-8 は固定文言警告のうえ空範囲（fail-closed）。警告はキー名と理由のみで入力値をエコーしない。`run()` の起動ログも同じ分類結果を使用する |
 | CONTENT-01 | 許可外形式、負価格、非整数価格、64bit範囲外価格、10 MiB 超本文 | 400で拒否 | 実装済み。有効な本文に不正値を1つだけ含めて拒否理由まで検証し、正常な価格境界（未指定=0、`0`、`MAX_ORDER_JPY`）の受理とDB保存も検証。拒否時に保存されないことを確認。上限超過（1,000,001 と `i64::MAX`）と 10 MiB 超 multipart 本文（Content-Length 検査ミドルウェアが 413 を返す）の拒否も検証 |
 | 決済 CID/価格 | 注文作成時に CID 形式・コンテンツ存在・`Approved` 状態・提示価格と `amount_jpy` の一致を検証 | 不一致・不存在・レビュー中・不正 CID を拒否し、注文取得時に CID が保存される | 実装済み。実チェーン上で注文金額と実際の送金額を照合する検証は未実装（実RPC待ち） |
 | CONTENT-02 | IPFS応答が10 MiB超過、遅延、切断 | 上限/タイムアウトを適用し、完全データとして返さない | 実装済み。10 MiB 超過とタイムアウト、次ゲートウェイへのフォールバック、ストリーム途中の切断（Partial ボディを返さない）をローカルモックで検証 |
@@ -226,7 +226,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | AGE-01 | 年齢ポリシー設定と公開 | 不正な `AGE_*` 設定は起動失敗（fail closed）。`GET /policy/age` は認証不要で有効設定値（非秘密）と `settings_always_public=true` を返す | 実装済み（`common`/`server` テスト）。`GET /policy/age` に秘密情報が含まれないことは設計/レビューで継続確認 |
 | AGE-02 | 明示設定必須・信頼属性必須モード | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` 未充足時および `trusted_attribute_required` は拒否（フェイルクローズ）。設定チェックは `/auth/verify` と OIDC callback / refresh の共通ゲートで行う | 実装済み（現行入力は申告値）。検証済み属性入力経路は未実装。必須設定値が未充足（`configuration_satisfied() == false`）のときの全経路拒否は AGE-03 で検証 |
 | AGE-03 | OIDC callback / refresh の設定必須ゲート（R1-17） | `AGE_REQUIRE_EXPLICIT_CONFIGURATION=1` かつ必須設定値が未充足（`default_minimum_age=21` ・`country_minimums` 空・`target_regions` 空）のとき、callback と refresh は state / Cookie の消費前に 403（`ConfigurationRequired`）。`trusted_attribute_required` も 403（`TrustedAttributeRequired`） | 実装済み。`test_require_explicit_configuration_blocks_oidc_callback_and_refresh` で両経路の 403 を検証。下記「年齢ゲート共通化と TZ 境界の検証」を参照。リフレッシュの原子化後も年齢ゲート共通ゲートは `BEGIN` より前に実行され、BAN チェックと claims/JWT 事前計算も `BEGIN` 前に配置して write_lock 保持中の待ちを避ける |
-| AGE-04 | 年齢基準日の TZ ローカル化 | `TZ` の `Asia/Tokyo`（UTC+9）/ `Etc/GMT±N`（POSIX 符号反転）/ 未設定・未対応名（UTC フォールバック）で「今日」が変わり、年齢境界が1日ずれる。UTC 2024-01-01T16:00Z の JST は翌日 | 実装済み。`test_today_for_policy_uses_configured_local_timezone` と `test_validate_age_at_uses_local_today_for_age_boundary` の2件。下記「年齢ゲート共通化と TZ 境界の検証」を参照 |
+| AGE-04 | 年齢基準日の TZ ローカル化 | `TZ` の `Asia/Tokyo`（UTC+9）/ `Etc/GMT±N`（POSIX 符号反転）/ 未設定・未対応名（UTC フォールバック）で「今日」が変わり、年齢境界が1日ずれる。UTC 2024-01-01T16:00Z の JST は翌日 | 実装済み。`test_today_for_policy_uses_configured_local_timezone` と `test_validate_age_at_uses_local_today_for_age_boundary` の2件。下記「年齢ゲート共通化と TZ 境界の検証」を参照。`TZ` 読取は `configured_tz()`（`common::env::read_env` ベース）へ一本化し、非 UTF-8 は UTC フォールバックのまま doctor の `classify(lookup("TZ"))` 固定文言警告対象とする（生バイト非保持・非エコー） |
 | AGE-05 | 署名付き年齢属性 adapter の正常系（DEC-01 / ADR-0007） | `verify(issuer, claims, nonce, audience)` が許可リスト完全一致・発行者束縛・audience 束縛・nonce 束縛を通した場合のみ `VerifiedAge` を返す。mock 経路では自己申告の成人判定を上書きして検証済み生年月日で判定。`verified_claims` 経路の `user_hash` は issuer + signed_subject 由来 | 実装済み。`verified_age.rs` の `verify_accepts_valid_claims` と `test_verified_age_accepts_valid_signed_attribute_in_mock_path`（hash 契約は AGE-12） |
 | AGE-06 | 自己申告混入拒否 | `birth_date` / `country_code` を `verified_claims` へ混ぜた JSON は `deny_unknown_fields` で拒否。信頼属性必須モードで `verified_claims` 欠落時は自己申告が成人でも 403 | 実装済み。`self_reported_fields_cannot_be_injected_into_claims` と `test_verified_age_rejects_self_reported_fields_and_missing_claims` |
 | AGE-07 | nonce 再利用拒否 | 既存 `MOCK_NONCES.remove()` の単回消費を再利用し、2回目の提示は 400 | 実装済み。`test_verified_age_rejects_reused_nonce`、`verify_rejects_nonce_mismatch` |
@@ -238,7 +238,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | PAY-01 | 対応JPYCの有効な送金と最終性確認 | 確認後のみ決済成立 | 基盤実装済み。モックverifierで注文作成・ウォレット結合・検証・確定、BIP44受取アドレス派生を検証。金額・確認数・署名復元・期限の境界5件は下記「決済ユーティリティの境界の検証（PAY-01〜03）」を参照。R1-26 の並行注文は `test_parallel_orders_derive_sequential_indices_and_unique_addresses`（連番の `derivation_index` と一意な受取先）/`test_identical_parallel_orders_all_succeed`（同一内容の並行注文5件が全件成功）/`test_fixed_receiving_address_keeps_derivation_index_null`（固定受取アドレスは index NULL を維持）/`test_rejected_orders_do_not_consume_derivation_index`（拒否注文は index を消費しない）の4件で検証。実チェーンRPCは未実装 |
 | PAY-02 | 非対応トークン、チェーン、再編成、二重通知 | 不成立または確認中として扱う | 一部実装。未対応チェーン、金額・送金元・受取先の不一致、同一tx再利用を検証。再編成・二重通知・別コントラクトは未実装 |
 | PAY-03 | 取引要求ID・金額・受取先との不一致 | 有償機能を解放しない | 基盤実装済み。注文ID・金額・受取先・送金元の照合を検証 |
-| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須 |
+| AUDIT-01 | 監査記録の改変・欠落・順序入替 | ハッシュ連鎖・連番・Merkle root で改変を検出 | ローカルDBのハッシュ連鎖（v2 正規化＋v1 互換検証）・`log_id` 連続性・Merkle root と `--expect-root` による切詰め検出を実装。エントリハッシュが全内容フィールドに依存することを mutation テストで確認（`log_id` は連続性/Merkle root 側でカバー）。署名付きスナップショット（version 3）がコンテンツ監査と BAN/UNBAN/UNPIN 監査の両方を含み、改ざんで検証失敗することを単体テストと実DBで確認。暗号エラーパス12件（署名・DER検証8件と `verify_chain_*` 4件）は下記「暗号検証エラーパスの検証（AUDIT-01）」を参照。CLI 契約（鍵権限・トークン・上書き拒否）は下記 AUDIT-02 を参照。外部アンカー・HSM 鍵管理は未実装、必須。`verify_chain` は `reasons_masked=true` のとき全 entry の `reason` がマスク済み（`reason_is_masked`）であることを検証し、平文が残っていれば拒否する。署名対象 `signature_payload()` はマスク版で entries_json を `masked` 印付きで含むため、この検査は署名対象の整合確認であり既存の verify 期待値は不変 |
 | AUDIT-02 | `sign_audit_export` の鍵権限・トークン受け渡し・出力上書き | 鍵 PEM は owner-only（0600/0400）を要求し、親ディレクトリの group/other 書き込みを拒否（0700 以外は警告）。リモート DB トークンは `DATABASE_TOKEN` 環境変数からのみ読み、`--database-token` はエラー。出力は `create_new` で既存ファイルを上書きしない | 実装済み（下記「監査CLIの権限・トークン・上書き拒否の検証（AUDIT-02）」にテスト設計を記載）。`server/src/bin/sign_audit_export.rs` に17テスト（既存10件＋include_reasons本番ガード2件＋DB接続先必須化5件）を追加済み。Runbookの手動確認手順も併用する |
 | PERF-01 | 初期表示、API、転送量、Wasmサイズ、手数料 | 合意済みSLO内 | status=not_evaluated（未作成、ADR-0011 で合意待ち。下記「性能・互換ゲートの評価状況」を参照） |
 | COMPAT-01 | 対応OS/ブラウザ/端末で閲覧・投稿・認証・決済 | 対応マトリクスを満たし、安全なフォールバックを表示 | status=not_evaluated（未作成、ADR-0012 で合意待ち。下同節を参照） |
@@ -271,7 +271,7 @@ E2E 回復フェーズは未統合で、auth は既存3件・全体69件を維�
 | CONTENT-10 | 一覧の `price` NULL | `status = 'Approved'` の行の `price` が NULL でも500にならず、購入不可を表す0として返る | 実装済み（`test_list_contents_null_price_is_returned_as_zero`）。`SELECT` 句は `COALESCE(price, 0) AS price`。下記同節を参照 |
 | EXPORT-11 | エクスポート解析失敗の表示 | `DataExport` として読めないレスポンスでは「0 件」成功にせず、`data-testid="export-error"` に固定文言 `エクスポート結果の解析に失敗しました。` を表示し、`export-status` は空のまま | 実装済み。クライアント側単体テスト `export_parse_failure_uses_fixed_phrase_without_success_status`（`client/src/lib.rs`）。正常系は件数入りの成功文言を維持。EXPORT-07 のダウンロード開始失敗（`anchor.click()` の例外、`ダウンロードの開始に失敗しました。`）は別事象であり、本ゲートはレスポンス解析失敗のみを扱う。E2E は `export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内へ `version` が文字列の不正 JSON を返すフェーズを追加し、`export-error` の固定文言と `export-status` が空であることを検証（新規 `test()` なし、export3件・全体69件を維持）。下記同節を参照 |
 | BUILD-01 | cargo-deny の4ゲート（licenses / advisories / bans / sources） | 既知の重複は exact version skip でのみ許容し、新規重複・未知取得元はビルドを失敗させる | 実装済み。`deny.toml` は `multiple-versions = "deny"` と skip の `version = "=x.y.z"` 固定（`version = "*"` は不使用）。`extra_gates` は licenses / advisories / bans sources の3コマンドで4ゲートを実行。`wildcards = "allow"` は workspace の path 依存に対する誤検知回避のみ |
-| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests128 は不変 |
+| BUILD-02 | リリース wasm の API オリジン fail-closed | `OIL_API_BASE` に `http://` または `localhost` を含む値を指定するとビルド失敗。E2E / 開発ビルドは未設定既定値で従来どおり動作 | 実装済み。`client/src/lib.rs` の const アサーションは `dev-console` feature なしで有効。`OIL_MOCK_AUTH` と同じ `option_env!` パターンで未設定時は開発既定値を維持。E2E 定義数69件・check23・doctor53・migrations14・tests132 は不変 |
 
 ### 性能・互換ゲートの評価状況（PERF-01 / COMPAT-01 / COMPAT-02）
 
@@ -486,6 +486,12 @@ WARN mock_auth_with_production_config: ALLOW_MOCK_AUTH is enabled together with 
 `yes` / `no` / 空文字を含む受理値外は拒否し、fail-closed とする。ランタイムは起動拒否となり、
 起動前診断では既存カテゴリ内へ固定文言の警告が追加され、値はエコーしない。
 判定は全フラグ共通の `common::age::parse_bool_env` に統一する。
+状態からの採用値と不正時文言の導出は `common::env::bool_env_result` へ集約し、
+`bool_env_at_startup` / `bool_flag_with_warning` / `bool_flag_from_env_value` が委譲する。
+受理値列挙の固定文言 `must be one of 1/true/0/false` は common 側の共通ヘルパに集約され、
+  OIDC 共有バリデータは変数名入りの独立文言を維持する（受理値は同一）。
+各呼び出し側は変数名（doctor は既定値も）を付けるだけである。
+受理値・既定値・既存文言・check23 / doctor53 は不変（新規テスト関数なし）。
 `ALLOW_MOCK_AUTH=1` 単独でも `mock_auth_enabled` に警告が計上され、`--strict` で exit 1 になる。
 
 上表の「設定判定」42件のうち `oidc_max_auth_age` カテゴリは、共通バリデータの固定文言をそのまま警告へ流す。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過
@@ -723,6 +729,12 @@ stop→wrapper→start を併設してから有効化し、配置後に手動1�
   oke_refresh_family` へつなぐ（ガードを保持したまま再取得するとデッドロックするため、refresh 内では別tx を取る `issue_refresh_token` を呼ばない）。BAN チェック
   と claims/JWT 事前計算は `BEGIN` 前に配置する。`test_refresh_rotates_token_and_issues_new_session`（旧 `used_at` 非NULL・新 `u
   sed_at` NULL）と `test_refresh_reuse_revokes_family` で検証する。
+- セッション発行の BAN 原子性（R2-SERVER）: `/auth/verify` は事前 `ensure_user_not_banned`
+  に加え、`write_lock` 配下の write tx 内で `users.is_banned` を再読し、有効な BAN
+  （`ban_until IS NULL OR ban_until > datetime('now')`）なら 403 `User is banned` で拒否する。
+  事前チェック通過後に BAN がコミットされても `iat` 採番号前に発行が止まることを、
+  既存 `test_auth_verify_write_waits_for_write_lock` 内へのアサーション追加で検証する
+  （新規 test 関数なし、test 数不変）。正常 200・BAN 後 401 等の既存期待値は不変。
 - 専用テスト名は確定済みで、PAY-04 は `test_payment_verify_stage2_cas_rejects_race_after_detected`、
   ID-05 は `test_reauthentication_delete_keeps_newer_revocation_threshold` が検証する。
 - R2-LOGOUT-TOKEN: logout token の `iat` を失効閾値 `revoked_subs.revoked_at` として扱い、UPSERT の
@@ -1661,7 +1673,8 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | 親ディレクトリ権限 | `mode & 0o055 != 0`（`0700` 以外、例 `0755`） | 警告を出力して継続 |
 | トークン受け渡し | `--database-token TOKEN` を指定 | エラー（`--database-token is not accepted; set DATABASE_TOKEN in the environment instead`） |
 | トークン受け渡し | `DATABASE_TOKEN` 環境変数を設定 | 読み込んでリモート libSQL へ渡す（未設定は空） |
-| 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` により原子的に失敗） |
+| 出力の上書き | `--output` に既存ファイルを指定 | 拒否（`create_new` により原子的に失敗）。原子的公開経路も既存ファイルを拒否し内容を保持する |
+| 出力の原子性 | 新規 `--output` を指定 | 同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` で公開。失敗時は一時ファイルを削除し、最終パスに中途半端なファイルが残らない |
 | 平文理由のエクスポート | 本番相当（`ALLOW_MOCK_AUTH` 無効・`AUDIT_EXPORT_INCLUDE_REASONS` 未設定）で `--include-reasons` を指定 | 拒否（`--include-reasons is not allowed in production without explicit opt-in; keep reasons masked or set AUDIT_EXPORT_INCLUDE_REASONS=1 deliberately`）。フラグ値・環境変数値はエコーしない |
 | 平文理由のエクスポート | `ALLOW_MOCK_AUTH=1`（開発）または `AUDIT_EXPORT_INCLUDE_REASONS=1`（明示オプトイン）付きで `--include-reasons` を指定 | 受理（理由をマスクせずエクスポート） |
 
@@ -1787,7 +1800,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   E2E69件、フルスイートの内訳は不変。
 - IPFS ゲートウェイ設定テストは既存の mock 有効ケース（http 受理）の期待値を維持する。
   `http` は `ALLOW_MOCK_AUTH` 有効時のみ受理し、本番相当（無効時）は `https` のみ受理
-  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests131 の数値は不変。
+  （拒否値は非エコー）。check23 / doctor53 / migrations14 / tests132 の数値は不変。
 
 ## R2-CLIENT-UX の受け入れ契約（既存ケース内へ統合・数値不変）
 
@@ -1808,4 +1821,4 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   を出す。403 / 5xx / network は従来の `集計の取得に失敗しました。` を維持する。
   `moderation.spec.ts` の R5-09 内へ401フェーズと403回帰フェーズを統合し、
   新規 `test()` は追加しない（moderation14件・E2E69件を維持）。
-  check23 / doctor53 / migrations14 / tests131 の数値は不変。
+  check23 / doctor53 / migrations14 / tests132 の数値は不変。

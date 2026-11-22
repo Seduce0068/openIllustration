@@ -96,11 +96,31 @@ static TRUSTED_RANGES: OnceLock<Vec<String>> = OnceLock::new();
 /// 不正な要素と全アドレスを含む範囲（プレフィックス長 0）は警告のうえ
 /// 無視する。
 pub fn trusted_proxy_ranges() -> &'static [String] {
-    TRUSTED_RANGES.get_or_init(|| {
-        std::env::var("TRUSTED_PROXY_CIDRS")
-            .map(|value| validated_ranges(parse_ranges(&value)))
-            .unwrap_or_default()
-    })
+    TRUSTED_RANGES.get_or_init(trusted_proxy_ranges_init)
+}
+
+/// `TRUSTED_PROXY_CIDRS` の読取結果（未設定 / 非 UTF-8 / UTF-8）を表す。
+/// 起動ログと範囲判定が同じ分類結果を共有するための単一情報源。
+pub fn trusted_proxy_cidrs_state() -> common::env::EnvValue {
+    TRUSTED_RANGES.get_or_init(trusted_proxy_ranges_init);
+    read_trusted_proxy_cidrs()
+}
+
+fn read_trusted_proxy_cidrs() -> common::env::EnvValue {
+    common::env::read_env("TRUSTED_PROXY_CIDRS")
+}
+
+fn trusted_proxy_ranges_init() -> Vec<String> {
+    match read_trusted_proxy_cidrs() {
+        common::env::EnvValue::Utf8(value) => validated_ranges(parse_ranges(&value)),
+        common::env::EnvValue::NonUtf8 => {
+            tracing::warn!(
+                "TRUSTED_PROXY_CIDRS is not valid UTF-8; ignoring all ranges (fail-closed)"
+            );
+            Vec::new()
+        }
+        common::env::EnvValue::Missing => Vec::new(),
+    }
 }
 
 fn parse_ranges(csv: &str) -> Vec<String> {
@@ -117,7 +137,8 @@ fn validated_ranges(entries: Vec<String>) -> Vec<String> {
         .filter(|entry| match classify_range(entry) {
             Ok(_) => true,
             Err(reason) => {
-                tracing::warn!("Ignoring TRUSTED_PROXY_CIDRS entry '{entry}': {reason}");
+                // 入力値（entry）はエコーせず、キー名と理由のみを警告する。
+                tracing::warn!("Ignoring TRUSTED_PROXY_CIDRS entry: {reason}");
                 false
             }
         })

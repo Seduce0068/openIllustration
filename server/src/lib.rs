@@ -1339,13 +1339,17 @@ async fn open_db_for_foreign_key_check() -> anyhow::Result<Connection> {
 /// 未設定は `false`、不正値（受理値外・非 UTF-8）は固定文言で起動拒否（fail-closed）する。
 /// per-request で読むフラグもここで検証し、読込側は `Valid(true)` のみ真とする二段構えにする。
 fn bool_env_at_startup(name: &str) -> anyhow::Result<bool> {
-    match common::env::bool_env_state(common::env::read_env(name)) {
-        common::env::BoolEnvState::Unset => Ok(false),
-        common::env::BoolEnvState::Valid(flag) => Ok(flag),
-        // 受理値外と非 UTF-8 は同じ Invalid。生バイトを保持しないためエコーしない。
-        common::env::BoolEnvState::Invalid => {
-            anyhow::bail!("{name} must be one of 1/true/0/false")
-        }
+    // 判定と固定文言は共通ヘルパへ集約する。受理値列挙の文言は
+    // common::env::bool_env_result の1箇所にだけ存在し、ここでは変数名を付けるだけ。
+    // 受理値外と非 UTF-8 は同じ Invalid。生バイトを保持しないためエコーしない。
+    let (flag, invalid_message) = common::env::bool_env_result(
+        common::env::bool_env_state(common::env::read_env(name)),
+        false,
+        false,
+    );
+    match invalid_message {
+        Some(message) => anyhow::bail!("{name} {message}"),
+        None => Ok(flag),
     }
 }
 
@@ -1548,14 +1552,18 @@ pub async fn run() -> anyhow::Result<()> {
     });
 
     // TRUSTED_PROXY_CIDRS を起動時に評価する（不正な要素は警告され無視される）。
+    // ログも範囲解決と同じ read_env ベースの分類結果を使い、非 UTF-8 は
+    // 「設定済み」として扱わず空範囲（fail-closed）であることを示す。
+    let trusted_proxy_cidrs_state = network::trusted_proxy_cidrs_state();
     let trusted_proxy_ranges = network::trusted_proxy_ranges();
-    if std::env::var_os("TRUSTED_PROXY_CIDRS").is_some() {
-        tracing::info!(
+    match trusted_proxy_cidrs_state {
+        common::env::EnvValue::Utf8(_) => tracing::info!(
             "TRUSTED_PROXY_CIDRS: {} valid range(s) enabled",
             trusted_proxy_ranges.len()
-        );
-    } else {
-        tracing::info!("TRUSTED_PROXY_CIDRS: not configured");
+        ),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
+            tracing::info!("TRUSTED_PROXY_CIDRS: not configured");
+        }
     }
 
     let age_policy = common::age::AgePolicy::from_env()
@@ -2925,7 +2933,8 @@ pub async fn auth_verify(
         let verified = verified_age
             .as_ref()
             .expect("trusted mode requires verified claims");
-        let today = today_for_policy(chrono::Utc::now(), std::env::var("TZ").ok().as_deref());
+        let tz = configured_tz();
+        let today = today_for_policy(chrono::Utc::now(), tz.as_deref());
         let age = common::age::calculate_age(&verified.birthdate, today)
             .map_err(age_validation_error_to_app_error)?;
         let threshold = state.age_policy.minimum_age_for(&verified.country);
@@ -3019,12 +3028,34 @@ pub async fn auth_verify(
         sha256_hex(format!("{}:{}", birth_date, country_code).as_bytes())
     };
 
+    // 事前ゲート（年齢ゲートの呼び出し順は変更しない）。ただしこの時点と
+    // write tx 取得の間で BAN が入り込む窓があるため、tx 内でもう一度検査する。
     ensure_user_not_banned(&state.db, &user_hash).await?;
 
     // 共有 Connection への INSERT は write_lock 配下の tx で行う。
     // ロック外の autocommit 書き込みは他トランザクションの BEGIN に取り込まれ、
     // その ROLLBACK でユーザー登録だけ失われる可能性がある。
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+    // BAN 原子化: 事前チェックから iat 採番号までの間に BAN がコミットされても
+    // セッションを発行しないよう、write_lock を保持した tx 内で users.is_banned を
+    // 再読し、有効な BAN なら 403 で拒否する（tx は drop でロールバックされる）。
+    // 判定述語は ensure_user_not_banned と同じ（期限切れ BAN は通過、NULL は継続）。
+    let mut ban_rows = tx
+        .query(
+            "SELECT 1 FROM users
+             WHERE user_hash = ?
+               AND is_banned = TRUE
+               AND (ban_until IS NULL OR ban_until > datetime('now'))",
+            [user_hash.clone()],
+        )
+        .await?;
+    if ban_rows.next().await?.is_some() {
+        drop(ban_rows);
+        drop(tx);
+        drop(_write_guard);
+        return Err(AppError::Forbidden("User is banned".to_string()));
+    }
+    drop(ban_rows);
     if let Some(der) = verified_key {
         tx.execute(
             "INSERT INTO users (user_hash, public_key_der) VALUES (?, ?) ON CONFLICT(user_hash) DO UPDATE SET public_key_der = excluded.public_key_der",
@@ -5139,6 +5170,19 @@ pub async fn public_mod_stats(
     ))))
 }
 
+/// `TZ` を `common::env::read_env` で読む単一情報源。
+///
+/// 未設定・非 UTF-8 はともに `None` を返し、既存どおり UTC の日付へフォールバックする。
+/// 非 UTF-8 の生バイトは保持せず、doctor が `classify(lookup("TZ"))` の
+/// `EnvValue::NonUtf8` を固定文言の警告へ変換する（判定は本関数の `None` と一致）。
+/// `run()` の年齢境界判定と `validate_age` はこの関数経由で同じ判定を共有する。
+pub fn configured_tz() -> Option<String> {
+    match common::env::read_env("TZ") {
+        common::env::EnvValue::Utf8(value) => Some(value),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+    }
+}
+
 /// `TZ` から実効 UTC オフセット（時間）を求める単一情報源。
 ///
 /// 外部依存（chrono-tz）を追加せず、`Asia/Tokyo`（前後の空白は除去・大小文字無視）と
@@ -5253,7 +5297,7 @@ pub fn validate_age(
     birth_date: &str,
     country_code: &str,
 ) -> Result<(), AppError> {
-    let tz = std::env::var("TZ").ok();
+    let tz = configured_tz();
     validate_age_at(
         policy,
         birth_date,

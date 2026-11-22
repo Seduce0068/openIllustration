@@ -1,7 +1,7 @@
 use anyhow::{Context, anyhow};
 use common::{
     AuditSnapshotEntry, GovernanceAuditEntry, SignedAuditSnapshot, compute_audit_chain_digest,
-    env::{BoolEnvState, EnvValue, bool_env_state, read_env},
+    env::{EnvValue, bool_env_state, read_env},
     mask_reason, sign_audit_snapshot,
 };
 use libsql::Builder;
@@ -134,12 +134,56 @@ fn check_signing_key_permissions(path: &str) -> anyhow::Result<()> {
 }
 
 /// 既存ファイルを決して上書きせずに出力ファイルを生成する（TOCTOU 対策）。
+#[cfg(test)]
 fn create_snapshot_output(path: &str) -> anyhow::Result<std::fs::File> {
     OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .context("failed to create snapshot output (it must not already exist)")
+}
+
+/// `restore_db` の staging + safety copy と同じ方式で、スナップショットを
+/// 0600 の一時ファイルへ書き、fsync のうえ rename で最終パスへ公開する。
+/// 書き込み・fsync・rename のいずれかが失敗した場合は一時ファイルを削除する。
+/// 最終パスが既に存在する場合は公開前に拒否し、既存ファイルを上書きしない。
+fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt;
+    let target = std::path::Path::new(path);
+    if std::fs::symlink_metadata(target).is_ok() {
+        return Err(anyhow!("snapshot output must not already exist: {path}"));
+    }
+    let parent = target
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let name = target
+        .file_name()
+        .ok_or_else(|| anyhow!("snapshot output path has no file name: {path}"))?
+        .to_string_lossy();
+    let tmp = parent.join(format!(".{name}.tmp-{}", std::process::id()));
+    let publish = (|| -> anyhow::Result<()> {
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        opts.mode(0o600);
+        let mut file = opts.open(&tmp).with_context(|| {
+            format!("failed to create staging snapshot file: {}", tmp.display())
+        })?;
+        file.write_all(json)
+            .with_context(|| format!("failed to write staging snapshot: {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to fsync staging snapshot: {}", tmp.display()))?;
+        drop(file);
+        std::fs::rename(&tmp, target)
+            .with_context(|| format!("failed to publish snapshot: {path}"))?;
+        Ok(())
+    })();
+    if publish.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    publish
 }
 
 /// 本番相当（`ALLOW_MOCK_AUTH` 無効）では平文理由のエクスポートを既定で拒否する。
@@ -168,10 +212,12 @@ fn bool_flag_from_env(name: &str) -> anyhow::Result<bool> {
 /// `read_env` の結果を真偽値へ変換する純粋版（非 UTF-8 注入の検証にも使う）。
 /// 受理値 1/true/0/false と trim・小文字化は `bool_env_state` 経由で不変。
 fn bool_flag_from_env_value(name: &str, value: EnvValue) -> anyhow::Result<bool> {
-    match bool_env_state(value) {
-        BoolEnvState::Unset => Ok(false),
-        BoolEnvState::Valid(flag) => Ok(flag),
-        BoolEnvState::Invalid => Err(anyhow!("{name} must be one of 1/true/0/false")),
+    // 判定と受理値列挙の固定文言は共通ヘルパへ集約する。
+    // ここでは変数名を付けるだけなので、文言の重複は存在しない。
+    let (flag, invalid_message) = common::env::bool_env_result(bool_env_state(value), false, false);
+    match invalid_message {
+        Some(message) => Err(anyhow!("{name} {message}")),
+        None => Ok(flag),
     }
 }
 
@@ -279,12 +325,10 @@ async fn main() -> anyhow::Result<()> {
     snapshot.signature =
         sign_audit_snapshot(&snapshot, &private_key_pem).map_err(|error| anyhow!("{error}"))?;
     let json = serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
-    // create_new で存在チェックと生成を原子的に行い、TOCTOU で既存ファイルを
-    // 上書きしないようにする。
-    let mut output_file = create_snapshot_output(&output)?;
-    output_file
-        .write_all(json.as_bytes())
-        .context("failed to write snapshot")?;
+    // restore_db の staging + safety copy と同じ方式: 0600 一時ファイルへ書き
+    // fsync してから rename で公開する。途中で失敗すれば一時ファイルを削除し、
+    // 既存の最終パスは上書きしない。
+    publish_snapshot_atomic(&output, json.as_bytes())?;
     println!(
         "audit_export_signed: output={output} entries={}",
         snapshot.entry_count()
@@ -297,7 +341,7 @@ mod tests {
     use super::{
         DATABASE_TOKEN_INVALID, bool_flag_from_env_value, check_signing_key_permissions,
         create_snapshot_output, database_token_from_env_value, ensure_include_reasons_allowed,
-        parse_args_from, resolve_database_url,
+        parse_args_from, publish_snapshot_atomic, resolve_database_url,
     };
     use common::env::{EnvValue, classify};
     use server::DatabaseUrlError;
@@ -554,6 +598,14 @@ mod tests {
             "{error:#}"
         );
         assert_eq!(std::fs::read(&output).expect("read output"), b"original");
+        // 原子的公開経路も既存ファイルを拒否し、内容を保持すること。
+        let error = publish_snapshot_atomic(&path_str(&output), b"replacement")
+            .expect_err("atomic publish must refuse existing output");
+        assert!(
+            error.to_string().contains("must not already exist"),
+            "{error:#}"
+        );
+        assert_eq!(std::fs::read(&output).expect("read output"), b"original");
     }
 
     #[test]
@@ -564,6 +616,23 @@ mod tests {
         file.write_all(b"snapshot").expect("write output");
         drop(file);
         assert_eq!(std::fs::read(&output).expect("read output"), b"snapshot");
+        // 原子的公開経路: 一時ファイルは残らず、最終パスに内容が公開されること。
+        let published = dir.child("published.json");
+        publish_snapshot_atomic(&path_str(&published), b"atomic").expect("publish snapshot");
+        assert_eq!(
+            std::fs::read(&published).expect("read published"),
+            b"atomic"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir.0)
+            .expect("read dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains("tmp-"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "staging file must be gone: {leftovers:?}"
+        );
     }
 
     // --- resolve_database_url: 暗黙既定値の撤廃 ---

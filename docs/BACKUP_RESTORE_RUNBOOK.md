@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-22T13:50:00+09:00"
+  at: "2026-11-22T22:50:00+09:00"
 ---
 
 ## 目的
@@ -382,6 +382,9 @@ cargo run -p server --bin restore_db -- \
 `<target>.pre-restore-<timestamp>` に安全コピーを作成してから原子的に置換する。
 バックアップの `PRAGMA integrity_check` と `_migrations` の存在を検証し、
 置換後にも再検証する。`-journal` サイドカーの拒否も実確認済み。
+`sign_audit_export` の監査スナップショット公開も、この staging + safety copy と同じ方式で
+同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` する。
+書き込み・fsync・rename の失敗時は一時ファイルを削除し、既存の最終パスは上書きしない。
 
 1. 復元 DB の外部キー孤立行を確認する。本番相当の環境変数（`DATABASE_URL` に復元先を指定し、
    `ALLOW_MOCK_AUTH` は無効）で `cargo run -p server --bin doctor -- --strict` を実行し、

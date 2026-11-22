@@ -75,3 +75,32 @@ pub fn bool_env_state(value: EnvValue) -> BoolEnvState {
         },
     }
 }
+
+/// 真偽値の状態から「採用値」と「不正時の固定文言」を導出する共通ヘルパ。
+///
+/// `default` は未設定・不正値のときに採用する値（呼び出し側の既定値をそのまま渡す）。
+/// `warn` は警告モード切替で、`true` なら診断向けの不正判定文言、
+/// `false` なら起動拒否向けの受理値列挙文言を返す。
+/// 返す文言は変数名・既定値を含まない共通部分だけであり、
+/// 呼び出し側が `format!("{name} {}", message)` のように固有部分を付ける
+/// （doctor は既定値を含む既存文言を維持するため、戻り値の有無だけを判定に使う）。
+/// これにより受理値列挙の固定文言が複数ファイルへ複製されない。
+/// いずれの文言も入力値・生バイトを含まない。
+pub fn bool_env_result(
+    state: BoolEnvState,
+    default: bool,
+    warn: bool,
+) -> (bool, Option<&'static str>) {
+    match state {
+        BoolEnvState::Unset => (default, None),
+        BoolEnvState::Valid(flag) => (flag, None),
+        BoolEnvState::Invalid => (
+            default,
+            Some(if warn {
+                "has an invalid boolean value (fail-closed)"
+            } else {
+                "must be one of 1/true/0/false"
+            }),
+        ),
+    }
+}

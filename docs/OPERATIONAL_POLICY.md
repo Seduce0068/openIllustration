@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-22T22:25:00+09:00"
+  at: "2026-11-22T22:50:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)
@@ -67,6 +67,13 @@ generated:
 - OIDC認証の未完了 `pending`（`state` / `nonce` / `code_verifier`）は10分TTLとし、保持数はコード定数
   `MAX_PENDING_AUTH = 1024` を上限とする。登録時・取出時に期限切れエントリを一括回収し、
   上限到達時は `GET /auth/oidc/start` が 429 を返して新規エントリを追加しない（R1-23）。
+- セッション発行（`/auth/verify`）の BAN 判定は原子的に適用する。事前 `ensure_user_not_banned`
+  に加え、`write_lock` 配下の write tx 内で `users.is_banned` を再読し、有効な BAN
+  （`ban_until IS NULL OR ban_until > datetime('now')`）なら 403 `User is banned` で
+  発行を拒否する。これにより事前チェック通過後から `iat` 採番号までの間に BAN が
+  コミットされても新規セッションが発行されない。判定述語・固定文言は既存の
+  `ensure_user_not_banned` と同じで、期限切れ BAN は従来どおり通過する。
+  権限・状态码・既存テストの期待値（正常 200、BAN 後 401 等）は不変。
   未認証で呼べる開始エンドポイントからのメモリ枯渇を防ぐ境界であり、環境変数ではない。
   回収は認証リクエスト時だけに限らず、`run_moderation_finalizer` が起動時と周期 tick
   （`MODERATION_FINALIZE_INTERVAL_SECS`）にも `sweep_expired_pending` を呼ぶため、
@@ -150,7 +157,12 @@ generated:
   （`0600` / `0400`）を要求する。親ディレクトリが group/other 書き込み可能なら拒否し、
   `0700` でなければ警告する。リモート libSQL のトークンは `DATABASE_TOKEN` 環境変数からのみ
   読み、`--database-token` は受け付けない（`argv` 露出対策）。出力先は `create_new` で原子的に
-  生成し、既存ファイルの上書きを拒否する。手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
+  生成し、既存ファイルの上書きを拒否する。公開は `restore_db` の staging + safety copy と同じ方式で、
+  同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` し、失敗時は一時ファイルを削除する。
+   手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
+   `verify_chain` は `reasons_masked=true` のとき全 entry の `reason` がマスク済みであることを検証する。
+   署名対象 `signature_payload()` は `reasons_masked=true` のとき entries_json を `masked` 印付きで含むため、
+   この検査は署名対象フィールドの整合確認であり、署名検証結果と矛盾しない。
 - 監査 CLI の権限・トークン・上書き拒否は実装済み。`sign_audit_export` に自動テスト17件を追加済み
   （TEST_SPECIFICATION AUDIT-02）。Runbook の手動確認（鍵権限・親ディレクトリ権限・
   `DATABASE_TOKEN` 設定・既存出力の有無）は補助的な確認として扱う。
@@ -274,6 +286,9 @@ generated:
   追記型（末尾がピア）ではサーバーが末尾のピアを除去して最左のクライアントを採用し、
   上書き型（末尾がピアでない）では末尾を採用する。信頼済みピアで解決できない場合は 403 となる。
   ネットワーク層でも許可方針を実装する。
+   読取は `common::env::read_env` に一本化し、非 UTF-8 は固定文言の警告のうえ空範囲として
+   fail-closed に倒す（生バイトも設定値もログへ出さず、キー名と理由のみを警告する）。
+   `run()` の起動ログも同じ分類結果を使い、非 UTF-8 は未設定と同じ「not configured」として扱う。
 - ログにJWT、署名、個人情報、投稿本文、Pinataトークンを出さない。現状のエラー応答は500系の内部詳細を
   ログのみに保ち、クライアントへは固定文言 `Internal server error` を返す（開発時は
   `EXPOSE_INTERNAL_ERRORS=1` で詳細を公開）。観測性は `LOG_FORMAT=json` と `/metrics` で提供し、
@@ -314,6 +329,10 @@ generated:
 - `age_policy` カテゴリは年齢判定の基準日（`TZ`）も診断する。`TZ` 未設定で UTC へ
    フォールバックする場合、`AGE_TARGET_REGIONS` に対して基準日のオフセットが不整合な場合に
    固定文言で警告し、設定値は出力しない。
+   `TZ` の読取は `common::env::read_env` ベースの `configured_tz()` に一本化し、
+   `run()` の年齢境界判定と `validate_age` が同じ分類結果を共有する。非 UTF-8 は
+   生バイトを保持せず `None`（UTC フォールバック）へ倒し、doctor は
+   `classify(lookup("TZ"))` の `EnvValue::NonUtf8` を固定文言の未設定警告として扱う。
 - 上記2カテゴリの追加項目は既存の23カテゴリ内に含まれ、カテゴリ数は変わらない。
    既定は警告のみで終了コード0、`--strict` のときだけ問題として終了コード1とする。
 - **Runbook（本番起動前ローカルゲート）**: 秘密管理基盤から本番相当の環境変数を注入し、
@@ -400,7 +419,7 @@ generated:
 | `OIDC_REQUIRED_ACR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `acr`（カンマ区切り、いずれか一致）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
 | `OIDC_MAX_AUTH_AGE_SECS` | 本番では必須（開発は任意） | 未設定 | 認証からの最大経過時間（秒、正の整数）。設定時は認証要求へ `max_age` を付与し ID トークンの `auth_time` を検証。未設定は `auth_time` / `max_age` 検証を行わず、不正値（0・負・非数値・オーバーフロー）は起動拒否。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）を超える値も固定文言（値非エコー）のハードエラーで起動拒否（fail-closed）。 |
 | `OIDC_REQUIRED_AMR` | 本番では必須（開発は任意） | 未設定 | 要求する ID トークンの `amr`（カンマ区切り、すべて含まれること）。設定時にクレーム欠落/不一致なら認証拒否（fail-closed）。 |
-| `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For`（XFF）を解釈し、追記型（末尾がピア）は末尾のピアを除去して最左のクライアントを、上書き型（末尾がピアでない）は末尾をクライアントIPとして採用する。不正エントリ・解決不能は 403（fail-closed）。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。`doctor --strict` の警告対象。 |
+| `TRUSTED_PROXY_CIDRS` | 任意 | 未設定 | 信頼済みリバースプロキシの IP / CIDR（カンマ区切り、単一ホップ前提）。設定時のみ、範囲内のピアから届いた `X-Forwarded-For`（XFF）を解釈し、追記型（末尾がピア）は末尾のピアを除去して最左のクライアントを、上書き型（末尾がピアでない）は末尾をクライアントIPとして採用する。不正エントリ・解決不能は 403（fail-closed）。全アドレスを含む範囲（プレフィックス長 0）と不正な要素は起動時に警告のうえ無視する（範囲は IPv4 / IPv6 の正規形で記載）。未設定時は本ヘッダーを判定に使わない。`doctor --strict` の警告対象。読取は `common::env::read_env` に一本化し、非 UTF-8 は固定文言警告のうえ空範囲（fail-closed）。警告にはキー名と理由のみを含め、設定値・生バイトはエコーしない。`run()` の起動ログも同じ分類結果を使う。 |
 | `RATE_LIMIT_PER_MIN` | 任意 | `60` | IP 単位のリクエスト上限（1〜600）。本番相当（`ALLOW_MOCK_AUTH` 無効）のみ適用。超出は 429。 |
 | `MAX_CONCURRENT_REQUESTS` | 任意 | `16` | 同時実行リクエスト上限（1〜256）。超過は 429。`/health`・`/ready`・`/metrics` は対象外。 |
 | `IPFS_GATEWAYS` | 任意 | 既定3件 | 取得に使う IPFS ゲートウェイの URL テンプレート（カンマ区切り）。各要素は `{cid}` を含む URL であること。スキームは `https` のみを受理し、`http` は `ALLOW_MOCK_AUTH` が有効な開発・隔離テスト環境でのみ受理する（本番相当では警告のうえ無視）。空要素、`{cid}` を含まない要素、その他スキームも警告のうえ無視する。CIDは英数字のみを許可し、パス・クエリ・フラグメント注入を拒否する。空にすると取得は常に失敗する。 |
@@ -413,7 +432,7 @@ generated:
 | `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。非 UTF-8 の値は「未設定」ではなく不正値として、受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。真偽値は `1`/`true`/`0`/`false` のみ。非 UTF-8 および受理値外は受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
 | `AGE_POLICY_CONFIGURED`（廃止） | — | — | 旧手動フラグ。読取を廃止し設定されても無視される。充足判定は `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の実効値から導出（`AgePolicy::configuration_satisfied()`）。 |
-| `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。 |
+| `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。読取は `configured_tz()`（`common::env::read_env` ベース）に一本化し、非 UTF-8 は `None`（UTC フォールバック）として doctor の固定文言警告対象にする。生バイトは保持・エコーしない。 |
 | `PAYMENT_RECEIVING_ADDRESS` | 任意 | 未設定 | JPYC注文の受取アドレス（`0x` + 40 hex）。未設定・不正時は注文作成を501で拒否する。 |
 | `PAYMENT_RECEIVING_XPRV` | 任意 | 未設定 | BIP44派生用のxprv。設定時は注文ごとの受取アドレスを派生し、`PAYMENT_RECEIVING_ADDRESS` より優先する。秘密管理基盤から注入し、ログへ出さない。 |
 | `OIDC_ISSUER` | 任意 | 未設定 | デジタル認証サービスの issuer。OIDC を有効化する場合は必須。URL は https が必須（下記 OIDC URL の規約を参照）。 |
@@ -487,6 +506,14 @@ generated:
   拒否し、ランタイムは起動拒否、起動後に read するフラグは安全側（`false` または
   Secure 付与）へ倒す。`doctor` は既存カテゴリ内で固定文言の警告を出し、不正値そのものは
   エコーしない。`common::age::parse_bool_env` が共通基準である。
+  真偽値の状態からの採用値と不正時文言の導出は `common::env::bool_env_result` へ集約する
+  （既定値と警告/起動拒否の切替を引数化）。`bool_env_at_startup` / `doctor` の
+  `bool_flag_with_warning` / `sign_audit_export` の `bool_flag_from_env_value` は
+  いずれもこの共通ヘルパへ委譲し、受理値列挙の固定文言
+  `must be one of 1/true/0/false` は lib.rs / doctor / sign_audit_export の
+  共通ヘルパ（common 側）に集約されている。OIDC 共有バリデータは
+  変数名入りの独立文言を維持する（受理値は同一）。
+  呼び出し側は変数名（と doctor の既定値）を付けるだけで、受理値・既定値・既存文言は不変。
 - 起動時に受理値を検証し不正値を起動拒否するフラグ4種（`ALLOW_MOCK_AUTH` / `EXPOSE_INTERNAL_ERRORS` / `OIDC_COOKIE_SECURE` / `JWT_REQUIRE_KID`）
   は設定フェーズ（`run()` の OIDC 検証直後）へ集約して検証する。
   DB 接続・マイグレーション・`instance.lock` 取得・FK 検査より前に起動拒否が確定し、失敗時にこれらを残さない。
@@ -585,4 +612,4 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor53 / migrations14 /
-  tests131 の数値は不変。
+  tests132 の数値は不変。

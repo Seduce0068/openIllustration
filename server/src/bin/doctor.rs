@@ -100,27 +100,27 @@ fn should_fail(strict: bool, problems: usize) -> bool {
     strict && problems > 0
 }
 
-/// 真偽値フラグをランタイムと同じ `common::age::parse_bool_env` で解釈する。
+/// 真偽値フラグを共通 `bool_env_state` / `bool_env_result` で解釈する
+/// （受理値の基準は従来どおり `common::age::parse_bool_env`）。
 /// 不正値は入力値をエコーせず、安全側の `default` へ倒した上で固定文言の警告を返す
 /// （doctor は診断専用なので起動拒否の代わりに既存カテゴリ内で警告する）。
 fn bool_flag_with_warning<F>(lookup: &F, name: &str, default: bool) -> (bool, Option<String>)
 where
     F: Fn(&str) -> Result<String, std::env::VarError>,
 {
-    let invalid = || {
-        Some(format!(
-            "{name} has an invalid boolean value; using {default} (fail-closed)"
-        ))
+    // 真偽値の分類・既定値適用・不正判定は共通ヘルパへ委譲する。
+    // 非 UTF-8 は生バイトを保持せず Invalid として既存の不正値警告へマージする。
+    let state = match lookup(name) {
+        Err(std::env::VarError::NotPresent) => common::env::EnvValue::Missing,
+        Err(std::env::VarError::NotUnicode(_)) => common::env::EnvValue::NonUtf8,
+        Ok(value) => common::env::EnvValue::Utf8(value),
     };
-    match lookup(name) {
-        Err(std::env::VarError::NotPresent) => (default, None),
-        // 非 UTF-8 は生バイトを見ず、既存の不正値警告へマージする。
-        Err(std::env::VarError::NotUnicode(_)) => (default, invalid()),
-        Ok(value) => match common::age::parse_bool_env(&value) {
-            Some(parsed) => (parsed, None),
-            None => (default, invalid()),
-        },
-    }
+    let (flag, invalid_message) =
+        common::env::bool_env_result(common::env::bool_env_state(state), default, true);
+    // doctor は診断専用なので、既存の固定文言（既定値を含む）を維持したまま警告を返す。
+    let warning = invalid_message
+        .map(|_| format!("{name} has an invalid boolean value; using {default} (fail-closed)"));
+    (flag, warning)
 }
 
 /// 検査結果を (項目, 問題) の形で集める。
@@ -461,7 +461,13 @@ where
     // 年齢判定の基準日（TZ）診断を age_policy カテゴリ内へ追加する（check 数は据え置き）。
     // 未設定は UTC フォールバックとなり、対象地域のローカル日付と境界がずれ得る。
     // いずれも固定文言の警告のみで、既定は終了コードへ影響しない（--strict 時のみ失敗）。
-    let tz_raw = lookup("TZ").ok();
+    // read_env ベースの run() と同じ分類を経由する（非 UTF-8 は生バイトを保持せず、
+    // 固定文言の未設定警告へ倒す。UTC フォールバック判定も run() と一致する）。
+    let tz_value = common::env::classify(lookup("TZ"));
+    let tz_raw = match tz_value {
+        common::env::EnvValue::Utf8(value) => Some(value),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+    };
     let tz_present = tz_raw
         .as_deref()
         .map(|value| !value.trim().is_empty())
