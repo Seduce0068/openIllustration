@@ -25,9 +25,20 @@ extract_checks() {
 	grep -oE '[0-9]+ check\(s\)' <<<"$1" | grep -oE '[0-9]+' | head -n1 || true
 }
 
+# E2E spec の test( 件数を数える（コメント行は除外）。
+count_e2e_tests() {
+	awk '
+		/^[[:space:]]*\/\// { next }
+		/^[[:space:]]*\*\// { in_block = 0; next }
+		/^[[:space:]]*\*/ { if (in_block) next }
+		/^[[:space:]]*\/\*/ { in_block = 1; next }
+		{ print }
+	' "$1" | grep -Ec '(^|[^.[:alnum:]_])test\(' || true
+}
+
 # --- 1. E2E 件数 ----------------------------------------------------------
 spec="docs/TEST_SPECIFICATION.md"
-e2e_total="$(grep -rEc '(^|[^.[:alnum:]_])test\(' e2e/tests/*.spec.ts | awk -F: '{s+=$2} END {print s+0}')"
+e2e_total="$(for f in e2e/tests/*.spec.ts; do count_e2e_tests "$f"; done | awk -F: '{s+=$1} END {print s+0}')"
 
 measured_line="$(grep -m1 '実測は全[0-9][0-9]*件' "$spec" || true)"
 measured_n="$(grep -oE '実測は全[0-9]+件' <<<"$measured_line" | grep -oE '[0-9]+' | head -n1 || true)"
@@ -106,7 +117,7 @@ done
 breakdown_sum=0
 for label in "${e2e_labels[@]}"; do
 	documented="${documented_breakdown[$label]:-}"
-	actual="$(grep -Ec '(^|[^.[:alnum:]_])test\(' "e2e/tests/${label}.spec.ts" || true)"
+	actual="$(count_e2e_tests "e2e/tests/${label}.spec.ts")"
 	assert_numbers_match "e2e ${label}" "$actual" "$documented"
 	# 先頭ゼロ付き数値を8進数として解釈しないよう 10# を付ける。
 	breakdown_sum=$((breakdown_sum + 10#${documented:-0}))
@@ -353,7 +364,7 @@ while IFS= read -r example_line; do
 		failures=$((failures + 1))
 		continue
 	fi
-	actual_n="$(grep -Ec '(^|[^.[:alnum:]_])test\(' "$spec_file" || true)"
+	actual_n="$(count_e2e_tests "$spec_file")"
 	assert_numbers_match "e2e spec example ${spec_name}" "$actual_n" "$documented_n"
 done <<<"$spec_example_lines"
 

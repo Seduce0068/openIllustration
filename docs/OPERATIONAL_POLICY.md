@@ -5,7 +5,7 @@ description: 認証、決済、監査、コンテンツの運用方針と本番�
 tags: [operations, security, payments]
 generated:
   by: dsh
-  at: "2026-11-23T02:35:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 ---
 
 ## 運用ポリシー (Operational Policy)

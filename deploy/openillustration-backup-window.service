@@ -4,6 +4,9 @@ Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 
 [Service]
 Type=oneshot
+# oneshot の既定は無期限。GPG / オフサイト転送のハングで ExecStart が返らないと
+# ExecStopPost が走らずアプリが停止したままになるため、上限を設定する。
+TimeoutStartSec=1800
 WorkingDirectory=/opt/openIllustration
 
 # APP_UNIT は設定可能値。deploy/ にはアプリ unit を置いていないため、

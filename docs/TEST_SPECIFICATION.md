@@ -5,10 +5,10 @@ description: 現行回帰テストと必須要件のリリース受け入れ条�
 tags: [testing, acceptance, quality]
 generated:
   by: dsh
-  at: "2026-11-23T02:35:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-23T02:35:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 ---
 
 ## テスト仕様書 (Test Specification Document)

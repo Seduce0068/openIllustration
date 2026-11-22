@@ -5,7 +5,7 @@ description: "単一ライター運用を前提とした libSQL スナップシ�
 tags: [runbook, backup, operations, database]
 generated:
   by: dsh
-  at: "2026-11-23T01:50:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 ---
 
 ## 目的
@@ -258,7 +258,9 @@ systemctl status openillustration-backup-window.service
 systemctl list-timers openillustration-backup.timer
 ```
 
-- バックアップ窓の間、アプリが停止していることを `/ready` が 503 を返すことで確認する。
+- バックアップ窓の間はアプリ unit が停止しているため `/ready` は応答しない（接続拒否が正常）。
+  停止確認は `systemctl is-active <APP_UNIT>` が `inactive` であることで行う。
+  `/ready` が 503 を返すのは SIGTERM 直後の graceful drain 窓だけであり、窓全体ではない。
 - 再起動後は `/health` 200 と `/ready` 200 を確認する。これが窓 unit 完了の条件。
 - バックアップ失敗は `ALERT_CMD`（設定時）が通知する。さらに再起動（`ExecStopPost`）が
   失敗した場合は窓 unit の結果が失敗となるため、`OnFailure=` または journald の unit 結果

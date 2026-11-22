@@ -14,6 +14,9 @@ Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 # ExecStopPost でアプリ unit 起動）。バックアップ失敗時も ExecStopPost が
 # 実行されるため、アプリが停止したまま放置されることはない。
 OnCalendar=*-*-* 03:17:00
+# Persistent=true はホスト停止中に逃した実行を起動後に補完する。メンテナンス窓外に
+# 走ると生存 instance.lock で backup_db が拒否される（fail-closed）ため、補完は
+# 窓とみなさない。運用上は Runbook の「サーバー稼働中のロック拒否」節を参照すること。
 Persistent=true
 RandomizedDelaySec=300
 Unit=openillustration-backup-window.service

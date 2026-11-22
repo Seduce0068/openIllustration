@@ -787,6 +787,21 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第25ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  doctor が非UTF-8 TRUSTED_PROXY_CIDRS を診断せず false pass していた問題を classify 判定へ修正、
+  doc-numbers の E2E test() 抽出を count_e2e_tests ヘルパでコメント除外へ堅牢化（全3箇所統一、
+  コメントに test( を入れても69件維持を親が実測）、backup window unit へ TimeoutStartSec=1800、
+  Runbook の /ready 手順を「停止中は接続拒否が正常」へ修正、timer Persistent 注記、
+  markdownlint 版記録 0.24.2 へ追随。
+  R4 の2件（timer参照名・TASK_INVENTORY文途切れ）も修正。
+  全ゲート green（E2E69/check23/doctor53/migrations14/tests142、npm audit3lockfile）。
+  初回 cargo deny advisory DB と npm audit が network reset で失敗したが再実行で green。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー、OIDC署名鍵403/501化、公開ledger意図、
+  OIL_API_BASE未設定fail-open、起動設定一括Config化、E2E_SERVER_PORT設定化、
+  監査要約の問い合わせ窓口、SPAビュー切替のフォーカス移動）は記録のみで保留。
+
 - 2026-11-23 コンボ第24ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   doctor --strict へ DATABASE_TOKEN 非UTF-8 と MODERATION_OPERATOR_HASHES の production 診断

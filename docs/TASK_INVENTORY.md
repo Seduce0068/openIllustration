@@ -10,10 +10,10 @@ tags:
   - operations
 generated:
   by: dsh (opencode-go/iceman-contributor-free)
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T21:45:00+09:00"
+  at: "2026-11-23T02:55:00+09:00"
 status: current
 ---
 
@@ -452,7 +452,9 @@ status: current
   `/auth/logout` でも Cookie が送られ、リフレッシュファミリ失効が到達する。
   mutation（旧 Path 復元）で新規テストが失敗することを確認。
 - [対応済み] R2-09: `get_content` を `status = 'Approved'` で絞り、通報中/却下コンテンツの直接 CID 取得を 404 化。一覧取得と整合。mutation（条件削除）で新規テストが失敗することを確認（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。
-- [対応済み] markdownlint の CI enforcement: `extra_gates` に版固定の `markdownlint-cli2@0.24.0 "docs/**/*.md"` を追加。
+- [対応済み] markdownlint の CI enforcement: `extra_gates` に `npx markdownlint-cli2
+  "docs/**/*.md"` を追加。版固定は `package.json` と `package-lock.json` で管理し、
+  現行は `markdownlint-cli2@0.24.2`。
  共通ワークフローに専用入力が無いため既存の `extra_gates` を利用。26ファイル 0 issues・YAML 構文を確認。
 - [対応済み] Markdown URL の Unicode 空白バイパス修正: `is_safe_markdown_url` が ASCII 空白のみ拒否し、ZWSP/NBSP を先頭に付けた `javascript:`
   を「相対URL」として受理していた問題を修正。Unicode 空白/制御文字を拒否し、不正スキームは fail-closed で拒否（[TEST_SPECIFICATION.md](TEST_SPECIFICATION.md)）。

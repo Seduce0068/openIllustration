@@ -580,13 +580,17 @@ where
 
     // TRUSTED_PROXY_CIDRS は X-Forwarded-For（XFF）を信頼する設定。設定自体は
     // 正当だが本番では意図確認が必要。CIDR 等の設定値は出力せず有無のみ警告する。
-    let trusted_proxy_errors = if lookup("TRUSTED_PROXY_CIDRS").is_ok() {
-        vec![
+    let trusted_proxy_errors = match common::env::classify(lookup("TRUSTED_PROXY_CIDRS")) {
+        common::env::EnvValue::Utf8(_) => vec![
             "TRUSTED_PROXY_CIDRS is configured; X-Forwarded-For (XFF) is trusted, confirm this is intentional in production"
                 .to_string(),
-        ]
-    } else {
-        Vec::new()
+        ],
+        // 非 UTF-8 は run()/network.rs と同じく fail-closed で空範囲へ倒るため、
+        // doctor --strict でも設定ミスとして検出する（値・生バイトはエコーしない）。
+        common::env::EnvValue::NonUtf8 => vec![
+            "TRUSTED_PROXY_CIDRS is not valid UTF-8; ignoring all ranges (fail-closed)".to_string(),
+        ],
+        common::env::EnvValue::Missing => Vec::new(),
     };
     results.push(("trusted_proxy", trusted_proxy_errors));
 
