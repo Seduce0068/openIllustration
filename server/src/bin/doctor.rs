@@ -33,6 +33,7 @@ const BACKUP_RECIPIENT_UNSET_WARNING: &str =
     "BACKUP_GPG_RECIPIENT is not set; encrypted backups are required in production";
 const BACKUP_OFFSITE_PAIR_WARNING: &str = "OFFSITE_COPY_CMD and OFFSITE_DEST must be set together";
 const BACKUP_ALERT_CMD_WARNING: &str = "ALERT_CMD is set but not executable";
+const BACKUP_OFFSITE_EXECUTABLE_WARNING: &str = "OFFSITE_COPY_CMD is set but not executable";
 
 /// 年齢判定の基準日（TZ）に関する固定警告。
 const TZ_UNSET_WARNING: &str =
@@ -185,6 +186,15 @@ where
         }
         if copy_set != dest_set {
             production.push(BACKUP_OFFSITE_PAIR_WARNING.to_string());
+        }
+        // OFFSITE_COPY_CMD にも ALERT_CMD と同じ is_executable_file 判定を適用する。
+        // backup-rotate.sh の `[[ -n "$offsitecopy" && ! -x "$offsitecopy" ]]`（fail-closed）
+        // と契約を揃え、実行不可パスを固定文言警告化する（値はエコーしない、check23 維持）。
+        if let Ok(copy_cmd) = lookup("OFFSITE_COPY_CMD")
+            && !copy_cmd.is_empty()
+            && !is_executable_file(copy_cmd.as_str())
+        {
+            production.push(BACKUP_OFFSITE_EXECUTABLE_WARNING.to_string());
         }
         if let Ok(alert) = lookup("ALERT_CMD")
             && !alert.is_empty()
@@ -2032,6 +2042,24 @@ mod tests {
         for error in errors {
             assert!(!error.contains(ALERT), "設定値が漏洩: {error}");
             assert!(!error.contains("/usr/bin/true"), "設定値が漏洩: {error}");
+        }
+
+        // OFFSITE_COPY_CMD に実行不可パスを設定した場合も、ALERT_CMD と同じ
+        // is_executable_file 判定で固定文言警告する（backup-rotate.sh の fail-closed と同契約）。
+        const NON_EXEC: &str = "/no/such/offsitecopy-for-doctor-test";
+        let offsite_results = check_all_with(lookup_from(&[
+            ("OFFSITE_COPY_CMD", NON_EXEC),
+            ("OFFSITE_DEST", "/var/backups/offsite"),
+        ]));
+        let offsite_errors = errors_for(&offsite_results, "production");
+        assert!(
+            offsite_errors
+                .iter()
+                .any(|error| error.as_str() == BACKUP_OFFSITE_EXECUTABLE_WARNING),
+            "missing: {BACKUP_OFFSITE_EXECUTABLE_WARNING}, errors={offsite_errors:?}"
+        );
+        for error in offsite_errors {
+            assert!(!error.contains(NON_EXEC), "設定値が漏洩: {error}");
         }
     }
 

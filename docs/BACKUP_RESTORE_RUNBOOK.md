@@ -398,7 +398,9 @@ safety copy / staging tmp の作成が途中失敗した場合は部分ファイ
 `restore_db` は staging に対して `PRAGMA integrity_check` と `_migrations` の検証を
 先に行い、成功したファイルだけを `rename` で公開する。置換後の再検証が失敗した
 場合は safety copy へ自動で書き戻し（権限 `0600` を維持）、失敗理由と出所パスを
-併記する。safety copy が無い場合は検証失敗をそのまま報告する。
+併記する。初回復元で safety copy が無い場合は、公開した target を削除して復元前の
+状態（target 不存在）へ戻す。削除自体が失敗した場合は、その旨と対象パスを元の
+検証失敗へ併記して報告する。
 `sign_audit_export` の監査スナップショット公開も、この staging + safety copy と同じ方式で
 同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `rename` する。
 書き込み・fsync・rename の失敗時は一時ファイルを削除し、既存の最終パスは上書きしない。

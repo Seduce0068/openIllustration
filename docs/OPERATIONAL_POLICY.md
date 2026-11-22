@@ -242,6 +242,8 @@ generated:
   生成し、既存ファイルの上書きを拒否する。公開は `restore_db` の staging + safety copy と同じ方式で、
   同ディレクトリの `0600` 一時ファイルへ書き `fsync` 後に `hard_link` で原子的に公開し、
   失敗時は一時ファイルを残す（詳細は直下の監査エクスポートの項目を参照）。
+  公開成功後に staging 削除が失敗した場合は警告ログへ留め、公開は成功扱い（終了コード 0）とする。
+  ログへは staging パスのみを出し、スナップショットの値や CID は出さない。
    手順は [AUDIT_EXPORT_RUNBOOK.md](AUDIT_EXPORT_RUNBOOK.md)。
    `verify_chain` は `reasons_masked=true` のとき全 entry の `reason` がマスク済みであることを検証する。
    署名対象 `signature_payload()` は `reasons_masked=true` のとき entries_json を `masked` 印付きで含むため、
@@ -249,7 +251,8 @@ generated:
 - 監査エクスポートの公開経路は `hard_link` による create_new 相当の原子的公開へ変更し、既存ファイルは
   競合として拒否する（存在チェックと公開の TOCTOU を解消）。hard_link が使えない環境
   （クロスデバイス等）は `rename` フォールバックで最終パスの存在を再確認する。公開失敗時は
-  ステージングを残し、値や CID をエコーしない。ステージング名は PID と unix_millis
+  ステージングを残し、値や CID をエコーしない。公開成功後のステージング削除失敗は警告のみで
+   成功扱いとし、誤った失敗通知と再実行拒否を防ぐ。ステージング名は PID と unix_millis
   （`.tmp-<pid>-<unix_millis>`）を含め、クラッシュ残骸による再実行ブロックを防ぐ。
   `content_audit_log` / `governance_audit_log` が両方 0 件のときは `--allow-empty` の明示が無い限り
   エクスポートを拒否し、`verify_audit_log` も空ログを `--expect-root` 未指定時を含め固定文言で拒否する
@@ -359,6 +362,8 @@ generated:
   暗号化成果物は `<stamp>.db.gpg` で、復元時は `gpg --decrypt` の復号先を `RESTORED_DB` に
   統一する。`verify_backup --input "$RESTORED_DB"` の成功を前提に、
   `restore_db --backup "$RESTORED_DB"` を実行する（Runbook「リストア（復旧訓練）」参照）。
+   初回復元（safety copy なし）で公開後の再検証が失敗した場合は、公開した target を削除して
+   復元前の状態へ戻し、削除自体が失敗した場合はその旨を元のエラーへ併記する。
   `deploy/openillustration-backup.cron` のジョブ行は `backup-cron-wrapper.sh` のみを実行し、
   常時稼働環境では `instance.lock` で拒否されるため、root 側スケジューラで
   stop→wrapper→start を併設するまで有効化しない。配置後は手動1回実行して成功ログを確認する。
@@ -426,6 +431,9 @@ generated:
 - `production` カテゴリはバックアップ設定の整合も診断する（本番相当・`ALLOW_MOCK_AUTH` 無効時のみ）。
    `BACKUP_GPG_RECIPIENT` 未設定、`OFFSITE_COPY_CMD` / `OFFSITE_DEST` の片方だけ設定、
    `ALERT_CMD` に実行不可のパスを指定した場合に固定文言で警告し、設定値は出力しない。
+   `OFFSITE_COPY_CMD` に実行不可のパスを指定した場合も、ALERT_CMD と同じ
+   `is_executable_file` 判定で固定文言警告する（`backup-rotate.sh` の fail-closed と同契約、
+   カテゴリ数は不変）。
 - `age_policy` カテゴリは年齢判定の基準日（`TZ`）も診断する。`TZ` 未設定で UTC へ
    フォールバックする場合、`AGE_TARGET_REGIONS` に対して基準日のオフセットが不整合な場合に
    固定文言で警告し、設定値は出力しない。
@@ -881,3 +889,19 @@ apt 導入ステップでインストールされる）。本リポジトリに�
 - 新規テスト関数は追加せず、回帰は既存 `me_export_returns_only_own_data`
   内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests150 の
   各数値は不変。
+
+### R2-CLIENT（第3次）追加契約（2026-11-23）
+
+- **検証待ちのアクセシビリティ**: `Verifying_Integrity...` は検証完了前の一時表示であり、
+  `role="status"` / `aria-live="polite"` / `lang="en"` を付与して読み上げと
+  言語宣言を整合させる。文言・`data-testid` は変更しない。
+- **取引履歴の401案内**: `GET /transactions` が401のときだけ
+  `再ログインが必要です。` と LOG OUT からの再ログイン案内を dedicated
+  `role="status"` で出し、他のエラーは従来の `role="alert"` 文言を維持する。
+  サーバー本文やステータス詳細は画面へ出さない。
+- **ログインの二重送信防止**: ログインボタンは `claim_submission` と `BusyGuard`
+  で送信中を同期に排除し、通信完了後は必ず再活性化する。
+  `/auth/login` と `/auth/verify` は二重クリックでも1本ずつとする。
+- **ビルド依存の明示化**: `client/Cargo.toml` の `web-sys` features へ `"Url"` を
+  明示し、推移依存の feature unification に依存しない。既存の固定文言・
+  data-testid・E2E69件 / check23 / doctor54 / migrations14 の数値は不変。

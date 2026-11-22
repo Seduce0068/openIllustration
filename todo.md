@@ -787,6 +787,28 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第37ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  CI Betterleaksを--stagedから--log-opts範囲走査へ（checkout直後0バイト走査で実質無効だった、
+  親がstaged=0B/log-opts=13KBを実測）、sign_audit_exportの公開後staging削除失敗を警告分離、
+  restore_db初回復元の公開後検証失敗時ロールバック、doctorのOFFSITE_COPY_CMD実行可能性診断、
+  検証待ちrole=status/lang、Ledger 401 dedicated案内、login二重送信ガード、web-sys Url feature。
+  親がHRTBエラーをクロージャで修正。R4 指摘なし。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests152、npm audit3lockfile、
+  markdownlint39ファイル、bin tests green）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  GPG復号訓練、Dependabot、axe自動スキャン、MSRV下限CI、二次処理5xx伝播、
+  finalizer異常終了readiness、動的alert、401復帰導線共通化、クライアントエラーテレメトリ、
+  .audit-rootオフサイト、E2E artifact回収、Chromeバージョン固定、OIL_MOCK_AUTH=0検証、
+  BUILD-02負のビルドゲート、retries方針、TOC scroll-margin、日時ja-JP+UTC不整合、
+  公開集計鮮度の端末時計依存、backup-cron-wrapper owner/mode分岐テスト、cargo-deny
+  aarch64/licenses方針、docs/log.md運用、HANDOFF CI記述、restore safety copy原子性、
+  refresh再利用検知時ファミリ失効失敗、prepare-distribution全denyゲート、notify世代識別、
+  OKFメタデータCI検証、監査要約窓口、ボディ付きAPI refresh再送E2E）は記録のみで保留。
+
 - 2026-11-23 コンボ第36ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   pre-commitシークレットスキャン導入（Betterleaks v1.10.1ピン・CI併設・.gitignore拡張）、

@@ -157,6 +157,14 @@ fn create_snapshot_output(path: &str) -> anyhow::Result<std::fs::File> {
 /// その際も最終パスの存在を再確認して競合を検出する。
 /// 公開失敗時は一時ファイルを残し、値や CID をエコーせず固定文言でエラーを返す。
 fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
+    publish_snapshot_atomic_with(path, json, |p: &std::path::Path| std::fs::remove_file(p))
+}
+
+/// `remove_staging` を差し替え可能な本体。テストから削除失敗を決定的に注入するために分離する。
+fn publish_snapshot_atomic_with<F>(path: &str, json: &[u8], remove_staging: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&std::path::Path) -> std::io::Result<()>,
+{
     #[cfg(unix)]
     use std::os::unix::fs::OpenOptionsExt;
     let target = std::path::Path::new(path);
@@ -196,13 +204,16 @@ fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
     // 存在チェックと公開の間の TOCTOU ウィンドウが無い（create_new 相当）。
     match std::fs::hard_link(&tmp, target) {
         Ok(()) => {
-            // 公開後に staging を削除する（ハードリンクを残さない）。
-            std::fs::remove_file(&tmp).with_context(|| {
-                format!(
-                    "failed to remove staging snapshot after publish: {}",
+            // hard_link による公開はここで完了済み。staging 削除に失敗しても公開の
+            // 成否は変えず、警告ログへ留めて Ok(()) を返す。誤った「失敗」通知と
+            // 再実行拒否（既存出力を競合として拒否する挙動）を防ぐためである。
+            // staging パスはログへ出してよいが、スナップショットの値や CID は出さない。
+            if let Err(error) = remove_staging(&tmp) {
+                eprintln!(
+                    "warning: failed to remove staging snapshot after publish ({}): {error}",
                     tmp.display()
-                )
-            })?;
+                );
+            }
             Ok(())
         }
         Err(_) => {
@@ -397,7 +408,7 @@ mod tests {
         DATABASE_TOKEN_INVALID, bool_flag_from_env_value, check_signing_key_permissions,
         create_snapshot_output, database_token_from_env_value, ensure_audit_not_empty,
         ensure_include_reasons_allowed, parse_args_from, publish_snapshot_atomic,
-        resolve_database_url,
+        publish_snapshot_atomic_with, resolve_database_url,
     };
     use common::env::{EnvValue, classify};
     use server::DatabaseUrlError;
@@ -733,6 +744,24 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "staging file must be gone: {leftovers:?}"
+        );
+
+        // hard_link 公開成功後に staging 削除が失敗しても Ok(()) を返すこと。
+        // 削除関数を差し替えて決定的に失敗を注入し、公開自体は成功扱いになることを検証する。
+        // ログへは staging パスのみを出し、値や CID はエコーしない契約。
+        let injected = std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "injected staging removal failure",
+        );
+        let published_with_failed_cleanup = dir.child("published-with-failed-cleanup.json");
+        publish_snapshot_atomic_with(&path_str(&published_with_failed_cleanup), b"atomic", |_| {
+            Err(injected)
+        })
+        .expect("staging removal failure must not fail an already published snapshot");
+        assert_eq!(
+            std::fs::read(&published_with_failed_cleanup).expect("read published"),
+            b"atomic",
+            "publication must remain visible despite staging cleanup failure"
         );
     }
 

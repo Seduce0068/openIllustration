@@ -31,12 +31,27 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await page.goto('/');
     const loginButton = page.getByRole('button', { name: 'CONNECT WITH JPKI' });
 
+    // R2-CLIENT-LOGIN-GUARD: 二重クリックで /auth/login と /auth/verify が
+    // 1本ずつかを記録する（既存ケース内のみ、新規 test() なし）。
+    // 1回目のクリックで文言が VERIFYING... へ変わるため、2回目は名前依存しない
+    // 安定セレクタ（lang + aria-busy）で同じボタンを直接指定する。
+    const loginButtonDom = page.locator('button[lang="en"][aria-busy]');
+    let loginRequests = 0;
+    let verifyRequests = 0;
+    page.on('request', request => {
+      if (request.url().includes('/auth/login')) loginRequests += 1;
+      if (request.url().includes('/auth/verify')) verifyRequests += 1;
+    });
+
     // 固定スリープではなく、インターセプトした 403 レスポンスの完了を待つ。
     const rejected = page.waitForResponse(
       response => response.url().includes('/auth/verify') && response.status() === 403,
       { timeout: 10000 }
     );
-    await loginButton.click();
+    // 2回の click イベントを連続で発火させ、disabled の DOM 反映より前に
+    // claim_submission が2回目を止めることを確認する。
+    await loginButtonDom.dispatchEvent('click');
+    await loginButtonDom.dispatchEvent('click');
 
     // R2-CLIENT-LOGIN-BUSY: 送信中はボタンが disabled / aria-busy=true になり、
     // 専用の role=status が日本語の進捗を告知する（lang="ja" を明示）。
@@ -62,6 +77,10 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(loginError).toHaveAttribute('lang', 'ja');
     await expect(loginError).toHaveText('認証に失敗しました (HTTP 403).');
     await expect(loginButton).toBeEnabled();
+
+    // 二重送信ガード: /auth/login と /auth/verify はいずれも1本だけ。
+    expect(loginRequests).toBe(1);
+    expect(verifyRequests).toBe(1);
 
     await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
   });

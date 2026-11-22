@@ -121,6 +121,31 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(page.locator('[data-testid="content-load-error"][role="alert"]')).toBeVisible();
     await expect(page.getByTestId('content-load-error')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('content-load-error')).toHaveText('Content Load Failed');
+
+    // 追加フェーズ: 検証待ちスパンの role=status / aria-live / lang を既存検証フロー内で検証する。
+    // 本文レスポンスを遅延させ、verified === None の表示を確実に捕捉する（既存 test 内のみ）。
+    invalidUtf8Phase = false;
+    loadFailedPhase = false;
+    await page.unroute(`**/content/${MOCK_CID}`);
+    await page.route(`**/content/${MOCK_CID}`, async route => {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/markdown',
+        headers: {
+          'x-forensic-checksum': hash,
+          'content-type': 'text/markdown'
+        },
+        body: ORIGINAL_CONTENT
+      });
+    });
+    await page.reload();
+    await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
+    const verifying = page.getByText('Verifying_Integrity...');
+    await expect(verifying).toBeVisible({ timeout: 10000 });
+    await expect(verifying).toHaveAttribute('role', 'status');
+    await expect(verifying).toHaveAttribute('aria-live', 'polite');
+    await expect(verifying).toHaveAttribute('lang', 'en');
   });
 
   test('should detect and block tampered content', async ({ page }) => {

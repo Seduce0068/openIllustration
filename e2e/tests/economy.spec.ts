@@ -220,10 +220,12 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     const transactionsGate = new Promise<void>(resolve => {
       releaseTransactions = resolve;
     });
+    // 同じケース内で 500 → 401 の2フェーズを切り替える（新規 test() は追加しない）。
+    let transactionStatus: 500 | 401 = 500;
     const { error, noTransactions, loading } = await setupLedgerFailurePage(page, async route => {
       await transactionsGate;
       await route.fulfill({
-        status: 500,
+        status: transactionStatus,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'ledger unavailable' }),
       });
@@ -241,6 +243,22 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     // R2-CLIENT-LANG: 日本語の取得失敗文言は error_lang 経由で lang="ja" を明示する。
     await expect(error).toHaveAttribute('lang', 'ja');
     await expect(error).toContainText('取引履歴の取得に失敗しました。');
+    await expect(noTransactions).toHaveCount(0);
+
+    // 401 フェーズ: 同じ Ledger ケース内で再取得し、dedicated role=status の
+    // 「再ログインが必要です。」＋ LOG OUT 案内を検証する（他エラー文言は不変）。
+    transactionStatus = 401;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'LEDGER' }).click();
+    const relogin = page.getByTestId('ledger-relogin');
+    await expect(relogin).toBeVisible();
+    await expect(relogin).toHaveAttribute('role', 'status');
+    await expect(relogin).toHaveAttribute('aria-live', 'polite');
+    await expect(relogin).toHaveAttribute('lang', 'ja');
+    await expect(relogin).toContainText('再ログインが必要です。');
+    await expect(relogin).toContainText('LOG OUT からログアウトし、再度 JPKI でログインしてください。');
+    // 401 では従来の role=alert を出し続けず、dedicated status へ切り替える。
+    await expect(error).toHaveCount(0);
     await expect(noTransactions).toHaveCount(0);
   });
 

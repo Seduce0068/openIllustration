@@ -2160,10 +2160,17 @@ where
     let (error, set_error) = signal(String::new());
 
     let do_login = move |_| {
+        // 同期ガード: DOM の disabled 反映前に届く2回目のクリックもここで止める。
+        // report / vote / favorite と同じ claim_submission + BusyGuard の方針。
+        if !claim_submission(loading.get()) {
+            return;
+        }
         set_loading.set(true);
         set_error.set(String::new());
         let on_success = on_success.clone();
         spawn_local(async move {
+            // 成否いずれの分岐でもスコープ離脱時の Drop で busy を解除する。
+            let _release = BusyGuard(set_loading);
             // 開発用モック認証でも nonce を取得して単回消費のフローを通す。
             // 501（本番認証未実装）は固定文言を出して verify を送らず早期 return する。
             // それ以外の失敗は従来どおり verify を試み、表示するエラーは verify の結果で上書きする。
@@ -3264,7 +3271,7 @@ where
                             </Show>
                         </div>
                     }.into_any(),
-                    None => view! { <span class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
+                    None => view! { <span role="status" aria-live="polite" lang="en" class="text-[10px] text-gray-600 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
                 }}
 
                 // このパネルは画像エリアに重なる non-modal disclosure（non-modal dialog）であり、
@@ -3748,6 +3755,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
 const LEDGER_ERROR: &str = "取引履歴の取得に失敗しました。";
 /// 取得中に dedicated `role=status` で告知する固定文言（既存固定文言は変更しない）。
 const LEDGER_LOADING: &str = "取引履歴を取得しています。";
+/// `/transactions` が 401 のときだけ出す dedicated 固定文言。他のエラー文言は変更しない。
+const LEDGER_UNAUTHORIZED: &str = "再ログインが必要です。";
+/// 401 のときに LOG OUT からの再ログインを案内する dedicated 文言。
+const LEDGER_RELOGIN_HINT: &str = "LOG OUT からログアウトし、再度 JPKI でログインしてください。";
 
 #[component]
 fn Ledger(token: String) -> impl IntoView {
@@ -3785,6 +3796,11 @@ fn Ledger(token: String) -> impl IntoView {
                         set_ledger_error.set(LEDGER_ERROR.to_string());
                     }
                 },
+                // 401 は dedicated 固定文言＋LOG OUT 案内へ切り替える。
+                // 403 / 5xx / ネットワークエラーは従来の取得失敗文言を維持する。
+                Ok(response) if response.status() == 401 => {
+                    set_ledger_error.set(LEDGER_UNAUTHORIZED.to_string());
+                }
                 // HTTP エラー・ネットワークエラー: ステータスや本文、生エラーは出さない。
                 _ => set_ledger_error.set(LEDGER_ERROR.to_string()),
             }
@@ -3803,9 +3819,16 @@ fn Ledger(token: String) -> impl IntoView {
                     {LEDGER_LOADING}
                 </p>
             </Show>
-            <Show when=move || !ledger_error.get().is_empty() fallback=|| ()>
+            <Show when=move || !ledger_error.get().is_empty() && ledger_error.get() != LEDGER_UNAUTHORIZED fallback=|| ()>
                 <p role="alert" data-testid="ledger-error" lang=move || error_lang(&ledger_error.get()) class="text-xs text-red-500 mb-4">
                     {move || ledger_error.get()}
+                </p>
+            </Show>
+            // 401 のときだけ、dedicated role=status で固定文言＋LOG OUT 案内を出す。
+            <Show when=move || ledger_error.get() == LEDGER_UNAUTHORIZED fallback=|| ()>
+                <p data-testid="ledger-relogin" role="status" aria-live="polite"
+                    lang=move || error_lang(LEDGER_UNAUTHORIZED) class="text-xs text-gray-400 mb-4">
+                    {LEDGER_UNAUTHORIZED} {LEDGER_RELOGIN_HINT}
                 </p>
             </Show>
             <div class="border border-white/10 overflow-hidden">

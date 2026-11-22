@@ -256,6 +256,19 @@ fn rollback_safety_copy(
     )
 }
 
+/// 初回復元（safety_copy=None）で公開後の検証に失敗したときのロールバック。
+/// 復元前に target は存在しなかったため、target を削除して復元前の状態へ戻す。
+/// 削除自体が失敗した場合は、その旨（対象パスとエラー）を元のエラーへ併記する。
+fn rollback_initial_restore(failure: String, target: &Path) -> anyhow::Error {
+    match std::fs::remove_file(target) {
+        Ok(()) => anyhow!(failure),
+        Err(error) => anyhow!(
+            "{failure}; additionally failed to remove restored target {}: {error}",
+            target.display()
+        ),
+    }
+}
+
 /// ステージ済みファイルを target へ原子的に置き換える。
 /// rename が失敗した場合は一時ファイルを片付け、safety copy の復元を試み、
 /// その成否を呼び出し側へ返す。一時ファイルの削除に失敗した場合は握り潰さず、
@@ -351,13 +364,14 @@ async fn main() -> anyhow::Result<()> {
     replace_target(&tmp, &target, safety_copy.as_deref())?;
 
     // rename 後の再検証。ここで失敗した場合は safety copy へロールバックする。
+    // 初回復元（safety_copy=None）なら target を削除して復元前の状態へ戻す。
     let (t, m) = match validate_backup(&target).await {
         Ok(result) => result,
         Err(error) => {
             let failure = format!("restored target failed verification: {error}");
             return Err(match safety_copy.as_deref() {
                 Some(copy) => restore_safety_copy(failure, copy, &target),
-                None => anyhow!(failure),
+                None => rollback_initial_restore(failure, &target),
             });
         }
     };
@@ -762,6 +776,42 @@ mod tests {
         assert!(
             !tmp.exists(),
             "staging file must be cleaned up on rename failure"
+        );
+
+        // 初回復元（safety_copy=None）で公開後検証が失敗した場合は、
+        // 公開した target を削除して復元前の状態（不存在）へ戻す。
+        let restored = dir.path("restored.db");
+        std::fs::write(&restored, b"published").expect("write restored target");
+        let error = rollback_initial_restore(
+            "restored target failed verification: injected".to_string(),
+            &restored,
+        );
+        assert!(
+            !restored.exists(),
+            "initial restore rollback must remove the published target"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("restored target failed verification"),
+            "{error:#}"
+        );
+
+        // 削除自体が失敗した場合はその旨をエラーへ併記する（target をディレクトリ化）。
+        let stubborn = dir.path("stubborn.db");
+        std::fs::create_dir(&stubborn).expect("make target a directory to break removal");
+        let error = rollback_initial_restore(
+            "restored target failed verification: injected".to_string(),
+            &stubborn,
+        );
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("additionally failed to remove restored target"),
+            "{message}"
+        );
+        assert!(
+            message.contains(&stubborn.display().to_string()),
+            "{message}"
         );
     }
 

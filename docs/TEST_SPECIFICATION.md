@@ -2227,3 +2227,28 @@ tests148 → tests150 へ追随し、E2E69件 / check23 / doctor54 / migrations1
 新規テスト関数は追加しない（既存テスト内への回帰追加のみ）。doc→code テスト名
 照合値は tests150 のまま、E2E69件 / check23 / doctor54 / migrations14 も不変
 （履歴記載の数値は変更しない）。
+
+## R2-CLIENT（第3次）の受け入れ契約（2026-11-23）
+
+1. **検証待ちの告知と言語宣言**: `ContentViewer` の `Verifying_Integrity...` スパンへ
+   `role="status"` / `aria-live="polite"` / `lang="en"` を付与する。固定文言と
+   `data-testid` は変更せず、`integrity.spec.ts` の既存検証フロー内で本文応答を
+   遅延させて3属性を検証する。
+2. **取引履歴の401専用告知**: `GET /transactions` が401のときだけ dedicated
+   固定文言 `再ログインが必要です。` と
+   `LOG OUT からログアウトし、再度 JPKI でログインしてください。` を
+   `data-testid="ledger-relogin"` の `role="status"`（`aria-live="polite"`、
+   `lang="ja"`）で表示する。403 / 5xx / ネットワークエラーは従来の
+   `ledger-error`（`role="alert"`、`取引履歴の取得に失敗しました。`）を維持する。
+   `economy.spec.ts` の既存 Ledger ケース内へ 500 → 401 の2フェーズを追加する。
+3. **ログインの二重送信ガード**: `do_login` に report / vote / favorite と同じ
+   `claim_submission` と `BusyGuard` を適用し、DOM の disabled 反映前に届く
+   2回目のクリックを同期で止める。既存の固定文言・進捗 status は変更しない。
+   `auth.spec.ts` の既存送信中ケース内で2回の click イベントを発火させ、
+   `/auth/login` と `/auth/verify` が1本ずつであることを検証する。
+4. **web-sys の Url feature 明示**: `client/Cargo.toml` の `web-sys` features へ
+   `"Url"` を明示追加し、推移依存の feature unification に依存しないようにする。
+   既存 feature とバージョンは変更しない。
+
+いずれも既存 E2E ケース内へのアサーション追加のみで、新規 `test()` は追加しない。
+E2E69件 / check23 / doctor54 / migrations14 の数値は不変。
