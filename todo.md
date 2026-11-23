@@ -786,6 +786,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第64ラウンド（ADR完了後3回目review/discovery）: 全7担当完了。
+  高は0件、R6 で medium を中心に是正: TimeoutLayerをobserve_metrics内側へ移動し
+  408をHTTPメトリクスへ計上、CI extra_gatesの&&連鎖を分離（npm ci失敗の黙飲み防止）、
+  web-sys featuresへWindow/Document/EventTarget明示、common chronoを
+  default-features=false化（wasmのclock系依存除外）、Runbook/テストを
+  オフサイト3点世代対（.audit-root/.db.gpg/.db.gpg.asc）記述へ更新。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、npm audit3lockfile、markdownlint39ファイル）。
+  残存（次ラウンド: retry_status二重アナウンス、再試行フィードバック、nav landmark名、
+  タブbutton→a、error_lang中国語判定、ci-extra-gates抽出、globalSetup認証済み画面、
+  RuntimeConfig一括化、OIDC初回登録403/501、restore原子的ロールバック、
+  unpin補償メトリクス、Vote disabled理由、公開集計鮮度警告、E2Eコメント行番号、
+  5秒スリープ、gpg前提README、Prometheus scrape、カードタッチ目標24px、
+  監査初期フォーカス、HANDOFF履歴、DOCUMENT_STATUS ADR反映、
+  url_decode不正percentテスト、ui_errorテスト仕様化）は記録のみで保留。
+
 - 2026-11-23 コンボ第63ラウンド（ADR完了後2回目review/discovery）: 全7担当完了。
   R6 で以下を是正: 【high】ui_errorがサーバ側ホワイトリストで全件400拒否されていた問題
   （ui_error受理+専用カウンタopenillustration_client_ui_errors_total+回帰テスト）、

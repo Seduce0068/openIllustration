@@ -100,7 +100,8 @@ jobs:
         ln -sf "$(basename "$betterleaks_bin")" "${tool_cache_dir}/betterleaks"
         export PATH="${tool_cache_dir}:${PATH}"
         echo "betterleaks cache_hit=${betterleaks_hit}"
-        command -v betterleaks && betterleaks --version
+        command -v betterleaks
+        betterleaks --version
         case "${{ github.event_name }}" in
           pull_request)
             scan_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
@@ -124,7 +125,8 @@ jobs:
         else
           betterleaks git . --redact --config .betterleaks.toml
         fi
-        npm ci --ignore-scripts --no-fund && npx markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
+        npm ci --ignore-scripts --no-fund
+        npx --no-install markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。
         # いずれも devDependency で本番ランタイムへは入らない。
         npm audit --audit-level=high

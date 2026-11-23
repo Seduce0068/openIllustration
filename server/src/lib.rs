@@ -3697,53 +3697,53 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let request_timeout_secs =
         request_timeout_secs_from_env(common::env::read_env("REQUEST_TIMEOUT_SECS"));
 
-    let app = common_layers(
-        Router::new()
-            .route("/auth/login", post(auth_login))
-            .route("/auth/verify", post(auth_verify))
-            .route("/auth/oidc/start", get(oidc::start))
-            .route("/auth/oidc/callback", get(oidc::callback))
-            .route("/auth/refresh", post(oidc::refresh))
-            .route("/auth/logout", post(logout))
-            .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
-            .route("/content", get(list_contents))
-            .route("/content/upload", post(upload_content))
-            .route("/transactions", get(list_transactions))
-            .route("/mod/report", post(mod_report))
-            .route("/mod/reports", get(list_reports))
-            .route("/mod/reports/{report_id}/finalize", post(finalize_report))
-            .route("/mod/operators/{user_hash}/ban", post(ban_user))
-            .route("/mod/operators/{user_hash}/unban", post(unban_user))
-            .route("/mod/content/{cid}/unpin", post(record_unpin))
-            .route("/mod/vote", post(mod_vote))
-            .route("/mod/stats", get(mod_stats))
-            .route("/mod/stats/public", get(public_mod_stats))
-            .route("/content/{cid}", get(get_content))
-            .route("/content/{cid}/audit", get(get_content_audit))
-            .route(
-                "/content/{cid}/favorite",
-                post(add_favorite).delete(remove_favorite),
-            )
-            .route("/content/{cid}/support", post(support_creator))
-            .route("/payments/orders", post(payments::create_order))
-            .route("/payments/orders/{order_id}", get(payments::get_order))
-            .route(
-                "/payments/orders/{order_id}/bind",
-                post(payments::bind_wallet),
-            )
-            .route(
-                "/payments/orders/{order_id}/verify",
-                post(payments::verify_order),
-            )
-            .route("/metrics/client-events", post(client_events))
-            .route("/policy/age", get(get_age_policy))
-            .route("/me/export", get(export::me_export)),
-    )
-    // ADR-0013 P4: 監視パスを除く全リクエストにREQUEST_TIMEOUT_SECS（既定30秒）を適用。
-    .layer(TimeoutLayer::with_status_code(
+    let app = Router::new()
+        .route("/auth/login", post(auth_login))
+        .route("/auth/verify", post(auth_verify))
+        .route("/auth/oidc/start", get(oidc::start))
+        .route("/auth/oidc/callback", get(oidc::callback))
+        .route("/auth/refresh", post(oidc::refresh))
+        .route("/auth/logout", post(logout))
+        .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
+        .route("/content", get(list_contents))
+        .route("/content/upload", post(upload_content))
+        .route("/transactions", get(list_transactions))
+        .route("/mod/report", post(mod_report))
+        .route("/mod/reports", get(list_reports))
+        .route("/mod/reports/{report_id}/finalize", post(finalize_report))
+        .route("/mod/operators/{user_hash}/ban", post(ban_user))
+        .route("/mod/operators/{user_hash}/unban", post(unban_user))
+        .route("/mod/content/{cid}/unpin", post(record_unpin))
+        .route("/mod/vote", post(mod_vote))
+        .route("/mod/stats", get(mod_stats))
+        .route("/mod/stats/public", get(public_mod_stats))
+        .route("/content/{cid}", get(get_content))
+        .route("/content/{cid}/audit", get(get_content_audit))
+        .route(
+            "/content/{cid}/favorite",
+            post(add_favorite).delete(remove_favorite),
+        )
+        .route("/content/{cid}/support", post(support_creator))
+        .route("/payments/orders", post(payments::create_order))
+        .route("/payments/orders/{order_id}", get(payments::get_order))
+        .route(
+            "/payments/orders/{order_id}/bind",
+            post(payments::bind_wallet),
+        )
+        .route(
+            "/payments/orders/{order_id}/verify",
+            post(payments::verify_order),
+        )
+        .route("/metrics/client-events", post(client_events))
+        .route("/policy/age", get(get_age_policy))
+        .route("/me/export", get(export::me_export));
+
+    // ADR-0013 P4: 監視パスを除く全リクエストへ REQUEST_TIMEOUT_SECS（既定30秒）を適用する。
+    // observe_metrics の内側（ルート直近）へ積むことで 408 短絡もカウンタへ計上される。
+    let app = common_layers(app.layer(TimeoutLayer::with_status_code(
         StatusCode::REQUEST_TIMEOUT,
         Duration::from_secs(request_timeout_secs),
-    ));
+    )));
 
     // 監視パスは同じ共通ミドルウェアを通すが TimeoutLayer は積まない。
     let monitoring = common_layers(

@@ -267,7 +267,7 @@ else
 	failures=$((failures + 1))
 fi
 
-echo "=== オフサイト 2回コピーの順序と部分失敗（ADR-0013 P2）==="
+echo "=== オフサイト 3点コピーの順序と部分失敗（ADR-0013 P2）==="
 # 呼び出し順をファイル名で記録するコピースタブ。
 cat >"${work}/order-copy.sh" <<'EOF'
 #!/usr/bin/env bash
