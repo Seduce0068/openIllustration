@@ -9,7 +9,7 @@ use server::{
     max_concurrent_requests, mock_auth_with_production_config_error, moderation_finalize_interval,
     oidc_http_timeout, policy_utc_offset_hours, production_allowed_origins_error,
     production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
-    validate_jwt_secret, validate_oidc_config_with,
+    resolve_bind_addr, validate_jwt_secret, validate_oidc_config_with,
 };
 
 fn print_help() {
@@ -160,6 +160,13 @@ where
     // `[[ -n "$var" ]]` と一致させる。ALERT_CMD は実行ファイルのパスなので生値のまま
     // `-x "$alert_cmd"` 相当を調べ、値は出力しない。
     if !allow_mock_auth {
+        // BIND_ADDR / PORT は run() と同じ resolve_bind_addr で検証する（check23 維持）。
+        if let Err(warning) = resolve_bind_addr(
+            common::env::read_env("BIND_ADDR"),
+            common::env::read_env("PORT"),
+        ) {
+            production.push(warning.to_string());
+        }
         // DATABASE_URL の必須化もサーバー起動判定と同じ共通判定で診断する。
         // results.push は増やさず production カテゴリ内へマージする（check23 維持）。
         // 非 UTF-8 は classify が NonUtf8 へ変換し、固定文言のみを警告する（値は非エコー）。

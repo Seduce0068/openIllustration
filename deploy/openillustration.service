@@ -1,0 +1,35 @@
+[Unit]
+Description=OpenIllustration API server
+Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+# アプリ本体の unit テンプレート（ADR-0013 P1「アプリ systemd unit テンプレート」）。
+# 配置時に /etc/systemd/system/openillustration.service へコピーし、以下を実環境へ
+# 合わせること: User/Group、ExecStart のバイナリパス、EnvironmentFile の所有者と権限。
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openIllustration
+User=openillustration
+Group=openillustration
+# 秘密情報（JWT_SECRET / PINATA_JWT / 決済鍵 等）は環境ファイルからのみ注入する。
+# 配置前に /etc/openillustration/server.env が所有者 openillustration・権限 0600
+# であることを確認すること（0600 必須。緩い権限では配置しない）。
+EnvironmentFile=/etc/openillustration/server.env
+# リポジトリに同梱した migrations の絶対パスを明示する（ADR-0013 P1）。
+# サーバー側の MIGRATIONS_DIR override が有効なときに参照される。
+# 開発フォールバック（CARGO_MANIFEST_DIR）に依存させないため、本番では必ず設定する。
+Environment=MIGRATIONS_DIR=/opt/openIllustration/migrations
+# 起動時に作られる一時ファイルの既定権限を 0600 に制限する。
+UMask=0077
+# 設定不正による起動拒否を無限リトライしないため、失敗時のみ再起動する。
+Restart=on-failure
+RestartSec=5
+ExecStart=/opt/openIllustration/target/release/server
+# SIGTERM で graceful drain するため、drain 上限（GRACEFUL_DRAIN_TIMEOUT_SECS
+# 最大300秒）より大きく設定する。既定90秒では drain 完了前に kill される。
+TimeoutStopSec=330
+SyslogIdentifier=openillustration
+
+[Install]
+WantedBy=multi-user.target

@@ -327,6 +327,11 @@ generated:
   `security_headers` は `CorsLayer` の内側に加えてさらに外側にも置く。CORS プリフライト（OPTIONS 204）は
   `CorsLayer` で短絡して内側を通らないため、外側の層が無いとヘッダーが落ちる。
   429 / 403 / 500 / 204 とプリフライト応答を含む全経路でヘッダーが付くことをゲートで確認する。
+- HSTS（`Strict-Transport-Security`）は TLS 終端プロキシが責任を持つ。**アプリ側は付与しない**。
+  終端とアプリの双方が付与すると `max-age` の矛盾や preload list への誤登録を招くため、
+  本番ではリバースプロキシ / ロードバランサー側で `max-age`・`includeSubDomains`・`preload`
+  を設定し、`ALLOWED_ORIGINS` / `OIL_API_BASE` の HTTPS オリジンと整合することを確認する。
+  手順の前提は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) にも記載する。
 - 同時リクエスト上限 `MAX_CONCURRENT_REQUESTS`（既定16・範囲1〜256・超過は429）は、IP 単位の
   レート制限とは別の同時実行境界である。permit はレスポンス完了時に解放され、長時間ハンドラが
   permit を保持している間は後続リクエストが 429 になる。値を下げるとバースト時の 429 が増え、
@@ -520,6 +525,12 @@ generated:
 本番移行には、実JPKI認証の独立検証、JPYC取引確認と手数料・失敗時運用、第三者検証可能な監査、プライバシー・法務レビュー、モデレーション承認、IPFS削除/通報対応、DB復旧訓練、環境別設定とセキュリティ試験を必要とする。
 本書の記載だけで法令適合を保証しない。
 
+- ホスト時刻同期（NTP / chrony 等）は**本番デプロイの必須前提**とする。監査ログの
+  `generated_at` / `iat`、JWT 有効期限、バックアップ世代名（`stat -c %Y`）が
+  ホスト時刻に依存するため、同期状態と時刻偏移量が未確認のホストへデプロイしない。
+  時刻偏移量を `doctor` の production カテゴリで警告する方針は
+  [ADR-0013](adr/ADR-0013-deferred-decisions.md) P1 に記録済み（閾値は設定可能、
+  サーバー側の実装は別途調整）。
 - 性能（PERF-01）と互換性（COMPAT-01 / COMPAT-02）の **Level 1（受入）** も本番移行の
   ブロッカーに含める。Level 1 は
   [ADR-0011](adr/ADR-0011-performance-measurement.md) と
@@ -543,6 +554,9 @@ generated:
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。`add_verification_key` は引数 `kid` と`kid_from_public_pem`（SPKI DER の SHA-256 先頭16バイト）の導出値を照合し、不一致なら登録を拒否する。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
+| `MIGRATIONS_DIR` | 任意（本番は明示推奨） | 未設定（./migrations 等を探索） | マイグレーション SQL 配置ディレクトリ（絶対パス必須）。存在・.read・001 からの連番を fail-closed 検証。`deploy/openillustration.service` では `/opt/openIllustration/migrations` を設定。 |
+| `BIND_ADDR` | 任意 | `::`（全インターフェース） | 待ち受け IP。不正・非 UTF-8 は起動拒否（値は非エコー）。doctor の production カテゴリでも診断。 |
+| `PORT` | 任意 | `3000` | 待ち受けポート（1024..=65535）。特権ポート・範囲外は起動拒否（値は非エコー）。doctor の production カテゴリでも診断。 |
 | `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`--database-token` は7つの運用CLIすべてが拒否するが、`DATABASE_TOKEN` 環境変数を使用するのは`backup_db` / `sign_audit_export` / `verify_audit_log` の3CLIのみ。`restore_db`（ローカルDBのみ）と`verify_backup` / `verify_audit_export`（DB非接続）はトークン自体を使わない。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り。開発 mock 時は有効な `http(s)://` のみ、本番相当では `https://` で始まり userinfo / path / query / loopback を含まないオリジンのみ。末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `https` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、実パーサは `is_production_https_origin`（`client` の `is_https_non_local_origin` と同基準）を共有する。`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。読取は `common::env::read_env` に一本化し、未設定と `json` / `text`（大小文字不問）のみ受理。タイポ・非 UTF-8 は固定文言 `LOG_FORMAT must be json or text; using text (invalid value)` の警告のうえテキスト形式へフォールバックし、`doctor` の `production` カテゴリが同じ判定で `--strict` の警告対象にする（値・生バイトはエコーしない）。 |
@@ -594,7 +608,7 @@ generated:
 | `BACKUP_GPG_RECIPIENT` | 本番では必須 | 未設定 | GPG 公開鍵のメール/ID。設定時にバックアップを GPG 暗号化する。未設定時は平文作成を拒否（fail-closed）。gpg（または `GPG_BIN`）不在時も失敗する。 |
 | `AUDIT_EXPECT_ROOT` | 本番起動必須（開発 mock 時のみ任意） | 未設定 | 別経路で保存した監査 Merkle root（hex、非機微）。設定時は `backup-rotate.sh` が `verify_audit_log --expect-root` へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・不正 hex（空・空白のみ・前後空白付きを含む）を固定文言で起動拒否（fail-closed、値・バイトはエコーしない）。判定は共有ヘルパ `production_audit_expect_root_error` が担い、DB 接続・マイグレーション・instance.lock・FK 検査より前に検証する。`doctor` は同じ判定を `audit_expect_root` カテゴリの固定文言警告へ反映する（値は非エコー、既定は警告のみで `--strict` のときだけ失敗）。`backup-rotate.sh` 自体は未設定時も内部整合性チェックのみで動作する従来契約を維持し、verify_audit_log / verify_audit_export の双方で root 値はエラー文言へエコーしない。監査ログ更新時は `verify_audit_log` の計算 root を `<prefix>-<stamp>.audit-root`（0600）へ世代保存し、成果物と同じ stamp 名で公開する（暗号化時も同じ世代名、root 値は stdout/stderr/ALERT 非エコー）。次回期待値への昇格は運用者明示承認の手作業で自動上書きしない。リストア時は復元対象世代に紐付いた root を `--expect-root` に渡す。 |
 | `BACKUP_ENV_FILE` | 任意 | `/etc/openillustration/backup.env` | cron 版は `backup-cron-wrapper.sh` がこのパスを読む。systemd 版はこの変数を使わず、`EnvironmentFile=` の固定パス（同パス）から読む。権限600・所有者固定、秘密情報は配布物へ含めない。 |
-| `APP_UNIT` | 任意（systemd 窓 unit） | `openillustration.service` | `deploy/openillustration-backup-window.service` が停止/起動するアプリ unit 名。`deploy/` にはアプリ unit を置いていないため、導入環境の実 unit 名へ drop-in 等で上書きする。バックアップ失敗時も `ExecStopPost` が起動を保証する。 |
+| `APP_UNIT` | 任意（systemd 窓 unit） | `openillustration.service` | `deploy/openillustration-backup-window.service` が停止/起動するアプリ unit 名。`deploy/openillustration.service` を同梱しているため、導入環境の実 unit 名と一致することを確認する。バックアップ失敗時も `ExecStopPost` が起動を保証する。 |
 | `BACKUP_DIR` | 任意 | リポジトリルートの `backups/` | バックアップ出力先。deploy 設定例では `/var/backups/openillustration`。事前に存在させ、権限を適切に設定する。 |
 | `BIN_DIR` | 任意 | リポジトリルートの `target/debug` | `backup_db` / `verify_backup` / `verify_audit_log` のあるディレクトリ。無ければ `cargo run` へフォールバック（開発用）。本番はビルド済みパスを指定。 |
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |

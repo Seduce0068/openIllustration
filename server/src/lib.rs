@@ -118,6 +118,42 @@ use uuid::Uuid;
 /// `/metrics/client-events` が受け付けるリクエストボディの上限（1 KiB）。
 const MAX_CLIENT_EVENT_BODY_BYTES: usize = 1024;
 
+/// `BIND_ADDR` 未設定時の既定ポート。現行の `[::]:3000` と等価。
+const DEFAULT_BIND_PORT: u16 = 3000;
+/// 特権ポート（<1024）は起動拒否する。
+const MIN_NON_PRIVILEGED_PORT: u16 = 1024;
+/// `BIND_ADDR` が不正なときの固定文言（値・生バイトはエコーしない）。
+pub const BIND_ADDR_INVALID: &str = "BIND_ADDR is not a valid IP address; refusing to start";
+/// `PORT` が不正・特権・範囲外のときの固定文言（値・生バイトはエコーしない）。
+pub const PORT_INVALID: &str = "PORT must be a port number in 1024..=65535; refusing to start";
+
+/// `BIND_ADDR` / `PORT` を起動時に fail-closed で解決する単一情報源。
+///
+/// `common::env::read_env` の分類結果をそのまま受け、未設定なら `[::]:3000`、
+/// 非 UTF-8・不正 IP・不正/特権/範囲外ポートなら固定文言の `Err` を返す。
+/// 値や生バイトはエラーへ含めない。
+pub fn resolve_bind_addr(
+    bind: common::env::EnvValue,
+    port: common::env::EnvValue,
+) -> Result<SocketAddr, &'static str> {
+    let ip = match bind {
+        common::env::EnvValue::Missing => std::net::IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED),
+        common::env::EnvValue::Utf8(value) => value
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| BIND_ADDR_INVALID)?,
+        common::env::EnvValue::NonUtf8 => return Err(BIND_ADDR_INVALID),
+    };
+    let port = match port {
+        common::env::EnvValue::Missing => DEFAULT_BIND_PORT,
+        common::env::EnvValue::Utf8(value) => value.parse::<u16>().map_err(|_| PORT_INVALID)?,
+        common::env::EnvValue::NonUtf8 => return Err(PORT_INVALID),
+    };
+    if port < MIN_NON_PRIVILEGED_PORT {
+        return Err(PORT_INVALID);
+    }
+    Ok(SocketAddr::new(ip, port))
+}
+
 /// SHA-256 を小文字 64-hex 文字列へ変換する。
 /// 旧 `sha256` 便宜 crate を削除し、`sha2` + `hex` の直接利用へ置換する。
 pub(crate) fn sha256_hex(data: impl AsRef<[u8]>) -> String {
@@ -135,6 +171,11 @@ pub struct AppState {
     /// 500系レスポンスの内部詳細を公開するか。起動時に `EXPOSE_INTERNAL_ERRORS` を
     /// 解釈した値だけを保持し、リクエスト処理では環境変数を再読しない。
     pub expose_internal_errors: bool,
+    /// `PINATA_JWT` の起動時解決済み値。本番相当の実トークンのみを `Some` で保持し、
+    /// 未設定・非 UTF-8・空白のみ・開発用 `mock_jwt` は `None`（モック経路）へ倒す。
+    /// 判定は doctor / `production_config_errors` と同じ `pinata_jwt_production_error`
+    /// を共有し、リクエスト処理では環境変数を再読しない。
+    pub pinata_jwt: Option<String>,
     /// IPFS ゲートウェイの URL テンプレート。`{cid}` を CID で置換する。
     /// 空の場合は取得を試みず、常に失敗する。
     pub ipfs_gateways: Vec<String>,
@@ -221,21 +262,33 @@ pub struct RateLimitState {
     pub concurrency: Arc<tokio::sync::Semaphore>,
 }
 
+/// 数値系 env の受理範囲。起動時警告（`numeric_env_value_in_range`）と実パーサが
+/// 同じ定数を参照し、片方だけの変更で境界がずれることを防ぐ（単一情報源）。
+const RATE_LIMIT_PER_MIN_BOUNDS: (u32, u32) = (1, 600);
+const MAX_CONCURRENT_REQUESTS_BOUNDS: (usize, usize) = (1, 256);
+const IPFS_TIMEOUT_BOUNDS: (u64, u64) = (1, 300);
+const IPFS_MAX_ATTEMPTS_BOUNDS: (usize, usize) = (1, 5);
+const OIDC_HTTP_TIMEOUT_BOUNDS: (u64, u64) = (1, 60);
+const GRACEFUL_DRAIN_TIMEOUT_BOUNDS: (u64, u64) = (1, 300);
+const MODERATION_FINALIZE_INTERVAL_BOUNDS: (u64, u64) = (30, 3600);
+
 /// `RATE_LIMIT_PER_MIN` を解析する。未設定・不正値・範囲外は既定の 60/分。
 pub fn rate_limit_per_min(env_value: Option<&str>) -> u32 {
     const DEFAULT: u32 = 60;
+    let (min, max) = RATE_LIMIT_PER_MIN_BOUNDS;
     env_value
         .and_then(|value| value.parse::<u32>().ok())
-        .filter(|n| (1..=600).contains(n))
+        .filter(|n| (min..=max).contains(n))
         .unwrap_or(DEFAULT)
 }
 
 /// `MAX_CONCURRENT_REQUESTS` を解析する。未設定・不正値・範囲外は既定の 16。
 pub fn max_concurrent_requests(env_value: Option<&str>) -> usize {
     const DEFAULT: usize = 16;
+    let (min, max) = MAX_CONCURRENT_REQUESTS_BOUNDS;
     env_value
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|n| (1..=256).contains(n))
+        .filter(|n| (min..=max).contains(n))
         .unwrap_or(DEFAULT)
 }
 
@@ -257,6 +310,47 @@ pub fn numeric_env_value<'a>(
         common::env::EnvValue::Utf8(raw) => (Some(raw.as_str()), None),
         common::env::EnvValue::Missing => (None, None),
         common::env::EnvValue::NonUtf8 => (None, Some(numeric_env_non_utf8_warning(name))),
+    }
+}
+
+/// [`numeric_env_value`] を範囲付きで拡張し、NonUtf8 に加えて
+/// 「正規化後の値が入力と一致しない」（typo・前後空白・範囲外）も検出する。
+///
+/// 警告にはキー名と受理範囲だけを含め、入力値・正規化後の値・生バイトは
+/// 一切エコーしない。doctor が個別に行っている「生のパース値 vs 正規化後の値」
+/// 比較を `run()` 側へ集約する共通判定（doctor.rs は担当外のためまず run() のみ）。
+pub fn numeric_env_value_in_range<'a, T>(
+    name: &str,
+    value: &'a common::env::EnvValue,
+    min: T,
+    max: T,
+) -> (Option<&'a str>, Option<String>)
+where
+    T: Copy + PartialOrd + std::str::FromStr + std::fmt::Display,
+{
+    let (input, non_utf8_warning) = numeric_env_value(name, value);
+    if non_utf8_warning.is_some() {
+        return (input, non_utf8_warning);
+    }
+    let Some(raw) = input else {
+        return (None, None);
+    };
+    // 受理範囲内の数値へ正規化した文字列が入力と一致しないなら、
+    // タイポ・前後空白・範囲外のいずれかとして固定文言で警告する。
+    let normalized = raw
+        .parse::<T>()
+        .ok()
+        .filter(|parsed| *parsed >= min && *parsed <= max)
+        .map(|parsed| parsed.to_string());
+    if normalized.as_deref() == Some(raw) {
+        (input, None)
+    } else {
+        (
+            input,
+            Some(format!(
+                "{name} is invalid or outside {min}..={max}; using default"
+            )),
+        )
     }
 }
 
@@ -984,13 +1078,41 @@ pub fn log_format_state(value: common::env::EnvValue) -> LogFormatState {
     }
 }
 
+/// `RUST_LOG` が不正だったときの固定警告（値・生バイトは一切含めない）。
+pub const RUST_LOG_INVALID_WARNING: &str =
+    "RUST_LOG is not a valid filter directive; using the default filter (info; value redacted)";
+
+/// `common::env::EnvValue` を `RUST_LOG` の EnvFilter と固定警告へ変換する。
+///
+/// `EnvFilter::try_from_default_env()` を直接呼ばず、`read_env` / `classify` の
+/// 分類結果を受け取る。未設定は既定 `info`、非 UTF-8・空・不正フィルタは
+/// 固定文言の警告を添えて既定 `info` へフォールバックする。
+/// 値や生バイトは保持・出力しない。
+pub fn rust_log_filter(
+    value: &common::env::EnvValue,
+) -> (tracing_subscriber::EnvFilter, Option<&'static str>) {
+    let default = || tracing_subscriber::EnvFilter::new("info");
+    match value {
+        common::env::EnvValue::Missing => (default(), None),
+        common::env::EnvValue::NonUtf8 => (default(), Some(RUST_LOG_INVALID_WARNING)),
+        common::env::EnvValue::Utf8(raw) => {
+            if raw.trim().is_empty() {
+                return (default(), Some(RUST_LOG_INVALID_WARNING));
+            }
+            match tracing_subscriber::EnvFilter::try_new(raw) {
+                Ok(filter) => (filter, None),
+                Err(_) => (default(), Some(RUST_LOG_INVALID_WARNING)),
+            }
+        }
+    }
+}
+
 /// `RUST_LOG` でフィルタ可能なログ subscriber を初期化する。未設定時は INFO。
 /// タイムスタンプは RFC 3339 (UTC)。
-/// `LOG_FORMAT` は `common::env::read_env` で一度だけ読み、未設定 / `json` / `text`
-/// のみを受理する。タイポ・非 UTF-8 は固定文言の警告のうえテキスト形式へフォールバックする。
+/// `RUST_LOG` / `LOG_FORMAT` は `common::env::read_env` で一度だけ読み、
+/// 不正値は固定文言の警告のうえ既定（info / テキスト形式）へフォールバックする。
 fn init_tracing() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let (filter, rust_log_warning) = rust_log_filter(&common::env::read_env("RUST_LOG"));
     let log_format = log_format_state(common::env::read_env("LOG_FORMAT"));
     if log_format == LogFormatState::Json {
         tracing_subscriber::fmt()
@@ -1007,6 +1129,9 @@ fn init_tracing() {
             .init();
     }
     // subscriber 初期化後に出す（初期化前の warn! は捨てられるため）。
+    if let Some(warning) = rust_log_warning {
+        warn!("{warning}");
+    }
     if log_format == LogFormatState::Invalid {
         warn!("{LOG_FORMAT_INVALID_WARNING}");
     }
@@ -1249,6 +1374,22 @@ where
 /// 値やトークンは保持・出力しない。
 pub fn pinata_jwt_production_like(value: common::env::EnvValue) -> bool {
     pinata_jwt_production_error(&value).is_none()
+}
+
+/// `PINATA_JWT` を起動時に解決し、本番相当の実トークンのみを `Some` で返す。
+///
+/// 判定は `pinata_jwt_production_error`（doctor / `production_config_errors` /
+/// `pinata_jwt_production_like` と同じ単一情報源）へ委譲する。未設定・非 UTF-8・
+/// 空白のみ・開発用 `mock_jwt` は `None`（モック経路）へ倒し、値や生バイトは
+/// 一切保持・出力しない。
+pub fn resolve_pinata_jwt(value: common::env::EnvValue) -> Option<String> {
+    if pinata_jwt_production_error(&value).is_some() {
+        return None;
+    }
+    match value {
+        common::env::EnvValue::Utf8(token) => Some(token),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => None,
+    }
 }
 
 /// `DATABASE_URL` がリモート DSN かを判定する純粋ヘルパ。
@@ -1581,6 +1722,15 @@ fn bool_env_at_startup(name: &str) -> anyhow::Result<bool> {
 pub async fn run() -> anyhow::Result<()> {
     init_tracing();
 
+    // BIND_ADDR / PORT は read_env で一度だけ読み、IpAddr / u16 へ fail-closed に
+    // パースする。未設定は現行の `[::]:3000`、不正値・特権ポート・範囲外は
+    // 固定文言で起動拒否（値はエコーしない）。DB 接触より前に確定させる。
+    let bind_addr = resolve_bind_addr(
+        common::env::read_env("BIND_ADDR"),
+        common::env::read_env("PORT"),
+    )
+    .map_err(anyhow::Error::msg)?;
+
     let allow_mock_auth = bool_env_at_startup("ALLOW_MOCK_AUTH")?;
     // EXPOSE_INTERNAL_ERRORS は起動時に一度だけ解釈し、以降は AppState の注入値だけを
     // 参照する（per-request の環境変数読みは廃止）。不正値は fail-closed で起動拒否する。
@@ -1611,6 +1761,9 @@ pub async fn run() -> anyhow::Result<()> {
     // PINATA_JWT は共通分類器の EnvValue をそのまま production_config_errors へ渡す。
     // 非 UTF-8 は「未設定」として飲まず、同じ固定文言の起動拒否へつなぐ（値はエコーしない）。
     let pinata_jwt_env = common::env::read_env("PINATA_JWT");
+    // 起動時に一度だけ解決して AppState へ保持する（per-request の read_env は廃止）。
+    // doctor と同じ production_config_errors 判定で、実トークンのみ Some となる。
+    let pinata_jwt = resolve_pinata_jwt(pinata_jwt_env.clone());
     // AUDIT_EXPECT_ROOT は PINATA_JWT と同じ設定フェーズで一度だけ読み、
     // 未設定 / 非 UTF-8 を「未設定」と混同しない。hex 検証は共有ヘルパへ委譲する。
     let audit_expect_root_env = common::env::read_env("AUDIT_EXPECT_ROOT");
@@ -1806,13 +1959,23 @@ pub async fn run() -> anyhow::Result<()> {
             ipfs_gateways.len()
         );
     }
-    let (timeout_value, warning) = env_value_for_use("IPFS_TIMEOUT_SECS", &ipfs_timeout_env);
-    if let Some(warning) = warning {
+    let (timeout_value, timeout_warning) = numeric_env_value_in_range(
+        "IPFS_TIMEOUT_SECS",
+        &ipfs_timeout_env,
+        IPFS_TIMEOUT_BOUNDS.0,
+        IPFS_TIMEOUT_BOUNDS.1,
+    );
+    if let Some(warning) = timeout_warning {
         warn!("{warning}");
     }
     let ipfs_timeout = ipfs_timeout(timeout_value);
-    let (attempts_value, warning) = env_value_for_use("IPFS_MAX_ATTEMPTS", &ipfs_attempts_env);
-    if let Some(warning) = warning {
+    let (attempts_value, attempts_warning) = numeric_env_value_in_range(
+        "IPFS_MAX_ATTEMPTS",
+        &ipfs_attempts_env,
+        IPFS_MAX_ATTEMPTS_BOUNDS.0,
+        IPFS_MAX_ATTEMPTS_BOUNDS.1,
+    );
+    if let Some(warning) = attempts_warning {
         warn!("{warning}");
     }
     let ipfs_max_attempts = ipfs_max_attempts(attempts_value);
@@ -1922,14 +2085,22 @@ pub async fn run() -> anyhow::Result<()> {
     } else {
         use std::num::NonZeroU32;
         let rate_limit_env = common::env::read_env("RATE_LIMIT_PER_MIN");
-        let (rate_limit_input, rate_limit_warning) =
-            numeric_env_value("RATE_LIMIT_PER_MIN", &rate_limit_env);
+        let (rate_limit_input, rate_limit_warning) = numeric_env_value_in_range(
+            "RATE_LIMIT_PER_MIN",
+            &rate_limit_env,
+            RATE_LIMIT_PER_MIN_BOUNDS.0,
+            RATE_LIMIT_PER_MIN_BOUNDS.1,
+        );
         if let Some(warning) = rate_limit_warning {
             warn!("{warning}");
         }
         let concurrency_env = common::env::read_env("MAX_CONCURRENT_REQUESTS");
-        let (concurrency_input, concurrency_warning) =
-            numeric_env_value("MAX_CONCURRENT_REQUESTS", &concurrency_env);
+        let (concurrency_input, concurrency_warning) = numeric_env_value_in_range(
+            "MAX_CONCURRENT_REQUESTS",
+            &concurrency_env,
+            MAX_CONCURRENT_REQUESTS_BOUNDS.0,
+            MAX_CONCURRENT_REQUESTS_BOUNDS.1,
+        );
         if let Some(warning) = concurrency_warning {
             warn!("{warning}");
         }
@@ -1947,8 +2118,12 @@ pub async fn run() -> anyhow::Result<()> {
     };
 
     let oidc_timeout_env = common::env::read_env("OIDC_HTTP_TIMEOUT_SECS");
-    let (oidc_timeout_input, oidc_timeout_warning) =
-        numeric_env_value("OIDC_HTTP_TIMEOUT_SECS", &oidc_timeout_env);
+    let (oidc_timeout_input, oidc_timeout_warning) = numeric_env_value_in_range(
+        "OIDC_HTTP_TIMEOUT_SECS",
+        &oidc_timeout_env,
+        OIDC_HTTP_TIMEOUT_BOUNDS.0,
+        OIDC_HTTP_TIMEOUT_BOUNDS.1,
+    );
     if let Some(warning) = oidc_timeout_warning {
         warn!("{warning}");
     }
@@ -1959,6 +2134,8 @@ pub async fn run() -> anyhow::Result<()> {
         jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth,
         expose_internal_errors,
+        // 起動時に解決済みの PINATA_JWT（実トークンのみ Some、値はログへ出さない）。
+        pinata_jwt,
         ipfs_gateways,
         ipfs_timeout,
         ipfs_max_attempts,
@@ -1997,8 +2174,12 @@ pub async fn run() -> anyhow::Result<()> {
     let app = build_router(shared_state);
 
     let finalize_interval_env = common::env::read_env("MODERATION_FINALIZE_INTERVAL_SECS");
-    let (finalize_interval_input, finalize_interval_warning) =
-        numeric_env_value("MODERATION_FINALIZE_INTERVAL_SECS", &finalize_interval_env);
+    let (finalize_interval_input, finalize_interval_warning) = numeric_env_value_in_range(
+        "MODERATION_FINALIZE_INTERVAL_SECS",
+        &finalize_interval_env,
+        MODERATION_FINALIZE_INTERVAL_BOUNDS.0,
+        MODERATION_FINALIZE_INTERVAL_BOUNDS.1,
+    );
     if let Some(warning) = finalize_interval_warning {
         warn!("{warning}");
     }
@@ -2016,12 +2197,17 @@ pub async fn run() -> anyhow::Result<()> {
         },
     ));
 
-    let addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000));
+    // BIND_ADDR / PORT は起動時に fail-closed で解決済み（未設定は `[::]:3000`）。
+    let addr = bind_addr;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("openIllustration Backend listening on {}", addr);
     let drain_timeout_env = common::env::read_env("GRACEFUL_DRAIN_TIMEOUT_SECS");
-    let (drain_timeout_input, drain_timeout_warning) =
-        numeric_env_value("GRACEFUL_DRAIN_TIMEOUT_SECS", &drain_timeout_env);
+    let (drain_timeout_input, drain_timeout_warning) = numeric_env_value_in_range(
+        "GRACEFUL_DRAIN_TIMEOUT_SECS",
+        &drain_timeout_env,
+        GRACEFUL_DRAIN_TIMEOUT_BOUNDS.0,
+        GRACEFUL_DRAIN_TIMEOUT_BOUNDS.1,
+    );
     if let Some(warning) = drain_timeout_warning {
         warn!("{warning}");
     }
@@ -2413,12 +2599,11 @@ pub fn ipfs_gateways(env_value: Option<&str>) -> Vec<String> {
 /// OIDC の token / JWKS 取得が実質無期限にハングするのを防ぐ。
 pub fn oidc_http_timeout(env_value: Option<&str>) -> Duration {
     const DEFAULT_SECS: u64 = 10;
-    const MIN_SECS: u64 = 1;
-    const MAX_SECS: u64 = 60;
+    let (min, max) = OIDC_HTTP_TIMEOUT_BOUNDS;
 
     env_value
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .filter(|secs| (min..=max).contains(secs))
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
@@ -2426,11 +2611,11 @@ pub fn oidc_http_timeout(env_value: Option<&str>) -> Duration {
 /// `IPFS_TIMEOUT_SECS` を解析する。未設定・0・不正値・上限超過は既定の 15 秒。
 /// 上限は、設定ミスでリクエストが実質無期限にハングするのを防ぐ。
 pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
-    const MAX_IPFS_TIMEOUT_SECS: u64 = 300;
+    let (min, max) = IPFS_TIMEOUT_BOUNDS;
 
     env_value
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|secs| (1..=MAX_IPFS_TIMEOUT_SECS).contains(secs))
+        .filter(|secs| (min..=max).contains(secs))
         .map(Duration::from_secs)
         .unwrap_or_else(|| Duration::from_secs(DEFAULT_IPFS_TIMEOUT_SECS))
 }
@@ -2439,10 +2624,10 @@ pub fn ipfs_timeout(env_value: Option<&str>) -> Duration {
 /// 上限は、設定ミスで1リクエストが長時間ハングするのを防ぐ。
 pub fn ipfs_max_attempts(env_value: Option<&str>) -> usize {
     const DEFAULT: usize = 1;
-    const MAX: usize = 5;
+    let (min, max) = IPFS_MAX_ATTEMPTS_BOUNDS;
     env_value
         .and_then(|value| value.parse::<usize>().ok())
-        .filter(|attempts| (1..=MAX).contains(attempts))
+        .filter(|attempts| (min..=max).contains(attempts))
         .unwrap_or(DEFAULT)
 }
 
@@ -2466,11 +2651,10 @@ pub fn moderation_operators(env_value: Option<&str>) -> HashSet<String> {
 /// グレースフル停止の drain タイムアウト（秒）。範囲外・不正値は既定 30 秒へフォールバック。
 pub fn graceful_drain_timeout(env_value: Option<&str>) -> Duration {
     const DEFAULT_SECS: u64 = 30;
-    const MIN_SECS: u64 = 1;
-    const MAX_SECS: u64 = 300;
+    let (min, max) = GRACEFUL_DRAIN_TIMEOUT_BOUNDS;
     env_value
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .filter(|secs| (min..=max).contains(secs))
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
@@ -2478,11 +2662,10 @@ pub fn graceful_drain_timeout(env_value: Option<&str>) -> Duration {
 /// ADR-0004: 自動確定ワーカーの周期（秒）。範囲外・不正値は既定 300 秒へフォールバック。
 pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
     const DEFAULT_SECS: u64 = 300;
-    const MIN_SECS: u64 = 30;
-    const MAX_SECS: u64 = 3600;
+    let (min, max) = MODERATION_FINALIZE_INTERVAL_BOUNDS;
     env_value
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|secs| (MIN_SECS..=MAX_SECS).contains(secs))
+        .filter(|secs| (min..=max).contains(secs))
         .map(Duration::from_secs)
         .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
@@ -5387,19 +5570,12 @@ pub async fn pin_to_ipfs(
     data: Vec<u8>,
     filename: &str,
 ) -> Result<String, AppError> {
-    // production_config_errors / doctor と同じ共通分類器・ヘルパで判定する。
-    // 未設定・非 UTF-8・空白のみ・モック値（前後空白付きを含む）はモック経路へ流し、
+    // AppState に保持した起動時確定値だけを参照する（per-request の read_env は廃止）。
+    // production_config_errors / doctor と同じ判定で、未設定・非 UTF-8・空白のみ・
+    // モック値（前後空白付きを含む）は None として保存されているためモック経路へ流し、
     // 外部 Pinata API への送信を避ける（値はエコーしない）。
-    let pinata_jwt_env = common::env::read_env("PINATA_JWT");
-    if !pinata_jwt_production_like(pinata_jwt_env.clone()) {
+    let Some(pinata_jwt) = state.pinata_jwt.as_deref() else {
         return Ok(mock_cid_for_data(&data));
-    }
-    // 上の判定を通ったのは Utf8 の実トークンのみ（Bearer 送信に使用）。
-    let pinata_jwt = match pinata_jwt_env {
-        common::env::EnvValue::Utf8(value) => value,
-        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
-            return Ok(mock_cid_for_data(&data));
-        }
     };
 
     let form = reqwest::multipart::Form::new().part(
@@ -5438,14 +5614,10 @@ pub async fn pin_to_ipfs(
 /// トークン値・レスポンス本文・CID はログへ出さず、失敗時は手動解除が必要な
 /// 固定文言だけを記録する。アップロード側の元エラーは常にそのまま返す。
 async fn compensate_unpin(state: &AppState, cid: &str) {
-    let pinata_jwt_env = common::env::read_env("PINATA_JWT");
-    if !pinata_jwt_production_like(pinata_jwt_env.clone()) {
+    // pin_to_ipfs と同じく AppState の起動時確定値だけを参照する（per-request read_env 廃止）。
+    let Some(pinata_jwt) = state.pinata_jwt.as_deref() else {
         // モック経路では外部ピンを作っていないため解除不要。
         return;
-    }
-    let pinata_jwt = match pinata_jwt_env {
-        common::env::EnvValue::Utf8(value) => value,
-        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => return,
     };
     // cid は pin_to_ipfs の厳密検証（is_safe_cid）を通した値だけが渡される。
     let url = format!("https://api.pinata.cloud/pinning/unpin/{cid}");

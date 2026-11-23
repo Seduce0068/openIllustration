@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenIllustration unit failure alert (template)
+Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+# OnFailure= 先の通知 unit の雛形（ADR-0013 P1「alert unit テンプレート」）。
+# 配置時に /etc/systemd/system/openillustration-backup-alert.service へコピーし、
+# 下記 ExecStart の __SET_ME__ を実宛先の通知コマンドへ差し替えること。
+# 差し替えずに有効化すると失敗通知が届かない（プレースホルダのまま配置しない）。
+# 直接起動する unit ではないため [Install] 節は置かない。
+
+[Service]
+Type=oneshot
+# 通知コマンドは通常 READY=1 を送らないため NotifyAccess=none でよい。
+# READY=1 を送るラッパーへ差し替えた場合は NotifyAccess=all へ変更する。
+NotifyAccess=none
+# 差し替え必須: backup.env の ALERT_CMD と同じ「1引数（メッセージ）」契約の
+# 実行ファイルを指定する。%N は失敗した unit 名へ展開される。
+ExecStart=/usr/local/bin/__SET_ME__ "unit %N failed; see journalctl -u %N"
+# backup.env の ALERT_CMD を再利用する場合は [Service] へ
+#   EnvironmentFile=-/etc/openillustration/backup.env
+# を追加し、ExecStart=${ALERT_CMD} "unit %N failed" としてもよい。
+# 通知コマンド自体が失敗しても、OnFailure を呼んだ unit の結果は変わらない。

@@ -786,6 +786,18 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第58ラウンド（ADR-0013 P1 実装）: 3担当（server設定一式/migration/deploy+docs）。
+  BIND_ADDR/PORT（既定[::]:3000・不正/特権/範囲外fail-closed・doctor production診断）、
+  RUST_LOG不正値警告、PINATA_JWTのAppState起動時確定、数値env範囲外警告（7変数）、
+  MIGRATIONS_DIR override（絶対パス・連番fail-closed）、
+  アプリsystemd unit + alert unit雛形、NTP必須/HSTSプロキシ責任/OnFailure役割分担を実装。
+  親がclippy一時値寿命エラー、R4指摘4件（.env.exampleのBIND_ADDR=[::]、doctor診断、
+  MIGRATIONS_DIR記載、陳腐化した「アプリunitなし」記述）を修正。
+  R4残1件（数値envのdoctor共有判定）は範囲定数共有の設計変更を伴うため次ラウンド以降。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  npm audit3lockfile、markdownlint40ファイル）。
+  ※ ゴール maxGoalRounds を 5000 へ変更（ユーザー明示指示）。
+
 - 2026-11-23 設計判断委譲: ユーザーより「設計判断待ちの箇所は推奨するものを決めて良い」と
   委譲された。docs/adr/ADR-0013-deferred-decisions.md を追加し、外部输入端依存（A）、
   プロジェクト内で決定し実装する P1〜P4、意図的に実装しない（C）を整理。

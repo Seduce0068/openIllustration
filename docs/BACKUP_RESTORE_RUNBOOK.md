@@ -37,6 +37,12 @@ generated:
   `backup_db` は `VACUUM INTO` を実行せず拒否する（下記「サーバー稼働中のロック拒否」を参照）。
   定期実行では `deploy/openillustration-backup-window.service` が停止→バックアップ→起動を
   自動オーケストレーションするため、手動停止は不要（下記「自動オーケストレーション」を参照）。
+- ホスト時刻同期（NTP / chrony 等）は本番デプロイの必須前提。監査タイムスタンプ、
+  トークン有効期限、バックアップ世代名（`stat -c %Y`）がホスト時刻に依存するため、
+  同期状態が未確認のホストへデプロイしない（[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
+- HSTS（`Strict-Transport-Security`）は TLS 終端プロキシが責任を持ち、アプリ側は付与しない。
+  プロキシ側で `max-age` / `includeSubDomains` / `preload` を設定すること
+  （[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 
 ## バックアップ取得
 
@@ -153,6 +159,24 @@ cron テンプレートの `MAILTO=__SET_ME__` は配置前に実際の宛先へ
 cron / systemd 共通の通知経路として統一し、`MAILTO` は空にして二重通知を避ける。
 パス・ユーザー・グループは導入環境に合わせて修正する。
 
+### アラート通知の役割分担と unit 失敗通知（OnFailure）
+
+通知経路は2つあり、役割が異なるため混同しない。
+
+- `ALERT_CMD`（`scripts/backup-rotate.sh` が呼ぶ）= **バックアップ詳細の通知**。
+  取得・検証・暗号化・オフサイト転送・ローテーションの失敗時に1引数メッセージで呼び、
+  成功時は通知しない。失敗理由や世代などバックアップ固有の情報を伝える。
+- `OnFailure=`（systemd が呼ぶ）= **unit 結果の通知**。
+  unit が failed 状態になったときは**常に発火する**。失敗の原因はバックアップに限らず、
+  アプリ unit の停止・起動や Timeout によるものも含まれる。
+
+`OnFailure` は unit failed 時に常に発火するため、バックアップ失敗では
+`ALERT_CMD` と二重通知になり得る。役割分担は「`ALERT_CMD` = バックアップ詳細、
+`OnFailure` = unit 結果」とし、宛先側で重複を許容するか、どちらか一方へ集約するかを
+配置時に決定する（下記「配置時の必須ステップ: alert unit」を参照）。
+再起動（`ExecStopPost`）の失敗は `ALERT_CMD` では検知できないため、
+`OnFailure` が自動検知の経路となる。
+
 `RETENTION_DAYS`（既定30、上限20000＝約55年）を超えた世代数を削除するが、直近
 `MIN_KEEP`（既定3、最小1、上限1000）件は保持期間を超えていても残す。直近件の選択は
 ファイル名の UTC タイムスタンプ順（新しい順）で行い、残りの保持期間判定は mtime
@@ -264,6 +288,31 @@ systemctl status openillustration-backup-window.service
 systemctl list-timers openillustration-backup.timer
 ```
 
+### 配置時の必須ステップ: alert unit（OnFailure 先）
+
+`deploy/openillustration-backup-window.service` は
+`OnFailure=openillustration-backup-alert.service` を参照する。配置時に次を省略しないこと。
+
+1. `deploy/openillustration-backup-alert.service.example` を
+   `/etc/systemd/system/openillustration-backup-alert.service` へコピーする。
+   `[Install]` 節は無く、`OnFailure=` から起動されるため直接 `enable` しない。
+1. `ExecStart` の `__SET_ME__` を**実宛先の通知コマンド**（メール / チャット /
+   Webhook 等のラッパー）へ差し替える。`backup.env` の `ALERT_CMD` を再利用する場合は
+   `EnvironmentFile=-/etc/openillustration/backup.env` を追加し
+   `ExecStart=${ALERT_CMD} "unit %N failed"` とする。未差し替えでは通知が届かない。
+1. `systemctl daemon-reload` を実行し、`systemd-analyze verify` で構文を確認する。
+1. 通知確認: 通知コマンドを1回直接呼ぶか、失敗 unit を一時実行して実宛先へ
+   `unit ... failed` のメッセージが届くことを確認する。あわせて
+   `journalctl -u openillustration-backup-alert.service` で起動結果を確認する。
+1. `ALERT_CMD` との二重通知の扱いを決定する（上記「アラート通知の役割分担と
+   unit 失敗通知（OnFailure）」を参照）。同一宛先へ集約する場合は重複を許容するか
+   片方を無効化し、設定根拠を記録する。
+
+`deploy/openillustration.service`（アプリ unit テンプレート）を配置する際は
+`/etc/openillustration/server.env` を所有者 `openillustration`・権限 `0600` で用意し、
+同梱 migrations のパス `MIGRATIONS_DIR=/opt/openIllustration/migrations` を確認すること
+（サーバー側の `MIGRATIONS_DIR` override 実装と合わせて有効化）。
+
 - 停止待ち時間の契約: window unit の `TimeoutStartSec=1800` は自 unit の Exec にしかかからず、
   `ExecStartPre` の `systemctl stop` が待つアプリ unit の `TimeoutStopSec`（既定90秒）は別値。
   アプリの drain 上限 `GRACEFUL_DRAIN_TIMEOUT_SECS`（最大300秒）を超えないよう、
@@ -280,8 +329,9 @@ systemctl list-timers openillustration-backup.timer
   誤りで、これらは手動確認の必須ステップである。自動検知が必要なら
   `OnFailure=` で通知 unit を実装するか、ヘルスチェックを unit の Exec へ組み込むこと。
 - バックアップ失敗は `ALERT_CMD`（設定時）が通知する。さらに再起動（`ExecStopPost`）が
-  失敗した場合は窓 unit の結果が失敗となるため、`OnFailure=` または journald の unit 結果
-  監視をアラート対象に含め、アプリが停止したまま放置されないようにする。
+  失敗した場合は窓 unit の結果が失敗となり `OnFailure=` が発火する。
+  `deploy/openillustration-backup-alert.service.example` を実宛先へ差し替えて配置し、
+  アプリが停止したまま放置されないようにする（上記「配置時の必須ステップ」を参照）。
 
 cron 版は `backup-cron-wrapper.sh` のみを実行し、`systemctl` の stop/start は行わない。
 オーケストレーションが必要なら root 側スケジューラ（上記 systemd timer と窓 unit、
@@ -522,5 +572,6 @@ rm -- /path/to/local.db.pre-restore-<timestamp>
 ## 未解決事項
 
 - 複数インスタンス同時起動は `<DB path>.instance.lock` で拒否する（単一ライター前提は継続）。
-- スケジューラへの登録は設定例を提供済み（`deploy/`）。失敗時のアラート通知先の設定は未実施。
+- スケジューラへの登録と alert unit の雛形は提供済み（`deploy/`）。実宛先への差し替え・
+  通知確認は各デプロイの配置作業であり未実施。
 - アプリケーションレベルの完全なリストア試験（アップロード済み IPFS コンテンツの再取得を含む）。

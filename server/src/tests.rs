@@ -209,6 +209,7 @@ async fn setup_app_with_options(
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 
@@ -260,6 +261,7 @@ async fn setup_app_with_jwt_keys(
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     (build_router(shared_state), db)
@@ -403,6 +405,7 @@ async fn setup_app_with_payments(
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
 
@@ -451,6 +454,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
 
@@ -803,6 +807,7 @@ async fn setup_app_with_oidc_age_policy_and_cookie_secure(
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 
@@ -845,6 +850,198 @@ fn test_rate_limit_configuration() {
         warning.as_deref(),
         Some("RATE_LIMIT_PER_MIN is not valid UTF-8; using default")
     );
+
+    // P1-ENV: 範囲付き分類は「正規化後の値が入力と一致しない」場合に固定文言警告を出す。
+    // 未設定・範囲内・下限・上限は警告なし、範囲外・タイポ・非 UTF-8 は警告あり。
+    fn classify(env: &common::env::EnvValue) -> (Option<&str>, Option<String>) {
+        crate::numeric_env_value_in_range("RATE_LIMIT_PER_MIN", env, 1u32, 600)
+    }
+    assert_eq!(classify(&common::env::EnvValue::Missing), (None, None));
+    for valid in ["1", "60", "600"] {
+        let env = common::env::EnvValue::Utf8(valid.to_string());
+        let (input, warning) = classify(&env);
+        assert_eq!(input, Some(valid));
+        assert_eq!(warning, None, "value={valid}");
+    }
+    for invalid in ["0", "601", "abc", "01", " 60 "] {
+        let env = common::env::EnvValue::Utf8(invalid.to_string());
+        let (input, warning) = classify(&env);
+        assert_eq!(input, Some(invalid));
+        assert_eq!(
+            warning.as_deref(),
+            Some("RATE_LIMIT_PER_MIN is invalid or outside 1..=600; using default"),
+            "value={invalid:?}"
+        );
+    }
+    let non_utf8 = common::env::EnvValue::NonUtf8;
+    let (input, warning) = classify(&non_utf8);
+    assert_eq!(input, None);
+    assert_eq!(
+        warning.as_deref(),
+        Some("RATE_LIMIT_PER_MIN is not valid UTF-8; using default")
+    );
+}
+
+/// P1-BIND: BIND_ADDR / PORT の起動時解決。既定・有効値・不正値・特権ポートを検証する。
+#[test]
+fn test_bind_addr_port_resolution_boundaries() {
+    use common::env::EnvValue;
+
+    // 未設定は現行の `[::]:3000`。
+    assert_eq!(
+        crate::resolve_bind_addr(EnvValue::Missing, EnvValue::Missing).unwrap(),
+        SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 0], 3000))
+    );
+    // IPv4 / IPv6 の受理値と下限ポート 1024。
+    assert_eq!(
+        crate::resolve_bind_addr(
+            EnvValue::Utf8("127.0.0.1".to_string()),
+            EnvValue::Utf8("8080".to_string())
+        )
+        .unwrap(),
+        SocketAddr::from(([127, 0, 0, 1], 8080))
+    );
+    assert_eq!(
+        crate::resolve_bind_addr(
+            EnvValue::Utf8("::1".to_string()),
+            EnvValue::Utf8("1024".to_string())
+        )
+        .unwrap(),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 1024)
+    );
+
+    // 不正 IP・非 UTF-8 は固定文言で拒否（値はエコーしない）。
+    for bad in [
+        EnvValue::Utf8("not-an-ip".to_string()),
+        EnvValue::Utf8("127.0.0.1:3000".to_string()),
+        EnvValue::NonUtf8,
+    ] {
+        assert_eq!(
+            crate::resolve_bind_addr(bad, EnvValue::Missing),
+            Err(crate::BIND_ADDR_INVALID)
+        );
+    }
+    // 不正・特権（<1024）・範囲外・非 UTF-8 ポートも固定文言で拒否。
+    for bad in [
+        EnvValue::Utf8("abc".to_string()),
+        EnvValue::Utf8("0".to_string()),
+        EnvValue::Utf8("80".to_string()),
+        EnvValue::Utf8("65536".to_string()),
+        EnvValue::NonUtf8,
+    ] {
+        assert_eq!(
+            crate::resolve_bind_addr(EnvValue::Missing, bad),
+            Err(crate::PORT_INVALID)
+        );
+    }
+    assert!(!crate::BIND_ADDR_INVALID.contains("not-an-ip"));
+    assert!(!crate::PORT_INVALID.contains("65536"));
+}
+
+/// P1-ENV: RUST_LOG と数値 env の起動時警告境界（既定・範囲内・範囲外・非 UTF-8）。
+#[test]
+fn test_startup_env_warning_boundaries() {
+    use common::env::EnvValue;
+
+    // RUST_LOG: 未設定 / 有効フィルタは警告なし、非 UTF-8・空・不正フィルタは固定文言。
+    assert_eq!(crate::rust_log_filter(&EnvValue::Missing).1, None);
+    assert_eq!(
+        crate::rust_log_filter(&EnvValue::Utf8("info".to_string())).1,
+        None
+    );
+    for bad in [
+        EnvValue::NonUtf8,
+        EnvValue::Utf8(String::new()),
+        EnvValue::Utf8("server=not-a-level".to_string()),
+    ] {
+        assert_eq!(
+            crate::rust_log_filter(&bad).1,
+            Some(crate::RUST_LOG_INVALID_WARNING)
+        );
+    }
+    assert_eq!(
+        crate::RUST_LOG_INVALID_WARNING,
+        "RUST_LOG is not a valid filter directive; using the default filter (info; value redacted)"
+    );
+
+    // 7 つの数値 env の範囲外がすべて固定文言警告になる（値・生バイトは非エコー）。
+    macro_rules! out_of_range {
+        ($name:expr, $value:expr, $min:expr, $max:expr) => {{
+            let env = $value;
+            let (input, warning) = crate::numeric_env_value_in_range($name, &env, $min, $max);
+            assert!(input.is_some(), "{}", $name);
+            let expected = format!(
+                "{} is invalid or outside {}..={}; using default",
+                $name, $min, $max
+            );
+            assert_eq!(warning.as_deref(), Some(expected.as_str()), "{}", $name);
+            assert!(
+                !warning.unwrap().contains("999999999"),
+                "{} must not echo the value",
+                $name
+            );
+        }};
+    }
+    out_of_range!(
+        "RATE_LIMIT_PER_MIN",
+        EnvValue::Utf8("999999999".to_string()),
+        1u32,
+        600u32
+    );
+    out_of_range!(
+        "MAX_CONCURRENT_REQUESTS",
+        EnvValue::Utf8("999999999".to_string()),
+        1usize,
+        256usize
+    );
+    out_of_range!(
+        "IPFS_TIMEOUT_SECS",
+        EnvValue::Utf8("999999999".to_string()),
+        1u64,
+        300u64
+    );
+    out_of_range!(
+        "IPFS_MAX_ATTEMPTS",
+        EnvValue::Utf8("999999999".to_string()),
+        1usize,
+        5usize
+    );
+    out_of_range!(
+        "OIDC_HTTP_TIMEOUT_SECS",
+        EnvValue::Utf8("999999999".to_string()),
+        1u64,
+        60u64
+    );
+    out_of_range!(
+        "MODERATION_FINALIZE_INTERVAL_SECS",
+        EnvValue::Utf8("999999999".to_string()),
+        30u64,
+        3600u64
+    );
+    out_of_range!(
+        "GRACEFUL_DRAIN_TIMEOUT_SECS",
+        EnvValue::Utf8("999999999".to_string()),
+        1u64,
+        300u64
+    );
+
+    // 未設定・境界値・範囲内は警告なし（既定値フォールバックの判定と一致）。
+    assert_eq!(
+        crate::numeric_env_value_in_range(
+            "GRACEFUL_DRAIN_TIMEOUT_SECS",
+            &EnvValue::Missing,
+            1u64,
+            300u64
+        ),
+        (None, None)
+    );
+    for valid in ["1", "30", "300"] {
+        let value = EnvValue::Utf8(valid.to_string());
+        let (input, warning) =
+            crate::numeric_env_value_in_range("GRACEFUL_DRAIN_TIMEOUT_SECS", &value, 1u64, 300u64);
+        assert_eq!(input, Some(valid));
+        assert_eq!(warning, None, "value={valid}");
+    }
 }
 
 /// R4-02: `MAX_CONCURRENT_REQUESTS` の境界値。
@@ -941,6 +1138,7 @@ async fn test_rate_limit_ignores_preflight() {
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
         })),
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(state);
@@ -1008,6 +1206,7 @@ async fn test_rate_limit_rejects_excess_requests() {
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(16)),
         })),
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(state);
@@ -1138,6 +1337,7 @@ async fn rate_limit_test_state_with_concurrency(
             )),
             concurrency: Arc::new(tokio::sync::Semaphore::new(concurrency)),
         })),
+        pinata_jwt: None,
         allowed_origins: vec![],
     })
 }
@@ -2532,6 +2732,28 @@ fn test_production_config_fail_closed() {
         common::env::EnvValue::Utf8(" mock_jwt ".to_string())
     ));
 
+    // P1-PINATA: 起動時解決は doctor と同じ判定で、実トークンのみ Some を返す。
+    // 未設定・非 UTF-8・空白のみ・モック値は None（モック経路）へ倒す（値はエコーしない）。
+    assert_eq!(
+        crate::resolve_pinata_jwt(common::env::EnvValue::Missing),
+        None
+    );
+    assert_eq!(
+        crate::resolve_pinata_jwt(common::env::EnvValue::NonUtf8),
+        None
+    );
+    for rejected in ["", " ", "\tmock_jwt\n", "mock_jwt"] {
+        assert_eq!(
+            crate::resolve_pinata_jwt(common::env::EnvValue::Utf8(rejected.to_string())),
+            None,
+            "rejected={rejected:?}"
+        );
+    }
+    assert_eq!(
+        crate::resolve_pinata_jwt(common::env::EnvValue::Utf8("real-jwt".to_string())),
+        Some("real-jwt".to_string())
+    );
+
     // R2-DBURL-SERVER: 本番相当では DATABASE_URL が必須（既定なし、値はエコーしない）。
     assert_eq!(
         crate::production_database_url_error(false, common::env::EnvValue::Missing),
@@ -2909,9 +3131,9 @@ fn test_mock_pin_cid_is_valid_and_unique() {
     );
 }
 
-/// PINATA_JWT の前後に空白装飾が付いたモック値でも、実行時の `pin_to_ipfs` が
-/// モック経路を通り外部 Pinata API へ送信しないことを検証する。
-/// `production_config_errors` / doctor の `trim() == "mock_jwt"` 判定と統一する。
+/// PINATA_JWT は起動時に `AppState` へ確定し、リクエスト毎の `read_env` は廃止された。
+/// プロセス環境に実トークン風の値が残っていても、`AppState` が None ならモック経路を
+/// 通り外部 Pinata API へ送信しないことを検証する（値はエコーしない）。
 #[tokio::test]
 async fn test_pin_to_ipfs_accepts_whitespace_decorated_mock_jwt() {
     let _env_guard = ENV_LOCK.lock().await;
@@ -2923,18 +3145,32 @@ async fn test_pin_to_ipfs_accepts_whitespace_decorated_mock_jwt() {
         .proxy(reqwest::Proxy::https("http://127.0.0.1:1").expect("valid proxy URL"))
         .build()
         .expect("build no-network HTTP client");
+    // 起動時解決の結果（None = モック経路）だけが参照される。
+    state.pinata_jwt = None;
 
     let data = b"whitespace-decorated-mock-jwt";
     let expected = crate::mock_cid_for_data(data);
 
     // 既存の完全一致 "mock_jwt" も壊さず、空白・タブ・改行装飾でもモック CID を返す。
     for jwt in ["mock_jwt", " mock_jwt ", "\tmock_jwt\n"] {
+        assert_eq!(
+            crate::resolve_pinata_jwt(common::env::EnvValue::Utf8(jwt.to_string())),
+            None,
+            "mock JWT {jwt:?} must not be resolved as a production token"
+        );
         test_set_env("PINATA_JWT", jwt);
         let cid = crate::pin_to_ipfs(&state, data.to_vec(), "test.txt")
             .await
             .unwrap_or_else(|e| panic!("mock JWT {jwt:?} must not hit Pinata API: {e}"));
         assert_eq!(cid, expected, "mock JWT {jwt:?} must return the mock CID");
     }
+
+    // 実トークン風の値を環境へ置いても、AppState が None ならモック経路のまま。
+    test_set_env("PINATA_JWT", "real-jwt-in-environment");
+    let cid = crate::pin_to_ipfs(&state, data.to_vec(), "test.txt")
+        .await
+        .expect("environment must not override the startup-resolved value");
+    assert_eq!(cid, expected);
 
     test_remove_env("PINATA_JWT");
 }
@@ -4638,6 +4874,7 @@ async fn test_vote_consensus_rejects_content() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -4822,6 +5059,7 @@ async fn test_duplicate_vote_rejected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5040,6 +5278,7 @@ async fn test_vote_after_conclusion_rejected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5124,6 +5363,7 @@ async fn test_vote_for_missing_report_returns_404() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5214,6 +5454,7 @@ async fn setup_vote_signature_test() -> (Router, libsql::Connection) {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5335,6 +5576,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5516,6 +5758,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -5586,6 +5829,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -6988,6 +7232,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -7074,6 +7319,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -7184,6 +7430,7 @@ async fn test_payment_verify_mismatch_is_terminal() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -7421,6 +7668,7 @@ async fn test_payment_verify_mismatch_cas_conflict() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -9673,6 +9921,7 @@ async fn test_logout_revokes_session() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let second_app = crate::build_router(second_state);
@@ -11940,6 +12189,7 @@ async fn setup_verified_age_app(
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     (build_router(state), db)
@@ -12145,6 +12395,7 @@ async fn test_verified_age_claims_rejected_when_mock_auth_disabled() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(state);
@@ -12456,6 +12707,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     (build_router(state), db)
@@ -13152,6 +13404,7 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
     // AuthClaims extractor は revoked_subs_before ではなく DB を読むため、
@@ -13227,6 +13480,7 @@ async fn test_ban_memory_threshold_is_monotonic() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let claims = || {
@@ -14556,6 +14810,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(state);
@@ -15192,6 +15447,7 @@ async fn test_refresh_rejects_revoked_sub_with_empty_in_memory_state() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
     let restarted = build_router(state);
@@ -18368,6 +18624,7 @@ async fn setup_me_export_app() -> Router {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     build_router(shared_state)
@@ -18837,6 +19094,7 @@ async fn me_export_snapshot_consistent_under_concurrent_ban_write() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -18919,6 +19177,7 @@ async fn me_export_waits_for_concurrent_write_transaction() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![],
     });
     let app = build_router(shared_state);
@@ -20727,6 +20986,7 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
         metrics: Arc::new(crate::Metrics::default()),
         expose_internal_errors: false,
         rate_limit: None,
+        pinata_jwt: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
 

@@ -24,8 +24,21 @@ use tracing::{info, warn};
 const MIGRATIONS_DIR: &str = "migrations";
 const MIGRATIONS_TABLE: &str = "_migrations";
 
-/// Get the migrations directory path, checking multiple locations
-fn get_migrations_dir() -> PathBuf {
+/// Fixed diagnostics for `MIGRATIONS_DIR` validation. The raw value is never
+/// echoed: invalid configuration is rejected fail-closed without leaking it.
+const MIGRATIONS_DIR_NOT_UTF8: &str =
+    "MIGRATIONS_DIR must be valid UTF-8; refusing to run migrations";
+const MIGRATIONS_DIR_NOT_ABSOLUTE: &str =
+    "MIGRATIONS_DIR must be an absolute path; refusing to run migrations";
+const MIGRATIONS_DIR_NOT_FOUND: &str =
+    "MIGRATIONS_DIR does not point to an existing directory; refusing to run migrations";
+const MIGRATIONS_DIR_NOT_READABLE: &str =
+    "MIGRATIONS_DIR directory is not readable; refusing to run migrations";
+
+/// Development back-compat search order (unchanged from the original runner):
+/// `./migrations` (cwd) → `$CARGO_MANIFEST_DIR/migrations` →
+/// `<compile-time crate dir>/migrations`. First existing candidate wins.
+fn default_migrations_dir() -> PathBuf {
     // 1. Relative to the current directory. Works when the server runs from
     //    `server/` (cargo run -p server in server dir, cargo test, deployed layout
     //    with binary + migrations directory together).
@@ -33,7 +46,7 @@ fn get_migrations_dir() -> PathBuf {
     if path.exists() {
         return path.to_path_buf();
     }
-    // 2. Runtime override (useful for deployment without a colocated migrations dir).
+    // 2. Runtime manifest dir (dev / build tooling convenience).
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         let path = Path::new(&manifest_dir).join(MIGRATIONS_DIR);
         if path.exists() {
@@ -48,11 +61,64 @@ fn get_migrations_dir() -> PathBuf {
             return path;
         }
     }
-    // Fallback: return the default (will log warning if not found)
+    // Fallback: return the default (run_migrations_from skips a missing dir,
+    // verify_migrations_from rejects it fail-closed).
     warn!(
         "Migrations directory not found, tried: ./migrations, $CARGO_MANIFEST_DIR/migrations, <crate>/migrations"
     );
     Path::new(MIGRATIONS_DIR).to_path_buf()
+}
+
+/// Validate an explicit `MIGRATIONS_DIR` override, fail-closed.
+///
+/// Checks, in order: absolute path, existing directory, readability, and the
+/// same strict `.sql` enumeration / filename / 001..N sequence validation used
+/// by `run_migrations` and `verify_migrations`. Any failure is an error — an
+/// invalid override never silently falls back to the development defaults.
+fn validate_migrations_dir_override(value: &str) -> Result<PathBuf, AppError> {
+    let path = Path::new(value);
+    if !path.is_absolute() {
+        return Err(AppError::Internal(MIGRATIONS_DIR_NOT_ABSOLUTE.to_string()));
+    }
+    if !path.is_dir() {
+        return Err(AppError::Internal(MIGRATIONS_DIR_NOT_FOUND.to_string()));
+    }
+    // read_dir はディレクトリの読み取り可能性を実際に検査する。
+    // 失敗時は OS 由来の文言を出さず固定文言へ変換する。
+    if fs::read_dir(path).is_err() {
+        return Err(AppError::Internal(MIGRATIONS_DIR_NOT_READABLE.to_string()));
+    }
+    // .sql 列挙・ファイル名・001 からの連番を共有の厳密検証で担保する。
+    // ここで拒否しないと不正なセットが run / verify をすり抜ける。
+    collect_migration_files(path)?;
+    Ok(path.to_path_buf())
+}
+
+/// Resolve the migrations directory from the supplied `MIGRATIONS_DIR` value.
+///
+/// `Some(value)` takes highest priority and is validated fail-closed;
+/// `None` keeps the development back-compat search order. The value is passed
+/// in rather than read here so tests never mutate the process environment
+/// (`std::env::set_var` is `unsafe` in edition 2024).
+fn resolve_migrations_dir(migrations_dir: Option<String>) -> Result<PathBuf, AppError> {
+    match migrations_dir {
+        Some(value) => validate_migrations_dir_override(&value),
+        None => Ok(default_migrations_dir()),
+    }
+}
+
+/// Read `MIGRATIONS_DIR` from the runtime environment and resolve the path.
+fn get_migrations_dir() -> Result<PathBuf, AppError> {
+    let value = match std::env::var_os("MIGRATIONS_DIR") {
+        // 非 UTF-8 値は黙って既定へフォールバックせず固定文言で拒否する。
+        Some(raw) => Some(
+            raw.to_str()
+                .ok_or_else(|| AppError::Internal(MIGRATIONS_DIR_NOT_UTF8.to_string()))?
+                .to_string(),
+        ),
+        None => None,
+    };
+    resolve_migrations_dir(value)
 }
 
 /// Initialize the migrations tracking table
@@ -348,7 +414,7 @@ async fn apply_migration(
 
 /// Run all pending migrations from the default migrations directory
 pub async fn run_migrations(db: &Connection) -> Result<(), AppError> {
-    let migrations_path = get_migrations_dir();
+    let migrations_path = get_migrations_dir()?;
     run_migrations_from(db, &migrations_path).await
 }
 
@@ -393,7 +459,7 @@ pub async fn run_migrations_from(db: &Connection, migrations_path: &Path) -> Res
 
 /// Verify all migrations match expected checksums (for CI/CD)
 pub async fn verify_migrations(db: &Connection) -> Result<(), AppError> {
-    let migrations_path = get_migrations_dir();
+    let migrations_path = get_migrations_dir()?;
     verify_migrations_from(db, &migrations_path).await
 }
 
@@ -653,6 +719,59 @@ mod tests {
         verify_migrations_from(&db, &dir).await.unwrap();
         assert_eq!(get_applied_versions(&db).await.unwrap().len(), 13);
 
+        // --- MIGRATIONS_DIR override の境界検証 ---
+        // 環境変数を汚さず resolve_migrations_dir へ値を注入して検証する。
+        // 1. 未設定 = 従来の既定探索（開発後方互換）。
+        let unset = resolve_migrations_dir(None).unwrap();
+        assert_eq!(unset, default_migrations_dir());
+        assert!(unset.ends_with(MIGRATIONS_DIR));
+
+        // 2. 有効な絶対パスは解決され、連番セットも検証を通過する。
+        let dir_value = dir.to_str().unwrap().to_string();
+        let resolved = resolve_migrations_dir(Some(dir_value)).unwrap();
+        assert_eq!(resolved, dir);
+
+        // 3. 存在しないパスは固定文言で拒否する（既定へフォールバックしない）。
+        let missing = dir.join("does_not_exist");
+        let missing_value = missing.to_str().unwrap().to_string();
+        let err = resolve_migrations_dir(Some(missing_value)).unwrap_err();
+        assert!(
+            err.to_string().contains("MIGRATIONS_DIR")
+                && err.to_string().contains("existing directory"),
+            "unexpected error: {err}"
+        );
+
+        // 4. 相対パスは絶対パス要件違反として拒否する。
+        let relative = MIGRATIONS_DIR.to_string();
+        let err = resolve_migrations_dir(Some(relative)).unwrap_err();
+        assert!(
+            err.to_string().contains("absolute path"),
+            "unexpected error: {err}"
+        );
+
+        // 5. 001 から連続しないセットは override 解決時点で fail-closed に拒否する。
+        let gapped = temp_migrations_dir("override_gap");
+        write_migration(
+            &gapped,
+            1,
+            "initial",
+            "CREATE TABLE gap1 (id INTEGER PRIMARY KEY);",
+        );
+        write_migration(
+            &gapped,
+            3,
+            "later",
+            "CREATE TABLE gap3 (id INTEGER PRIMARY KEY);",
+        );
+        let gapped_value = gapped.to_str().unwrap().to_string();
+        let err = resolve_migrations_dir(Some(gapped_value)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Non-contiguous migration versions"),
+            "unexpected error: {err}"
+        );
+
+        let _ = fs::remove_dir_all(&gapped);
         let _ = fs::remove_dir_all(&dir);
     }
 
