@@ -804,7 +804,7 @@ for advisory_doc in "${advisory_docs[@]}"; do
 	fi
 done
 
-# --- 12. doc→code テスト名照合の現行値（tests<N>）照合 --------------------
+# --- 13. doc→code テスト名照合の現行値（tests<N>）照合 --------------------
 # spec 内の "tests<N>" のうち現行値だけを抽出し、doc_test_names の実測数と照合する。
 # 履歴表記（当時 / 旧 / 履歴 / 旧値へ追随 等）は既存の注記ルールで除外する。
 while IFS=: read -r test_line_no test_line_body; do

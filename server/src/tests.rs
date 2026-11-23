@@ -4253,6 +4253,9 @@ async fn test_upload_rejects_body_over_10mib() {
         .await
         .unwrap();
     let status = response.status();
+    // ID-06: 短絡 413 も外側ミドルウェアのセキュリティヘッダ/相関IDを維持する。
+    assert_security_headers(&response);
+    assert!(!response.headers()["x-request-id"].is_empty());
     let body = to_bytes(response.into_body(), 4096).await.unwrap();
     // Content-Length 検査ミドルウェアが Multipart extractor より先に 413 を返す。
     assert_eq!(
@@ -15551,6 +15554,9 @@ async fn test_client_events_rejects_oversized_body() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    // ID-06: 1 KiB 超過の短絡 400 もセキュリティヘッダ/相関IDを維持する。
+    assert_security_headers(&response);
+    assert!(!response.headers()["x-request-id"].is_empty());
     assert!(
         to_bytes(response.into_body(), 1024)
             .await

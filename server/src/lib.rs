@@ -4506,21 +4506,24 @@ pub async fn mod_report(
         };
         let is_content_owner = owner_hash.as_deref() == Some(_claims.sub.as_str());
 
-        let mut reporter_rows = tx
-            .query(
-                "SELECT changed_by FROM content_audit_log
-                 WHERE cid = ? AND reason LIKE 'User report:%'
-                 ORDER BY abs(julianday(created_at) - julianday(?)) ASC, log_id ASC LIMIT 1",
-                [
-                    report.target_cid.clone(),
-                    prior_created_at.unwrap_or_default(),
-                ],
-            )
-            .await?;
-        // changed_by は NULL 許容列のため Option で読む。
-        let prior_reporter: Option<String> = match reporter_rows.next().await? {
-            Some(row) => row.get(0)?,
-            None => None,
+        // created_at が欠損しているとき julianday('') は NULL となり距離比較が無効化され、
+        // 最古の監査行を誤って元通報者と認めてしまう。fail-closed で所有者のみ受理する。
+        let prior_reporter: Option<String> = if let Some(created_at) = &prior_created_at {
+            let mut reporter_rows = tx
+                .query(
+                    "SELECT changed_by FROM content_audit_log
+                     WHERE cid = ? AND reason LIKE 'User report:%'
+                     ORDER BY abs(julianday(created_at) - julianday(?)) ASC, log_id ASC LIMIT 1",
+                    [report.target_cid.clone(), created_at.clone()],
+                )
+                .await?;
+            // changed_by は NULL 許容列のため Option で読む。
+            match reporter_rows.next().await? {
+                Some(row) => row.get(0)?,
+                None => None,
+            }
+        } else {
+            None
         };
         let is_prior_reporter = prior_reporter.as_deref() == Some(_claims.sub.as_str());
 

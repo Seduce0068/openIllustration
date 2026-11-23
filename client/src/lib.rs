@@ -3754,10 +3754,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     />
                 </div>
 
-                // Leptos 0.8 の bool 属性は true で属性付与 / false で削除になるため、
-                // 送信中の aria-busy は属性の有無で遷移する（E2E も付与・解除を検証）。
-                <button on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
-                    aria-busy=move || loading.get()
+                // ARIA boolean は "true"/"false" の文字列トークンを要求するため、
+                // 通報・投票・ログインと同じ形式で明示する（属性の有無ではない）。
+                <button data-testid="upload-submit" on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
+                    aria-busy=move || if loading.get() { "true" } else { "false" }
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
                     {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>

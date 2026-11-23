@@ -454,14 +454,19 @@ pub async fn verify_migrations_from(
             )
             .await?;
 
-        if let Some(row) = rows.next().await? {
-            let stored_checksum: String = row.get(0)?;
-            if stored_checksum != expected_checksum {
-                return Err(AppError::Internal(format!(
-                    "Migration {} checksum mismatch: file checksum {}, applied checksum {}",
-                    file.version_token, expected_checksum, stored_checksum
-                )));
-            }
+        let stored = match rows.next().await? {
+            Some(row) => Some(row.get::<String>(0)?),
+            None => None,
+        };
+        // read-then-next-query の順序を統一するため、次のファイルへ進む前にカーソルを閉じる。
+        drop(rows);
+        if let Some(stored_checksum) = stored
+            && stored_checksum != expected_checksum
+        {
+            return Err(AppError::Internal(format!(
+                "Migration {} checksum mismatch: file checksum {}, applied checksum {}",
+                file.version_token, expected_checksum, stored_checksum
+            )));
         }
     }
 

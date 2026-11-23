@@ -49,20 +49,18 @@ test.describe('Content Upload Flow', () => {
       });
     });
 
-    const submitButton = page.getByRole('button', { name: /Sign & Submit/i });
-    // 送信前は aria-busy なし（UPLOAD ビューで唯一の aria-busy 標的になる）。
-    await expect(page.locator('button[aria-busy]')).toHaveCount(0);
+    const submitButton = page.getByTestId('upload-submit');
+    // 送信前は aria-busy="false"（UPLOAD ビューで唯一の aria-busy 標的になる）。
+    await expect(submitButton).toHaveAttribute('aria-busy', 'false');
     await submitButton.click();
 
-    // 送信中: aria-busy が付与され、ボタンは disabled になる。
-    const busyButton = page.locator('button[aria-busy]');
-    await expect(busyButton).toHaveCount(1, { timeout: 10000 });
-    await expect(busyButton).toHaveAttribute('aria-busy', '');
-    await expect(busyButton).toBeDisabled();
+    // 送信中: aria-busy="true" になり、ボタンは disabled になる。
+    await expect(submitButton).toHaveAttribute('aria-busy', 'true', { timeout: 10000 });
+    await expect(submitButton).toBeDisabled();
     releaseUpload();
 
-    // 完了: aria-busy が外れ、ボタンが再活性化する。
-    await expect(page.locator('button[aria-busy]')).toHaveCount(0, { timeout: 10000 });
+    // 完了: aria-busy="false" に戻り、ボタンが再活性化する。
+    await expect(submitButton).toHaveAttribute('aria-busy', 'false', { timeout: 10000 });
     await expect(submitButton).toBeEnabled({ timeout: 10000 });
     await expect(page.locator('text=SUCCESS: Content registered')).toBeVisible({ timeout: 15000 });
   });

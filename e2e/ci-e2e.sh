@@ -363,7 +363,7 @@ done
 
 # ブラウザ導入は選定の後・実行の前に行う（CI では firefox/webkit を必ず導入）。
 echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
-# npm ci の引数はクライアント側（上の `(cd client && npm ci ...)`）と完全一致させ、
+# npm ci の引数はクライアント側（下の `(cd client && npm ci ...)`）と完全一致させ、
 # 両者を同一の依存導入契約として扱う（lifecycle script を --ignore-scripts で抑制）。
 # ブラウザ導入は下の install_browsers / `npx playwright install` の明示実行であり
 # lifecycle script ではないため、--ignore-scripts でも従来どおり動作する。
