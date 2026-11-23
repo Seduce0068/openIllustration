@@ -16,9 +16,9 @@ test.describe('Real server integration', () => {
 
     // 実サーバーの /auth/login + /auth/verify を通る（ルートをモックしない）。
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
 
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     // CID の一意性のため毎回異なるバイト列を使う（FF 0A = JXL raw codestream）。
     const body = Buffer.concat([
@@ -94,7 +94,7 @@ test.describe('Real server integration', () => {
     expect(typeof payload.token).toBe('string');
     expect(typeof payload.user_hash).toBe('string');
     // ブラウザ側も認証済み状態になっていることを確認する（既存テストと同じ遷移）。
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
 
     return { token: payload.token as string, userHash: payload.user_hash as string };
   }

@@ -492,7 +492,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(card.getByTestId('audit-error')).toBeVisible({ timeout: 10000 });
     await expect(card.getByTestId('audit-error')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
     await expect(card.getByTestId('audit-retry-status')).toHaveAttribute('role', 'status');
-    await expect(card.getByTestId('audit-retry-status')).toHaveText('しばらく待って再試行してください。');
+    await expect(card.getByTestId('audit-retry-status')).toHaveText('再読み込みできます。');
     // 再読み込みで成功し、専用文言が消えること。
     auditRateLimited = false;
     await card.getByTestId('audit-retry').getByRole('button', { name: '再読み込み' }).click();
@@ -564,8 +564,20 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // R2-LEGACY-LANG: lang="ja" のページ内で、主要英語固定ラベルだけが
     // lang="en" を宣言し、スクリーンリーダーの発音と言語宣言が整合することを確認する。
     // 文言・data-testid は不変（既存 ARIA テスト内へ統合、新規ケースなし、E2E69件維持）。
-    for (const label of ['BROWSE', 'UPLOAD', 'MODERATION', 'LEDGER']) {
-      await expect(page.getByRole('button', { name: label })).toHaveAttribute('lang', 'en');
+    // R2-P4-NAV: グローバル nav は aria-label 付き landmark として識別できること。
+    await expect(page.getByRole('navigation', { name: 'メインナビゲーション' }))
+      .toHaveAttribute('lang', 'ja');
+    // R2-P4-NAV: 4タブは role=link の <a> になり、各々 href を保持すること
+    // （既存 ARIA ケース内へ統合、新規ケースなし、E2E69件維持）。
+    for (const [label, hash] of [
+      ['BROWSE', '#dashboard'],
+      ['UPLOAD', '#upload'],
+      ['MODERATION', '#moderation'],
+      ['LEDGER', '#ledger'],
+    ] as const) {
+      const tab = page.getByRole('link', { name: label, exact: true });
+      await expect(tab).toHaveAttribute('lang', 'en');
+      await expect(tab).toHaveAttribute('href', hash);
     }
     await expect(page.getByTestId('logout-button')).toHaveAttribute('lang', 'en');
     // 検索フォームの主要英文 UI と言語宣言を整合させる（既存 ARIA ケース内で検証）。
@@ -645,7 +657,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     }
     await expect(page.getByText('NO_PENDING_VOTES')).toHaveAttribute('lang', 'en');
 
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
     await expect(page.getByRole('heading', { name: 'Forensic Upload Engine' }))
       .toHaveAttribute('lang', 'en');
     for (const target of [
@@ -658,7 +670,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
       await expect(page.locator(`label[for="${target}"]`)).toHaveAttribute('lang', 'en');
     }
 
-    await page.getByRole('button', { name: 'LEDGER', exact: true }).click();
+    await page.getByRole('link', { name: 'LEDGER', exact: true }).click();
     await expect(page.getByText(/LEGACY MOCK RECORDS/).first()).toHaveAttribute('lang', 'en');
     await expect(page.getByRole('heading', { name: 'Forensic Transaction Ledger' }))
       .toHaveAttribute('lang', 'en');
@@ -731,9 +743,14 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     const closeButton = dialog.getByRole('button', { name: 'CLOSE' });
 
-    // モーダル中核契約①: requestAnimationFrame による初期フォーカス。
-    // オープン直後にダイアログ内 CLOSE がフォーカスされる。rAF の遅延があるため
-    // toBeFocused の自動待ち（expect retries）に任せ、固定 sleep は置かない。
+    // パネル展開時は FORENSIC_TIMELINE 見出し（tabindex=-1）へ初期フォーカス。
+    // rAF の遅延があるため toBeFocused の自動待ち（expect retries）に任せ、固定 sleep は置かない。
+    const timelineHeading = dialog.getByTestId('audit-timeline-heading');
+    await expect(timelineHeading).toHaveAttribute('tabindex', '-1');
+    await expect(timelineHeading).toBeFocused();
+
+    // CLOSE は Tab 到達可能な通常ボタンとして残す（初期フォーカス先は見出し）。
+    await page.keyboard.press('Tab');
     await expect(closeButton).toBeFocused();
 
     // P4: このパネルは non-modal。CLOSE フォーカス中に Tab / Shift+Tab を送ると

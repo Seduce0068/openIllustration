@@ -86,7 +86,7 @@ test.describe('Content search and filtering (R5-01)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
 
     // 初期表示では全件とメタデータが見える
     await expect(page.getByText('Moonlit Harbor')).toBeVisible({ timeout: 20000 });
@@ -119,7 +119,7 @@ test.describe('Content search and filtering (R5-01)', () => {
     // 再読込 -> 未認証なのでログインへ戻る -> 再ログインで URL から条件が復元される。
     await page.reload();
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByLabel('Search')).toHaveValue('Neon');
     // 復元時の二重 GET が無く、末尾 2 件が [Neon, Neon] になること。
     await expect.poll(() => seenQueries.slice(-2)).toEqual(['Neon', 'Neon']);
@@ -143,19 +143,21 @@ test.describe('Content search and filtering (R5-01)', () => {
     // TOC の #slug は既知 view ではないため、popstate で直前の既知 view
     // （ここでは dashboard）へ正規化されることを検証する。
     await page.getByText('Table of Contents').click();
+    // R2-P4-NAV: 目次 nav も aria-label 付き landmark として識別できること（既存ケース内）。
+    await expect(page.getByRole('navigation', { name: '目次' })).toBeVisible();
     const tocAnchor = page.locator('details nav a').first();
     await expect(tocAnchor).toBeVisible();
     await tocAnchor.click();
     await expect.poll(() => new URL(page.url()).hash).not.toBe('#dashboard');
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
 
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveAttribute('aria-current', 'page');
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toHaveAttribute('aria-current', 'page');
     // タブタイトルも view と同期する（document.set_title の回帰検証）。
     await expect(page).toHaveTitle('UPLOAD — OpenIllustration');
 
     await page.goBack();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
 
     // R2-CLIENT-DLINK: カード強調表示の根拠となる cid が popstate の往復で復元される。
     // pushState 自身は popstate を出さないため、検索条件が異なる履歴条目を積んでから
@@ -177,7 +179,7 @@ test.describe('Content search and filtering (R5-01)', () => {
     await expect(highlighted).toHaveClass(/ring-green-500/);
 
     // MODERATION の通報フォーム CID も、view を離れず履歴だけが変わる往復で復元される。
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     const targetCidInput = page.getByLabel('TARGET CID', { exact: true });
     await expect(targetCidInput).toHaveValue('');
     await page.evaluate(cid => {

@@ -311,6 +311,9 @@ const DASHBOARD_LOAD_FAILED_ANNOUNCEMENT: &str = "コンテンツを取得でき
 const RETRY_LATER_MESSAGE: &str = "しばらく待って再試行してください。";
 /// 各取得失敗画面で共有する「再読み込み」ボタンの固定文言。
 const RETRY_BUTTON_LABEL: &str = "再読み込み";
+/// `retry_control` の dedicated `role=status` が読み上げる操作案内固定文言。
+/// 取得失敗の内容は呼び出し側の `role=alert` が告知するため、ここでは重複読み上げしない。
+const RETRY_STATUS_MESSAGE: &str = "再読み込みできます。";
 
 /// 本番認証が未実装であることを示す固定文言。
 /// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
@@ -2071,7 +2074,9 @@ fn is_known_view_hash(hash: &str) -> bool {
 
 /// ログアウト API の失敗時に dedicated role=alert で出す固定文言。
 /// 画面遷移は現行契約どおり即座にログインへ戻す（失敗で戻さないことはしない）。
-const LOGOUT_FAILED_MESSAGE: &str = "ログアウト処理が完了しませんでした。再試行してください。";
+/// 失敗後はログイン画面へ戻るため、再試行ではなく再ログインを案内する。
+const LOGOUT_FAILED_MESSAGE: &str =
+    "ログアウト処理が完了しませんでした。再度ログインしてください。";
 
 /// 指定 view とクエリで履歴を更新する。通常の `navigate` と、
 /// 投票キュー／カードからのディープリンクで同じ契約を共有する。
@@ -2336,30 +2341,46 @@ pub fn App() -> impl IntoView {
                 class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-white focus:px-4 focus:py-2 focus:text-black focus:font-bold">
                 "本文へスキップ"
             </a>
-            <nav class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
+            <nav aria-label="メインナビゲーション" lang="ja" class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
                 <h1 lang="en" class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
                 <Show when=move || view.get() != "login" fallback=|| ()>
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
-                        <button lang="en" on:click=move |_| navigate("dashboard", NavigateMode::Push)
+                        <a href="#dashboard" lang="en"
+                            on:click=move |ev| {
+                                ev.prevent_default();
+                                navigate("dashboard", NavigateMode::Push)
+                            }
                             aria-current=move || if view.get() == "dashboard" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-400" })>
                             "BROWSE"
-                        </button>
-                        <button lang="en" on:click=move |_| navigate("upload", NavigateMode::Push)
+                        </a>
+                        <a href="#upload" lang="en"
+                            on:click=move |ev| {
+                                ev.prevent_default();
+                                navigate("upload", NavigateMode::Push)
+                            }
                             aria-current=move || if view.get() == "upload" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-400" })>
                             "UPLOAD"
-                        </button>
-                        <button lang="en" on:click=move |_| navigate("moderation", NavigateMode::Push)
+                        </a>
+                        <a href="#moderation" lang="en"
+                            on:click=move |ev| {
+                                ev.prevent_default();
+                                navigate("moderation", NavigateMode::Push)
+                            }
                             aria-current=move || if view.get() == "moderation" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-400" })>
                             "MODERATION"
-                        </button>
-                        <button lang="en" on:click=move |_| navigate("ledger", NavigateMode::Push)
+                        </a>
+                        <a href="#ledger" lang="en"
+                            on:click=move |ev| {
+                                ev.prevent_default();
+                                navigate("ledger", NavigateMode::Push)
+                            }
                             aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
                             class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-400" })>
                             "LEDGER"
-                        </button>
+                        </a>
                         <button lang="en" type="button" on:click=handle_logout
                             data-testid="logout-button"
                             class="text-gray-400 hover:text-white transition-colors">
@@ -2864,7 +2885,7 @@ where
                 <p role="alert" data-testid="dashboard-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500 mb-4">
                     {move || error.get()}
                 </p>
-                {move || retry_control("dashboard", error.get(), {
+                {move || retry_control("dashboard", {
                     let set_submit = set_search_submit;
                     move || set_submit.update(|n| *n += 1)
                 })}
@@ -3082,20 +3103,27 @@ fn ExportMyData(token: String) -> impl IntoView {
 
 mod jxl;
 
-/// エラー／進捗文言の言語を判定し、要素の `lang` 属性へ渡す共通ヘルパ。
+/// エラー／進捗の**固定文言**の言語を判定し、要素の `lang` 属性へ渡す共通ヘルパ。
 ///
 /// 契約: `role="alert"` / `role="status"` に限らず、動的・静的を問わず英文テキストを
 /// 表示する要素は必ず `lang="en"` を宣言し、日本語テキストは `lang="ja"` を宣言する
 /// （ルートの `lang="ja"` に依存した暗黙宣言は使わない）。固定の英文見出しや
 /// 検証バッジ・種別バッジのような非ライブリージョンの英文もこの契約の対象であり、
 /// 要素単位で言語を明示する。動的な文言はこのヘルパを経由して言語を決める。
-/// 既存固定文言は一切変更しない。判定は文言に日本語文字（ひらがな・カタカナ・
-/// 漢字）が含まれるかだけを見るため、個々の文言追加・変更で drift しない。
-/// HTTP ステータス番号は判定に影響しない。
+/// 既存固定文言は一切変更しない。HTTP ステータス番号は判定に影響しない。
+///
+/// 適用範囲は固定文言のみに限定する。ユーザー由来の自由入力
+/// （通報の `reason`／監査ログの `reason` 等）は言語を確定できないため、この
+/// ヘルパを通さず要素へ `lang` を付けない。漢字だけを見て日本語と判定すると
+/// 中国語等の漢字混在テキストを誤って `ja` と宣言してしまうため、判定根拠は
+/// ひらがな／カタカナの有無に変更する。既存固定文言の `lang` 契約を壊さない
+/// ため、漢字のみで構成される固定の `UTC_LABEL`（およびそれを含む整形日時）だけは
+/// 例外的に `ja` を返す。
 fn error_lang(message: &str) -> &'static str {
-    if message
-        .chars()
-        .any(|c| matches!(c, '\u{3040}'..='\u{30ff}' | '\u{4e00}'..='\u{9fff}'))
+    if message.contains(UTC_LABEL)
+        || message
+            .chars()
+            .any(|c| matches!(c, '\u{3040}'..='\u{30ff}'))
     {
         "ja"
     } else {
@@ -3117,16 +3145,12 @@ fn datetime_content(formatted: String) -> impl IntoView {
 }
 
 /// 取得失敗画面で共有する「再読み込み」ボタンと dedicated `role=status`。
-/// 表示するのは固定文言のみで、レスポンス本文・生エラー・URL は一切渡さない。
-fn retry_control(
-    test_id: &'static str,
-    message: String,
-    on_retry: impl Fn() + 'static,
-) -> impl IntoView {
+/// `role=status` は操作案内の固定文言だけを告知し、エラー内容は呼び出し側の
+/// `role=alert` に任せる（二重読み上げの防止）。レスポンス本文・生エラー・URL は
+/// このコンポーネントへ渡さない。
+fn retry_control(test_id: &'static str, on_retry: impl Fn() + 'static) -> impl IntoView {
     let container_id = format!("{test_id}-retry");
     let status_id = format!("{test_id}-retry-status");
-    // lang 判定と本文で同じ値を参照するため、クロージャ用に複製する。
-    let message_for_lang = message.clone();
     // 連打ガード: 1 操作 = 1 リクエストとし、自己誘発の 429 を防ぐ。
     let (retry_busy, set_retry_busy) = signal(false);
     view! {
@@ -3148,8 +3172,8 @@ fn retry_control(
                 {RETRY_BUTTON_LABEL}
             </button>
             <p role="status" aria-live="polite" data-testid=status_id
-                lang=move || error_lang(&message_for_lang) class="text-xs text-gray-400">
-                {message}
+                lang=move || error_lang(RETRY_STATUS_MESSAGE) class="text-xs text-gray-400">
+                {RETRY_STATUS_MESSAGE}
             </p>
         </div>
     }
@@ -3256,10 +3280,12 @@ where
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
     let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
-    // non-modal パネル表示時: ダイアログ内の初期フォーカス先兼 Tab フォーカスの周回先。
+    // パネル展開時の初期フォーカス先（FORENSIC_TIMELINE 見出し）。
+    let audit_heading_ref = NodeRef::<leptos::html::H4>::new();
+    // CLOSE は Tab 到達可能な通常ボタンとして残す（初期フォーカス先ではない）。
     let audit_close_ref = NodeRef::<leptos::html::Button>::new();
 
-    // Show が true になった後に CLOSE へフォーカスを移す。
+    // Show が true になった後に見出しへフォーカスを移す。
     // <Show> が DOM を挿入するのを待つため requestAnimationFrame で 1 フレーム遅らせる。
     Effect::new(move |_| {
         if !show_audit.get() {
@@ -3268,13 +3294,13 @@ where
         let Some(window) = web_sys::window() else {
             return;
         };
-        let close_ref = audit_close_ref;
-        let focus_close = Closure::once_into_js(move |_: f64| {
-            if let Some(close) = close_ref.get() {
-                let _ = close.focus();
+        let heading_ref = audit_heading_ref;
+        let focus_heading = Closure::once_into_js(move |_: f64| {
+            if let Some(heading) = heading_ref.get() {
+                let _ = heading.focus();
             }
         });
-        let _ = window.request_animation_frame(focus_close.unchecked_ref());
+        let _ = window.request_animation_frame(focus_heading.unchecked_ref());
     });
 
     let token_stored = StoredValue::new(token);
@@ -3537,7 +3563,7 @@ where
                         lang="en"
                         aria-label=move || if favorite.get() { "Remove from favorites" } else { "Add to favorites" }
                         aria-pressed=move || if favorite.get() { "true" } else { "false" }
-                        class="text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
+                        class="min-h-6 min-w-6 text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
                         {move || if favorite.get() { "★" } else { "☆" }}
                     </button>
                     <button on:click=move |_| {
@@ -3550,7 +3576,7 @@ where
                         node_ref=audit_toggle_ref
                         aria-expanded=move || if show_audit.get() { "true" } else { "false" }
                         aria-controls=move || audit_controls_id.get_value().to_string()
-                        class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
+                        class="min-h-6 min-w-6 text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Audit"
                     </button>
                     <button
@@ -3558,7 +3584,7 @@ where
                         lang="en"
                         on:click=move |_| report_click(report_click_cid.clone())
                         data-testid="content-report-button"
-                        class="text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
+                        class="min-h-6 min-w-6 text-[8px] border border-white/20 px-1 hover:bg-white/10 transition-colors uppercase">
                         "Report"
                     </button>
                 </div>
@@ -3573,7 +3599,7 @@ where
                     <summary lang="en" class="text-[10px] tracking-widest uppercase text-gray-400 hover:text-white cursor-pointer">
                         "Table of Contents"
                     </summary>
-                    <nav class="mt-3 space-y-1 max-h-40 overflow-y-auto" inner_html=move || novel_toc.get() />
+                    <nav aria-label="目次" lang="ja" class="mt-3 space-y-1 max-h-40 overflow-y-auto" inner_html=move || novel_toc.get() />
                 </details>
             </Show>
 
@@ -3617,7 +3643,7 @@ where
                                         {CONTENT_RELOGIN_HINT}
                                     </p>
                                 </Show>
-                                {move || retry_control("content", content_load_error.get(), {
+                                {move || retry_control("content", {
                                     let set_reload = set_content_reload;
                                     move || set_reload.update(|n| *n += 1)
                                 })}
@@ -3656,12 +3682,15 @@ where
                         role="dialog"
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
-                        <h4 lang="en" class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
+                        // パネル展開時の初期フォーカス先。tabindex=-1 で Tab 停止点は増やさない。
+                        <h4 lang="en" tabindex="-1" data-testid="audit-timeline-heading"
+                            node_ref=audit_heading_ref
+                            class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
                         <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
                             <p role="alert" data-testid="audit-error" lang=move || error_lang(&audit_error.get()) class="text-[8px] text-red-500">
                                 {move || audit_error.get()}
                             </p>
-                            {move || retry_control("audit", audit_error.get(), {
+                            {move || retry_control("audit", {
                                 let fetched = audit_fetched_cid;
                                 let set_reload = set_audit_reload;
                                 move || {
@@ -3679,9 +3708,9 @@ where
                                     let created_at = log.created_at.clone();
                                     let created_display = format_local_datetime(&log.created_at);
                                     let created_lang = error_lang(&created_display);
-                                    // 理由は日本語になり得るため error_lang で言語を決める（値は属性へエコーしない）。
+                                    // ユーザー由来の自由入力（監査理由）は言語を確定できないため、
+                                    // error_lang を適用せず lang 属性を付けない（固定文言のみが判定対象）。
                                     let reason = log.reason.clone().unwrap_or_default();
-                                    let reason_for_lang = reason.clone();
                                     view! {
                                         <div class="text-[8px] space-y-1">
                                             <div class="flex justify-between text-gray-400">
@@ -3689,7 +3718,7 @@ where
                                                 <span class="text-green-500">{log.new_status.clone()}</span>
                                             </div>
                                             <p lang="en" class="text-gray-300">"By: " {log.changed_by.clone()}</p>
-                                            <p class="italic"><span lang="en">"Reason: "</span><span lang=move || error_lang(&reason_for_lang)>{reason}</span></p>
+                                            <p class="italic"><span lang="en">"Reason: "</span><span>{reason}</span></p>
                                             <p lang="ja" class="text-[8px] text-gray-500">"※ 表示は要約です。全文は運用者へお問い合わせください"</p>
                                             <p lang="en" class="text-[10px] text-gray-400 break-all font-mono">"Hash: " {log.entry_hash.clone()}</p>
                                         </div>
@@ -3838,6 +3867,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     let (title, set_title) = signal(String::new());
     let (description, set_description) = signal(String::new());
     let (tags, set_tags) = signal(String::new());
+    // 送信前ゲートで拒否した入力を識別し、aria-invalid / aria-describedby を付与する。
+    let (price_invalid, set_price_invalid) = signal(false);
+    let (metadata_invalid, set_metadata_invalid) = signal(false);
     // ラベルをキーボードで操作したときに file input へclick()を渡すための参照。
     let file_input_ref = NodeRef::<leptos::html::Input>::new();
 
@@ -3847,11 +3879,16 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         if loading.get() {
             return;
         }
+        // ファイルが変わったら前回の入力検証フラグを解除する。
+        set_price_invalid.set(false);
+        set_metadata_invalid.set(false);
         let input: HtmlInputElement = event_target(&ev);
         if let Some(files) = input.files()
             && let Some(f) = files.get(0)
         {
             if f.size() > MAX_UPLOAD_BYTES {
+                // 拒否したファイルを input からも取り除き、同じファイルを再選択できるようにする。
+                input.set_value("");
                 set_file.set(None);
                 set_failed.set("ERROR: File exceeds the 10 MiB limit.".to_string());
                 return;
@@ -3874,6 +3911,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         if !claim_submission(loading.get()) {
             return;
         }
+        // 新しい試行では前回の入力検証フラグを解除し、成功時に aria-invalid を残さない。
+        set_price_invalid.set(false);
+        set_metadata_invalid.set(false);
         // ファイル未選択（サイズ拒否を含む）ではパニックせずエラー表示する。
         let Some(f) = file.get() else {
             set_failed.set("ERROR: Select a file first.".to_string());
@@ -3894,12 +3934,14 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         // 送信直前にサーバー契約 0..=1_000_000 をゲートする。入力中に黙って丸めない
         // 経路を維持するため、範囲外はここで固定文言を出して通信を開始しない。
         if let Some(error) = price_range_error(price_val) {
+            set_price_invalid.set(true);
             set_failed.set(error.to_string());
             return;
         }
         // メタデータも通信前に UTF-8 バイト契約でゲートする。HTML の maxlength は
         // UTF-16 単位のため日本語では守れず、ここで拒否すれば HTTP は 0 本のまま。
         if let Some(error) = metadata_byte_error(&title_val, &description_val, &tags_val) {
+            set_metadata_invalid.set(true);
             set_failed.set(error.to_string());
             return;
         }
@@ -4052,6 +4094,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         name="price"
                         min="0"
                         max="1000000"
+                        aria-invalid=move || if price_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if price_invalid.get() { Some("upload-failed") } else { None }
                         on:input=move |ev| {
                             // 実挙動: ブラウザ自身の数値解釈（valueAsNumber）を使うため、
                             // "1e3" のような指数表記の貼り付けは 1000 として受理される。
@@ -4083,6 +4127,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         type="text"
                         maxlength=UPLOAD_TITLE_MAX_LEN
                         placeholder="TITLE"
+                        aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
                         on:input=move |ev| set_title.set(event_target_value(&ev))
                         prop:value=title
                         class="w-full bg-black border border-white/20 p-3 text-sm"
@@ -4098,6 +4144,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         name="description"
                         maxlength=UPLOAD_DESCRIPTION_MAX_LEN
                         placeholder="DESCRIPTION"
+                        aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
                         on:input=move |ev| set_description.set(event_target_value(&ev))
                         prop:value=description
                         class="w-full bg-black border border-white/20 p-3 text-sm h-24 resize-y"
@@ -4114,6 +4162,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         type="text"
                         maxlength=UPLOAD_TAGS_MAX_LEN
                         placeholder="FANTASY, SCIFI"
+                        aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
                         on:input=move |ev| set_tags.set(event_target_value(&ev))
                         prop:value=tags
                         class="w-full bg-black border border-white/20 p-3 text-sm"
@@ -4133,7 +4183,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                     </div>
                 </Show>
                 <Show when=move || !failed.get().is_empty() fallback=|| ()>
-                    <div data-testid="upload-failed" role="alert" lang=move || error_lang(&failed.get()) class="p-4 bg-white/5 border border-red-500/40 text-xs">
+                    <div id="upload-failed" data-testid="upload-failed" role="alert" lang=move || error_lang(&failed.get()) class="p-4 bg-white/5 border border-red-500/40 text-xs">
                         <span class="text-gray-500 mr-2">"[FAILED]"</span> {move || failed.get()}
                     </div>
                 </Show>
@@ -4222,7 +4272,7 @@ fn Ledger(token: String) -> impl IntoView {
                 <p role="alert" data-testid="ledger-error" lang=move || error_lang(&ledger_error.get()) class="text-xs text-red-500 mb-4">
                     {move || ledger_error.get()}
                 </p>
-                {move || retry_control("ledger", ledger_error.get(), {
+                {move || retry_control("ledger", {
                     let set_reload = set_ledger_reload;
                     move || set_reload.update(|n| *n += 1)
                 })}
@@ -4322,6 +4372,10 @@ enum StatsFailure {
 /// 公開集計が 401 のときだけ表示する dedicated 固定文言。
 /// 403 / 5xx / ネットワークエラーは従来どおり `stats_error_message(Fetch)` を維持する。
 const PUBLIC_STATS_UNAUTHORIZED: &str = "再ログインが必要です。";
+
+/// オプインの `SHOW STATS` が 403 のときに dedicated `role=status` で出す固定文言。
+/// サーバー本文・権限詳細は一切エコーせず、ボタンの `aria-describedby` から参照する。
+const MOD_STATS_FORBIDDEN_MESSAGE: &str = "集計は運用者のみ閲覧できます。";
 
 /// 集計取得失敗時に画面へ表示する固定文言を返す純粋ヘルパー。
 /// 生エラー（`reqwest::Error` / `serde_json::Error`）を引数に取らないため、
@@ -4432,6 +4486,9 @@ where
     let (report_failed, set_report_failed) = signal(String::new());
     // 空入力で送信を止めた理由を role=alert で読み上げる（送信前に検証する）。
     let (report_validation_error, set_report_validation_error) = signal(String::new());
+    // 検証失敗フィールドを識別し、aria-invalid / aria-describedby を関連付ける。
+    let (report_cid_invalid, set_report_cid_invalid) = signal(false);
+    let (report_reason_invalid, set_report_reason_invalid) = signal(false);
     let (reports, set_reports) = signal(Vec::<Report>::new());
     // 投票一覧の取得失敗を明示する。失敗しても reports は空にせず既存データを維持し、
     // 空状態を「保留投票なし」と誤表示しない。
@@ -4457,6 +4514,8 @@ where
     // 運用者パネルのマウント条件。`/mod/stats` が 200 を返したというサーバ応答だけを根拠にし、
     // トークン内容やクライアント状態から運用者を推測しない。
     let (stats_authorized, set_stats_authorized) = signal(false);
+    // 403 のときだけオプインボタンの説明として出す dedicated status の表示状態。
+    let (stats_forbidden, set_stats_forbidden) = signal(false);
     let (stats_busy, set_stats_busy) = signal(false);
     // 投票結果のフィードバック。成功通知と失敗エラーは固定文言のみを表示する。
     let (vote_error, set_vote_error) = signal(String::new());
@@ -4637,6 +4696,8 @@ where
             return;
         }
         set_stats_busy.set(true);
+        // 新しい試行では前回の 403 案内を消し、応答に応じて再度設定する。
+        set_stats_forbidden.set(false);
         let token = token_stored.get_value();
         spawn_local(async move {
             let _release = BusyGuard(set_stats_busy);
@@ -4654,6 +4715,7 @@ where
                     Ok(stats) => {
                         set_stats_html.set(render_moderation_stats_html(&stats));
                         set_stats_error.set(String::new());
+                        set_stats_forbidden.set(false);
                         set_stats_loaded.set(true);
                         // 200 応答のみを運用者判定の根拠にしてパネルをマウントする。
                         set_stats_authorized.set(true);
@@ -4664,19 +4726,23 @@ where
                         set_stats_html.set(String::new());
                         set_stats_loaded.set(false);
                         set_stats_error.set(stats_error_message(StatsFailure::Parse).to_string());
+                        set_stats_forbidden.set(false);
                         set_stats_authorized.set(true);
                     }
                 },
                 Ok(response) if response.status() == 403 => {
-                    // 403 は一般画面へ描画せず、パネルを黙って閉じる。
+                    // 403 ではパネルを開かず、オプインボタンに紐付く dedicated status で案内する。
+                    // サーバー本文は一切使わず固定文言だけを表示する。
                     set_stats_html.set(String::new());
                     set_stats_error.set(String::new());
                     set_stats_loaded.set(false);
                     set_stats_authorized.set(false);
+                    set_stats_forbidden.set(true);
                 }
                 Ok(response) => {
                     set_stats_html.set(String::new());
                     set_stats_loaded.set(false);
+                    set_stats_forbidden.set(false);
                     set_stats_error.set(format!(
                         "集計の取得に失敗しました (HTTP {}).",
                         response.status()
@@ -4686,6 +4752,7 @@ where
                     // ネットワークエラーの生情報は出さず固定文言のみ表示する。
                     set_stats_html.set(String::new());
                     set_stats_loaded.set(false);
+                    set_stats_forbidden.set(false);
                     set_stats_error.set(stats_error_message(StatsFailure::Fetch).to_string());
                 }
             }
@@ -4697,24 +4764,33 @@ where
         if !claim_submission(report_busy.get()) {
             return;
         }
-        // 新しい試行では前回の送信失敗を消す。
+        // 新しい試行では前回の送信失敗と入力検証フラグを消す。
         set_report_failed.set(String::new());
+        set_report_cid_invalid.set(false);
+        set_report_reason_invalid.set(false);
         let cid = cid.get();
         let reason = reason.get();
         // POST 前に空入力を止める。検証エラーは role=alert で読み上げる。
         // 既存の "Report failed." 固定文言は成否の通知として変更しない。
         if let Err(message) = validate_report_input(&cid, &reason) {
+            // 空だったフィールドだけを invalid とし、エラー要素を aria-describedby で参照する。
+            set_report_cid_invalid.set(cid.trim().is_empty());
+            set_report_reason_invalid.set(!cid.trim().is_empty());
             set_report_validation_error.set(message.to_string());
             set_status.set(String::new());
             return;
         }
         // 理由も UTF-8 バイト契約を通信前にゲートする（maxlength は UTF-16 では守れない）。
         if let Some(error) = report_reason_byte_error(&reason) {
+            set_report_cid_invalid.set(false);
+            set_report_reason_invalid.set(true);
             set_report_validation_error.set(error.to_string());
             set_status.set(String::new());
             return;
         }
         set_report_validation_error.set(String::new());
+        set_report_cid_invalid.set(false);
+        set_report_reason_invalid.set(false);
         set_report_busy.set(true);
         let token = token_stored.get_value();
         // 送信開始時にも失敗表示を消し、進捗は status へ出す。
@@ -4854,10 +4930,20 @@ where
                     on:click=move |_| fetch_stats()
                     disabled=move || stats_busy.get()
                     aria-busy=move || if stats_busy.get() { "true" } else { "false" }
+                    // 403 のときだけ dedicated status を説明として関連付ける。
+                    aria-describedby=move || if stats_forbidden.get() { Some("moderation-stats-forbidden") } else { None }
                     data-testid="moderation-stats-toggle"
                     class="py-2 px-4 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white hover:text-black">
                     "SHOW STATS"
                 </button>
+                <Show when=move || stats_forbidden.get() fallback=|| ()>
+                    <p role="status" aria-live="polite" id="moderation-stats-forbidden"
+                        data-testid="moderation-stats-forbidden"
+                        lang=move || error_lang(MOD_STATS_FORBIDDEN_MESSAGE)
+                        class="text-xs text-yellow-500">
+                        {MOD_STATS_FORBIDDEN_MESSAGE}
+                    </p>
+                </Show>
                 <Show when=move || stats_authorized.get() fallback=|| ()>
                     <section data-testid="moderation-stats-section" class="border-t border-white/10 pt-8 space-y-4">
                         <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"TRANSPARENCY DASHBOARD"</h2>
@@ -4894,6 +4980,8 @@ where
                         lang="en"
                         aria-label="TARGET CID"
                         aria-required="true"
+                        aria-invalid=move || if report_cid_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if report_cid_invalid.get() { Some("report-validation-error") } else { None }
                         placeholder="TARGET CID"
                         maxlength=REPORT_CID_MAX_LEN
                         on:input=move |ev| set_cid.set(event_target_value(&ev))
@@ -4908,6 +4996,8 @@ where
                         lang="en"
                         aria-label="REASON"
                         aria-required="true"
+                        aria-invalid=move || if report_reason_invalid.get() { "true" } else { "false" }
+                        aria-describedby=move || if report_reason_invalid.get() { Some("report-validation-error") } else { None }
                         placeholder="REASON"
                         maxlength=REPORT_REASON_MAX_LEN
                         on:input=move |ev| set_reason.set(event_target_value(&ev))
@@ -4920,7 +5010,7 @@ where
                         "SUBMIT FORENSIC REPORT"
                     </button>
                     <Show when=move || !report_validation_error.get().is_empty() fallback=|| ()>
-                        <p role="alert" data-testid="report-validation-error" lang=move || error_lang(&report_validation_error.get()) class="text-xs text-red-500">
+                        <p id="report-validation-error" role="alert" data-testid="report-validation-error" lang=move || error_lang(&report_validation_error.get()) class="text-xs text-red-500">
                             {move || report_validation_error.get()}
                         </p>
                     </Show>
@@ -4941,7 +5031,7 @@ where
                     <p role="alert" data-testid="reports-error" lang=move || error_lang(&reports_error.get()) class="text-xs text-red-500">
                         {move || reports_error.get()}
                     </p>
-                    {move || retry_control("reports", reports_error.get(), {
+                    {move || retry_control("reports", {
                         let set_reload = set_reports_reload;
                         move || set_reload.update(|n| *n += 1)
                     })}
@@ -4989,7 +5079,8 @@ where
                                         </a>
                                         <span lang="en" class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
                                     </div>
-                                    <p class="text-[10px] text-gray-300 italic"><span lang="en">"Reason: "</span><span lang=move || error_lang(&report.reason)>{report.reason.clone()}</span></p>
+                                    // 通報理由はユーザー自由入力のため error_lang を適用せず lang を付けない。
+                                    <p class="text-[10px] text-gray-300 italic"><span lang="en">"Reason: "</span><span>{report.reason.clone()}</span></p>
                                     <div class="grid grid-cols-2 gap-4">
                                         <button lang="en" on:click=move |_| do_vote(rid, "Approve".to_string())
                                             disabled=move || vote_busy.get() || !reports_error.get().is_empty()
@@ -5167,6 +5258,8 @@ mod tests {
             "Network error submitting vote.",
             "Network error loading reports.",
             "Report failed.",
+            // 漢字を含む中国語は日本語ではないため ja と判定しない（自由入力へは lang を付けない）。
+            "这是一个中文测试。",
         ] {
             assert_eq!(super::error_lang(message), "en", "{message}");
         }
@@ -6448,10 +6541,11 @@ mod tests {
 
     #[test]
     fn stats_forbidden_phrase_is_preserved_but_never_rendered_on_general_screen() {
-        // 403 固定文言は一般画面へ描画しない（パネルは黙って閉じる）。
-        // ただし確定した文言自体は変更検知のため検証し続ける。
+        // 403 ではサーバー本文の文言をエコーせず、オプインボタンに紐付く
+        // dedicated status の固定文言だけを案内する（パネルは開かない）。
         const FORBIDDEN: &str = "運用者権限が必要です";
         assert_eq!(FORBIDDEN, "運用者権限が必要です");
+        assert_ne!(super::MOD_STATS_FORBIDDEN_MESSAGE, FORBIDDEN);
         for message in [
             super::stats_error_message(super::StatsFailure::Parse),
             super::stats_error_message(super::StatsFailure::Fetch),

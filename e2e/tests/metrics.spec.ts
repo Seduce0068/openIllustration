@@ -263,13 +263,13 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     expect(contentBodyRequests.length).toBe(1);
 
     // BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントさせ、同じ本文を再描画する。
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
     // ビュー切り替えが完了した肯定アサーションを先に置き、否定は poll で待つ。
     await expect(page.locator('#upload-price')).toBeVisible();
     await expect
       .poll(() => page.getByText('Neutralized Story').count(), { timeout: 5000 })
       .toBe(0);
-    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
     await expect(page.locator('span', { hasText: '● VERIFIED' })).toBeVisible({ timeout: 30000 });
     await expect.poll(() => contentBodyRequests.length, { timeout: 10000 }).toBe(2);
 

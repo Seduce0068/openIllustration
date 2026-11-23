@@ -105,8 +105,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.locator('#main-content')).toBeFocused();
 
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'BROWSE' }).click();
 
     // 支援オーバーレイは group-focus-within:opacity-100 でも表示される。
     // Tailwind の .group に依存せず、クライアント側の testid で特定する。
@@ -156,8 +156,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
       };
     });
 
-    await page.getByRole('button', { name: 'LEDGER' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
+    await page.getByRole('link', { name: 'LEDGER' }).click();
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toHaveAttribute('aria-current', 'page');
     expect(new URL(page.url()).hash).toBe('#dashboard');
     await expect.poll(() => historyWarnings.length).toBeGreaterThan(0);
 
@@ -172,7 +172,7 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     });
 
     // The ledger stays readable for legacy mock records, labeled as such
-    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await page.getByRole('link', { name: 'LEDGER' }).click();
     await expect(page.locator('text=Forensic Transaction Ledger')).toBeVisible();
     await expect(page.locator('text=LEGACY MOCK RECORDS')).toBeVisible();
     await expect(page.locator('text=Record_Hash')).toBeVisible();
@@ -182,7 +182,7 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     // R2-URL: タブ切替は pushState なので、戻るで直前の BROWSE が復元される。
     expect(new URL(page.url()).hash).toBe('#ledger');
     await page.goBack();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toHaveAttribute(
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toHaveAttribute(
       'aria-current',
       'page',
     );
@@ -229,8 +229,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'LEDGER' }).click();
 
     return {
       error: page.getByTestId('ledger-error'),
@@ -272,13 +272,14 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(page.getByTestId('ledger-retry').getByRole('button', { name: '再読み込み' }))
       .toBeVisible();
     await expect(page.getByTestId('ledger-retry-status')).toHaveAttribute('role', 'status');
-    await expect(page.getByTestId('ledger-retry-status')).toHaveText('取引履歴の取得に失敗しました。');
+    // role=status は操作案内のみ。エラー文言は ledger-error の role=alert が告知する。
+    await expect(page.getByTestId('ledger-retry-status')).toHaveText('再読み込みできます。');
 
     // 401 フェーズ: 同じ Ledger ケース内で再取得し、dedicated role=status の
     // 「再ログインが必要です。」＋ LOG OUT 案内を検証する（他エラー文言は不変）。
     transactionStatus = 401;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'LEDGER' }).click();
     const relogin = page.getByTestId('ledger-relogin');
     await expect(relogin).toBeVisible();
     await expect(relogin).toHaveAttribute('role', 'status');
@@ -292,12 +293,12 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
 
     // 429 フェーズ: レート制限専用文言と共通の再読み込み導線を検証する。
     transactionStatus = 429;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'LEDGER' }).click();
     await expect(error).toHaveText('しばらく待って再試行してください。', { timeout: 10000 });
     await expect(page.getByTestId('ledger-retry-status')).toHaveAttribute('role', 'status');
     await expect(page.getByTestId('ledger-retry-status'))
-      .toHaveText('しばらく待って再試行してください。');
+      .toHaveText('再読み込みできます。');
     await expect(page.locator('body')).not.toContainText('ledger unavailable');
   });
 

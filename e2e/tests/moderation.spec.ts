@@ -129,8 +129,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('link', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
     await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'REJECT (VOTE)' })).toBeVisible();
@@ -152,8 +152,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('link', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
   };
 
@@ -229,8 +229,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('link', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'MODERATION' }).click();
 
     // サーバーが要約した reason がそのまま投票キューに表示されること。
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
@@ -256,7 +256,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByText('FORENSIC_TIMELINE')).toBeVisible();
     await expect(page.getByText('Initial report')).toBeVisible();
     // 確認後は MODERATION へ戻り、投票可能な状態が維持されていること。
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(page.getByRole('button', { name: 'APPROVE (RESTORE)' })).toBeVisible();
 
     // A11Y: 通報フォームは既存 aria-label を維持したうえで <label for> でも関連付ける。
@@ -304,8 +304,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('link', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'MODERATION' }).click();
 
     // 要約済み文字列と [redacted] は表示される。
     await expect(page.getByText('Jury Voting Queue')).toBeVisible({ timeout: 10000 });
@@ -390,8 +390,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'BROWSE' }).click();
     
     const auditButton = page.locator('button:has-text("Audit")').first();
     await expect(auditButton).toBeVisible({ timeout: 20000 });
@@ -581,8 +581,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await expect(page.getByRole('link', { name: 'MODERATION' })).toBeVisible({ timeout: 10000 });
+    await page.getByRole('link', { name: 'MODERATION' }).click();
 
     // フェーズ0（公開集計）: オプインを待たず初期表示で 1 本だけ取得し、
     // 一般画面へホワイトリストの指標だけを描画する。
@@ -609,6 +609,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
     await expect(page.locator('body')).not.toContainText('TRANSPARENCY DASHBOARD');
     await expect(page.locator('body')).not.toContainText(statsForbiddenText);
+    await expect(page.getByTestId('moderation-stats-forbidden')).toHaveCount(0);
+    await expect(page.getByTestId('moderation-stats-toggle')).not.toHaveAttribute('aria-describedby');
     expect(statsRequests).toEqual([]);
 
     // フェーズ2: 中立ボタンの押下で1本だけ送信し、200 応答を根拠にパネルをマウントする。
@@ -620,15 +622,23 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('moderation-stats-totals')).toContainText('Quorum Not Met');
     await expect(page.getByTestId('moderation-stats-monthly')).toContainText('2026-11');
     await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
+    await expect(page.getByTestId('moderation-stats-forbidden')).toHaveCount(0);
+    await expect(page.getByTestId('moderation-stats-toggle')).not.toHaveAttribute('aria-describedby');
     expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
     ]);
 
-    // フェーズ3: 403 では権限エラーを一般画面へ出さず、パネルを黙って閉じる。
+    // フェーズ3: 403 ではパネルを開かず、オプインボタンに紐付く dedicated status で案内する。
     forbidStats = true;
     await page.getByTestId('moderation-stats-toggle').click();
     await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0, { timeout: 10000 });
     await expect(page.getByTestId('moderation-stats-error')).toHaveCount(0);
+    const forbiddenNotice = page.getByTestId('moderation-stats-forbidden');
+    await expect(forbiddenNotice).toHaveAttribute('role', 'status');
+    await expect(forbiddenNotice).toHaveText('集計は運用者のみ閲覧できます。');
+    await expect(page.getByTestId('moderation-stats-toggle'))
+      .toHaveAttribute('aria-describedby', 'moderation-stats-forbidden');
+    // サーバー本文の権限文言は一切エコーしない。
     await expect(page.locator('body')).not.toContainText(statsForbiddenText);
     expect(statsRequests).toEqual([
       { method: 'GET', path: '/mod/stats', authorization: 'Bearer mock_jwt_token' },
@@ -636,8 +646,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     ]);
 
     // 再マウントしても初期表示は 0 本のまま（画面遷移による勝手な再フェッチがないこと）。
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(page.getByTestId('moderation-stats-toggle')).toBeVisible({ timeout: 10000 });
     await expect(page.getByTestId('moderation-stats-section')).toHaveCount(0);
     expect(statsRequests).toHaveLength(2);
@@ -649,8 +659,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // フェーズ4: 公開集計が不正 JSON のときも運用者向け /mod/stats と同じ Parse 分類の
     // 固定文言を出し、serde の生エラー（センチネル）は出さない。既存ケース内で完結する。
     brokenPublicStats = true;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     const publicStatsError = page.getByTestId('public-mod-stats-error');
     await expect(publicStatsError).toBeVisible({ timeout: 10000 });
     await expect(publicStatsError).toHaveAttribute('role', 'alert');
@@ -667,8 +677,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // サーバー本文（センチネル）は画面へ出さない。既存ケース内で完結する。
     brokenPublicStats = false;
     unauthorizedPublicStats = true;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(publicStatsError).toBeVisible({ timeout: 10000 });
     await expect(publicStatsError).toHaveText(publicStatsUnauthorizedText);
     await expect(publicStatsError).not.toContainText('UNAUTHORIZED_SENTINEL_DO_NOT_SHOW');
@@ -680,8 +690,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 403 は 401 専用文言へ切り替えず、従来の「集計の取得に失敗しました。」を維持する（回帰）。
     unauthorizedPublicStats = false;
     forbiddenPublicStats = true;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect(publicStatsError).toHaveText('集計の取得に失敗しました。', { timeout: 10000 });
     await expect(publicStatsError).not.toContainText('FORBIDDEN_SENTINEL_DO_NOT_SHOW');
     await expect(page.getByTestId('public-mod-stats-relogin-hint')).toHaveCount(0);
@@ -691,8 +701,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // /mod/stats は一切増えない（状態変更なし）。
     forbiddenPublicStats = false;
     freshPublicStats = false;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await assertGeneratedAt(page.getByTestId('public-mod-stats'), 'public-mod-stats-generated-at');
     const staleWarning = page.getByTestId('public-mod-stats-stale');
     await expect(staleWarning).toBeVisible({ timeout: 10000 });
@@ -721,8 +731,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     const refreshButton = page.getByTestId('public-mod-stats-refresh');
     const statsCountBeforeRace = statsRequests.length;
     const publicCountBeforeRace = publicStatsRequests.length;
-    await page.getByRole('button', { name: 'BROWSE' }).click();
-    await page.getByRole('button', { name: 'MODERATION' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'MODERATION' }).click();
     await expect.poll(() => publicStatsRequests.length).toBe(publicCountBeforeRace + 1);
     // マウント取得は busy を立てないため、更新ボタンは押せる。
     await expect(refreshButton).toBeEnabled();
@@ -978,7 +988,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // auth.spec.ts は担当外のため、ここに境界オラクルを集約する（新規 test() なし）。
     const reportsReload = page.getByTestId('reports-retry').getByRole('button', { name: '再読み込み' });
     await expect(page.getByTestId('reports-retry-status')).toHaveAttribute('role', 'status');
-    await expect(page.getByTestId('reports-retry-status')).toHaveText(reportsHttpErrorText(500));
+    // role=status は操作案内のみ（エラー文言は reports-error の role=alert が告知）。
+    await expect(page.getByTestId('reports-retry-status')).toHaveText('再読み込みできます。');
 
     reportStatus = 401;
     await reportsReload.click();
@@ -997,7 +1008,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     reportStatus = 429;
     await reportsReload.click();
     await expect(page.getByTestId('reports-retry-status'))
-      .toHaveText('しばらく待って再試行してください。', { timeout: 10000 });
+      .toHaveText('再読み込みできます。', { timeout: 10000 });
     await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
     reportStatus = 500;
 
@@ -1105,6 +1116,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(validationError).toHaveText('対象 CID を入力してください。');
     await expect(validationError).toHaveAttribute('role', 'alert');
     await expect(validationError).toHaveAttribute('lang', 'ja');
+    // 検証失敗 input だけを aria-invalid とし、エラー要素を aria-describedby で参照する。
+    await expect(cidField).toHaveAttribute('aria-invalid', 'true');
+    await expect(cidField).toHaveAttribute('aria-describedby', 'report-validation-error');
+    await expect(reasonField).toHaveAttribute('aria-invalid', 'false');
+    await expect(reasonField).not.toHaveAttribute('aria-describedby');
     expect(reportRequests).toEqual([]);
 
     await page.locator('input[placeholder="TARGET CID"]').fill('');
@@ -1120,6 +1136,10 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
     await expect(validationError).toHaveText('通報理由を入力してください。');
     await expect(validationError).toHaveAttribute('role', 'alert');
+    await expect(reasonField).toHaveAttribute('aria-invalid', 'true');
+    await expect(reasonField).toHaveAttribute('aria-describedby', 'report-validation-error');
+    await expect(cidField).toHaveAttribute('aria-invalid', 'false');
+    await expect(cidField).not.toHaveAttribute('aria-describedby');
     expect(reportRequests).toEqual([]);
     await expect(reportFailed).toHaveCount(0);
 
@@ -1128,6 +1148,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await page.getByRole('button', { name: 'SUBMIT FORENSIC REPORT' }).click();
 
     await expect(validationError).toHaveCount(0);
+    // 成功時は aria-invalid / aria-describedby を解除する。
+    await expect(cidField).toHaveAttribute('aria-invalid', 'false');
+    await expect(reasonField).toHaveAttribute('aria-invalid', 'false');
+    await expect(cidField).not.toHaveAttribute('aria-describedby');
+    await expect(reasonField).not.toHaveAttribute('aria-describedby');
     await expect(reportFailed).toHaveCount(1);
     // 失敗は dedicated role="alert"、成功・進捗は status のまま。
     await expect(reportFailed).toHaveAttribute('role', 'alert');

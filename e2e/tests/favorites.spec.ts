@@ -144,7 +144,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
 
     await expect(page.getByText('Fav Story')).toBeVisible({ timeout: 20000 });
     await expect(page.getByText('Plain Story')).toBeVisible();
@@ -337,7 +337,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Guard Story')).toBeVisible({ timeout: 20000 });
 
     const card = page.locator('div[data-testid="content-card"]').filter({ hasText: 'Guard Story' });

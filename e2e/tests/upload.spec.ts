@@ -15,7 +15,7 @@ test.describe('Content Upload Flow', () => {
     });
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
   });
 
   test('should upload JXL content successfully', async ({ page }) => {
@@ -27,7 +27,7 @@ test.describe('Content Upload Flow', () => {
     await expect(itemCountStatus).toHaveAttribute('aria-live', 'polite');
     await expect(itemCountStatus).toContainText('件のコンテンツを表示中');
 
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
     
     const fileInput = page.locator('input[type="file"]');
     const mockFile = Buffer.from('mock jxl data');
@@ -74,7 +74,7 @@ test.describe('Content Upload Flow', () => {
   });
 
   test('should reject files over 10 MiB before upload', async ({ page }) => {
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     let uploadAttempted = false;
     await page.route('**/content/upload', async route => {
@@ -96,10 +96,21 @@ test.describe('Content Upload Flow', () => {
     // 拒否後はファイルが保持されず、送信ボタンは無効になる。
     await expect(page.getByRole('button', { name: /Sign & Submit/i })).toBeDisabled();
     expect(uploadAttempted).toBe(false);
+
+    // サイズ拒否時に input.value がクリアされ、同じファイルを再選択できること。
+    await expect(fileInput).toHaveValue('');
+    await fileInput.setInputFiles({
+      name: 'retry.jxl',
+      mimeType: 'image/jxl',
+      buffer: Buffer.from('mock jxl data'),
+    });
+    await expect(page.getByTestId('upload-failed')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Sign & Submit/i })).toBeEnabled();
+    expect(uploadAttempted).toBe(false);
   });
 
   test('INT-02: should reject ZIP files', async ({ page }) => {
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     // R2-ACCEPT: file input に受理 MIME/拡張子の accept 属性を宣言する。
     // 禁止ファイルはブラウザのピッカー段階で弾むが、setInputFiles は accept を
@@ -138,7 +149,7 @@ test.describe('Content Upload Flow', () => {
   });
 
   test('R1-14: shows an error and re-enables the button when arrayBuffer() rejects', async ({ page }) => {
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     const fileInput = page.locator('input[type="file"]');
     await fileInput.setInputFiles({
@@ -174,7 +185,7 @@ test.describe('Content Upload Flow', () => {
   });
 
   test('R2: file-upload label is keyboard operable and price input has bounds', async ({ page }) => {
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     const label = page.locator('label[for="file-upload"]');
     await expect(label).toBeVisible();
@@ -247,7 +258,7 @@ test.describe('Content Upload Flow', () => {
   });
 
   test('R2 (price boundary): 送信前ゲートで範囲外を拒否し、0/1000000 を丸めずに送信する', async ({ page }) => {
-    await page.getByRole('button', { name: 'UPLOAD' }).click();
+    await page.getByRole('link', { name: 'UPLOAD' }).click();
 
     const submittedPrices: string[] = [];
     let uploadRouteCalls = 0;
@@ -295,6 +306,9 @@ test.describe('Content Upload Flow', () => {
     await submitButton.click();
     await expect(failed).toContainText(clientPriceError, { timeout: 15000 });
     await expect(failed).toHaveAttribute('role', 'alert');
+    // 価格入力を aria-invalid とし、エラー要素を aria-describedby で参照する。
+    await expect(priceInput).toHaveAttribute('aria-invalid', 'true');
+    await expect(priceInput).toHaveAttribute('aria-describedby', 'upload-failed');
     expect(uploadRouteCalls).toBe(0);
 
     // 1000001: 上限超過も同じゲートで拒否され、引き続き route は0回。
@@ -307,6 +321,9 @@ test.describe('Content Upload Flow', () => {
     // 0: 購入不可を表すが、サーバー契約では下限として受理される。
     await priceInput.fill('0');
     await submitButton.click();
+    // 受理されたら aria-invalid / aria-describedby を解除する。
+    await expect(priceInput).toHaveAttribute('aria-invalid', 'false');
+    await expect(priceInput).not.toHaveAttribute('aria-describedby');
     await expect(status).toContainText('SUCCESS: Content registered', { timeout: 15000 });
 
     // 1000000: 上限境界は受理。

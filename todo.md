@@ -786,6 +786,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第71ラウンド（残存a11y/UX一式）: 2担当（nav/UX）。
+  nav landmarkへaria-label+lang、4タブをbuttonからhref付きaへ（clickでprevent_default後に
+  navigate）、E2Eセレクタ71箇所をlinkへ更新。error_langをひらがな/カタカナ判定へ強化し
+  自由入力への適用を禁止、SHOW STATS 403 dedicated案内+aria-describedby、
+  logout文言を再ログイン案内へ、aria-invalid/describedby付与と成功時解除、
+  サイズ超過file inputクリア、retry statusを操作案内固定文言へ（二重読み上げ解消）、
+  カード24pxタッチ目標、監査見出し初期フォーカス。
+  親がNodeRef型名(HtmlHeadingElement→H4)を修正。R4指摘0件。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  wasm/tsc green、server全テスト green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: axe WCAG AA自動スキャン導入、再試行フィードバック、
+  RuntimeConfig一括化、doctor MIGRATIONS_DIR診断、REQUEST_TIMEOUT二重読込、
+  restore原子的ロールバック、ContentViewer世代ガード、バックアップunit network-online、
+  REVIEW_REPORT未更新、TimeoutLayer408統合テスト、url_decode不正percentテスト、
+  ui_errorテスト仕様化、ハンドル済みUI失敗テレメトリ）は記録のみで保留。
+
 - 2026-11-24 コンボ第69ラウンド（ADR完了後8回目review/discovery）: 全7担当完了。
   高は0件。R6 で以下を是正: global-setup.tsをtsc型検査対象へ追加（型エラーも修正）、
   公開集計の鮮度判定をサーバー時刻(server_now)方式へ移行（旧サーバーは端末時刻へ

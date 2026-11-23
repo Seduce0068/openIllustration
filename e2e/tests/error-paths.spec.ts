@@ -39,7 +39,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'BROWSE' })).toBeVisible({ timeout: 10000 });
   }
 
   test('DASH-ERR: GET /content が network error のときダッシュボードにエラー表示が出ること', async ({ page }) => {
@@ -145,7 +145,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await expect(loginAlert)
       .toHaveText('認証に失敗しました (HTTP 500).', { timeout: 10000 });
     await expect(loginAlert).toHaveAttribute('role', 'alert');
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toHaveCount(0);
   });
 
   test('AUDIT-500: /content/{cid}/audit が HTTP 500 のとき監査パネルに role=alert が出ること', async ({ page }) => {
@@ -209,7 +209,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     });
 
     await loginWithMockAuth(page);
-    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('link', { name: 'BROWSE' }).click();
     await expect(page.getByText('Audit Error Fixture')).toBeVisible({ timeout: 20000 });
 
     await page.locator('button:has-text("Audit")').first().click();

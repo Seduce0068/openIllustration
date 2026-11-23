@@ -11,7 +11,7 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(loginButton).toBeVisible();
     await loginButton.click();
 
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
 
     // R2-A11Y: view が login → dashboard へ変わったら本文へフォーカスが移る。
     // 初回マウントでは奪わず、実際の view 変更時だけ移す契約を検証する。
@@ -109,7 +109,7 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(ipv4Alert).not.toContainText('SENTINEL_LOGIN_BODY_MUST_NOT_BE_SHOWN');
     await expect(page.getByTestId('login-error')).toHaveCount(0);
 
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).not.toBeVisible();
   });
 
   test('should log out and return to login screen with Bearer header on /auth/logout', async ({ page }) => {
@@ -169,14 +169,14 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
 
     await page.goto('/');
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
 
     const logoutButton = page.getByTestId('logout-button');
     await expect(logoutButton).toHaveText('LOG OUT');
     await logoutButton.click();
 
     // 画面は API 成否にかかわらず即座にログインへ戻る（client の handle_logout 契約）。
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).not.toBeVisible();
     await expect(page.getByRole('button', { name: 'CONNECT WITH JPKI' })).toBeVisible();
 
     // リクエストは spawn_local で飛ぶため、到達までポールで待つ。
@@ -184,7 +184,7 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     expect(logoutMethod).toBe('POST');
 
     // R2-CLIENT-05: /auth/logout が失敗しても画面遷移は現行どおりログインへ戻し、
-    // dedicated role=alert で再試行を案内する（auth 3件は不変）。
+    // dedicated role=alert で再ログインを案内する（auth 3件は不変）。
     let abortedLogout = 0;
     await page.unroute('**/auth/logout');
     await page.route('**/auth/logout', async route => {
@@ -192,16 +192,16 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
       await route.abort();
     });
     await page.getByRole('button', { name: 'CONNECT WITH JPKI' }).click();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toBeVisible({ timeout: 10000 });
     await page.getByTestId('logout-button').click();
 
     // 失敗時もログイン画面へ戻る（画面遷移の現行契約を維持）。
     await expect(page.getByRole('button', { name: 'CONNECT WITH JPKI' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).toHaveCount(0);
     const logoutError = page.getByTestId('logout-error');
     await expect(logoutError).toHaveAttribute('role', 'alert');
     await expect(logoutError).toHaveText(
-      'ログアウト処理が完了しませんでした。再試行してください。',
+      'ログアウト処理が完了しませんでした。再度ログインしてください。',
       { timeout: 10000 },
     );
     await expect.poll(() => abortedLogout).toBe(1);
@@ -247,7 +247,7 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     const loginError = page.getByTestId('login-error');
     await expect(loginError).toHaveAttribute('role', 'alert');
     await expect(loginError).toHaveText('本番認証は未実装です。');
-    await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
+    await expect(page.getByRole('link', { name: 'UPLOAD' })).not.toBeVisible();
     expect(await page.locator('body').innerText()).not.toContain(loginSentinel);
     expect(verifyRequests).toBe(0);
   });
