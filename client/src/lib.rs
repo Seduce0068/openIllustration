@@ -70,6 +70,10 @@ const _: () = {
     assert!(!is_https_non_local_origin("https://[::1]:8443"));
     assert!(!is_https_non_local_origin("https://0.0.0.0"));
     assert!(!is_https_non_local_origin("https://LOCALHOST"));
+    assert!(!is_https_non_local_origin("https://localhost."));
+    assert!(!is_https_non_local_origin("https://2130706433"));
+    assert!(!is_https_non_local_origin("https://0x7f000001"));
+    assert!(!is_https_non_local_origin("https://[::]"));
 };
 
 /// 不正なオリジンが注入されたら const 評価時にビルドを失敗させる（fail-closed）。
@@ -140,8 +144,18 @@ const fn is_https_non_local_origin(origin: &str) -> bool {
         }
         index += 1;
     }
-    // loopback / wildcard 宿主は大小文字無視で拒否する。
-    let forbidden: [&[u8]; 4] = [b"127.0.0.1", b"[::1]", b"0.0.0.0", b"localhost"];
+    // loopback / wildcard 宿主とその代替表現を大小文字無視で拒否する。
+    // 整数表記 (2130706433) / 16進 (0x7f000001) / IPv6 wildcard ([::]) は
+    // ブラウザや IP スタックによって loopback へ解決され得るため fail-closed で弾く。
+    let forbidden: [&[u8]; 7] = [
+        b"127.0.0.1",
+        b"[::1]",
+        b"0.0.0.0",
+        b"localhost",
+        b"2130706433",
+        b"0x7f000001",
+        b"[::]",
+    ];
     let mut pattern = 0;
     while pattern < forbidden.len() {
         if contains_ascii_case_insensitive(bytes, forbidden[pattern]) {
@@ -3313,7 +3327,7 @@ where
                             </Show>
                         </div>
                     }.into_any(),
-                    None => view! { <span role="status" aria-live="polite" lang="en" class="text-[10px] text-gray-400 animate-pulse uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
+                    None => view! { <span role="status" aria-live="polite" lang="en" class="text-[10px] text-gray-400 animate-pulse motion-reduce:animate-none uppercase tracking-tighter">"Verifying_Integrity..."</span> }.into_any(),
                 }}
 
                 // このパネルは画像エリアに重なる non-modal disclosure（non-modal dialog）であり、
@@ -3370,7 +3384,7 @@ where
             </div>
             <div class="text-[10px] tracking-widest font-bold mt-auto flex justify-between items-center">
                 <div class="flex items-center gap-4">
-                    <span data-testid="content-verification-badge" lang="en" class=move || match verified.get() {
+                    <span data-testid="content-verification-badge" role="status" aria-live="polite" lang="en" class=move || match verified.get() {
                         Some(true) => "text-green-500",
                         Some(false) => "text-red-500",
                         None => "text-gray-400",

@@ -6,8 +6,8 @@ use server::{
     CLOCK_SKEW_MAX_SECS, CLOCK_SKEW_MIN_SECS, DEFAULT_CLOCK_SKEW_SECS, MAX_AUTH_AGE_MAX_SECS,
     MODERATION_OPERATORS_NON_UTF8_WARNING, database_token_from_env_value, env_value_for_use,
     graceful_drain_timeout, ipfs_gateways, ipfs_max_attempts, ipfs_timeout, jwt_keys_from_env,
-    max_concurrent_requests, moderation_finalize_interval, oidc_http_timeout,
-    pinata_jwt_production_like, policy_utc_offset_hours, production_allowed_origins_error,
+    max_concurrent_requests, mock_auth_with_production_config_error, moderation_finalize_interval,
+    oidc_http_timeout, policy_utc_offset_hours, production_allowed_origins_error,
     production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
     validate_jwt_secret, validate_oidc_config_with,
 };
@@ -251,27 +251,13 @@ where
     results.push(("production", production));
 
     // モック認証と本番相当の設定の併用は危険（モック認証で本番データが触れる）。
-    // ALLOW_MOCK_AUTH が真で実質的な本番設定が一つでもあれば警告する。秘密値は出力しない。
-    const OIDC_REQUIRED: [&str; 7] = [
-        "OIDC_ISSUER",
-        "OIDC_CLIENT_ID",
-        "OIDC_CLIENT_SECRET",
-        "OIDC_REDIRECT_URI",
-        "OIDC_AUTHORIZATION_ENDPOINT",
-        "OIDC_TOKEN_ENDPOINT",
-        "OIDC_JWKS_URI",
-    ];
-    let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_ok());
-    // run() / pin_to_ipfs と同じ共通ヘルパで本番相当かを判定する（単一情報源）。
-    let pinata_production = pinata_jwt_production_like(common::env::classify(lookup("PINATA_JWT")));
-    let mut mock_auth_errors = Vec::new();
-    if allow_mock_auth
-        && (pinata_production || oidc_any || lookup("JWT_RSA_PRIVATE_KEY_PEM").is_ok())
-    {
-        mock_auth_errors.push(
-            "ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration".to_string(),
-        );
-    }
+    // 判定は run() の起動ゲートと同じ共有ヘルパへ集約する（単一情報源）。
+    // カテゴリ数・固定文言は不変で、秘密値・オリジンは一切出力しない。
+    let mock_auth_errors: Vec<String> =
+        mock_auth_with_production_config_error(allow_mock_auth, &lookup)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
     results.push(("mock_auth_with_production_config", mock_auth_errors));
 
     // モック認証が有効なこと自体は開発環境では正しいが、本番設定としては不適切。

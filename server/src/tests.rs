@@ -109,9 +109,9 @@ async fn lock_env_and_read(key: &str) -> (tokio::sync::MutexGuard<'_, ()>, Optio
 /// 「他スレッドが同時に環境変数を読まないこと」を保証する必要がある。
 /// 書き手の呼び出し箇所はすべて `ENV_LOCK` を保持して直列化しており、
 /// テストが直接読む場合も `lock_env_and_read` で同じロックを取得する。
-/// ただしアプリ経由で本番コードが読む `EXPOSE_INTERNAL_ERRORS` /
-/// `OIDC_COOKIE_SECURE` はこのロックを通らないため完全な直列化は保証できず、
-/// 根本解決には `AppOptions` 等の設定注入への移行が必要である。
+/// `EXPOSE_INTERNAL_ERRORS` は起動時に解釈して `AppState` へ注入する方式へ移行済みで、
+/// このロックと無関係に並列テストできる。残る per-request 読込の
+/// `OIDC_COOKIE_SECURE` 等はこのロックを通らないため完全な直列化は保証できない。
 fn test_set_env(key: &str, value: &str) {
     // SAFETY: 呼び出し側が ENV_LOCK を保持している（上記コメント参照）。
     unsafe { std::env::set_var(key, value) };
@@ -207,6 +207,7 @@ async fn setup_app_with_options(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
@@ -257,6 +258,7 @@ async fn setup_app_with_jwt_keys(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -399,6 +401,7 @@ async fn setup_app_with_payments(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -446,6 +449,7 @@ async fn setup_app_with_hd_payments(xprv: &str) -> (Router, Arc<libsql::Connecti
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -797,6 +801,7 @@ async fn setup_app_with_oidc_age_policy_and_cookie_secure(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
@@ -929,6 +934,7 @@ async fn test_rate_limit_ignores_preflight() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: Some(Arc::new(crate::RateLimitState {
             limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
                 NonZeroU32::new(1).unwrap(),
@@ -995,6 +1001,7 @@ async fn test_rate_limit_rejects_excess_requests() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: Some(Arc::new(crate::RateLimitState {
             limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
                 NonZeroU32::new(2).unwrap(),
@@ -1124,6 +1131,7 @@ async fn rate_limit_test_state_with_concurrency(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: Some(Arc::new(crate::RateLimitState {
             limiter: governor::RateLimiter::keyed(governor::Quota::per_minute(
                 NonZeroU32::new(per_minute).unwrap(),
@@ -2282,9 +2290,104 @@ fn test_jwt_secret_minimum_length() {
 /// R4-01 / R4-04: 本番相当では OIDC と実 PINATA_JWT が必須。
 #[test]
 fn test_production_config_fail_closed() {
+    // ALLOWED_ORIGINS の本番判定は client と同じ loopback 代替表現も拒否する。
+    assert!(crate::is_production_https_origin("https://api.example.org"));
+    for bad in [
+        "https://localhost.",
+        "https://2130706433",
+        "https://0x7f000001",
+        "https://[::]",
+        "https://127.0.0.1:8443",
+        "http://api.example.org",
+    ] {
+        assert!(
+            !crate::is_production_https_origin(bad),
+            "loopback alternative must be rejected"
+        );
+    }
+
     // モック認証が有効な開発環境では警告のみ（既存の開発フローを壊さない）。
     assert!(
         crate::production_config_errors(true, false, common::env::EnvValue::Missing).is_empty()
+    );
+
+    // R2-STARTUP: ALLOW_MOCK_AUTH=1 と本番相当設定の併用は、doctor の
+    // mock_auth_with_production_config と同じ共有ヘルパで run() の起動ゲートへ渡される。
+    // これによりモック経由で任意 user_hash の JWT が発行される状態を防ぐ。
+    const MOCK_PROD_ERROR: &str = "ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration";
+    let empty_lookup = |_name: &str| Err(std::env::VarError::NotPresent);
+    // モック単独（本番相当設定なし）は従来どおり許可。
+    assert_eq!(
+        crate::mock_auth_with_production_config_error(true, empty_lookup),
+        None
+    );
+    // 本番相当（allow_mock_auth=false）では併用判定自体は発動しない。
+    assert_eq!(
+        crate::mock_auth_with_production_config_error(false, |name: &str| {
+            if name == "JWT_RSA_PRIVATE_KEY_PEM" {
+                Ok("dummy".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        }),
+        None
+    );
+    // OIDC 必須 7 変数のいずれかが存在すれば固定文言で拒否（値はエコーしない）。
+    for name in [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ] {
+        let lookup = |key: &str| {
+            if key == name {
+                Ok("https://issuer.example".to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert_eq!(
+            crate::mock_auth_with_production_config_error(true, lookup),
+            Some(MOCK_PROD_ERROR),
+            "OIDC variable {name} must trigger startup refusal"
+        );
+    }
+    // 実値の PINATA_JWT / JWT_RSA_PRIVATE_KEY_PEM も単独で拒否。
+    for (name, value) in [
+        ("PINATA_JWT", "real-production-jwt"),
+        ("JWT_RSA_PRIVATE_KEY_PEM", "-----BEGIN PRIVATE KEY-----"),
+    ] {
+        let lookup = |key: &str| {
+            if key == name {
+                Ok(value.to_string())
+            } else {
+                Err(std::env::VarError::NotPresent)
+            }
+        };
+        assert_eq!(
+            crate::mock_auth_with_production_config_error(true, lookup),
+            Some(MOCK_PROD_ERROR),
+            "{name} must trigger startup refusal"
+        );
+        assert!(
+            !MOCK_PROD_ERROR.contains(value),
+            "secret must not be echoed"
+        );
+    }
+    // 開発用 PINATA_JWT 単独は本番相当設定ではないため拒否しない。
+    let mock_jwt_lookup = |key: &str| {
+        if key == "PINATA_JWT" {
+            Ok("mock_jwt".to_string())
+        } else {
+            Err(std::env::VarError::NotPresent)
+        }
+    };
+    assert_eq!(
+        crate::mock_auth_with_production_config_error(true, mock_jwt_lookup),
+        None
     );
 
     // 本番相当では不足を列挙する。
@@ -2865,11 +2968,11 @@ fn test_pinata_response_rejects_invalid_ipfs_hash() {
     ));
 }
 
-/// SEC-04: 500系エラーの内部詳細は既定で隠し、`1`/`true`（大小文字不問）で公開する。
+/// SEC-04: 500系エラーの内部詳細は既定で隠し、注入値が真のときだけ公開する。
+/// `EXPOSE_INTERNAL_ERRORS` は起動時に一度だけ解釈して `AppState` へ保持し、
+/// リクエストではその注入値だけを参照する（環境変数書き換え・`ENV_LOCK` 依存を廃止）。
 #[tokio::test]
 async fn test_internal_error_details_visibility() {
-    let _env_guard = ENV_LOCK.lock().await;
-
     async fn error_body() -> (StatusCode, String) {
         let response = AppError::Internal("no such table: users".to_string()).into_response();
         let status = response.status();
@@ -2877,8 +2980,7 @@ async fn test_internal_error_details_visibility() {
         (status, String::from_utf8_lossy(&body).into_owned())
     }
 
-    // 既定（未設定）: 内部詳細は出さず一般化メッセージのみ
-    test_remove_env("EXPOSE_INTERNAL_ERRORS");
+    // 注入スコープ外（ミドルウェア未適用）は安全側の false。
     let (status, text) = error_body().await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     assert!(
@@ -2890,44 +2992,43 @@ async fn test_internal_error_details_visibility() {
         "generic message expected: {text}"
     );
 
-    // 偽の値: マスクのまま（既定値を壊さない）
-    for value in ["0", "false", "FALSE"] {
-        test_set_env("EXPOSE_INTERNAL_ERRORS", value);
-        let (_, text) = error_body().await;
-        assert!(
-            !text.contains("no such table"),
-            "details must be hidden for {value:?}: {text}"
-        );
-        assert!(
-            text.contains("Internal server error"),
-            "generic message expected for {value:?}: {text}"
-        );
-    }
-
-    // 真の値: `1` と `true`（大文字小文字を問わず）で詳細を公開
-    for value in ["1", "true", "TRUE", "TrUe"] {
-        test_set_env("EXPOSE_INTERNAL_ERRORS", value);
-        let (status, text) = error_body().await;
+    // AppState から注入された値と同じ真偽値で状態を切り替える（環境変数は触らない）。
+    for expose in [false, true] {
+        let (status, text) = crate::EXPOSE_INTERNAL_ERRORS
+            .scope(expose, error_body())
+            .await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert!(
+        assert_eq!(
             text.contains("no such table"),
-            "details must be visible for {value:?}: {text}"
+            expose,
+            "injected expose={expose} must control visibility: {text}"
+        );
+        assert_eq!(
+            text.contains("Internal server error"),
+            !expose,
+            "generic message must appear only when masked: {text}"
         );
     }
 
-    // 非 UTF-8 は Invalid（生バイトは保持しない）→ Valid(true) ではないため fail-closed。
-    // expose_internal_errors と同じ判定で詳細を出さないことを検証する。
+    // internal_error_body は注入値だけを参照する（per-request の env 読みは存在しない）。
+    assert_eq!(
+        crate::internal_error_body("injected-detail".to_string(), true),
+        "injected-detail"
+    );
+    assert_eq!(
+        crate::internal_error_body("injected-detail".to_string(), false),
+        "Internal server error"
+    );
+
+    // 起動時検証側の分類: 非 UTF-8 は Invalid で、Valid(true) として扱われない。
     let non_utf8 = common::env::classify(Err::<String, _>(std::env::VarError::NotUnicode(
         std::ffi::OsString::from_vec(vec![0xff]),
     )));
     assert_eq!(non_utf8, common::env::EnvValue::NonUtf8);
     assert_eq!(
-        common::env::bool_env_state(non_utf8.clone()),
+        common::env::bool_env_state(non_utf8),
         common::env::BoolEnvState::Invalid
     );
-    assert_eq!(format!("{non_utf8:?}"), "NonUtf8");
-
-    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
 
 #[tokio::test]
@@ -4535,6 +4636,7 @@ async fn test_vote_consensus_rejects_content() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -4718,6 +4820,7 @@ async fn test_duplicate_vote_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -4935,6 +5038,7 @@ async fn test_vote_after_conclusion_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -5018,6 +5122,7 @@ async fn test_vote_for_missing_report_returns_404() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -5107,6 +5212,7 @@ async fn setup_vote_signature_test() -> (Router, libsql::Connection) {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -5227,6 +5333,7 @@ async fn test_vote_with_invalid_signature_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -5407,6 +5514,7 @@ async fn test_vote_with_invalid_payload_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -5476,6 +5584,7 @@ async fn test_vote_with_sub_mismatch_rejected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -6877,6 +6986,7 @@ async fn test_payment_verify_cas_rejects_stale_status() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -6962,6 +7072,7 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -7217,6 +7328,7 @@ async fn test_payment_verify_mismatch_cas_conflict() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -7375,9 +7487,8 @@ async fn test_payment_verify_rejects_reused_transaction() {
 /// JPYC: UNIQUE 違反以外の DB エラーは「送金の再利用」として 400 にせず 500 にする。
 #[tokio::test]
 async fn test_payment_verify_maps_non_unique_db_error_to_internal() {
-    // 既定の内部エラーマスクを確認するため、環境変数を触るテストと直列化する。
-    let _env_guard = ENV_LOCK.lock().await;
-    test_remove_env("EXPOSE_INTERNAL_ERRORS");
+    // 内部エラーのマスクは AppState の注入値（既定 false）で決まり、
+    // 環境変数を触らず並列実行しても競合しない。
 
     let receiving = "0x1111111111111111111111111111111111111111";
     let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
@@ -7430,7 +7541,6 @@ async fn test_payment_verify_maps_non_unique_db_error_to_internal() {
         !text.contains("transaction is already used by another order"),
         "must not map non-UNIQUE DB errors to the reuse message: {text}"
     );
-    test_remove_env("EXPOSE_INTERNAL_ERRORS");
 }
 
 /// 決済: 期限切れ注文へのウォレット紐付けを拒否する。
@@ -9470,6 +9580,7 @@ async fn test_logout_revokes_session() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -11736,6 +11847,7 @@ async fn setup_verified_age_app(
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -11940,6 +12052,7 @@ async fn test_verified_age_claims_rejected_when_mock_auth_disabled() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -12250,6 +12363,7 @@ async fn setup_mod_app_with_operators(operators: &[&str]) -> (Router, libsql::Co
         ),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -12945,6 +13059,7 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
         moderation_operators: Arc::new(std::collections::HashSet::from(["operator".to_string()])),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
@@ -14228,6 +14343,7 @@ async fn test_readiness_returns_503_while_shutting_down() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down,
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -14863,6 +14979,7 @@ async fn test_refresh_rejects_revoked_sub_with_empty_in_memory_state() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });
@@ -18038,6 +18155,7 @@ async fn setup_me_export_app() -> Router {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -18506,6 +18624,7 @@ async fn me_export_snapshot_consistent_under_concurrent_ban_write() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -18587,6 +18706,7 @@ async fn me_export_waits_for_concurrent_write_transaction() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![],
     });
@@ -20376,6 +20496,7 @@ async fn test_auth_verify_clears_db_revocation_before_restart() {
         moderation_operators: Arc::new(std::collections::HashSet::new()),
         shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
         rate_limit: None,
         allowed_origins: vec![HeaderValue::from_static("http://localhost:8080")],
     });

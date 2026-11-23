@@ -132,6 +132,9 @@ pub struct AppState {
     pub jwt_keys: Arc<jwt::JwtKeys>,
     /// 開発用: mock_token およびゼロ署名を許可
     pub allow_mock_auth: bool,
+    /// 500系レスポンスの内部詳細を公開するか。起動時に `EXPOSE_INTERNAL_ERRORS` を
+    /// 解釈した値だけを保持し、リクエスト処理では環境変数を再読しない。
+    pub expose_internal_errors: bool,
     /// IPFS ゲートウェイの URL テンプレート。`{cid}` を CID で置換する。
     /// 空の場合は取得を試みず、常に失敗する。
     pub ipfs_gateways: Vec<String>,
@@ -716,14 +719,21 @@ impl IntoResponse for AppError {
         let (status, message) = match self {
             AppError::Database(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                internal_error_body(format!("DB Error: {}", e)),
+                internal_error_body(
+                    format!("DB Error: {}", e),
+                    injected_expose_internal_errors(),
+                ),
             ),
-            AppError::Internal(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, internal_error_body(msg))
-            }
+            AppError::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                internal_error_body(msg, injected_expose_internal_errors()),
+            ),
             AppError::Io(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                internal_error_body(format!("IO Error: {}", e)),
+                internal_error_body(
+                    format!("IO Error: {}", e),
+                    injected_expose_internal_errors(),
+                ),
             ),
             AppError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             AppError::NotFound => (StatusCode::NOT_FOUND, "Resource not found".to_string()),
@@ -746,31 +756,46 @@ impl IntoResponse for AppError {
     }
 }
 
-/// 内部エラーの詳細をクライアントへ公開するか。未設定時は一般化メッセージを返す。
-/// 受理値は共通の `bool_env_state`（`1`/`true` と `0`/`false` のみ、trim・小文字化）に統一する。
-/// この関数はリクエストごとに呼ばれるため、ここでは起動拒否を返せない。
-/// `Valid(true)` のときだけ詳細を公開し、未設定・受理値外・非 UTF-8 は安全側の `false` とする。
-/// 不正値は起動時に `bool_env_at_startup` が固定文言で拒否する（値はエコーしない）。
-fn expose_internal_errors() -> bool {
-    matches!(
-        common::env::bool_env_state(common::env::read_env("EXPOSE_INTERNAL_ERRORS")),
-        common::env::BoolEnvState::Valid(true)
-    )
+// 起動時に解釈して `AppState` へ保持した `EXPOSE_INTERNAL_ERRORS` の注入先。
+// リクエストごとに環境変数を読まず、ミドルウェアがこの task-local へ値を流す。
+tokio::task_local! {
+    static EXPOSE_INTERNAL_ERRORS: bool;
 }
 
-/// 500系レスポンスのボディを決定する。詳細は常にログへ出し、公開はフラグに従う。
-fn internal_error_body(details: String) -> String {
+/// `IntoResponse` が参照する公開フラグ。ミドルウェア未適用時は安全側の `false`。
+/// 環境変数は一切読まない（起動時に解釈した注入値だけを参照する）。
+fn injected_expose_internal_errors() -> bool {
+    EXPOSE_INTERNAL_ERRORS
+        .try_with(|value| *value)
+        .unwrap_or(false)
+}
+
+/// 500系レスポンスのボディを決定する。詳細は常にログへ出し、公開は注入値にのみ従う。
+/// `expose_internal_errors` は起動時に解釈され `AppState` から注入された値である。
+fn internal_error_body(details: String, expose_internal_errors: bool) -> String {
     // ミドルウェアが張った task-local から相関 ID を取る。
     // 直接呼び出された場合などスコープ外では ID なしでログする。
     match REQUEST_ID.try_with(|id| *id) {
         Ok(id) => tracing::error!(request_id = %id, "Internal error: {}", details),
         Err(_) => tracing::error!("Internal error: {}", details),
     }
-    if expose_internal_errors() {
+    if expose_internal_errors {
         details
     } else {
         "Internal server error".to_string()
     }
+}
+
+/// `AppState` に保持した起動時値をリクエストの task-local へ注入するミドルウェア。
+/// ここでは環境変数を読まず、`state.expose_internal_errors` だけを正本とする。
+async fn inject_expose_internal_errors(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    EXPOSE_INTERNAL_ERRORS
+        .scope(state.expose_internal_errors, next.run(request))
+        .await
 }
 
 use jsonwebtoken::encode;
@@ -1177,6 +1202,42 @@ pub fn production_config_errors(
     errors
 }
 
+/// `ALLOW_MOCK_AUTH` と本番相当設定の併用を検出する共通情報源。
+///
+/// `doctor` の `mock_auth_with_production_config` カテゴリと `run()` の起動ゲートが
+/// 同じ判定を共有する。OIDC 必須 7 変数の存在・本番相当の `PINATA_JWT`・
+/// `JWT_RSA_PRIVATE_KEY_PEM` の存在のいずれかを検出したら固定文言を返す。
+/// 値・オリジン・鍵の内容は一切エコーしない。`allow_mock_auth` が偽なら常に `None`。
+pub fn mock_auth_with_production_config_error<F>(
+    allow_mock_auth: bool,
+    lookup: F,
+) -> Option<&'static str>
+where
+    F: Fn(&str) -> Result<String, std::env::VarError>,
+{
+    const ERROR: &str = "ALLOW_MOCK_AUTH is enabled together with production-like settings; do not deploy this configuration";
+    if !allow_mock_auth {
+        return None;
+    }
+    const OIDC_REQUIRED: [&str; 7] = [
+        "OIDC_ISSUER",
+        "OIDC_CLIENT_ID",
+        "OIDC_CLIENT_SECRET",
+        "OIDC_REDIRECT_URI",
+        "OIDC_AUTHORIZATION_ENDPOINT",
+        "OIDC_TOKEN_ENDPOINT",
+        "OIDC_JWKS_URI",
+    ];
+    let oidc_any = OIDC_REQUIRED.iter().any(|name| lookup(name).is_ok());
+    // run() / pin_to_ipfs と同じ共通ヘルパで本番相当かを判定する（単一情報源）。
+    let pinata_production = pinata_jwt_production_like(common::env::classify(lookup("PINATA_JWT")));
+    if oidc_any || pinata_production || lookup("JWT_RSA_PRIVATE_KEY_PEM").is_ok() {
+        Some(ERROR)
+    } else {
+        None
+    }
+}
+
 /// PINATA_JWT が本番相当の実値かを判定する共通ヘルパ。
 ///
 /// `run()` / `doctor` / `pin_to_ipfs` が同じ `common::env::EnvValue` 分類を共有する。
@@ -1518,9 +1579,9 @@ pub async fn run() -> anyhow::Result<()> {
     init_tracing();
 
     let allow_mock_auth = bool_env_at_startup("ALLOW_MOCK_AUTH")?;
-    // per-request で読む EXPOSE_INTERNAL_ERRORS も起動時に受理値を検証し、
-    // 不正値は fail-closed で起動拒否する（読込側は Valid(true) のみ真）。
-    bool_env_at_startup("EXPOSE_INTERNAL_ERRORS")?;
+    // EXPOSE_INTERNAL_ERRORS は起動時に一度だけ解釈し、以降は AppState の注入値だけを
+    // 参照する（per-request の環境変数読みは廃止）。不正値は fail-closed で起動拒否する。
+    let expose_internal_errors = bool_env_at_startup("EXPOSE_INTERNAL_ERRORS")?;
     // OIDC 未構成時も OidcState::from_env_with は cookie_secure を見ないため、
     // ここでも受理値を検証して不正値を起動拒否する（fail-closed）。
     bool_env_at_startup("OIDC_COOKIE_SECURE")?;
@@ -1576,6 +1637,14 @@ pub async fn run() -> anyhow::Result<()> {
         allow_mock_auth,
         allowed_origins_env.clone(),
     ));
+    // ALLOW_MOCK_AUTH=1 と本番相当設定の併用は doctor の
+    // mock_auth_with_production_config と同じ共有ヘルパで起動拒否する。
+    // モック経由で任意 user_hash の JWT が発行される状態をここで防ぐ（値は非エコー）。
+    if let Some(message) =
+        mock_auth_with_production_config_error(allow_mock_auth, |name: &str| std::env::var(name))
+    {
+        config_errors.push(message);
+    }
     if !config_errors.is_empty() {
         return Err(anyhow::anyhow!(
             "Production configuration is incomplete: {}",
@@ -1886,6 +1955,7 @@ pub async fn run() -> anyhow::Result<()> {
             .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?,
         jwt_keys: Arc::new(jwt_keys),
         allow_mock_auth,
+        expose_internal_errors,
         ipfs_gateways,
         ipfs_timeout,
         ipfs_max_attempts,
@@ -2072,8 +2142,9 @@ fn is_origin_shape(origin: &str) -> bool {
 ///
 /// `client/src/lib.rs::is_https_non_local_origin` と同じ「https かつオリジンのみ」判定:
 /// `https://` で始まり、オリジン区切り（`/` `?` `#` `@`）を含まず、loopback /
-/// wildcard 宿主（`127.0.0.1` / `[::1]` / `0.0.0.0` / `localhost`）を大小文字無視で
-/// 含まないこと。`production_allowed_origins_error` と doctor の `allowed_origins`
+/// wildcard 宿主（`127.0.0.1` / `[::1]` / `0.0.0.0` / `localhost`）とその代替表現
+/// （`2130706433` / `0x7f000001` / `[::]`）を大小文字無視で含まないこと。
+/// `production_allowed_origins_error` と doctor の `allowed_origins`
 /// 診断は両者ともこの判定を実パーサ `allowed_origins` 経由で共有する。
 /// 値・オリジンは一切エコーしない（戻り値は真偽のみ）。
 pub fn is_production_https_origin(origin: &str) -> bool {
@@ -2090,9 +2161,17 @@ pub fn is_production_https_origin(origin: &str) -> bool {
         return false;
     }
     let lowered = origin.to_ascii_lowercase();
-    !["127.0.0.1", "[::1]", "0.0.0.0", "localhost"]
-        .iter()
-        .any(|forbidden| lowered.contains(forbidden))
+    ![
+        "127.0.0.1",
+        "[::1]",
+        "0.0.0.0",
+        "localhost",
+        "2130706433",
+        "0x7f000001",
+        "[::]",
+    ]
+    .iter()
+    .any(|forbidden| lowered.contains(forbidden))
 }
 
 /// 起動時警告へ出す ALLOWED_ORIGINS エントリのマスク表現。
@@ -3169,6 +3248,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics/client-events", post(client_events))
         .route("/policy/age", get(get_age_policy))
         .route("/me/export", get(export::me_export))
+        // 起動時に解釈して AppState へ保持した EXPOSE_INTERNAL_ERRORS だけを注入する。
+        // 環境変数はここでは読まない（per-request 読みの廃止）。
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            inject_expose_internal_errors,
+        ))
         .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
         .layer(from_fn(reject_oversized_body))
         .layer(axum::middleware::from_fn_with_state(

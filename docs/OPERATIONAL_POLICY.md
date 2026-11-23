@@ -16,6 +16,11 @@ generated:
 ## 1. 認証・環境分離
 
 - `ALLOW_MOCK_AUTH=1` はローカル開発・隔離テスト専用。本番環境では設定しない。
+  `ALLOW_MOCK_AUTH=1` と本番相当設定（OIDC 必須 7 変数のいずれか、実値の `PINATA_JWT`、
+  `JWT_RSA_PRIVATE_KEY_PEM` のいずれか）の併用はサーバー起動時に拒否する。
+  判定は共有ヘルパ `mock_auth_with_production_config_error` が担い、`doctor` の
+  `mock_auth_with_production_config` カテゴリと同じ契約（固定文言・値/オリジン非エコー）を共有する。
+  モック経由で任意 `user_hash` の JWT が発行される状態を防ぐため、本番相当の設定は必ず隔離する。
 - クライアントのビルドでは本番成果物に `OIL_MOCK_AUTH=0` を指定し、
   ログイン画面の開発用モック認証注記（`data-testid="mock-auth-notice"`）を出さない。
   未設定（既定）は注記を表示する開発用契約で、`"0"` / `"false"`（大小文字無視）が無効化する。
@@ -577,7 +582,7 @@ generated:
 | `OIDC_CLOCK_SKEW_SECS` | 任意 | `60` | IDトークンの時刻検証に許容する秒数（1〜300、範囲外は既定60へフォールバックし `doctor` が警告）。 |
 | `PINATA_JWT` | 本番では必須 | `mock_jwt`（模擬、開発用） | IPFSピン用トークン。本番相当（`ALLOW_MOCK_AUTH` 無効）では実トークンが必須。未設定・空・空白のみ・`mock_jwt`（前後空白を含む）は起動拒否（fail-closed）。非 UTF-8 は `common::env` 分類器が `EnvValue::NonUtf8` として区別し、`run()` と `doctor` が同じ固定文言 `PINATA_JWT is empty` を返す（生バイトはエコーしない）。`doctor` の `production` カテゴリで同じ判定を診断し、値は出力しない。 |
 | `RUST_LOG` | 任意 | `info` | ログレベルフィルタ。 |
-| `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。受理値外は起動拒否、`doctor` の `expose_internal_errors` カテゴリで警告。 |
+| `EXPOSE_INTERNAL_ERRORS` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で500系の内部詳細を応答へ含める。本番では設定しない。受理値外は起動拒否、`doctor` の `expose_internal_errors` カテゴリで警告。値は起動時に一度だけ解釈して `AppState.expose_internal_errors` へ保持し、ミドルウェアがリクエストの task-local へ注入する。リクエストごとの環境変数読みは行わず、`internal_error_body` は注入値だけを参照する（ミドルウェア未適用時は安全側 `false`）。 |
 | `ALLOW_MOCK_AUTH` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で模擬JPKI・ゼロ署名を受理する。本番では設定しない。受理値外は起動拒否、`doctor` の `mock_auth_enabled` カテゴリで警告。 |
 | `ALLOW_IPV4_LOCALHOST` | 開発専用 | 無効 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1`/`true` で127.0.0.0/8からのアクセスを許可する。本番では設定しない。有効時は `doctor --strict` の警告対象。受理値外は起動時に警告のうえ per-request 判定で `false`（IPv4 不許可、fail-closed）とし、`doctor` の `ipv4_localhost` カテゴリでも警告。 |
 | `ALLOW_UNENCRYPTED_BACKUP` | 開発専用 | `0` | `1` で平文バックアップを許可する。ローカル開発専用の明示オプトアウト。オフサイト保存設定時は拒否。本番では設定しない。 |
@@ -660,8 +665,9 @@ generated:
 - 非 UTF-8 の環境変数値は「未設定」ではなく不正値として扱う。`common::env::read_env` が
   `EnvValue::NonUtf8` を返し、`bool_env_state` は `BoolEnvState::Invalid` に分類する
   （受理値の基準は既存 `parse_bool_env` に委譲）。必須設定（`PINATA_JWT` 等）は
-  `production_config_errors` 経由で起動拒否、per-request で読むフラグ
-  （`EXPOSE_INTERNAL_ERRORS` / `ALLOW_IPV4_LOCALHOST`）は `Valid(true)` 以外を
+  `production_config_errors` 経由で起動拒否。`EXPOSE_INTERNAL_ERRORS` は起動時に解釈して
+  `AppState` へ保持し、ミドルウェア経由の注入値のみを参照するため per-request の環境変数読みは
+  行わない。残る per-request 読込の `ALLOW_IPV4_LOCALHOST` は `Valid(true)` 以外を
   安全側 `false` として fail-closed とし、`doctor` は既存カテゴリ内で固定文言の警告を
   出す。いずれも生バイトはログ・エラー文言へエコーしない。
    `AGE_*` も `std::env::var` と同じ Result 契約で読み、`NotPresent` のみ「未設定」とする。
