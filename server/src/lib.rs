@@ -4840,6 +4840,8 @@ pub async fn ban_user(
     if rows.next().await?.is_none() {
         return Err(AppError::NotFound);
     }
+    // read-then-write 順序を統一するため、書き込み前にカーソルを閉じる。
+    drop(rows);
     // 期間付き BAN は ban_until に期限を記録する。NULL は無期限を表す。
     // duration_days は上流で 1..=3650 に検証済みのため文字列連結による SQL 注入はないが、
     // 引数としてバインドして日数を組み立てる。
@@ -4917,6 +4919,7 @@ pub async fn unban_user(
     if rows.next().await?.is_none() {
         return Err(AppError::NotFound);
     }
+    drop(rows);
     tx.execute(
         "UPDATE users SET is_banned = FALSE, banned_at = NULL, ban_until = NULL WHERE user_hash = ?",
         [user_hash],
@@ -4983,6 +4986,7 @@ pub async fn record_unpin(
     if rows.next().await?.is_none() {
         return Err(AppError::NotFound);
     }
+    drop(rows);
     record_governance_action(&tx, "UNPIN", &cid, &claims.sub, reason, None).await?;
     tx.commit()
         .await

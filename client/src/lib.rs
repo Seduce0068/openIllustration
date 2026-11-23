@@ -2770,6 +2770,9 @@ fn ExportMyData(token: String) -> impl IntoView {
                     if message == download_start_error_message() {
                         set_download_hint.set(EXPORT_DOWNLOAD_RETRY_HINT.to_string());
                     }
+                    // 前回成功の生成日時/sub を残さない（失敗時は両要素を消す契約）。
+                    set_generated_at.set(String::new());
+                    set_sub_label.set(String::new());
                     set_error.set(message);
                 }
             }

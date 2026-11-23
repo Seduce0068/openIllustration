@@ -118,10 +118,9 @@ status: current
   `__SET_ME__` 等へ変更し、Runbook に差し替え手順と ALERT_CMD 必須化を追記。
 - [x] **JWT 期限切れ (401) の自動 refresh を有効化（基盤は実装済み・既定無効）**
   2026-11-22: 共有トークン signal・api_fetch/api_fetch_request（再試行・単一フライト）・
-  CORS allow_credentials を実装済み。ただし全 fetch に波及させると既存の 401 固定文言
-  ビューと一覧フェッチの再描画が競合し E2E が不安定になったため、
-  `ENABLE_AUTO_REFRESH=false` で段階的有効化の前に留めている。有効化には
-  呼び出し側のエラー表示を refresh 非依存にする移行が必要。
+  CORS allow_credentials を実装済み。当初 `ENABLE_AUTO_REFRESH=false` で段階導入していたが、
+  呼び出し側のエラー表示を refresh 非依存へ移行し、2026-11-22 に `true` へ反転済み
+  （現行コード・TEST_SPECIFICATION と整合）。履歴として記録する。
   — 根拠 `client/src/lib.rs` fetch 系ハンドラ群 / `docs/UNKNOWN_TASKS_INVESTIGATION.md` / discovery R5-VU / 重大度 high。
   `/auth/refresh` がクライアントに存在せず、期限切れ後は全ビューが固定エラーで固まる。
   共通 fetch ラッパーで401を1回 refresh 再試行する基盤を追加。失敗時は元の401を返し
@@ -786,6 +785,35 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-23 コンボ第48ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  ban_user/unban_user/record_unpinのread-then-write順序統一（rows drop）、
+  エクスポート失敗時に前回成功の生成日時/subをクリア、
+  todo.mdのENABLE_AUTO_REFRESH記述をコード/仕様と整合（true反転済み）。
+  R4 指摘なし。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  npm audit3lockfile、markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2E本番相当昇格、Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  build.rs rerun-if-env-changed、リクエストタイムアウト、E2E artifact公開、GPG署名、
+  RPO/RTO定義、バックアップ鮮度監視、trunk部分アーカイブ、cronタイムアウト、GPG trust、
+  cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、axe自動スキャン、
+  開発モックuser_hash衝突、再試行導線、クライアント例外テレメトリ、refresh失敗メトリクス、
+  playwright install再試行、window unit停止済みアプリ再起動、監査スクロール到達、
+  E2Eビルド::error::、reqwest TLS二重スタック、tokio features full、CIバイナリキャッシュ、
+  失効閾値削除失敗の警告格下げ、logout sub不一致時Cookie削除、finalizer BEGIN失敗計上、
+  NTP同期要件、ブラウザエラー観測、429/503再試行、prefers-reduced-motion、
+  JXLアニメーション/MAX_PIXELS、日時フォールバック/鮮度NaNのオラクル、cron設定集約、
+  audit root 64hex検証、ライセンス本文件数照合、アーカイブ保持寿命、exportファイル名世代、
+  real-api宛先のenv化、resolver3、deny.toml copyleft方針/bans skip副作用、
+  R2-REFRESH-ORIGIN E2E、systemd/cron構文CIゲート、オフサイトMonitor.Missing.rootコピー、
+  backup.service OnFailure、E2Eセットアップ失敗の::error::、署名公開rename TOCTOU、
+  IPFSチェックサム不一致時フェイルオーバー、429専用文言、nonce取得失敗の上書き、
+  aria-describedby/aria-invalid、Auditボタン/dialog lang、export sub 8文字以下契約、
+  Blob/URL生成エラー分岐）は記録のみで保留。
 
 - 2026-11-23 コンボ第47ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
