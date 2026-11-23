@@ -94,10 +94,6 @@ jobs:
         cargo deny check licenses
         cargo deny check advisories
         cargo deny check bans sources
-        bash scripts/test-backup-rotate.sh
-        bash scripts/test-backup-cron-wrapper.sh
-        bash scripts/test-prepare-distribution.sh
-        bash e2e/ci-e2e.sh
         # シェル静的ゲート（既存行は維持し、以下3行を追加）。対象は glob で明示する。
         # shellcheck / shfmt は共通ワークフローの apt_packages（呼び出し側 ci.yml）で導入する。
         for f in scripts/*.sh e2e/*.sh; do bash -n "$f"; done
@@ -105,3 +101,7 @@ jobs:
         # SC2016 は test-backup-rotate.sh の systemd 契約検証用リテラルのみで行単位除外する。
         for f in scripts/*.sh e2e/*.sh; do shellcheck "$f"; done
         shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi
+        bash scripts/test-backup-rotate.sh
+        bash scripts/test-backup-cron-wrapper.sh
+        bash scripts/test-prepare-distribution.sh
+        bash e2e/ci-e2e.sh

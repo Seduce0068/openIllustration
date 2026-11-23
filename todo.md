@@ -787,6 +787,28 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第43ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  CIシェル静的ゲートをbackupテスト/E2Eより前に移動（E2E失敗時にスキップされないように）、
+  doc-numbersへspecの現行tests<N>照合を追加（履歴語併記行は「現行...testsN」を優先）、
+  ログイン画面の内部ID(SEC-01)文言を平易な英語案内へ置換(E2E追随)、
+  エクスポート成功表示GENERATED_AT:/SUB:へspan lang=en。
+  R4指摘（履歴語判定粒度）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、npm audit3lockfile、
+  markdownlint39ファイル、shellcheck/shfmt green）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2E本番相当昇格、Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  instance.lock部分書込み、build.rs rerun-if-env-changed、リクエストタイムアウト、
+  E2E artifact公開、GPG署名、RPO/RTO定義、バックアップ鮮度監視、trunk部分アーカイブ、
+  cronタイムアウト、GPG trust、cron allowlistログキー、license_file相対パス、
+  BACKUP_PREFIX検証、axe自動スキャン、開発モックuser_hash衝突、ネットワークエラー再試行、
+  クライアント例外テレメトリ、refresh失敗メトリクス、playwright install再試行、
+  window unit停止済みアプリ再起動、監査スクロールキーボード到達、
+  JXL channels=0/非有限サンプル、backup expect件数spec照合、E2Eビルド::error::）は記録のみで保留。
+
 - 2026-11-23 コンボ第42ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   【high】PAYMENT_RECEIVING_ADDRESSのゼロアドレスを拒否（is_valid_eth_address）+回帰テスト、

@@ -2265,7 +2265,7 @@ where
         <div class="max-w-md mx-auto mt-20 border border-white/10 p-8 text-center">
             <h2 class="text-2xl font-bold mb-8 tracking-tighter italic">"本人確認が必要です。"</h2>
             <p lang="en" class="text-[10px] text-gray-500 mb-4 leading-relaxed">
-                "IPv6-ONLY ACCESS: Legacy IPv4-only networks are rejected at the API layer (SEC-01)."
+                "IPv6 connection is required. If you are on an IPv4-only network, please switch to an IPv6-capable connection."
             </p>
             <p lang="en" class="text-[10px] text-gray-500 mb-8 leading-relaxed">
                 "JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY."
@@ -2793,12 +2793,12 @@ fn ExportMyData(token: String) -> impl IntoView {
             </Show>
             <Show when=move || !generated_at.get().is_empty() fallback=|| ()>
                 <p data-testid="export-generated-at" class="text-xs text-gray-400">
-                    "GENERATED_AT: " {move || generated_at.get()}
+                    <span lang="en">"GENERATED_AT: "</span> {move || generated_at.get()}
                 </p>
             </Show>
             <Show when=move || !sub_label.get().is_empty() fallback=|| ()>
                 <p data-testid="export-sub" class="text-xs text-gray-400">
-                    "SUB: " {move || sub_label.get()}
+                    <span lang="en">"SUB: "</span> {move || sub_label.get()}
                 </p>
             </Show>
         </div>

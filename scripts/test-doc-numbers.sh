@@ -804,6 +804,35 @@ for advisory_doc in "${advisory_docs[@]}"; do
 	fi
 done
 
+# --- 12. doc→code テスト名照合の現行値（tests<N>）照合 --------------------
+# spec 内の "tests<N>" のうち現行値だけを抽出し、doc_test_names の実測数と照合する。
+# 履歴表記（当時 / 旧 / 履歴 / 旧値へ追随 等）は既存の注記ルールで除外する。
+while IFS=: read -r test_line_no test_line_body; do
+	[[ -z "$test_line_body" ]] && continue
+	# 履歴語と現行値が同一行に混在し得る。行内に「現行...testsN」があればそれだけを照合する。
+	current_token="$(grep -oE '現行[^0-9]{0,20}tests[0-9]+' <<<"$test_line_body" | grep -oE 'tests[0-9]+' | head -n1 || true)"
+	if [[ -n "$current_token" ]]; then
+		n="$(grep -oE '[0-9]+' <<<"$current_token" | head -n1 || true)"
+		[[ -n "$n" ]] && assert_numbers_match "doc test names current @ ${spec}:${test_line_no}" "${#doc_test_names[@]}" "$n"
+		continue
+	fi
+	# 履歴語と現行値が同一行に混在し得るため、トークン単位で直前の文言を判定する。
+	while IFS= read -r token_offset; do
+		[[ -z "$token_offset" ]] && continue
+		token="${test_line_body:$token_offset}"
+		token="${token%%[!0-9a-z_]*}"
+		[[ -z "$token" ]] && continue
+		context_start=$((token_offset > 30 ? token_offset - 30 : 0))
+		context="${test_line_body:$context_start:$((token_offset - context_start))}"
+		if grep -qE '当時|旧|履歴|へ追随|以前|当初' <<<"$context"; then
+			continue
+		fi
+		n="$(grep -oE '[0-9]+' <<<"$token" | head -n1 || true)"
+		[[ -z "$n" ]] && continue
+		assert_numbers_match "doc test names current @ ${spec}:${test_line_no}" "${#doc_test_names[@]}" "$n"
+	done < <(grep -boE 'tests[0-9]+' <<<"$test_line_body" | cut -d: -f1 || true)
+done < <(grep -nE 'tests[0-9]+' "$spec" || true)
+
 # --- 結果 ----------------------------------------------------------------
 if ((failures > 0)); then
 	echo "doc numbers FAILED (${failures})" >&2

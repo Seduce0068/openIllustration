@@ -517,7 +517,7 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
 
     await page.goto('/');
     // R2-LEGACY-LANG: ログイン画面の英語パラグラフも lang="en" を宣言する。
-    await expect(page.getByText('IPv6-ONLY ACCESS: Legacy IPv4-only networks are rejected at the API layer (SEC-01).'))
+    await expect(page.getByText('IPv6 connection is required. If you are on an IPv4-only network, please switch to an IPv6-capable connection.'))
       .toHaveAttribute('lang', 'en');
     await expect(page.getByText('JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY.'))
       .toHaveAttribute('lang', 'en');
