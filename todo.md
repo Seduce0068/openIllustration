@@ -787,6 +787,33 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第46ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  ローカルnpm testの既定をchromiumのみへ（E2E_PROJECTS opt-in、CI時は3プロジェクト登録で
+  ci-e2e.shの--project選択と整合）、READMEのE2E前提を実態へ、
+  .env.exampleへビルド時/CLI変数追記、restore_dbの部分コピー削除失敗を元エラーへ集約。
+  R4 high指摘（CIでfirefox/webkit未登録になりProject not found）を修正し、
+  CI=1で207件/--project=firefoxで69件が解決することを実測確認。
+  R4 low指摘（restore_db削除失敗のテスト）は記録のみで保留。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、npm audit3lockfile、
+  markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2E本番相当昇格、Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  build.rs rerun-if-env-changed、リクエストタイムアウト、E2E artifact公開、GPG署名、
+  RPO/RTO定義、バックアップ鮮度監視、trunk部分アーカイブ、cronタイムアウト、GPG trust、
+  cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、axe自動スキャン、
+  開発モックuser_hash衝突、再試行導線、クライアント例外テレメトリ、refresh失敗メトリクス、
+  playwright install再試行、window unit停止済みアプリ再起動、監査スクロール到達、
+  E2Eビルド::error::、reqwest TLS二重スタック、tokio features full、CIバイナリキャッシュ、
+  失効閾値削除失敗の警告格下げ、logout sub不一致時Cookie削除、finalizer BEGIN失敗計上、
+  NTP同期要件、ブラウザエラー観測、429/503再試行、prefers-reduced-motion、
+  JXLアニメーション/MAX_PIXELS、日時フォールバック/鮮度NaNのオラクル、cron設定集約、
+  audit root 64hex検証、ライセンス本文件数照合、アーカイブ保持寿命、exportファイル名世代、
+  real-api宛先のenv化、resolver3）は記録のみで保留。
+
 - 2026-11-23 コンボ第45ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   JXLのchannels=0を明示拒否+NaN/±infのsaturating castオラクル、

@@ -114,11 +114,14 @@ cargo test -p common
 
 # E2E（開発用・ローカル反復向け。初回は cd e2e && npm ci）
 # 前提: Google Chrome・trunk v0.21.14・Node 22 以上。
+# 既定は chromium のみ。firefox/webkit は E2E_PROJECTS=firefox,webkit で opt-in。
 # 開発サーバーは Playwright が自動起動する。
 cd e2e && npm test
 
 # CI E2E ゲート（開発用モック認証 ALLOW_MOCK_AUTH=1 で実行）
-# 前提: E2E_JWT_SECRET/DATABASE_URL 注入・trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# 前提: trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# E2E_JWT_SECRET / DATABASE_URL は ci-e2e.sh が実行ごとに生成・export するため注入不要
+# （既存環境変数は上書きされる。ローカル npm test とは契約が異なる）。
 # 本番相当の設定診断は doctor --strict 側（後述）で行う。
 # 共通ワークフロー rust-gates.yml の extra_gates から呼ばれる。
 bash e2e/ci-e2e.sh

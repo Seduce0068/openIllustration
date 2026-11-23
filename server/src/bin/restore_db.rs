@@ -201,8 +201,15 @@ fn create_safety_copy(src: &Path, dst: &Path, label: &str) -> anyhow::Result<()>
         // 中途失敗で部分的なコピーを残さない。create_new により既存ファイルは
         // ここへ到達する前に拒否されているため、他者のファイルを消すことはない。
         drop(dest);
-        let _ = std::fs::remove_file(dst);
-        return Err(error).with_context(|| format!("failed to write {label}: {}", dst.display()));
+        let cleanup = std::fs::remove_file(dst);
+        let mut message = format!("failed to write {label}: {}", dst.display());
+        if let Err(cleanup_error) = cleanup {
+            // 不完全な平文 DB が残置された事実を利用者へ伝える（手動 cleanup が必要）。
+            message.push_str(&format!(
+                "; additionally failed to remove partial {label}: {cleanup_error}"
+            ));
+        }
+        return Err(error).context(message);
     }
     Ok(())
 }

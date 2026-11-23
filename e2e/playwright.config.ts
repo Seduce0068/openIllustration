@@ -42,30 +42,46 @@ export default defineConfig({
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
-  projects: [
-    {
-      name: 'chromium',
-      use: {
-        channel: 'chrome',
-        viewport,
+  // 既定は chromium のみ。firefox/webkit は E2E_PROJECTS で明示指定したときだけ
+  // 登録する（未導入ブラウザを既定で走らせない。ci-e2e.sh の --project 選択と同契約）。
+  projects: (() => {
+    const all = [
+      {
+        name: 'chromium',
+        use: {
+          channel: 'chrome',
+          viewport,
+        },
       },
-    },
-    {
-      name: 'firefox',
-      use: {
-        // プロジェクト名はラベルにすぎないため browserName を明示する。
-        browserName: 'firefox',
-        viewport,
+      {
+        name: 'firefox',
+        use: {
+          // プロジェクト名はラベルにすぎないため browserName を明示する。
+          browserName: 'firefox' as const,
+          viewport,
+        },
       },
-    },
-    {
-      name: 'webkit',
-      use: {
-        browserName: 'webkit',
-        viewport,
+      {
+        name: 'webkit',
+        use: {
+          browserName: 'webkit' as const,
+          viewport,
+        },
       },
-    },
-  ],
+    ];
+    // CI は E2E_PROJECTS を export せず --project 引数だけで選択するため、
+    // 3 プロジェクトを登録しておき、選択は --project 側へ委ねる。
+    // ローカル既定は chromium のみ（未導入ブラウザを既定で走らせない）。
+    const configured =
+      process.env.E2E_PROJECTS ??
+      (process.env.CI ? 'chromium,firefox,webkit' : 'chromium');
+    const selected = configured
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    if (selected.length === 0) return [all[0]];
+    return all.filter((project) => selected.includes(project.name));
+  })(),
   // 開発サーバーを自動起動する。`cwd` は設定ファイルからの相対パスで解決され、
   // `env` は process.env へマージされる。trunk は PATH 上のものを使用する。
   webServer: [
