@@ -398,9 +398,13 @@ async fn apply_migration(
     }
 
     // Record migration as applied
+    // 複数インスタンスが同時に同一 migration を適用しても冪等に成功させる。
+    // 適用済み判定はトランザクション外だが、INSERT の UNIQUE 競合は成功扱いとし、
+    // 片方が起動拒否されることを防ぐ（checksum 不一致は既に上で fail-closed）。
     tx.execute(
         &format!(
-            "INSERT INTO {} (version, name, checksum) VALUES (?, ?, ?)",
+            "INSERT INTO {} (version, name, checksum) VALUES (?, ?, ?)
+             ON CONFLICT(version) DO NOTHING",
             MIGRATIONS_TABLE
         ),
         (version, name, checksum),

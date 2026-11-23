@@ -4,6 +4,9 @@ Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
 # アプリ本体の unit テンプレート（ADR-0013 P1「アプリ systemd unit テンプレート」）。
 # 配置時に /etc/systemd/system/openillustration.service へコピーし、以下を実環境へ
 # 合わせること: User/Group、ExecStart のバイナリパス、EnvironmentFile の所有者と権限。
+# unit failed 時に通知 unit を起動する（配置時に実宛先へ差し替えること）。
+# ALERT_CMD はバックアップ詳細、OnFailure は unit 結果の通知を担う（Runbook 参照）。
+OnFailure=openillustration-backup-alert.service
 After=network-online.target
 Wants=network-online.target
 

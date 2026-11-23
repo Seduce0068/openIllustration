@@ -34,11 +34,6 @@ js-sys = "0.3"
 jxl-oxide = "0.12"
 pulldown-cmark = { version = "0.13.4", features = ["default"] }
 
-# wasm32 の乱数バックエンドを明示的に有効化する。
-# 旧 rsa 0.10 由来の要件は audit feature 分離で client から消えたが、
-# 他クレートの RNG 解決を変えないため残す（削除は別途検証して判断する）。
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-
 # client の直接依存からは除外（common の checksum feature のみを有効化するため
 # RSA 署名検証スタックは推移的にも本番 wasm へ入らない）。
 [dev-dependencies]

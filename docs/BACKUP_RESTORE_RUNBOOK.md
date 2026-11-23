@@ -357,8 +357,8 @@ systemd 版ではタイマーが窓 unit を起動し、次の順で実行する
    `Type=oneshot` の `ExecStopPost` は `ExecStartPre` / `ExecStart` の成否にかかわらず
    実行されるため、バックアップ失敗時も起動が保証される。
 
-`APP_UNIT` は設定可能値で、既定は `openillustration.service`。`deploy/` にはアプリ unit を
-置いていないため、導入環境の実 unit 名へ合わせる（`systemctl edit` の drop-in で
+`APP_UNIT` は設定可能値で、既定は `openillustration.service`。`deploy/openillustration.service`
+を同梱しているため、導入環境の実 unit 名と一致していることを確認する（`systemctl edit` の drop-in で
 `[Service] Environment=APP_UNIT=<実 unit 名>` を上書き）。`+` 接頭辞は systemd が
 `User=` / `Group=` を無視して当該コマンドを root で実行するものであり、`sudoers` / `polkit`
 での権限付与は不要。`backup-rotate.sh` 自体は `User=openillustration` で実行され、

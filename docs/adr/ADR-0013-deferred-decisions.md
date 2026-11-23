@@ -10,7 +10,7 @@ generated:
 
 ## ADR-0013: 保留事項の推奨方針と実装優先順位
 
-- Status: Proposed
+- Status: Implemented
 - Date: 2026-11-23
 - Decision owners: Project owner（ユーザーより推奨方針の決定を委譲）
 - Scope: `todo.md` のメモ欄に「設計判断待ち」として蓄積された項目

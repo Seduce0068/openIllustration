@@ -185,7 +185,17 @@ async fn main() -> anyhow::Result<()> {
     let db = open_db(database_url, database_token)
         .await
         .context("failed to open database")?;
+    let vacuum_started = std::time::SystemTime::now();
     if let Err(error) = db.execute(&format!("VACUUM INTO '{output}'"), ()).await {
+        // 存在チェック後に第三者のバックアップが作られた場合は削除しない（TOCTOU 保護）。
+        // VACUUM INTO 開始前は存在しないため、ここで存在するファイルは本プロセスが
+        // 途中まで作ったものとみなし、それ以外は守る。
+        let created_by_us = std::fs::symlink_metadata(output_path)
+            .map(|meta| meta.created().ok() >= Some(vacuum_started))
+            .unwrap_or(false);
+        if !created_by_us {
+            return Err(anyhow::Error::new(error).context("VACUUM INTO failed"));
+        }
         // VACUUM INTO が途中まで出力を作った場合、部分スナップショットを残さない。
         return fail_backup_with_cleanup(
             output_path,

@@ -13490,10 +13490,11 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
     )
     .await;
 
-    // メモリ更新は poison で失敗するが、DB の閾値は先にコミットされている。
+    // ADR-0013 P4: メモリ更新の poison は警告へ格下げし、DB 閾値のコミットと
+    // 未使用リフレッシュトークン消費を必ず完了する（back-channel と同契約）。
     assert!(
-        result.is_err(),
-        "poisoned in-memory threshold must make ban_user fail"
+        result.is_ok(),
+        "poisoned cache must not block the committed revocation and token cleanup"
     );
 
     let mut rows = db

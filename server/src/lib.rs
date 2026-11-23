@@ -1258,7 +1258,17 @@ fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
         .create_new(true)
         .open(lock_path)
     {
-        Ok(mut file) => write_instance_lock(&mut file),
+        Ok(mut file) => {
+            if let Err(error) = write_instance_lock(&mut file) {
+                // PID 不明のロックを残すと次回起動が fail-closed で拒否されるため、
+                // 作成したファイルを片付けてから失敗を返す。
+                drop(file);
+                let _ = std::fs::remove_file(lock_path);
+                Err(error)
+            } else {
+                Ok(())
+            }
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             // 読取失敗は内容不明＝所有者確認不能なので、stale とみなさず起動を拒否する（fail-closed）。
             // エラー文言には lock_path と I/O 原因のみを含め、秘密情報は出さない。
@@ -5432,12 +5442,17 @@ pub async fn ban_user(
     // 古い閾値で上書きすると /auth/refresh が iat を小さく採番し、
     // 発行直後の新 JWT が失効する。
     {
-        let mut before = state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        let entry = before.entry(user_hash.to_string()).or_insert(0);
-        *entry = (*entry).max(revoked_at);
+        // メモリ更新失敗は DB 閾値が正本のため警告へ格下げし、
+        // 下流の未使用リフレッシュトークン消費を必ず実行する（back-channel と同契約）。
+        match state.revoked_subs_before.lock() {
+            Ok(mut before) => {
+                let entry = before.entry(user_hash.to_string()).or_insert(0);
+                *entry = (*entry).max(revoked_at);
+            }
+            Err(_) => tracing::warn!(
+                "revoked_subs_before cache is poisoned; DB threshold remains authoritative"
+            ),
+        }
     }
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 側の失効が先に確定しているため、

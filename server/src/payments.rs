@@ -882,7 +882,9 @@ pub async fn verify_order(
         // デッドロック・一時障害・容量不足などの DB エラーを「再利用」と誤報告せず、
         // Internal (500) として伝播させる。詳細は既定のマスク処理に任せる。
         if is_unique_constraint_violation(&error) {
-            warn!("payment verification rejected: {}", error);
+            // DB エラー本文は detailed ログや Internal 経路のマスク処理へ任せ、
+            // ここでは固定文言のみを出す（詳細の二重露出を避ける）。
+            warn!("payment verification rejected: duplicate transaction");
             return Err(AppError::BadRequest(
                 "transaction is already used by another order".to_string(),
             ));

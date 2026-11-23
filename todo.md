@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第62ラウンド（ADR完了後初回review/discovery）: 全7担当完了。
+  R6 で以下を是正: オフサイト転送へdetached署名(.asc)追加（3点世代対）、
+  アプリ/backup両unitへOnFailure、backup_db VACUUM INTO TOCTOU保護、
+  ban_userメモリpoison警告格下げ+トークン消費、migration ON CONFLICT冪等化、
+  export generated_atをtx開始直後へ、決済warn固定文言、instance.lock失敗時削除、
+  doctorのBIND_ADDR/PORT注入修正、ContentViewer再試行、検索クリア後フォーカス、
+  retry_statusのlangを本文から算出、ADR-0013 Status=Implemented反映、
+  JXL仕様60M/rename記述削除/REQUEST_TIMEOUT_SECS/.env/空セクション削除。
+  R4指摘1件（retry_status lang）も修正。親がE2E moderation strict mode 1件を修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、npm audit3lockfile、markdownlint40ファイル）。
+  残存（design-wait区分A・外部入力依存: JPKI信頼アンカー/OIDC azp/第三者監査アンカー/
+  JPYC返金dispute/脅威モデル 等は方針決定済みで記録のみ）、
+  新規検出の低優先（RuntimeConfig一括化・OIDC初回登録403/501・restore原子的ロールバック・
+  unpin補償メトリクス・Voteボタンdisabled理由・公開集計鮮度警告・E2Eコメント行番号・
+  5秒スリープ・gpg前提README・Prometheus scrape設定例）は次ラウンド以降。
+
 - 2026-11-23 コンボ第61ラウンド（ADR-0013 P4 実装・全区分完了）: 3担当（server/client/deps）。
   TimeoutLayer+REQUEST_TIMEOUT_SECS、tokio/tower/reqwest features絞り、workspace.dependencies集約、
   common RSA feature分割（client wasmからRSA除外）、監査non-modal Tab、Support overlay、

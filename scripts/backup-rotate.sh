@@ -299,15 +299,25 @@ if [[ -n "$offsitecopy" ]]; then
 		echo "error: audit root is missing for offsite copy" >&2
 		exit 1
 	fi
-	# ADR-0013 P2: 監査 root を先に送り、成果物を後に送る。
-	echo "==> offsite copy: audit root then artifact"
-	"$offsitecopy" "$audit_root_output" "$offsitedest"
-	if ! "$offsitecopy" "$artifact" "$offsitedest"; then
-		# 2回目失敗で片方だけ残る場合は値・パスをエコーせず固定文言で警告する。
-		# 片方だけ残ったオフサイト先は手動 cleanup が必要（Runbook 参照）。
-		echo "WARNING: offsite copy partially completed: the audit root was sent but the artifact was not; manual cleanup at the offsite destination is required (see Runbook)" >&2
-		exit 1
+	# ADR-0013 P2: 監査 root → 成果物 → detached 署名 の順で送る。
+	# オフサイト先で復元前に gpg --verify を通すため .asc も世代対に必須。
+	copies=("$audit_root_output" "$artifact")
+	if [[ -n "$gpg_recipient" ]]; then
+		if [[ ! -f "${encrypted}.asc" ]]; then
+			echo "error: detached signature is missing for offsite copy" >&2
+			exit 1
+		fi
+		copies+=("${encrypted}.asc")
 	fi
+	echo "==> offsite copy: audit root, artifact, then detached signature"
+	for ((copy_index = 0; copy_index < ${#copies[@]}; copy_index++)); do
+		if ! "$offsitecopy" "${copies[$copy_index]}" "$offsitedest"; then
+			# 途中失敗で一部だけ残る場合は値・パスをエコーせず固定文言で警告する。
+			# 不完全世代は手動 cleanup が必要（Runbook 参照）。
+			echo "WARNING: offsite copy partially completed: only some generation artifacts were sent; manual cleanup at the offsite destination is required (see Runbook)" >&2
+			exit 1
+		fi
+	done
 fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は

@@ -2,6 +2,11 @@
 
 ## 2026-11-23
 
+- ADR-0013 の P1（設定・運用の単一情報源）／P2（バックアップ／復旧の完全性）／
+  P3（テスト／CI の信頼性）／P4（ランタイム保護／UX）がすべて実装完了。
+  Deterministic Gates（fmt/clippy/test/wasm/deny/markdownlint/backup/doc-numbers/E2E）green
+  （E2E69 / check23 / doctor54 / migrations14 / tests156）。Status を Implemented へ更新。
+
 - [ADR-0004](ADR-0004-moderation-procedure.md): 異議（appeal_of 付き再通報）の認可を追加。
   提出主体を元通報者（監査ログの `User report:` 行の `changed_by`）またはコンテンツ所有者
   に限定し、第三者は固定文言 403 で拒否。同一 CID の異議は30日以内1回のクールダウンを

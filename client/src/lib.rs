@@ -2909,6 +2909,15 @@ where
                                     set_tag.set(String::new());
                                     set_content_type.set(String::new());
                                     set_favorite_only.set(false);
+                                    // ADR-0013 P4: 条件を消すとボタン自体が DOM から消えるため、
+                                    // フォーカスを検索フォーム先頭へ移して操作位置を保持する。
+                                    if let Some(input) = web_sys::window()
+                                        .and_then(|window| window.document())
+                                        .and_then(|doc| doc.get_element_by_id("content-q"))
+                                        .and_then(|input| input.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                    {
+                                        let _ = input.focus();
+                                    }
                                 }
                                 class="border border-white/20 px-3 py-1 text-gray-400 hover:bg-white/10 hover:text-white transition-colors">
                                 "条件をクリア"
@@ -3107,9 +3116,10 @@ fn retry_control(
     message: String,
     on_retry: impl Fn() + 'static,
 ) -> impl IntoView {
-    let status_message = message.clone();
     let container_id = format!("{test_id}-retry");
     let status_id = format!("{test_id}-retry-status");
+    // lang 判定と本文で同じ値を参照するため、クロージャ用に複製する。
+    let message_for_lang = message.clone();
     view! {
         <div data-testid=container_id class="flex flex-wrap items-center gap-3 mb-4">
             <button type="button" lang=move || error_lang(RETRY_BUTTON_LABEL)
@@ -3118,7 +3128,7 @@ fn retry_control(
                 {RETRY_BUTTON_LABEL}
             </button>
             <p role="status" aria-live="polite" data-testid=status_id
-                lang=move || error_lang(&status_message) class="text-xs text-gray-400">
+                lang=move || error_lang(&message_for_lang) class="text-xs text-gray-400">
                 {message}
             </p>
         </div>
@@ -3209,6 +3219,8 @@ where
     let (novel_decode_error, set_novel_decode_error) = signal(false);
     // HTTP エラー／バイナリ読取失敗は改ざん検知ではなく取得失敗として扱う。
     let (content_load_error, set_content_load_error) = signal(String::new());
+    // ADR-0013 P4: 本文取得失敗からの復帰用トリガ。
+    let (content_reload, set_content_reload) = signal(0u64);
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
@@ -3358,6 +3370,8 @@ where
 
     let ct_ef = content_type.clone();
     Effect::new(move |_| {
+        // reload カウンタの変化でこの Effect を再加熱する。
+        let _reload_generation = content_reload.get();
         let cid = cid.clone();
         let heading_prefix = heading_prefix.clone();
         let expected_checksum = expected_checksum.clone();
@@ -3570,6 +3584,10 @@ where
                                 <p data-testid="content-load-error-detail" lang=move || error_lang(&content_load_error.get()) class="text-gray-500 text-[8px]">
                                     {move || content_load_error.get()}
                                 </p>
+                                {move || retry_control("content", content_load_error.get(), {
+                                    let set_reload = set_content_reload;
+                                    move || set_reload.update(|n| *n += 1)
+                                })}
                             </Show>
                             <Show when=move || content_load_error.get().is_empty() && decode_error.get() fallback=|| ()>
                                 <p role="alert" lang=move || error_lang("JXL Decode Failed") data-testid="jxl-decode-error" class="text-red-500 font-bold text-[10px] mb-2 uppercase">

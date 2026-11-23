@@ -177,8 +177,8 @@ where
         }
         // BIND_ADDR / PORT は run() と同じ resolve_bind_addr で検証する（check23 維持）。
         if let Err(warning) = resolve_bind_addr(
-            common::env::read_env("BIND_ADDR"),
-            common::env::read_env("PORT"),
+            common::env::classify(lookup("BIND_ADDR")),
+            common::env::classify(lookup("PORT")),
         ) {
             production.push(warning.to_string());
         }

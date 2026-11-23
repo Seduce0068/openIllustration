@@ -285,8 +285,8 @@ mkdir -p "$order_dest"
 sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
 expect_success "offsite copies audit root before artifact" env BACKUP_DIR="$order_dir" BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/order-copy.sh" OFFSITE_DEST="$order_dest" "$script"
 mapfile -t copy_calls <"$COPY_LOG"
-if ((${#copy_calls[@]} == 2)) && [[ "${copy_calls[0]}" == *.audit-root ]] && [[ "${copy_calls[1]}" == *.db.gpg ]]; then
-	echo "PASS offsite order: audit root first, artifact second"
+if ((${#copy_calls[@]} == 3)) && [[ "${copy_calls[0]}" == *.audit-root ]] && [[ "${copy_calls[1]}" == *.db.gpg ]] && [[ "${copy_calls[2]}" == *.db.gpg.asc ]]; then
+	echo "PASS offsite order: audit root first, artifact second, signature third"
 else
 	echo "FAIL offsite copy order"
 	printf 'actual: %s\n' "${copy_calls[*]}" >&2

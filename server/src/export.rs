@@ -521,14 +521,18 @@ async fn export_revoked_subs(
 /// `db` には読み取りトランザクション内の接続（`BEGIN DEFERRED` 開始後）を渡す。
 /// 全クエリが同じトランザクションに所属することをデバッグビルドで検証する
 /// （`cargo test` では `debug_assert!` が有効）。
-async fn collect_export_snapshot(db: &Connection, sub: &str) -> Result<DataExport, AppError> {
+async fn collect_export_snapshot(
+    db: &Connection,
+    sub: &str,
+    generated_at: String,
+) -> Result<DataExport, AppError> {
     debug_assert!(
         !db.is_autocommit(),
         "export queries must run inside a read transaction"
     );
     Ok(DataExport {
         version: 1,
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at,
         sub: sub.to_string(),
         users: export_users(db, sub).await?,
         contents: export_contents(db, sub).await?,
@@ -566,7 +570,9 @@ pub async fn me_export(
     // ロックが保持される。
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
 
-    let export = collect_export_snapshot(&tx, sub).await?;
+    // トランザクション開始直後の時刻をメタデータとし、各テーブル読取時刻とのずれを防ぐ。
+    let generated_at = chrono::Utc::now().to_rfc3339();
+    let export = collect_export_snapshot(&tx, sub, generated_at).await?;
 
     // 読み取りのみだが明示的にコミットしてトランザクションを終了する。
     // 途中のクエリがエラーを返して `?` で早期 return した場合、
