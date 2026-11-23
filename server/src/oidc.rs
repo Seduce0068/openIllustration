@@ -1360,21 +1360,9 @@ pub async fn callback(
         .checked_add_signed(Duration::seconds(SESSION_TTL_SECS))
         .expect("valid timestamp")
         .timestamp() as usize;
-    let (iat, old_threshold) = {
-        let revoked_subs = state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?;
-        // R2-AUTH: ここでは remove せず読むだけに留める。発行前に閾値を消すと
-        // JWT 署名 / refresh token 登録の失敗で旧 JWT（iat <= 旧閾値）が復活する。
-        let old = revoked_subs.get(&user_hash).copied();
-        let issued_at = match old {
-            Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
-            None => now_ts,
-        };
-        // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
-        (issued_at, old)
-    };
+    // ADR-0013 P4: DB 正本から iat と旧閾値を読む（他インスタンスの失効も反映）。
+    // 発行前に閾値を消さない契約は維持（署名失敗時に旧 JWT が復活しないように）。
+    let (iat, old_threshold) = crate::issued_iat_from_db(&state.db, &user_hash, now_ts).await?;
     let session_claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,

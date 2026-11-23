@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第77ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: セッション発行のiatをメモリだけでなくDB正本(revoked_subs)から
+  採番（auth_verify/OIDC callback両方、issued_iat_from_dbヘルパ追加）、
+  revoke_session/is_session_revokedのpoisonを警告格下げしてDB照会へ、
+  READMEの/metricsをcounter/gauge区別（finalizer_last_success/rate_limiter_keysはgauge）。
+  R4指摘1件（is_session_revoked側のpoison）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  server全テスト green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe WCAG AA導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、jxl fuzz独立オラクル、Node/Chrome比較分岐テスト、
+  backup-cron-wrapper所有者/mode分岐テスト、web-sys未参照feature5件、
+  doctor-ci-env双方向照合、署名公開失敗回帰、pushState失敗告知、
+  ナビ/LOG OUT/投票の24pxタッチ目標、投票.disabled理由、noscript/fallback、
+  apple-touch-icon PNG、公開集計閾値の設定化、RuntimeConfig一括化、
+  doctor MIGRATIONS_DIR診断、REVIEW_REPORT未更新、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第76ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: GPG署名テストの本番trust-model違いをテスト専用と明記、
   RunbookのTimeoutStopSec根拠（同梱unitは330秒）とStartLimit到達時の

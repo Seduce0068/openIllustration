@@ -775,6 +775,33 @@ pub async fn client_events(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// 発行時の iat と旧失効閾値を DB 正本から読む（ADR-0013 P4）。
+/// 他インスタンスの BAN/back-channel logout やメモリキャッシュ poison 後も、
+/// DB に残った閾値を基準に iat を採番し、発行直後の 401 を防ぐ。
+pub(crate) async fn issued_iat_from_db(
+    db: &libsql::Connection,
+    sub: &str,
+    now_ts: usize,
+) -> Result<(usize, Option<usize>), AppError> {
+    let mut rows = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = ?",
+            [sub.to_string()],
+        )
+        .await?;
+    let old = rows
+        .next()
+        .await?
+        .map(|row| -> Result<usize, AppError> { Ok(row.get::<i64>(0)? as usize) })
+        .transpose()?;
+    drop(rows);
+    let iat = match old {
+        Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
+        None => now_ts,
+    };
+    Ok((iat, old))
+}
+
 /// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
 ///
 /// ADR-0013 P4: ロック識別子は接続ポインタではなく DB ファイルの canonicalize 済みパス。
@@ -4265,18 +4292,7 @@ pub async fn auth_verify(
     // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
     // ただしここでは閾値を読むだけに留め、削除は JWT 発行の完了後へ回す。
     // 発行前に削除すると署名失敗時に旧 JWT（iat <= 旧閾値）が復活するため。
-    let (iat, old_threshold) = {
-        let revoked_subs = state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        let old = revoked_subs.get(&user_hash).copied();
-        let issued_at = match old {
-            Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
-            None => now_ts,
-        };
-        (issued_at, old)
-    };
+    let (iat, old_threshold) = issued_iat_from_db(&state.db, &user_hash, now_ts).await?;
 
     let claims = Claims {
         sub: user_hash.clone(),
@@ -4321,11 +4337,16 @@ pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
-    state
-        .revoked_sessions
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .insert(sid.to_string());
+    // DB コミットが正本。positive-only キャッシュの poison は警告へ格下げし、
+    // 失効記録の成功を返す（miss 時に DB を照会するため失効判定は維持）。
+    match state.revoked_sessions.lock() {
+        Ok(mut sessions) => {
+            sessions.insert(sid.to_string());
+        }
+        Err(_) => tracing::warn!(
+            "revoked_sessions cache is poisoned; DB revocation remains authoritative"
+        ),
+    }
     Ok(())
 }
 
@@ -4334,12 +4355,15 @@ pub(crate) async fn revoke_session(state: &Arc<AppState>, sid: &str) -> Result<(
 /// miss 時は必ず DB を照会する。否定結果はキャッシュしないため、
 /// 他インスタンスで記録された失効も取りこぼさない。
 pub(crate) async fn is_session_revoked(state: &Arc<AppState>, sid: &str) -> Result<bool, AppError> {
-    if state
-        .revoked_sessions
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .contains(sid)
-    {
+    // キャッシュ poison は警告へ格下げし、DB 正本の照会へ進む（miss 扱い）。
+    let cached = match state.revoked_sessions.lock() {
+        Ok(sessions) => sessions.contains(sid),
+        Err(_) => {
+            tracing::warn!("revoked_sessions cache is poisoned; falling back to DB");
+            false
+        }
+    };
+    if cached {
         return Ok(true);
     }
     let mut rows = state
