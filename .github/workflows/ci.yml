@@ -42,6 +42,8 @@ jobs:
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
         ALLOW_IPV4_LOCALHOST=1
+        # Chrome 上限: ランナーの Chrome を自動更新した際は検証済み major へ追随させる。
+        MAX_CHROME_MAJOR=140
       # 共通ワークフローは -D warnings を先頭に付けるが、ローカル検証ループと
       # 同じ引数を明示する（重複しても無害）。
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
@@ -49,10 +51,12 @@ jobs:
       extra_gates: |
         # --- ADR-0013 P3: CI バイナリキャッシュ -------------------------------
         # cargo-deny 0.20.2 / betterleaks v1.10.1 をバージョン＋checksum 付きで
-        # $HOME/.cache/oil-ci-tools へキャッシュする。このディレクトリが actions/cache
-        # の復元／保存対象（キーは tool 名＋固定バージョン＋checksum）となり、
-        # ヒット時も sha256sum -c と固定版 --version を再確認して fail-closed にする。
-        # キャッシュが無い／検証失敗の場合は従来の cargo install / go install を維持する。
+        # $HOME/.cache/oil-ci-tools に配置する。現状は actions/cache が接続されていない
+        # ため毎回コールドインストールとなり、ヒット判定は常に 0 となる。
+        # 保存先は共通ワークフロー rust-gates.yml 側の cache-directories 入力を待つ
+        # （追加された場合はキーに tool 名＋固定バージョン＋checksum を使う）。
+        # いずれの場合も sha256sum -c と固定版 --version を再確認して fail-closed にし、
+        # 検証失敗時は従来の cargo install / go install 経路へ戻す。
         tool_cache_dir="${HOME}/.cache/oil-ci-tools"
         mkdir -p "$tool_cache_dir"
         cargo_deny_version="0.20.2"

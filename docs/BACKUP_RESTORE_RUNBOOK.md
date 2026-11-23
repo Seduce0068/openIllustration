@@ -49,7 +49,12 @@ generated:
 - 復旧目標は RPO=24 時間、RTO=4 時間とする
   （[ADR-0013 P2](adr/ADR-0013-deferred-decisions.md) / DEC-07）。
   日次バックアップ窓（03:17、`RandomizedDelaySec=300`）の成功を毎日確認し、
-  直近成功世代からの損失が24時間以内に収まることを担保する。復旧訓練では
+  直近成功世代からの損失が24時間以内に収まることを担保する。成功時に
+  `backup-rotate.sh` が `${BACKUP_DIR}/.last-success`（UTC RFC3339、0600）を公開するため、
+  mtime と内容を確認する。想定窓は 03:17 + `RandomizedDelaySec=300` + 1 日 = 1445 分で、
+  これを超えて更新されない場合は `ALERT_CMD` で通知する（cron テンプレートに例を記載）。
+  systemd timer 構成では外部監視基盤から同じファイルを監視し、cron と同等の検知を提供する。
+  復旧訓練では
   停止から `/health` / `/ready` 200 と `verify_audit_log` 成功までを計測し、
   4時間以内に完了することを確認する。計測条件は同一ハードウェア・
   コールドキャッシュ・ローカル libSQL とし、受入値の確定は DEC-07 の合意後に行う。

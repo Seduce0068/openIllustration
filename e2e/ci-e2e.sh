@@ -301,9 +301,8 @@ if ((10#$chrome_major < 10#$min_chrome_major)); then
 	e2e_stage_fail "Chrome ${chrome_major} is older than the required major ${min_chrome_major}."
 fi
 # Chrome の上限は CI で明示する（MIN_CHROME_MAJOR=120 と合わせた互換範囲）。
-# README は担当外のため根拠をここに残す: ADR-0013 P3 の例に従い ci.yml 側で
-# ci-e2e.sh の CI 分岐で MAX_CHROME_MAJOR=140 を既定適用する（ci.yml の設定は不要）。
-# 実環境の Chrome がこれより新しい場合は ci.yml で検証済み値へ上書きする。
+# ci.yml の env_vars で MAX_CHROME_MAJOR を注入する。未注入の CI では 140 を既定とし、
+# ランナーの Chrome を更新した場合は ci.yml の値を検証済み major へ追随させる。
 # 上限超過は警告ではなく失敗（fail-closed）。
 max_chrome_major="${MAX_CHROME_MAJOR:-}"
 if [[ -n "${CI:-}" && -z "$max_chrome_major" ]]; then

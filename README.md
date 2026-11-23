@@ -116,16 +116,19 @@ cargo test -p server
 cargo test -p common
 
 # CI と同じローカル再現ゲート（手元で緑にしてから push する）
+set -euo pipefail
 bash scripts/test-doc-numbers.sh
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
-shfmt -l scripts/*.sh e2e/*.sh   # 出力が空なら OK
+shfmt_out="$(shfmt -l scripts/*.sh e2e/*.sh)"
+[[ -z "$shfmt_out" ]] || { printf '%s\n' "$shfmt_out"; exit 1; }
 npm audit --audit-level=high && npm audit --prefix e2e --audit-level=high && npm audit --prefix client --audit-level=high
 bash scripts/test-backup-rotate.sh
 bash scripts/test-backup-cron-wrapper.sh
 bash scripts/test-prepare-distribution.sh
 
 # E2E（開発用・ローカル反復向け。初回は cd e2e && npm ci）
-# 前提: Google Chrome 120 以上（MIN_CHROME_MAJOR）・trunk v0.21.14・Node 22 以上。
+# 前提: Google Chrome 120〜140（MIN_CHROME_MAJOR / MAX_CHROME_MAJOR）・trunk v0.21.14・Node 22 以上。
+# 上限超過は fail-closed。CI ランナーの Chrome 更新時は ci.yml の MAX_CHROME_MAJOR を追随させる。
 # 既定は chromium のみ。firefox/webkit は E2E_PROJECTS=firefox,webkit で opt-in。
 # 開発サーバーは Playwright が自動起動する。
 cd e2e && npm test

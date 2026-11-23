@@ -9,11 +9,10 @@ import { chromium, firefox, webkit, type BrowserType, type FullConfig } from '@p
  */
 
 // 既存の履歴警告（economy.spec.ts の fail-closed オラクル）は許可する。
-// favicon の 404 等、ブラウザ既定のリソースエラーもアプリ由来ではないため除外する。
+// favicon はアプリ提供物（client/favicon.svg）のため 404 を許可しない。
 const ALLOWED_MESSAGES: RegExp[] = [
   /履歴の更新に失敗しました。/,
   /history update failed; view unchanged/,
-  /favicon\.ico/,
 ];
 
 // 主要画面に絞る（未認証でもレンダリングされるルートのみ、待機は短く）。

@@ -4064,6 +4064,21 @@ pub async fn auth_verify(
                 common::age::AgeValidationError::TrustedAttributeRequired,
             )
         })?;
+        // 単回消費契約: verify の成否にかかわらず、ここで nonce を先に消費する。
+        // 検証失敗後に同一 nonce で別の署名済み属性を再提示できないようにする。
+        {
+            let mut nonces = MOCK_NONCES
+                .lock()
+                .map_err(|_| AppError::Internal("nonce store is poisoned".to_string()))?;
+            let now = std::time::Instant::now();
+            nonces.retain(|_, issued| now.duration_since(*issued) <= MOCK_NONCE_TTL);
+            match nonces.remove(nonce) {
+                Some(_) => {}
+                None => {
+                    return Err(AppError::BadRequest("invalid or reused nonce".to_string()));
+                }
+            }
+        }
         // audience は OIDC client_id をフォールバックに使用する。
         let audience = state
             .oidc
@@ -4087,15 +4102,15 @@ pub async fn auth_verify(
         None
     };
 
-    // nonce は年齢判定より先に消費する。年齢判定で 403/400 になっても
-    // 同一 nonce を別の署名済み属性で再提示できないようにするため（単回消費契約）。
+    // nonce は verified_claims 分岐で verify より先に消費済み（単回消費契約）。
+    // ここではモック presentation_token 経路（verified_claims 無し）の nonce を消費する。
+    // 消費済み nonce は PoP 検証でも再利用するため、スコープ外でも参照できるよう保持する。
     let verified_key = if payload.presentation_token == "mock_token" && state.allow_mock_auth {
-        // 開発用モックでも nonce を必須化し、リプレイを防ぐ。
-        let nonce = payload
-            .nonce
-            .as_deref()
-            .ok_or_else(|| AppError::BadRequest("nonce is required".to_string()))?;
-        {
+        if payload.verified_claims.is_none() {
+            let nonce = payload
+                .nonce
+                .as_deref()
+                .ok_or_else(|| AppError::BadRequest("nonce is required".to_string()))?;
             let mut nonces = MOCK_NONCES
                 .lock()
                 .map_err(|_| AppError::Internal("nonce store is poisoned".to_string()))?;
@@ -4163,13 +4178,17 @@ pub async fn auth_verify(
             }
             // 検証対象はサーバーが発行し今消費した nonce。pop.nonce は
             // envelope の記録値であり、発行契約との一致だけを確認する。
-            if pop.nonce != nonce {
+            if pop.nonce != payload.nonce.as_deref().unwrap_or("") {
                 return Err(AppError::Unauthorized(
                     "PoP nonce does not match the issued nonce".to_string(),
                 ));
             }
             // 公開鍵はリクエストの SPKI DER をそのまま流用し、証明書パースは通さない。
-            jpki::verify_proof_of_possession(der, nonce, &signature)?;
+            jpki::verify_proof_of_possession(
+                der,
+                payload.nonce.as_deref().unwrap_or(""),
+                &signature,
+            )?;
         }
         payload.public_key_der.clone()
     } else {

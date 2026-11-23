@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第73ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: CI Chrome上限140がハードコードでランナー更新時に恒久赤になる問題
+  （ci.yml env_varsでMAX_CHROME_MAJOR注入可能化、READMEに上限/更新手順）。
+  他: CIキャッシュコメントを実態（未接続・毎回コールド）化、
+  バックアップ鮮度.last-success監視手順追記、READMEローカルゲートfail-closed化、
+  verified_claimsのnonceをverify前に消費（PoPはpayload.nonce読直し）、
+  PWA manifest/favicon/theme-color追加、globalSetupのfavicon許可削除。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、manifest JSON OK、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: axe WCAG AA自動スキャン導入、globalSetup認証後ビュー監視、
+  fail-closedカウンタ2種のテスト・仕様、error_lang UTC例外テスト、
+  E2Eブラウザ選択CI fail-closedテスト、jxl fuzz独立オラクル、
+  RuntimeConfig一括化、doctor MIGRATIONS_DIR診断、REQUEST_TIMEOUT二重読込、
+  restore原子的ロールバック、ContentViewer世代ガード、REVIEW_REPORT未更新、
+  url_decode不正percentテスト、ui_errorテスト仕様化、
+  英語placeholderのlang付与、ハンドル済みUI失敗テレメトリ）は記録のみで保留。
+
 - 2026-11-24 コンボ第72ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: リモートDBでmigrationがwrite_lockを取らず冪等でない
   ALTER/DROP SQLが並行起動時に二重実行される問題（apply_migrationを
