@@ -111,7 +111,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{cors::CorsLayer, timeout::TimeoutLayer, trace::TraceLayer};
 use tracing::{Span, warn};
 use uuid::Uuid;
 
@@ -212,6 +212,17 @@ pub struct AppState {
     pub allowed_origins: Vec<HeaderValue>,
 }
 
+impl Drop for AppState {
+    fn drop(&mut self) {
+        // ADR-0013 P4: 最後の AppState が消える＝接続が破棄される時点で
+        // canonicalize 済み DB パスをキーにしたロックエントリも回収する。
+        // 他に Arc<Connection> の保持者がいれば接続はまだ生きているため残す。
+        if Arc::strong_count(&self.db) == 1 {
+            reclaim_db_write_lock(&self.db);
+        }
+    }
+}
+
 /// `Content-Length` が上限を超えるリクエストを拒否する。
 /// 通常エンドポイントの本文上限（10 MiB）。ヘッダ検査と DefaultBodyLimit の
 /// 単一情報源とし、片方だけの変更で境界がずれることを防ぐ。
@@ -271,6 +282,10 @@ const IPFS_MAX_ATTEMPTS_BOUNDS: (usize, usize) = (1, 5);
 const OIDC_HTTP_TIMEOUT_BOUNDS: (u64, u64) = (1, 60);
 const GRACEFUL_DRAIN_TIMEOUT_BOUNDS: (u64, u64) = (1, 300);
 const MODERATION_FINALIZE_INTERVAL_BOUNDS: (u64, u64) = (30, 3600);
+/// ADR-0013 P4: `REQUEST_TIMEOUT_SECS` の受理範囲。drain と同じ 1..=300。
+pub const REQUEST_TIMEOUT_SECS_BOUNDS: (u64, u64) = (1, 300);
+/// ADR-0013 P4: 未設定・不正値時の既定（graceful drain の既定 30 秒と整合）。
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 /// `RATE_LIMIT_PER_MIN` を解析する。未設定・不正値・範囲外は既定の 60/分。
 pub fn rate_limit_per_min(env_value: Option<&str>) -> u32 {
@@ -369,6 +384,8 @@ pub struct Metrics {
     pub finalizer_lock_busy: std::sync::atomic::AtomicU64,
     /// purge / 自動確定が失敗した回数。
     pub finalizer_failures: std::sync::atomic::AtomicU64,
+    /// ADR-0013 P4: 旧失効閾値の削除に失敗し、閾値を残したまま警告へ格下げした回数。
+    pub revocation_clear_failures: std::sync::atomic::AtomicU64,
     /// 直近の回収処理が成功した時刻（Unix秒）。未実行なら 0。
     pub finalizer_last_success_secs: std::sync::atomic::AtomicU64,
     /// 直近の周期 tick で観測したレート制限キー数（IP キーの単調増加監視用）。
@@ -598,7 +615,10 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
          openillustration_finalizer_failures_total {}\n\
          # HELP openillustration_finalizer_last_success_timestamp_seconds Unix timestamp of the last successful finalizer/purge run.\n\
          # TYPE openillustration_finalizer_last_success_timestamp_seconds gauge\n\
-         openillustration_finalizer_last_success_timestamp_seconds {}\n",
+         openillustration_finalizer_last_success_timestamp_seconds {}\n\
+         # HELP openillustration_revocation_clear_failures_total Total failed superseded revocation threshold deletions.\n\
+         # TYPE openillustration_revocation_clear_failures_total counter\n\
+         openillustration_revocation_clear_failures_total {}\n",
         state
             .metrics
             .requests
@@ -630,6 +650,10 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         state
             .metrics
             .finalizer_last_success_secs
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .revocation_clear_failures
             .load(std::sync::atomic::Ordering::Relaxed),
     );
     // R2-SERVER: レート制限キーの単調増加を監視するためのゲージと sweep 回数。
@@ -707,16 +731,64 @@ pub async fn client_events(
 }
 
 /// libSQL のローカル接続は同時に 1 つの `BEGIN` しか保持できない。
-/// Arc<Connection> の実体アドレスをキーにしたプロセス内ロックで書き込みを直列化する。
+///
+/// ADR-0013 P4: ロック識別子は接続ポインタではなく DB ファイルの canonicalize 済みパス。
+/// これにより同一 DB を別 Arc/別接続から開いた場合も同じロックを共有できる。
+/// 本アプリは 1 プロセス 1 接続（Arc<Connection> を AppState で共有）を前提とする。
 static DB_WRITE_LOCKS: std::sync::LazyLock<
-    std::sync::Mutex<HashMap<usize, Arc<tokio::sync::Mutex<()>>>>,
+    std::sync::Mutex<HashMap<std::path::PathBuf, Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
+/// 接続ポインタ → canonicalize 済み DB パスの逆引き。接続破棄時の回収に使う。
+static DB_LOCK_PATHS: std::sync::LazyLock<std::sync::Mutex<HashMap<usize, std::path::PathBuf>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// 接続が指す DB パスを `PRAGMA database_list` から取得し canonicalize する。
+/// リモート DSN / in-memory でファイルパスが無い場合は固定の疑似パスへ倒す。
+async fn db_lock_path(db: &Connection) -> Result<std::path::PathBuf, AppError> {
+    let mut rows = db.query("PRAGMA database_list", ()).await?;
+    let file = match rows.next().await? {
+        Some(row) => row.get::<Option<String>>(2)?,
+        None => None,
+    };
+    drop(rows);
+    match file.filter(|path| !path.is_empty()) {
+        Some(path) => {
+            Ok(std::fs::canonicalize(&path).unwrap_or_else(|_| std::path::PathBuf::from(&path)))
+        }
+        // ファイルを持たない接続（in-memory / リモート）は DB パスが無いため、
+        // 接続ごとの疑似パスへ倒す（別 DB を誤って直列化しない）。
+        None => Ok(std::path::PathBuf::from(format!(
+            ":memory:{}",
+            db as *const Connection as usize
+        ))),
+    }
+}
+
 /// 指定接続に対応する書き込みロックを返す。
-/// ロックテーブルの取得・キー登録を含む全体を `Result` で包み、poison 時は
-/// panic させず `AppError::Internal` として呼び出し側へ伝播する。
-pub fn write_lock(db: &Connection) -> Result<Arc<tokio::sync::Mutex<()>>, AppError> {
-    let key = db as *const Connection as usize;
+/// パスは最初の呼び出しで解決して逆引きへ登録し、以後は同一パスのロックを共有する。
+/// poison 時は panic させず `AppError::Internal` として呼び出し側へ伝播する。
+pub async fn write_lock(db: &Connection) -> Result<Arc<tokio::sync::Mutex<()>>, AppError> {
+    let pointer = db as *const Connection as usize;
+    let key = {
+        let paths = DB_LOCK_PATHS
+            .lock()
+            .map_err(|_| AppError::Internal("write lock path table is poisoned".to_string()))?;
+        paths.get(&pointer).cloned()
+    };
+    let key = match key {
+        Some(key) => key,
+        None => {
+            let resolved = db_lock_path(db).await?;
+            let mut paths = DB_LOCK_PATHS
+                .lock()
+                .map_err(|_| AppError::Internal("write lock path table is poisoned".to_string()))?;
+            paths
+                .entry(pointer)
+                .or_insert_with(|| resolved.clone())
+                .clone()
+        }
+    };
     let mut locks = DB_WRITE_LOCKS
         .lock()
         .map_err(|_| AppError::Internal("write lock table is poisoned".to_string()))?;
@@ -725,6 +797,26 @@ pub fn write_lock(db: &Connection) -> Result<Arc<tokio::sync::Mutex<()>>, AppErr
             .entry(key)
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
     ))
+}
+
+/// 接続が破棄されたときにロックテーブルのエントリを回収する。
+/// 同じパスを使用中の別接続があればロックは残す（単一 Connection 前提だが安全側）。
+pub fn reclaim_db_write_lock(db: &Connection) {
+    let pointer = db as *const Connection as usize;
+    let removed = DB_LOCK_PATHS
+        .lock()
+        .ok()
+        .and_then(|mut paths| paths.remove(&pointer));
+    let Some(path) = removed else {
+        return;
+    };
+    let still_used = DB_LOCK_PATHS
+        .lock()
+        .map(|paths| paths.values().any(|candidate| candidate == &path))
+        .unwrap_or(true);
+    if !still_used && let Ok(mut locks) = DB_WRITE_LOCKS.lock() {
+        locks.remove(&path);
+    }
 }
 
 /// ロックを保持したままトランザクションを開始する（AppError を返す版）。
@@ -736,7 +828,7 @@ pub fn write_lock(db: &Connection) -> Result<Arc<tokio::sync::Mutex<()>>, AppErr
 async fn begin_write_tx_sql(
     db: &Connection,
 ) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
-    let guard = write_lock(db)?.lock_owned().await;
+    let guard = write_lock(db).await?.lock_owned().await;
     begin_write_tx_sql_with_guard(db, guard)
         .await
         .map_err(|e| AppError::Internal(format!("Transaction start failed: {}", e)))
@@ -760,7 +852,7 @@ async fn acquire_purge_lock(
     db: &Connection,
     wait: Option<Duration>,
 ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, AppError> {
-    let lock = write_lock(db)?;
+    let lock = write_lock(db).await?;
     let guard = match wait {
         Some(wait) => match tokio::time::timeout(wait, lock.lock_owned()).await {
             Ok(guard) => guard,
@@ -2229,6 +2321,18 @@ pub async fn run() -> anyhow::Result<()> {
         warn!("{warning}");
     }
     let finalize_interval = moderation_finalize_interval(finalize_interval_input);
+    // ADR-0013 P4: REQUEST_TIMEOUT_SECS も起動時に一度だけ検証し、不正値は固定警告のうえ
+    // 既定 30 秒へフォールバックする（doctor 側の production 診断は親が接続する）。
+    let request_timeout_env = common::env::read_env("REQUEST_TIMEOUT_SECS");
+    let (_, request_timeout_warning) = numeric_env_value_in_range(
+        "REQUEST_TIMEOUT_SECS",
+        &request_timeout_env,
+        REQUEST_TIMEOUT_SECS_BOUNDS.0,
+        REQUEST_TIMEOUT_SECS_BOUNDS.1,
+    );
+    if let Some(warning) = request_timeout_warning {
+        warn!("{warning}");
+    }
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
     let finalizer = tokio::spawn(run_moderation_finalizer_with_cleanup(
         worker_db,
@@ -2704,6 +2808,28 @@ pub fn graceful_drain_timeout(env_value: Option<&str>) -> Duration {
         .unwrap_or(Duration::from_secs(DEFAULT_SECS))
 }
 
+/// ADR-0013 P4: `REQUEST_TIMEOUT_SECS` を解析する。
+/// 未設定・不正値・範囲外は既定 30 秒へフォールバックする（fail-open ではなく安全な既定）。
+pub fn request_timeout_secs(env_value: Option<&str>) -> u64 {
+    let (min, max) = REQUEST_TIMEOUT_SECS_BOUNDS;
+    env_value
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|secs| (min..=max).contains(secs))
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS)
+}
+
+/// ADR-0013 P4: `common::env::EnvValue` をそのまま使える公開ヘルパ。
+/// doctor の production 診断からも同じ判定を呼べるようにする（doctor 側の配線は担当外）。
+pub fn request_timeout_secs_from_env(value: common::env::EnvValue) -> u64 {
+    let (input, _) = numeric_env_value("REQUEST_TIMEOUT_SECS", &value);
+    request_timeout_secs(input)
+}
+
+/// ADR-0013 P4: リクエストタイムアウトの `Duration` 版。
+pub fn request_timeout_duration(env_value: Option<&str>) -> Duration {
+    Duration::from_secs(request_timeout_secs(env_value))
+}
+
 /// ADR-0004: 自動確定ワーカーの周期（秒）。範囲外・不正値は既定 300 秒へフォールバック。
 pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
     const DEFAULT_SECS: u64 = 300;
@@ -2718,7 +2844,7 @@ pub fn moderation_finalize_interval(env_value: Option<&str>) -> Duration {
 /// 期限到達済みの未確定通報をまとめて確定する。自動ワーカーと手動操作の共通処理。
 /// ロック取得は完了まで待つ（呼び出し側で上限を設けたい場合は `finalize_due_reports_with_wait` を使う）。
 pub async fn finalize_due_reports(db: &Connection) -> Result<usize, AppError> {
-    let guard = write_lock(db)?.lock_owned().await;
+    let guard = write_lock(db).await?.lock_owned().await;
     // 手動確定はメトリクスを持たないため None（成功件数の計上は自動ワーカー側で行う）。
     finalize_due_reports_with_guard(db, guard, None).await
 }
@@ -2752,13 +2878,21 @@ async fn finalize_due_reports_with_guard(
     let mut finalized = 0usize;
     let mut failed = 0usize;
     let mut guard = guard;
-    for report_id in report_ids {
+    let total_reports = report_ids.len();
+    for (index, report_id) in report_ids.into_iter().enumerate() {
         let (next_guard, tx) = match begin_write_tx_sql_with_guard(db, guard).await {
             Ok(pair) => pair,
             Err(error) => {
-                failed += 1;
-                note_finalizer_failure(metrics);
-                tracing::warn!("Moderation finalization BEGIN failed: {}", error);
+                // ADR-0013 P4: BEGIN 失敗後は残件すべてをスキップ扱いとして計上する。
+                // 旧実装は 1 件しか加算しておらず、未処理件数がメトリクスから消えていた。
+                let skipped = total_reports - index;
+                failed += skipped;
+                note_finalizer_failures(metrics, skipped);
+                tracing::warn!(
+                    "Moderation finalization BEGIN failed; skipped {} remaining report(s): {}",
+                    skipped,
+                    error
+                );
                 break;
             }
         };
@@ -2986,10 +3120,17 @@ fn note_finalizer_success(metrics: &Metrics, processed: u64) {
 
 /// 一件の自動確定失敗を成功率とは分離して失敗カウンタへ反映する。
 fn note_finalizer_failure(metrics: Option<&Metrics>) {
-    if let Some(metrics) = metrics {
+    note_finalizer_failures(metrics, 1);
+}
+
+/// ADR-0013 P4: 複数件を一括でスキップしたときの失敗数をまとめて計上する。
+fn note_finalizer_failures(metrics: Option<&Metrics>, count: usize) {
+    if let Some(metrics) = metrics
+        && count > 0
+    {
         metrics
             .finalizer_failures
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(count as u64, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -3437,124 +3578,149 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let mut state = state;
     Arc::make_mut(&mut state).allowed_origins = allowed_origin_values.clone();
 
-    // TraceLayer のスパン属性は method / path / status のみ。path はルーティングの
-    // テンプレートパスを使い、生 CID やクエリは積まない。既定のイベントは
-    // request_id_and_access_log 側へ一本化するため無効化する（OPTIONS も通過する）。
-    let trace_layer = TraceLayer::new_for_http()
-        .make_span_with(|request: &axum::extract::Request| {
-            let path = request
-                .extensions()
-                .get::<MatchedPath>()
-                .map(|matched| matched.as_str())
-                // 未マッチ経路は生パスを記録せず固定値へ（ログ注入・属性カーディナリティ抑制）。
-                .unwrap_or("unmatched");
-            tracing::info_span!(
-                "http_request",
-                method = %request.method(),
-                path = %path,
-                status = tracing::field::Empty,
-            )
-        })
-        .on_request(())
-        .on_response(record_response_status)
-        .on_failure(())
-        .on_body_chunk(())
-        .on_eos(());
+    // ADR-0013 P4: 全ルート共通のミドルウェアを 1 箇所で定義し、通常ルートと
+    // 監視ルートの両方へ同じ順序で適用する。TimeoutLayer は通常ルートの最外側だけへ
+    // 追加し、/health /ready /metrics のスクレイプはタイムアウト対象から除外する。
+    let make_trace_layer = || {
+        // TraceLayer のスパン属性は method / path / status のみ。path はルーティングの
+        // テンプレートパスを使い、生 CID やクエリは積まない。既定のイベントは
+        // request_id_and_access_log 側へ一本化するため無効化する（OPTIONS も通過する）。
+        TraceLayer::new_for_http()
+            .make_span_with(|request: &axum::extract::Request| {
+                let path = request
+                    .extensions()
+                    .get::<MatchedPath>()
+                    .map(|matched| matched.as_str())
+                    // 未マッチ経路は生パスを記録せず固定値へ（ログ注入・属性カーディナリティ抑制）。
+                    .unwrap_or("unmatched");
+                tracing::info_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %path,
+                    status = tracing::field::Empty,
+                )
+            })
+            .on_request(())
+            .on_response(record_response_status)
+            .on_failure(())
+            .on_body_chunk(())
+            .on_eos(())
+    };
 
-    Router::new()
-        .route("/auth/login", post(auth_login))
-        .route("/auth/verify", post(auth_verify))
-        .route("/auth/oidc/start", get(oidc::start))
-        .route("/auth/oidc/callback", get(oidc::callback))
-        .route("/auth/refresh", post(oidc::refresh))
-        .route("/auth/logout", post(logout))
-        .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
-        .route("/content", get(list_contents))
-        .route("/content/upload", post(upload_content))
-        .route("/transactions", get(list_transactions))
-        .route("/mod/report", post(mod_report))
-        .route("/mod/reports", get(list_reports))
-        .route("/mod/reports/{report_id}/finalize", post(finalize_report))
-        .route("/mod/operators/{user_hash}/ban", post(ban_user))
-        .route("/mod/operators/{user_hash}/unban", post(unban_user))
-        .route("/mod/content/{cid}/unpin", post(record_unpin))
-        .route("/mod/vote", post(mod_vote))
-        .route("/mod/stats", get(mod_stats))
-        .route("/mod/stats/public", get(public_mod_stats))
-        .route("/content/{cid}", get(get_content))
-        .route("/content/{cid}/audit", get(get_content_audit))
-        .route(
-            "/content/{cid}/favorite",
-            post(add_favorite).delete(remove_favorite),
-        )
-        .route("/content/{cid}/support", post(support_creator))
-        .route("/payments/orders", post(payments::create_order))
-        .route("/payments/orders/{order_id}", get(payments::get_order))
-        .route(
-            "/payments/orders/{order_id}/bind",
-            post(payments::bind_wallet),
-        )
-        .route(
-            "/payments/orders/{order_id}/verify",
-            post(payments::verify_order),
-        )
-        .route("/health", get(|| async { "ok" }))
-        .route("/ready", get(readiness))
-        .route("/metrics", get(metrics))
-        .route("/metrics/client-events", post(client_events))
-        .route("/policy/age", get(get_age_policy))
-        .route("/me/export", get(export::me_export))
-        // 起動時に解釈して AppState へ保持した EXPOSE_INTERNAL_ERRORS だけを注入する。
-        // 環境変数はここでは読まない（per-request 読みの廃止）。
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            inject_expose_internal_errors,
-        ))
-        .layer(axum::extract::DefaultBodyLimit::max(
-            MAX_BODY_BYTES as usize,
-        ))
-        .layer(from_fn(reject_oversized_body))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            rate_limit_middleware,
-        ))
-        .layer(from_fn(network::ipv6_only_middleware))
-        // IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
-        .layer(from_fn(security_headers))
-        // CORS はミドルウェア群の外側に置く。レート超過 429 / IP ゲート 403 の
-        // 応答にも ACAO が付き、プリフライトは内側のミドルウェアを通過しない。
-        .layer(
-            CorsLayer::new()
-                .allow_origin(allowed_origin_values)
-                // refresh Cookie を cross-origin fetch で送るため。許可オリジンは
-                // 上の明示リストのまま（wildcard は絶対に使わない）。
-                .allow_credentials(true)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::DELETE,
-                ])
-                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
-                // クロスオリジンの JS から相関 ID を読めるようにする。
-                // 許可オリジンは上の明示リストのまま（wildcard は使わない）。
-                .expose_headers([header::HeaderName::from_static("x-request-id")]),
-        )
-        // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
-        // CorsLayer の外側にもう一段置く。これで 429/403/500/204 に加え
-        // プリフライト応答にも nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
-        .layer(from_fn(security_headers))
-        // 相関 ID 付与とアクセスログ。CorsLayer の外側なのでプリフライトや
-        // 429 / 403 / 413 の短絡レスポンスにも x-request-id が付く。
-        .layer(from_fn(request_id_and_access_log))
-        // リクエストスパン（属性は method/path/status のみ）。observe_metrics の内側。
-        .layer(trace_layer)
-        // メトリクスは最も外側で観測する。OPTIONS 204 や 429 / 403 / 413 は
-        // 内側のミドルウェアで短絡するため、ここで初めて全レスポンスを捕捉できる。
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            observe_metrics,
-        ))
-        .with_state(state)
+    let common_layers = |router: Router<Arc<AppState>>| -> Router<Arc<AppState>> {
+        router
+            // 起動時に解釈して AppState へ保持した EXPOSE_INTERNAL_ERRORS だけを注入する。
+            // 環境変数はここでは読まない（per-request 読みの廃止）。
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                inject_expose_internal_errors,
+            ))
+            .layer(axum::extract::DefaultBodyLimit::max(
+                MAX_BODY_BYTES as usize,
+            ))
+            .layer(from_fn(reject_oversized_body))
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                rate_limit_middleware,
+            ))
+            .layer(from_fn(network::ipv6_only_middleware))
+            // IP ゲートの 403 を含む全レスポンスへヘッダーを付与する。
+            .layer(from_fn(security_headers))
+            // CORS はミドルウェア群の外側に置く。レート超過 429 / IP ゲート 403 の
+            // 応答にも ACAO が付き、プリフライトは内側のミドルウェアを通過しない。
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(allowed_origin_values.clone())
+                    // refresh Cookie を cross-origin fetch で送るため。許可オリジンは
+                    // 上の明示リストのまま（wildcard は絶対に使わない）。
+                    .allow_credentials(true)
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::DELETE,
+                    ])
+                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+                    // クロスオリジンの JS から相関 ID を読めるようにする。
+                    // 許可オリジンは上の明示リストのまま（wildcard は使わない）。
+                    .expose_headers([header::HeaderName::from_static("x-request-id")]),
+            )
+            // CORS プリフライトは CorsLayer で短絡し内側の security_headers を通らないため、
+            // CorsLayer の外側にもう一段置く。これで 429/403/500/204 に加え
+            // プリフライト応答にも nosniff / DENY が付く。二重付与でも同値のため結果は変わらない。
+            .layer(from_fn(security_headers))
+            // 相関 ID 付与とアクセスログ。CorsLayer の外側なのでプリフライトや
+            // 429 / 403 / 413 の短絡レスポンスにも x-request-id が付く。
+            .layer(from_fn(request_id_and_access_log))
+            // リクエストスパン（属性は method/path/status のみ）。observe_metrics の内側。
+            .layer(make_trace_layer())
+            // メトリクスは最も外側で観測する。OPTIONS 204 や 429 / 403 / 413 は
+            // 内側のミドルウェアで短絡するため、ここで初めて全レスポンスを捕捉できる。
+            .layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                observe_metrics,
+            ))
+    };
+
+    let request_timeout_secs =
+        request_timeout_secs_from_env(common::env::read_env("REQUEST_TIMEOUT_SECS"));
+
+    let app = common_layers(
+        Router::new()
+            .route("/auth/login", post(auth_login))
+            .route("/auth/verify", post(auth_verify))
+            .route("/auth/oidc/start", get(oidc::start))
+            .route("/auth/oidc/callback", get(oidc::callback))
+            .route("/auth/refresh", post(oidc::refresh))
+            .route("/auth/logout", post(logout))
+            .route("/auth/backchannel-logout", post(oidc::backchannel_logout))
+            .route("/content", get(list_contents))
+            .route("/content/upload", post(upload_content))
+            .route("/transactions", get(list_transactions))
+            .route("/mod/report", post(mod_report))
+            .route("/mod/reports", get(list_reports))
+            .route("/mod/reports/{report_id}/finalize", post(finalize_report))
+            .route("/mod/operators/{user_hash}/ban", post(ban_user))
+            .route("/mod/operators/{user_hash}/unban", post(unban_user))
+            .route("/mod/content/{cid}/unpin", post(record_unpin))
+            .route("/mod/vote", post(mod_vote))
+            .route("/mod/stats", get(mod_stats))
+            .route("/mod/stats/public", get(public_mod_stats))
+            .route("/content/{cid}", get(get_content))
+            .route("/content/{cid}/audit", get(get_content_audit))
+            .route(
+                "/content/{cid}/favorite",
+                post(add_favorite).delete(remove_favorite),
+            )
+            .route("/content/{cid}/support", post(support_creator))
+            .route("/payments/orders", post(payments::create_order))
+            .route("/payments/orders/{order_id}", get(payments::get_order))
+            .route(
+                "/payments/orders/{order_id}/bind",
+                post(payments::bind_wallet),
+            )
+            .route(
+                "/payments/orders/{order_id}/verify",
+                post(payments::verify_order),
+            )
+            .route("/metrics/client-events", post(client_events))
+            .route("/policy/age", get(get_age_policy))
+            .route("/me/export", get(export::me_export)),
+    )
+    // ADR-0013 P4: 監視パスを除く全リクエストにREQUEST_TIMEOUT_SECS（既定30秒）を適用。
+    .layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        Duration::from_secs(request_timeout_secs),
+    ));
+
+    // 監視パスは同じ共通ミドルウェアを通すが TimeoutLayer は積まない。
+    let monitoring = common_layers(
+        Router::new()
+            .route("/health", get(|| async { "ok" }))
+            .route("/ready", get(readiness))
+            .route("/metrics", get(metrics)),
+    );
+
+    app.merge(monitoring).with_state(state)
 }
 
 /// GET /mod/reports の取得上限。全行を Vec 化しないよう SQL の LIMIT にバインドする。
@@ -3742,6 +3908,19 @@ fn verified_age_user_hash(verified: &verified_age::VerifiedAge) -> Result<String
 /// 旧 JWT（`iat <= 旧閾値`）が復活するため、`auth_verify` と OIDC callback は
 /// この関数を発行の完了後に呼ぶ。DB コミットを先に行い、成功後にメモリを更新する。
 /// 並行して back-channel logout が新しい閾値を登録した場合は削除しない。
+/// ADR-0013 P4: 旧失効閾値の削除失敗を 500 から警告＋メトリクスへ格下げする。
+/// 旧閾値は `clear_superseded_revocation` 側で残るため、セッション発行はそのまま完了する。
+pub(crate) fn note_revocation_clear_failure(state: &Arc<AppState>, error: &AppError) {
+    warn!(
+        "failed to clear superseded revocation threshold; keeping the old threshold: {}",
+        error
+    );
+    state
+        .metrics
+        .revocation_clear_failures
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) async fn clear_superseded_revocation(
     state: &Arc<AppState>,
     sub: &str,
@@ -4030,7 +4209,10 @@ pub async fn auth_verify(
     .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
 
     // JWT 発行が成功してから旧閾値を削除する（発行失敗時は失効を維持）。
-    clear_superseded_revocation(&state, &user_hash, old_threshold).await?;
+    // ADR-0013 P4: 削除失敗は警告＋メトリクスへ格下げし、発行済みセッションを返す。
+    if let Err(error) = clear_superseded_revocation(&state, &user_hash, old_threshold).await {
+        note_revocation_clear_failure(&state, &error);
+    }
 
     Ok(Json(VerifyResponse {
         authorized: true,
@@ -4152,6 +4334,16 @@ pub async fn logout(
             revoke_session(&state, sid).await?;
         }
     }
+    // ADR-0013 P4: 削除 Cookie を先に組み立て、sub 不一致の 401 経路でも必ず付与する。
+    // Secure 属性は発行側 refresh_cookie と同じ OIDC 設定を単一ソースとして共有する。
+    // OIDC 未構成（mock 認証等）では Secure を付与する（fail-closed）。
+    let secure = state
+        .oidc
+        .as_ref()
+        .map(|oidc| oidc.cookie_secure())
+        .unwrap_or(true);
+    let cookie = oidc::delete_refresh_cookie(secure)?;
+
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
     // state Cookie と同じ基準で重複を拒否する（先勝ちで攻撃者の値を選ばない）。
     if let Some(token) = oidc::refresh_cookie_from_headers(&headers) {
@@ -4186,10 +4378,17 @@ pub async fn logout(
             }
             Some(_) => {
                 // Cookie の sub が JWT と不一致。ファミリ更新を行わず 401 とする。
+                // ADR-0013 P4: 不正な Cookie でもブラウザ側を即時消去するため、
+                // 401 レスポンスへも refresh_token 削除 Cookie を付与してから返す。
                 // 値はエコーしない固定文言（sid 失効は既に冪等に済んでいる）。
-                return Err(AppError::Unauthorized(
+                let mut response = AppError::Unauthorized(
                     "refresh token subject does not match the session".to_string(),
-                ));
+                )
+                .into_response();
+                response
+                    .headers_mut()
+                    .append(header::SET_COOKIE, cookie.clone());
+                return Ok(response);
             }
             None => {
                 // 未知のトークンは従来どおりファミリ更新なしで継続し、Cookie を削除する。
@@ -4197,15 +4396,7 @@ pub async fn logout(
         }
     }
     // DB 側のファミリ失効だけではブラウザの Cookie が 30 日残るため、
-    // 同じ Path/SameSite 属性の空 Cookie で即時削除する。
-    // Secure 属性は発行側 refresh_cookie と同じ OIDC 設定を単一ソースとして共有する。
-    // OIDC 未構成（mock 認証等）では Secure を付与する（fail-closed）。
-    let secure = state
-        .oidc
-        .as_ref()
-        .map(|oidc| oidc.cookie_secure())
-        .unwrap_or(true);
-    let cookie = oidc::delete_refresh_cookie(secure)?;
+    // 同じ Path/SameSite 属性の空 Cookie で即時削除する（cookie は分岐前に組み立て済み）。
     let mut response = Json(true).into_response();
     response.headers_mut().append(header::SET_COOKIE, cookie);
     Ok(response)
@@ -4808,6 +4999,9 @@ pub async fn mod_report(
         Some(row) => row.get(0)?,
         None => return Err(AppError::NotFound),
     };
+    // 1 行読取後に明示的に解放してから後続の tx.query / tx.execute を発行する。
+    // 他ハンドラと read-then-write 順序を統一する（ADR-0013 P4 item9）。
+    drop(rows);
     if current_status == "Reported" {
         return Err(AppError::BadRequest(
             "Content is already under review".to_string(),
@@ -4830,6 +5024,7 @@ pub async fn mod_report(
             Some(row) => (Some(row.get(0)?), row.get(1)?),
             None => (None, None),
         };
+    drop(prior_rows);
 
     // ADR-0004 R2-AUTHZ: 異議（appeal_of 付き再通報）は元通報者または
     // コンテンツ所有者だけが申し立てられる。それ以外の主体は 403 の固定文言で拒否する。
@@ -4849,6 +5044,7 @@ pub async fn mod_report(
             Some(row) => row.get(0)?,
             None => None,
         };
+        drop(owner_rows);
         let is_content_owner = owner_hash.as_deref() == Some(_claims.sub.as_str());
 
         // created_at が欠損しているとき julianday('') は NULL となり距離比較が無効化され、
@@ -4863,10 +5059,12 @@ pub async fn mod_report(
                 )
                 .await?;
             // changed_by は NULL 許容列のため Option で読む。
-            match reporter_rows.next().await? {
+            let reporter = match reporter_rows.next().await? {
                 Some(row) => row.get(0)?,
                 None => None,
-            }
+            };
+            drop(reporter_rows);
+            reporter
         } else {
             None
         };
@@ -4892,6 +5090,7 @@ pub async fn mod_report(
             Some(row) => row.get(0)?,
             None => 0,
         };
+        drop(appeal_rows);
         if recent_appeals > 0 {
             return Err(AppError::Forbidden(
                 "Appeal cooldown: only one appeal per CID within 30 days".to_string(),
@@ -5450,6 +5649,8 @@ pub async fn mod_vote(
         }
         None => return Err(AppError::NotFound),
     };
+    // ADR-0013 P4 item9: 1 行読取後にカーソルを閉じてから後続の書き込みへ進む。
+    drop(report_rows);
     if target_status != "Reported" {
         return Err(AppError::BadRequest(
             "Report is already concluded".to_string(),
@@ -5471,7 +5672,9 @@ pub async fn mod_vote(
             (vote.report_id, vote.juror_hash.clone()),
         )
         .await?;
-    if existing_vote.next().await?.is_some() {
+    let already_voted = existing_vote.next().await?.is_some();
+    drop(existing_vote);
+    if already_voted {
         return Err(AppError::BadRequest("Juror has already voted".to_string()));
     }
 

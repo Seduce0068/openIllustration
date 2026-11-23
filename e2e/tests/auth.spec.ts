@@ -74,19 +74,40 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(busyButton).toHaveAttribute('aria-busy', 'false');
     await expect(loginProgress).toHaveCount(0);
 
-    // R2-CLIENT-LOGIN-RESULT: リクエスト準備失敗時（.unwrap() を Result 伝播へ置換した経路）
-    // と同じく、失敗時は既存固定文言の role=alert を表示しボタンを再活性化する。
-    // 新規 test() は追加せず、auth 3件を維持する。
-    const loginError = page.getByTestId('login-error');
+    // R2-CLIENT-LOGIN-RESULT: 失敗時は role=alert を表示しボタンを再活性化する。
+    // P4: /auth/login の 403 は IPv6 要件の dedicated 文言へ分岐するため、
+    // 汎用 login-error ではなく dedicated alert を検証する（auth 3件維持）。
+    const loginError = page.getByTestId('login-ipv4-alert');
     await expect(loginError).toHaveAttribute('role', 'alert');
     // R2-CLIENT-LANG: 日本語固定文言の role=alert は error_lang 経由で lang="ja" を明示する。
     await expect(loginError).toHaveAttribute('lang', 'ja');
-    await expect(loginError).toHaveText('認証に失敗しました (HTTP 403).');
+    await expect(loginError).toContainText('IPv6');
     await expect(loginButton).toBeEnabled();
 
     // 二重送信ガード: /auth/login と /auth/verify はいずれも1本だけ。
     expect(loginRequests).toBe(1);
     expect(verifyRequests).toBe(1);
+
+    // P4: /auth/login が 403 のときだけ IPv6 要件の専用固定文言を dedicated role=alert で出す。
+    // サーバー本文（センチネル）や IP はエコーしない（既存ケース内へ統合、auth 3件維持）。
+    await page.route('**/auth/login', async route => {
+      await route.fulfill({
+        status: 403,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'IPv4 203.0.113.7 SENTINEL_LOGIN_BODY_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await loginButton.click();
+    const ipv4Alert = page.getByTestId('login-ipv4-alert');
+    await expect(ipv4Alert).toBeVisible({ timeout: 10000 });
+    await expect(ipv4Alert).toHaveAttribute('role', 'alert');
+    await expect(ipv4Alert).toHaveAttribute('lang', 'ja');
+    await expect(ipv4Alert).toHaveText(
+      'IPv6 接続が必要です。IPv4 のみの環境では IPv6 対応回線へ切り替えてください。',
+    );
+    await expect(ipv4Alert).not.toContainText('203.0.113.7');
+    await expect(ipv4Alert).not.toContainText('SENTINEL_LOGIN_BODY_MUST_NOT_BE_SHOWN');
+    await expect(page.getByTestId('login-error')).toHaveCount(0);
 
     await expect(page.getByRole('button', { name: 'UPLOAD' })).not.toBeVisible();
   });

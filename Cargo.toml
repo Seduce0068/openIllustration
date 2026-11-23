@@ -12,6 +12,26 @@ license = "AGPL-3.0-or-later"
 # toolchain 指定はリポジトリに置かず、CI / ローカルいずれもこの値以上を使う。
 rust-version = "1.88"
 
+# ADR-0013 P4: 共通依存を一元管理する。version のみをここで宣言し、features は
+# 各クレート側で維持する（resolver 3 の feature unification を壊さないため）。
+# url / time は直接依存が無いため（推移依存のみ）ここには置かない。
+[workspace.dependencies]
+base64 = "0.23"
+chrono = "0.4"
+hex = "0.4"
+reqwest = { version = "0.13", default-features = false }
+rsa = "0.10"
+serde = "1.0"
+serde_json = "1.0"
+sha2 = "0.11"
+thiserror = "2.0"
+tokio = "1.43.0"
+tower = "0.5.2"
+tower-http = "0.7"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = "1.23.1"
+
 [profile.release]
 strip = true
 

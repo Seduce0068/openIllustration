@@ -8238,7 +8238,7 @@ fn spawn_lock_holding_writer(
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
         // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
-        let guard = crate::write_lock(&db).unwrap().lock_owned().await;
+        let guard = crate::write_lock(&db).await.unwrap().lock_owned().await;
         let tx = db.transaction().await.unwrap();
         tx.execute("INSERT INTO users (user_hash) VALUES ('lock_holder')", ())
             .await
@@ -8306,7 +8306,7 @@ fn spawn_report_lock_holding_writer(
     let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let writer = tokio::spawn(async move {
-        let guard = crate::write_lock(&db).unwrap().lock_owned().await;
+        let guard = crate::write_lock(&db).await.unwrap().lock_owned().await;
         let tx = db.transaction().await.unwrap();
         tx.execute(
             "INSERT INTO contents (cid, type, owner_hash, checksum, status)
@@ -14272,6 +14272,29 @@ fn test_graceful_drain_timeout_defaults_and_bounds() {
         crate::graceful_drain_timeout(Some("bad")),
         Duration::from_secs(30)
     );
+    // ADR-0013 P4: REQUEST_TIMEOUT_SECS は drain と同じ既定・範囲を共有する。
+    assert_eq!(crate::request_timeout_secs(None), 30);
+    assert_eq!(crate::request_timeout_secs(Some("1")), 1);
+    assert_eq!(crate::request_timeout_secs(Some("300")), 300);
+    assert_eq!(
+        crate::request_timeout_secs(Some("0")),
+        30,
+        "zero must fall back"
+    );
+    assert_eq!(
+        crate::request_timeout_secs(Some("301")),
+        30,
+        "over the maximum must fall back"
+    );
+    assert_eq!(crate::request_timeout_secs(Some("bad")), 30);
+    assert_eq!(
+        crate::request_timeout_secs_from_env(common::env::EnvValue::Missing),
+        30
+    );
+    assert_eq!(
+        crate::request_timeout_duration(Some("5")),
+        Duration::from_secs(5)
+    );
 }
 
 #[tokio::test]
@@ -14364,7 +14387,7 @@ async fn concurrent_transactions_on_shared_connection_are_serialized() {
             let gate = Arc::clone(&gate);
             tokio::spawn(async move {
                 gate.wait().await;
-                let lock = crate::write_lock(&db).unwrap();
+                let lock = crate::write_lock(&db).await.unwrap();
                 let _guard = lock.lock().await;
                 let tx = db.transaction().await.unwrap();
                 tx.execute(
@@ -15290,6 +15313,23 @@ async fn test_logout_revokes_refresh_family() {
         mismatch.status(),
         StatusCode::UNAUTHORIZED,
         "refresh token with a different sub must not be accepted for logout"
+    );
+    // ADR-0013 P4 item5: sub 不一致の 401 でも refresh_token 削除 Cookie を付与する。
+    let mismatch_cookies: Vec<String> = mismatch
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok().map(str::to_owned))
+        .collect();
+    let deletion = mismatch_cookies
+        .iter()
+        .find(|cookie| cookie.starts_with("refresh_token="))
+        .expect("sub mismatch must still delete the refresh cookie");
+    assert!(deletion.starts_with("refresh_token=;"), "{deletion}");
+    assert!(deletion.contains("Max-Age=0"), "{deletion}");
+    assert!(
+        !deletion.contains(foreign),
+        "the mismatched token must not be echoed"
     );
     let mut rows = db
         .query(
@@ -19253,7 +19293,11 @@ async fn me_export_waits_for_concurrent_write_transaction() {
     let writer_db = Arc::clone(&db);
     let writer = tokio::spawn(async move {
         // 本番の書き込みと同じ順序: write_lock を取ってから BEGIN する。
-        let guard = crate::write_lock(&writer_db).unwrap().lock_owned().await;
+        let guard = crate::write_lock(&writer_db)
+            .await
+            .unwrap()
+            .lock_owned()
+            .await;
         let tx = writer_db.transaction().await.unwrap();
         tx.execute(
             "INSERT INTO users (user_hash) VALUES ('concurrent_writer')",
@@ -21333,7 +21377,11 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
     let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
     let db_writer = Arc::clone(&db);
     let writer = tokio::spawn(async move {
-        let guard = crate::write_lock(&db_writer).unwrap().lock_owned().await;
+        let guard = crate::write_lock(&db_writer)
+            .await
+            .unwrap()
+            .lock_owned()
+            .await;
         started_tx.send(()).unwrap();
         release_rx.await.unwrap();
         drop(guard);
@@ -21414,4 +21462,51 @@ async fn test_periodic_finalize_completes_all_reports_after_lock_acquired() {
         .expect("finalizer must stop cleanly")
         .expect("finalizer task must not panic");
     writer.await.unwrap();
+}
+
+/// ADR-0013 P4 item10: write_lock の識別子が接続ポインタではなく canonicalize 済み DB パスであること。
+#[tokio::test]
+async fn test_write_lock_key_uses_canonical_db_path() {
+    let dir = std::env::temp_dir();
+    let file_name = format!("dsh-write-lock-{}.db", uuid::Uuid::new_v4());
+    let file = dir.join(&file_name);
+    let plain = file.to_string_lossy().into_owned();
+    // `./` を挟んだ別表記でも canonicalize 後は同じキーになる。
+    let dotted = format!("{}/./{}", dir.to_string_lossy(), file_name);
+    let db_a = Builder::new_local(plain)
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    let db_b = Builder::new_local(dotted)
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+
+    let lock_a = crate::write_lock(&db_a).await.unwrap();
+    let lock_b = crate::write_lock(&db_b).await.unwrap();
+    assert!(
+        Arc::ptr_eq(&lock_a, &lock_b),
+        "two connections to the same canonical DB path must share one write lock"
+    );
+
+    // 接続破棄相当の回収後は古い Arc と別のロックが作られる。
+    crate::reclaim_db_write_lock(&db_a);
+    crate::reclaim_db_write_lock(&db_b);
+    let recreated = crate::write_lock(&db_a).await.unwrap();
+    assert!(
+        !Arc::ptr_eq(&lock_a, &recreated),
+        "reclaimed lock entry must not be reused"
+    );
+
+    crate::reclaim_db_write_lock(&db_a);
+    drop(lock_a);
+    drop(lock_b);
+    drop(recreated);
+    drop(db_a);
+    drop(db_b);
+    let _ = std::fs::remove_file(&file);
 }

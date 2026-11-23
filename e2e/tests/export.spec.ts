@@ -57,6 +57,8 @@ test.describe('R5-04: Export My Data', () => {
     let requestCount = 0;
     // 後続フェーズでレスポンスを不正 JSON へ差し替えるためのフラグ。
     let malformedResponse = false;
+    // P4 境界: 不正 ISO は生文字列を返す既存契約を既存ケース内でオラクルする。
+    let invalidGeneratedAt = false;
     // R2-BUSY: 最初の応答を明示的に解放するまで保留し、保留中の二重クリックを
     // 固定スリープに依存せず決定論的に観測する。
     let releaseExport: () => void = () => {};
@@ -83,7 +85,11 @@ test.describe('R5-04: Export My Data', () => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify(exportFixture),
+        body: JSON.stringify(
+          invalidGeneratedAt
+            ? { ...exportFixture, generated_at: 'not-a-timestamp' }
+            : exportFixture,
+        ),
       });
     });
 
@@ -152,6 +158,9 @@ test.describe('R5-04: Export My Data', () => {
     await expect(exportGeneratedAt).toContainText('GENERATED_AT: ');
     await expect(exportGeneratedAt).toContainText('2026');
     await expect(exportGeneratedAt).not.toContainText(exportFixture.generated_at);
+    // P4: generated_at 要素と言語宣言（UTC 固定ラベルは lang="ja" の子要素）。
+    await expect(exportGeneratedAt).toHaveAttribute('lang', 'ja');
+    await expect(exportGeneratedAt.locator('span[lang="ja"]').last()).toContainText('(協定世界時)');
     const exportSub = page.getByTestId('export-sub');
     await expect(exportSub).toBeVisible();
     await expect(exportSub).toContainText('SUB: mock_sub…');
@@ -169,6 +178,18 @@ test.describe('R5-04: Export My Data', () => {
     await expect(page.getByTestId('export-generated-at')).toHaveCount(0);
     await expect(page.getByTestId('export-sub')).toHaveCount(0);
     expect(requestCount).toBe(2);
+
+    // P4 境界: 不正 ISO は丸めず生文字列を返す（UTC ラベルを付けない既存契約）。
+    malformedResponse = false;
+    invalidGeneratedAt = true;
+    const fallbackDownload = page.waitForEvent('download');
+    await page.getByTestId('export-my-data').click();
+    await fallbackDownload;
+    const fallbackGeneratedAt = page.getByTestId('export-generated-at');
+    await expect(fallbackGeneratedAt).toHaveText('GENERATED_AT: not-a-timestamp', { timeout: 10000 });
+    await expect(fallbackGeneratedAt).toHaveAttribute('lang', 'en');
+    await expect(fallbackGeneratedAt).not.toContainText('(協定世界時)');
+    expect(requestCount).toBe(3);
   });
 
   test('R5-04: /me/export が 401 の場合は「ログインが必要です」を role=alert で表示すること', async ({ page }) => {

@@ -9,7 +9,8 @@ use server::{
     max_concurrent_requests, mock_auth_with_production_config_error, moderation_finalize_interval,
     oidc_http_timeout, policy_utc_offset_hours, production_allowed_origins_error,
     production_audit_expect_root_error, production_config_errors, rate_limit_per_min,
-    resolve_bind_addr, validate_jwt_secret, validate_oidc_config_with,
+    request_timeout_secs_from_env, resolve_bind_addr, validate_jwt_secret,
+    validate_oidc_config_with,
 };
 
 fn print_help() {
@@ -160,6 +161,20 @@ where
     // `[[ -n "$var" ]]` と一致させる。ALERT_CMD は実行ファイルのパスなので生値のまま
     // `-x "$alert_cmd"` 相当を調べ、値は出力しない。
     if !allow_mock_auth {
+        // REQUEST_TIMEOUT_SECS も run() と同じ範囲で診断する（check23 維持）。
+        let timeout_env = common::env::classify(lookup("REQUEST_TIMEOUT_SECS"));
+        let (timeout_input, timeout_warning) =
+            server::numeric_env_value("REQUEST_TIMEOUT_SECS", &timeout_env);
+        if let Some(warning) = timeout_warning {
+            production.push(warning);
+        } else if let Some(value) = timeout_input
+            && request_timeout_secs_from_env(common::env::EnvValue::Utf8(value.to_string()))
+                != value.parse::<u64>().unwrap_or(0)
+        {
+            production.push(
+                "REQUEST_TIMEOUT_SECS is invalid or outside 1..=300; using default".to_string(),
+            );
+        }
         // BIND_ADDR / PORT は run() と同じ resolve_bind_addr で検証する（check23 維持）。
         if let Err(warning) = resolve_bind_addr(
             common::env::read_env("BIND_ADDR"),

@@ -171,6 +171,10 @@ fn normalize_api_origin(origin: &str) -> &str {
     origin.trim_end_matches('/')
 }
 
+/// 整形済み日時に付ける UTC 明示ラベル。書式は従来どおり変更しない。
+/// 表示側はこの部分だけを `lang="ja"` の子要素として描画する。
+const UTC_LABEL: &str = " (協定世界時)";
+
 /// ISO 8601 文字列を表示用の日時へ整形する。
 ///
 /// 既存依存の js-sys 経由で `Intl.DateTimeFormat` を呼び、locale は `ja-JP`、
@@ -204,7 +208,7 @@ fn format_local_datetime(iso: &str) -> String {
     match formatter.format().call1(&JsValue::NULL, date.as_ref()) {
         // UTC 固定を維持するため、可視テキストにもタイムゾーンを明示する（誤読防止）。
         Ok(value) => format!(
-            "{} (協定世界時)",
+            "{}{UTC_LABEL}",
             value.as_string().unwrap_or_else(|| iso.to_string())
         ),
         Err(_) => iso.to_string(),
@@ -303,10 +307,18 @@ const CONTENT_INDEX_NETWORK_ERROR: &str = "Network error loading content.";
 const CONTENT_INDEX_UNAUTHORIZED: &str = "再ログインが必要です。";
 /// 一覧取得失敗時に `role=status` が読み上げる文言（既存固定文言は変更しない）。
 const DASHBOARD_LOAD_FAILED_ANNOUNCEMENT: &str = "コンテンツを取得できませんでした";
+/// 429 のときだけ出す専用文言。サーバー本文・Retry-After 値はエコーしない。
+const RETRY_LATER_MESSAGE: &str = "しばらく待って再試行してください。";
+/// 各取得失敗画面で共有する「再読み込み」ボタンの固定文言。
+const RETRY_BUTTON_LABEL: &str = "再読み込み";
 
 /// 本番認証が未実装であることを示す固定文言。
 /// 501 レスポンスの本文は機微情報を含み得るため画面へ出さず、この文言だけを表示する。
 const PRODUCTION_AUTH_NOT_IMPLEMENTED: &str = "本番認証は未実装です。";
+/// `/auth/login` が 403 のときだけ出す IPv6 要件の専用固定文言。
+/// サーバー本文・IP アドレス・User-Agent は一切エコーしない。
+const LOGIN_IPV4_REQUIRED: &str =
+    "IPv6 接続が必要です。IPv4 のみの環境では IPv6 対応回線へ切り替えてください。";
 
 /// ログイン進捗を dedicated `role=status` で告知する固定文言（日本語）。
 const LOGIN_PROGRESS: &str = "本人確認の通信中です。";
@@ -924,11 +936,22 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     let mut html = String::new();
     // 表示は整形済み日時、生 ISO は title 属性へ保持する（監査日時と同じ契約）。
     let generated_at = format_stats_generated_at(&stats.generated_at);
+    // UTC 明示ラベルだけを lang="ja" の子要素にする（書式は変更しない）。
+    let generated_html = match generated_at.strip_suffix(UTC_LABEL) {
+        Some(body) => format!(
+            "{}<span lang=\"{}\">{}</span>",
+            escape_html_text(body),
+            error_lang(UTC_LABEL),
+            escape_html_text(UTC_LABEL)
+        ),
+        None => escape_html_text(&generated_at),
+    };
     let _ = writeln!(
         html,
-        "<p data-testid=\"moderation-stats-generated-at\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        "<p data-testid=\"moderation-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        error_lang(&generated_at),
         escape_html_text(&stats.generated_at),
-        escape_html_text(&generated_at)
+        generated_html
     );
 
     let totals = [
@@ -1000,11 +1023,22 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     let mut html = String::new();
     // 表示は整形済み日時、生 ISO は title 属性へ保持する（監査日時と同じ契約）。
     let generated_at = format_stats_generated_at(&stats.generated_at);
+    // UTC 明示ラベルだけを lang="ja" の子要素にする（書式は変更しない）。
+    let generated_html = match generated_at.strip_suffix(UTC_LABEL) {
+        Some(body) => format!(
+            "{}<span lang=\"{}\">{}</span>",
+            escape_html_text(body),
+            error_lang(UTC_LABEL),
+            escape_html_text(UTC_LABEL)
+        ),
+        None => escape_html_text(&generated_at),
+    };
     let _ = writeln!(
         html,
-        "<p data-testid=\"public-mod-stats-generated-at\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        "<p data-testid=\"public-mod-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        error_lang(&generated_at),
         escape_html_text(&stats.generated_at),
-        escape_html_text(&generated_at)
+        generated_html
     );
 
     let totals = [
@@ -1213,6 +1247,19 @@ fn collect_headings(markdown: &str) -> Vec<HeadingEntry> {
 /// 0 件のときは送信しない（`None`）ため `spawn_local` を起こさない。
 #[cfg(any(test, target_arch = "wasm32"))]
 fn client_event_payload(count: usize) -> Option<String> {
+    client_event_body("neutralized_url", count)
+}
+
+/// クライアント例外の観測用イベント。既存の中立化 URL イベントとは `event` 名だけが異なり、
+/// `event` / `count` 以外（URL・IP・User-Agent・スタック・メッセージ）は一切送らない。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn ui_error_payload(count: usize) -> Option<String> {
+    client_event_body("ui_error", count)
+}
+
+/// 監視ペイロードの共通組み立て。受け取るのは固定の event 名と件数だけ。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn client_event_body(event: &str, count: usize) -> Option<String> {
     // ビルド時に OIL_CLIENT_METRICS=0 が指定された場合は一切送信しない。
     if !CLIENT_METRICS_ENABLED {
         return None;
@@ -1222,7 +1269,7 @@ fn client_event_payload(count: usize) -> Option<String> {
     }
     // サーバー側の受け入れ範囲は 1..=1000。超過分は丸めて送る。
     let count = count.min(1000);
-    Some(format!(r#"{{"event":"neutralized_url","count":{count}}}"#))
+    Some(format!(r#"{{"event":"{event}","count":{count}}}"#))
 }
 
 /// 送信済みとして記録する描画ソース（markdown 本文のハッシュ）の集合。
@@ -1278,6 +1325,34 @@ fn should_report_source(source_hash: u64) -> bool {
 fn report_neutralized_urls(_count: usize, _markdown: &str, _scope: &str) {
     // 非 wasm では送信経路が無いが、ビルド時フラグの判定はコンパイル対象に保つ。
     let _ = CLIENT_METRICS_ENABLED;
+}
+
+/// クライアント例外の件数だけを監視用に送信する（非 wasm では送信経路なし）。
+#[cfg(not(target_arch = "wasm32"))]
+#[allow(dead_code)]
+fn report_ui_error(_count: usize) {
+    let _ = CLIENT_METRICS_ENABLED;
+}
+
+/// クライアント例外の件数だけを監視用に送信する。
+/// 例外メッセージ・URL・IP・User-Agent はペイロードへ含めず、
+/// 送信失敗も画面とコンソールには何も出さない。
+#[cfg(target_arch = "wasm32")]
+fn report_ui_error(count: usize) {
+    if !CLIENT_METRICS_ENABLED {
+        return;
+    }
+    let Some(payload) = ui_error_payload(count) else {
+        return;
+    };
+    spawn_local(async move {
+        if let Ok(request) = Request::post(&format!("{API_BASE}/metrics/client-events"))
+            .header("Content-Type", "application/json")
+            .body(payload)
+        {
+            let _ = request.send().await;
+        }
+    });
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -1820,10 +1895,36 @@ fn export_filename_from_generated_at(generated_at: &str) -> String {
     }
 }
 
+/// ダウンロード処理の失敗箇所。JS の例外値や URL は一切保持しない。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DownloadFailureStage {
+    Json,
+    Blob,
+    ObjectUrl,
+    Window,
+    Document,
+    Anchor,
+    Click,
+}
+
+/// Blob／URL 生成を含むダウンロード失敗の固定文言を箇所別に返す純粋関数。
+/// 引数に例外値・レスポンス本文・URL を取らないため機微情報が混入しない。
+fn download_error_message(stage: DownloadFailureStage) -> &'static str {
+    match stage {
+        DownloadFailureStage::Json => "エクスポートの JSON 生成に失敗しました。",
+        DownloadFailureStage::Blob => "エクスポートの Blob 生成に失敗しました。",
+        DownloadFailureStage::ObjectUrl => "ダウンロード URL の生成に失敗しました。",
+        DownloadFailureStage::Window => "ブラウザの window が利用できません。",
+        DownloadFailureStage::Document => "ブラウザの document が利用できません。",
+        DownloadFailureStage::Anchor => "ダウンロード要素の生成に失敗しました。",
+        DownloadFailureStage::Click => "ダウンロードの開始に失敗しました。",
+    }
+}
+
 /// ダウンロード開始に失敗したときに表示する固定文言。
 /// JS 側の例外メッセージは機微情報を含み得るため表示には使わない。
 fn download_start_error_message() -> &'static str {
-    "ダウンロードの開始に失敗しました。"
+    download_error_message(DownloadFailureStage::Click)
 }
 
 /// ダウンロード開始失敗時に、既存の固定エラー文言に添えて出す再試行案内。
@@ -1853,26 +1954,26 @@ extern "C" {
 /// 開始後に revoke する（同期的な revoke は一部ブラウザで保存を中断するため）。
 fn download_json_file(payload: &serde_json::Value, filename: &str) -> Result<(), String> {
     let text = serde_json::to_string_pretty(payload)
-        .map_err(|_| "エクスポートの JSON 生成に失敗しました。".to_string())?;
+        .map_err(|_| download_error_message(DownloadFailureStage::Json).to_string())?;
     let parts = js_sys::Array::new();
     parts.push(&JsValue::from_str(&text));
     let options = BlobPropertyBag::new();
     options.set_type("application/json");
     let blob = Blob::new_with_str_sequence_and_options(&parts, &options)
-        .map_err(|_| "エクスポートの Blob 生成に失敗しました。".to_string())?;
+        .map_err(|_| download_error_message(DownloadFailureStage::Blob).to_string())?;
     let url = web_sys::Url::create_object_url_with_blob(&blob)
-        .map_err(|_| "ダウンロード URL の生成に失敗しました。".to_string())?;
+        .map_err(|_| download_error_message(DownloadFailureStage::ObjectUrl).to_string())?;
 
-    let window =
-        web_sys::window().ok_or_else(|| "ブラウザの window が利用できません。".to_string())?;
+    let window = web_sys::window()
+        .ok_or_else(|| download_error_message(DownloadFailureStage::Window).to_string())?;
     let document = window
         .document()
-        .ok_or_else(|| "ブラウザの document が利用できません。".to_string())?;
+        .ok_or_else(|| download_error_message(DownloadFailureStage::Document).to_string())?;
     let anchor = document
         .create_element("a")
-        .map_err(|_| "ダウンロード要素の生成に失敗しました。".to_string())?
+        .map_err(|_| download_error_message(DownloadFailureStage::Anchor).to_string())?
         .dyn_into::<web_sys::HtmlAnchorElement>()
-        .map_err(|_| "ダウンロード要素の生成に失敗しました。".to_string())?;
+        .map_err(|_| download_error_message(DownloadFailureStage::Anchor).to_string())?;
     anchor.set_href(&url);
     anchor.set_download(filename);
     // Firefox 等では DOM に繋がっていないアンカーの click が無視されることがある。
@@ -2372,6 +2473,10 @@ where
                 Ok(response) if response.status() == 501 => {
                     set_error.set(PRODUCTION_AUTH_NOT_IMPLEMENTED.to_string());
                 }
+                // 403 は IPv4 回線からのアクセスを想定し、IPv6 要件だけを dedicated 文言で案内する。
+                Ok(response) if response.status() == 403 => {
+                    set_error.set(LOGIN_IPV4_REQUIRED.to_string());
+                }
                 Ok(response) => {
                     set_error.set(format!("認証に失敗しました (HTTP {}).", response.status()));
                 }
@@ -2405,7 +2510,13 @@ where
                     {LOGIN_PROGRESS}
                 </p>
             </Show>
-            <Show when=move || !error.get().is_empty() fallback=|| ()>
+            // 403 の IPv4 案内は dedicated role=alert で出し、サーバー本文や IP は出さない。
+            <Show when=move || error.get() == LOGIN_IPV4_REQUIRED fallback=|| ()>
+                <p role="alert" data-testid="login-ipv4-alert" lang=move || error_lang(LOGIN_IPV4_REQUIRED) class="text-xs text-red-500">
+                    {LOGIN_IPV4_REQUIRED}
+                </p>
+            </Show>
+            <Show when=move || !error.get().is_empty() && error.get() != LOGIN_IPV4_REQUIRED fallback=|| ()>
                 <p role="alert" data-testid="login-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500">
                     {move || error.get()}
                 </p>
@@ -2601,6 +2712,12 @@ where
                             set_error.set(CONTENT_INDEX_UNAUTHORIZED.to_string());
                         }
                     }
+                    // 429 はレート制限専用文言へ切り替え、共通の再読み込み導線を出す。
+                    Ok(res) if res.status() == 429 => {
+                        if should_apply_response(generation_cell.get(), response_generation) {
+                            set_error.set(RETRY_LATER_MESSAGE.to_string());
+                        }
+                    }
                     Ok(_) => {
                         if should_apply_response(generation_cell.get(), response_generation) {
                             set_error.set(CONTENT_INDEX_LOAD_ERROR.to_string());
@@ -2744,6 +2861,10 @@ where
                 <p role="alert" data-testid="dashboard-error" lang=move || error_lang(&error.get()) class="text-xs text-red-500 mb-4">
                     {move || error.get()}
                 </p>
+                {move || retry_control("dashboard", error.get(), {
+                    let set_submit = set_search_submit;
+                    move || set_submit.update(|n| *n += 1)
+                })}
             </Show>
             // 401 のときだけ、既存の LOG OUT ボタンからの再ログインを案内する。
             <Show when=move || error.get() == CONTENT_INDEX_UNAUTHORIZED fallback=|| ()>
@@ -2930,8 +3051,8 @@ fn ExportMyData(token: String) -> impl IntoView {
                 </p>
             </Show>
             <Show when=move || !generated_at.get().is_empty() fallback=|| ()>
-                <p data-testid="export-generated-at" class="text-xs text-gray-400">
-                    <span lang="en">"GENERATED_AT: "</span> {move || generated_at.get()}
+                <p data-testid="export-generated-at" lang=move || error_lang(&generated_at.get()) class="text-xs text-gray-400">
+                    <span lang="en">"GENERATED_AT: "</span> {move || datetime_content(generated_at.get())}
                 </p>
             </Show>
             <Show when=move || !sub_label.get().is_empty() fallback=|| ()>
@@ -2963,6 +3084,44 @@ fn error_lang(message: &str) -> &'static str {
         "ja"
     } else {
         "en"
+    }
+}
+
+/// 整形済み日時の本文を描画する。UTC 明示ラベルだけを子要素で言語宣言し、
+/// 不正 ISO の生文字列フォールバックではラベルを付けない（既存契約を維持）。
+fn datetime_content(formatted: String) -> impl IntoView {
+    let lang = error_lang(&formatted);
+    match formatted.strip_suffix(UTC_LABEL) {
+        Some(body) => view! {
+            <span lang=lang>{body.to_string()}<span lang=error_lang(UTC_LABEL)>{UTC_LABEL}</span></span>
+        }
+        .into_any(),
+        None => view! { <span lang=lang>{formatted}</span> }.into_any(),
+    }
+}
+
+/// 取得失敗画面で共有する「再読み込み」ボタンと dedicated `role=status`。
+/// 表示するのは固定文言のみで、レスポンス本文・生エラー・URL は一切渡さない。
+fn retry_control(
+    test_id: &'static str,
+    message: String,
+    on_retry: impl Fn() + 'static,
+) -> impl IntoView {
+    let status_message = message.clone();
+    let container_id = format!("{test_id}-retry");
+    let status_id = format!("{test_id}-retry-status");
+    view! {
+        <div data-testid=container_id class="flex flex-wrap items-center gap-3 mb-4">
+            <button type="button" lang=move || error_lang(RETRY_BUTTON_LABEL)
+                on:click=move |_| on_retry()
+                class="px-3 py-1 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10">
+                {RETRY_BUTTON_LABEL}
+            </button>
+            <p role="status" aria-live="polite" data-testid=status_id
+                lang=move || error_lang(&status_message) class="text-xs text-gray-400">
+                {message}
+            </p>
+        </div>
     }
 }
 
@@ -3055,6 +3214,8 @@ where
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
     let (audit_error, set_audit_error) = signal(String::new());
     let (show_audit, set_show_audit) = signal(false);
+    // 監査ログの「再読み込み」押下で Effect を再加熱するためのトリガ。
+    let (audit_reload, set_audit_reload) = signal(0u32);
     let canvas_ref = NodeRef::<leptos::html::Canvas>::new();
     // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
     let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
@@ -3141,6 +3302,8 @@ where
     let audit_cid = cid.clone();
     let audit_fetched_cid: StoredValue<Option<String>> = StoredValue::new(None);
     Effect::new(move |_| {
+        // 再読み込みボタンの押下を追跡対象にする（取得成功時は履歴を残さない）。
+        let _ = audit_reload.get();
         if !show_audit.get() {
             return;
         }
@@ -3177,10 +3340,12 @@ where
                 Ok(response) => {
                     // HTTP エラーも再試行対象。フラグを戻す。
                     audit_fetched_cid.set_value(None);
-                    set_audit_error.set(format!(
-                        "監査ログの取得に失敗しました (HTTP {}).",
-                        response.status()
-                    ));
+                    let status = response.status();
+                    set_audit_error.set(if status == 429 {
+                        RETRY_LATER_MESSAGE.to_string()
+                    } else {
+                        format!("監査ログの取得に失敗しました (HTTP {status}).")
+                    });
                 }
                 Err(_) => {
                     // ネットワークエラーも再試行対象。フラグを戻す。
@@ -3314,18 +3479,10 @@ where
                 // ダイアログ内（トグル含む）で Escape が押されたら閉じてフォーカスを戻す。
                 if ev.key() == "Escape" && show_audit.get() {
                     close_audit();
-                    return;
                 }
-                // パネル表示中の Tab フォーカス制御。パネル内のインタラクティブ要素は
-                // CLOSE ボタンのみなので、Tab / Shift+Tab を CLOSE へ戻す現行挙動を維持する。
-                // 将来パネル内にフォーカス可能要素を追加する場合は、shift_key() で
-                // 先頭/末尾を判定するループ型トラップへ変更すること（今回は挙動を変更しない）。
-                if ev.key() == "Tab" && show_audit.get() {
-                    ev.prevent_default();
-                    if let Some(close) = audit_close_ref.get() {
-                        let _ = close.focus();
-                    }
-                }
+                // non-modal パネルのため Tab / Shift+Tab は prevent_default しない。
+                // Escape / CLOSE で閉じる契約は維持しつつ、キーボードフォーカスは
+                // パネル外の背景（ナビ・他カード等）へ自然に移動できるようにする。
             }
             class=move || format!("p-4 border border-white/10 bg-black text-white space-y-4 flex flex-col h-full {}", if highlighted { "ring-1 ring-green-500" } else { "" })>
             <div class="flex justify-between items-start">
@@ -3391,7 +3548,9 @@ where
 
                 {move || match verified.get() {
                     Some(true) => view! {
-                        <div data-testid="support-overlay" tabindex="0" lang="en"
+                        // 支援は無効（Settlement Pending）のためタブ停止点を作らない。
+                        // aria-disabled と説明テキストで状態を伝え、lang を明示する。
+                        <div data-testid="support-overlay" lang="en" aria-disabled="true"
                             class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
                             <p lang="en" class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
                             <p lang="en" class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
@@ -3399,7 +3558,7 @@ where
                                 class="px-6 py-2 border border-white/20 text-gray-500 cursor-not-allowed font-bold text-[10px] uppercase">
                                 "Settlement Pending"
                             </button>
-                            <p lang="en" class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
+                            <p data-testid="support-disabled-note" lang="en" class="text-[8px] text-gray-400 italic">"JPYC settlement verification is in development. Support is disabled until then."</p>
                         </div>
                     }.into_any(),
                     Some(false) => view! {
@@ -3451,6 +3610,14 @@ where
                             <p role="alert" data-testid="audit-error" lang=move || error_lang(&audit_error.get()) class="text-[8px] text-red-500">
                                 {move || audit_error.get()}
                             </p>
+                            {move || retry_control("audit", audit_error.get(), {
+                                let fetched = audit_fetched_cid;
+                                let set_reload = set_audit_reload;
+                                move || {
+                                    fetched.set_value(None);
+                                    set_reload.update(|n| *n += 1);
+                                }
+                            })}
                         </Show>
                         <div class="space-y-4">
                             <For
@@ -3459,13 +3626,15 @@ where
                                 children=move |log| {
                                     // 表示は整形済み日時、生 ISO は title 属性へ保持する。
                                     let created_at = log.created_at.clone();
+                                    let created_display = format_local_datetime(&log.created_at);
+                                    let created_lang = error_lang(&created_display);
                                     // 理由は日本語になり得るため error_lang で言語を決める（値は属性へエコーしない）。
                                     let reason = log.reason.clone().unwrap_or_default();
                                     let reason_for_lang = reason.clone();
                                     view! {
                                         <div class="text-[8px] space-y-1">
                                             <div class="flex justify-between text-gray-400">
-                                                <span data-testid="audit-created-at" title=created_at>{format_local_datetime(&log.created_at)}</span>
+                                                <span data-testid="audit-created-at" title=created_at lang=created_lang>{datetime_content(created_display)}</span>
                                                 <span class="text-green-500">{log.new_status.clone()}</span>
                                             </div>
                                             <p lang="en" class="text-gray-300">"By: " {log.changed_by.clone()}</p>
@@ -3833,10 +4002,12 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         min="0"
                         max="1000000"
                         on:input=move |ev| {
-                            // ブラウザ自身の数値解釈（valueAsNumber）を使う。Rust 側で文字列を
-                            // パースしないため 1e3 のような指数表記も 1000 として受理する。
-                            // 有限・整数・i32 範囲内でなければ signal を更新せず直前値を保持し、
-                            // 受理時は丸めずにそのまま保持する（範囲外は送信前ゲートで拒否）。
+                            // 実挙動: ブラウザ自身の数値解釈（valueAsNumber）を使うため、
+                            // "1e3" のような指数表記の貼り付けは 1000 として受理される。
+                            // 一方、対話入力中の "1e" / "-" 等は valueAsNumber が NaN となり、
+                            // price_from_number が None を返すため signal は更新しない（直前値を保持）。
+                            // 有限・整数・i32 範囲内のみ受理し、受理時は丸めずに保持する。
+                            // 範囲外は送信前ゲートで拒否する。
                             let Some(target) = ev.target() else {
                                 return;
                             };
@@ -3938,8 +4109,11 @@ fn Ledger(token: String) -> impl IntoView {
     let (ledger_error, set_ledger_error) = signal(String::new());
     // 取得中は loading status を出し、空状態は取得完了後のみ描画する。
     let (loading, set_loading) = signal(false);
+    // 共通の「再読み込み」ボタンから Effect を再加熱するためのトリガ。
+    let (ledger_reload, set_ledger_reload) = signal(0u32);
 
     Effect::new(move |_| {
+        let _ = ledger_reload.get();
         let token = token.clone();
         spawn_local(async move {
             // 再取得時に前回の失敗表示が残らないようにする。
@@ -3971,6 +4145,10 @@ fn Ledger(token: String) -> impl IntoView {
                 Ok(response) if response.status() == 401 => {
                     set_ledger_error.set(LEDGER_UNAUTHORIZED.to_string());
                 }
+                // 429 はレート制限専用文言＋共通の再読み込み導線を出す。
+                Ok(response) if response.status() == 429 => {
+                    set_ledger_error.set(RETRY_LATER_MESSAGE.to_string());
+                }
                 // HTTP エラー・ネットワークエラー: ステータスや本文、生エラーは出さない。
                 _ => set_ledger_error.set(LEDGER_ERROR.to_string()),
             }
@@ -3993,6 +4171,10 @@ fn Ledger(token: String) -> impl IntoView {
                 <p role="alert" data-testid="ledger-error" lang=move || error_lang(&ledger_error.get()) class="text-xs text-red-500 mb-4">
                     {move || ledger_error.get()}
                 </p>
+                {move || retry_control("ledger", ledger_error.get(), {
+                    let set_reload = set_ledger_reload;
+                    move || set_reload.update(|n| *n += 1)
+                })}
             </Show>
             // 401 のときだけ、dedicated role=status で固定文言＋LOG OUT 案内を出す。
             <Show when=move || ledger_error.get() == LEDGER_UNAUTHORIZED fallback=|| ()>
@@ -4022,9 +4204,11 @@ fn Ledger(token: String) -> impl IntoView {
                                 let receiver_prefix = tx.receiver_hash[0..12.min(tx.receiver_hash.len())].to_string();
                                 // 表示は整形済み日時、生 ISO は title 属性へ保持する。
                                 let created_at = tx.created_at.clone();
+                                let created_display = format_local_datetime(&tx.created_at);
+                                let created_lang = error_lang(&created_display);
                                 view! {
                                     <tr class="hover:bg-white/5 transition-colors">
-                                        <th scope="row" class="p-4 text-gray-400" title=created_at>{format_local_datetime(&tx.created_at)}</th>
+                                        <th scope="row" class="p-4 text-gray-400" title=created_at lang=created_lang>{datetime_content(created_display)}</th>
                                         <td class="p-4 text-blue-400">{sender_prefix} "..."</td>
                                         <td class="p-4 text-green-400">{receiver_prefix} "..."</td>
                                         <td class="p-4 text-right font-bold">{tx.amount} " JPYC"</td>
@@ -4068,6 +4252,12 @@ fn reports_error_message(status: Option<u16>) -> String {
 
 /// 投票一覧の JSON 解析失敗時に表示する固定文言。解析エラーの詳細は出さない。
 const REPORTS_PARSE_ERROR: &str = "投票一覧の解析に失敗しました。";
+/// 投票一覧が 401 のときだけ出す再ログイン案内（サーバー本文は出さない）。
+const REPORTS_UNAUTHORIZED: &str = "再ログインが必要です。";
+/// 401 のときに LOG OUT からの再ログインを案内する dedicated 文言。
+const REPORTS_RELOGIN_HINT: &str = "LOG OUT からログアウトし、再度 JPKI でログインしてください。";
+/// 投票一覧が 403 のときの中立文言。サーバー本文や権限詳細はエコーしない。
+const REPORTS_FORBIDDEN: &str = "投票一覧は運用者のみ閲覧できます。";
 
 /// 集計取得の失敗種別。生エラーやサーバー本文は保持しない。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4176,6 +4366,8 @@ where
     // 投票一覧の取得失敗を明示する。失敗しても reports は空にせず既存データを維持し、
     // 空状態を「保留投票なし」と誤表示しない。
     let (reports_error, set_reports_error) = signal(String::new());
+    // 投票一覧の「再読み込み」押下でマウント時 Effect を再加熱するためのトリガ。
+    let (reports_reload, set_reports_reload) = signal(0u32);
     // R5-09: 透明性ダッシュボードの集計表示状態。
     // 初期表示では取得せず、中立的なボタンの押下時にだけプローブする。
     let (stats_html, set_stats_html) = signal(String::new());
@@ -4256,8 +4448,15 @@ where
                     }
                 },
                 Ok(response) => {
-                    // HTTP エラー（401 を含む）: 既存データを維持し、ステータス番号のみ表示する。
-                    set_reports_error.set(reports_error_message(Some(response.status())));
+                    // 401 は再ログイン案内、403 は「運用者のみ」の中立文言へ分岐する。
+                    // いずれもサーバー本文や生エラーは出さない。
+                    let status = response.status();
+                    set_reports_error.set(match status {
+                        401 => REPORTS_UNAUTHORIZED.to_string(),
+                        403 => REPORTS_FORBIDDEN.to_string(),
+                        429 => RETRY_LATER_MESSAGE.to_string(),
+                        _ => reports_error_message(Some(status)),
+                    });
                 }
                 Err(_) => {
                     // ネットワークエラー: 生エラーは出さず固定文言を表示する。
@@ -4268,6 +4467,7 @@ where
     };
 
     Effect::new(move |_| {
+        let _ = reports_reload.get();
         fetch_reports();
     });
 
@@ -4669,6 +4869,17 @@ where
                 <Show when=move || !reports_error.get().is_empty() fallback=|| ()>
                     <p role="alert" data-testid="reports-error" lang=move || error_lang(&reports_error.get()) class="text-xs text-red-500">
                         {move || reports_error.get()}
+                    </p>
+                    {move || retry_control("reports", reports_error.get(), {
+                        let set_reload = set_reports_reload;
+                        move || set_reload.update(|n| *n += 1)
+                    })}
+                </Show>
+                // 401 のときだけ dedicated role=status で再ログインを案内する。
+                <Show when=move || reports_error.get() == REPORTS_UNAUTHORIZED fallback=|| ()>
+                    <p data-testid="reports-relogin-hint" role="status" aria-live="polite"
+                        lang=move || error_lang(REPORTS_RELOGIN_HINT) class="text-xs text-gray-400 mb-4">
+                        {REPORTS_RELOGIN_HINT}
                     </p>
                 </Show>
                 <Show when=move || !vote_error.get().is_empty() fallback=|| ()>
@@ -6105,10 +6316,11 @@ mod tests {
 
     #[test]
     fn reports_error_uses_only_fixed_phrases() {
-        // HTTP エラー（401 を含む）はステータス番号のみを埋め込む固定文言。
+        // 401 は再ログイン案内、403 は「運用者のみ」の中立文言へ分岐する（描画側の定数）。
+        assert_eq!(super::REPORTS_UNAUTHORIZED, "再ログインが必要です。");
         assert_eq!(
-            super::reports_error_message(Some(401)),
-            "投票一覧の取得に失敗しました (HTTP 401)."
+            super::REPORTS_FORBIDDEN,
+            "投票一覧は運用者のみ閲覧できます。"
         );
         assert_eq!(
             super::reports_error_message(Some(500)),
@@ -6314,6 +6526,32 @@ mod tests {
             super::download_start_error_message(),
             "ダウンロードの開始に失敗しました。"
         );
+    }
+
+    /// Blob／URL 生成を含む失敗文言が純粋な分類関数へ集約され、
+    /// 例外詳細・URL・機微値を含まない固定文言であることを検証する。
+    #[test]
+    fn download_stage_error_messages_are_fixed_phrases() {
+        use super::DownloadFailureStage as Stage;
+        let cases = [
+            (Stage::Json, "エクスポートの JSON 生成に失敗しました。"),
+            (Stage::Blob, "エクスポートの Blob 生成に失敗しました。"),
+            (Stage::ObjectUrl, "ダウンロード URL の生成に失敗しました。"),
+            (Stage::Window, "ブラウザの window が利用できません。"),
+            (Stage::Document, "ブラウザの document が利用できません。"),
+            (Stage::Anchor, "ダウンロード要素の生成に失敗しました。"),
+            (Stage::Click, "ダウンロードの開始に失敗しました。"),
+        ];
+        for (stage, expected) in cases {
+            let message = super::download_error_message(stage);
+            assert_eq!(message, expected);
+            for leaked in ["blob:", "http", "Error", "TypeError", "undefined"] {
+                assert!(
+                    !message.contains(leaked),
+                    "must not echo JS details: {leaked}"
+                );
+            }
+        }
     }
 
     /// 保存ファイル名の基底は固定値で、ユーザー入力から組み立てられないこと。
@@ -6559,6 +6797,43 @@ mod tests {
         }
     }
 
+    /// クライアント例外イベントは event/count だけを持つ別イベントで、
+    /// URL・IP・User-Agent・例外メッセージを送らない（既存契約を維持）。
+    #[test]
+    fn ui_error_event_is_separate_and_minimal() {
+        // 非 wasm の送信経路は no-op（コンパイル対象として残す）。
+        super::report_ui_error(2);
+        if !super::CLIENT_METRICS_ENABLED {
+            assert_eq!(super::ui_error_payload(2), None);
+            return;
+        }
+        assert_eq!(super::ui_error_payload(0), None);
+        assert_eq!(
+            super::ui_error_payload(2).as_deref(),
+            Some(r#"{"event":"ui_error","count":2}"#)
+        );
+        assert_eq!(
+            super::ui_error_payload(1001).as_deref(),
+            Some(r#"{"event":"ui_error","count":1000}"#)
+        );
+        assert_ne!(super::ui_error_payload(2), super::client_event_payload(2));
+        let payload = super::ui_error_payload(2).expect("nonzero count");
+        let value: serde_json::Value = serde_json::from_str(&payload).expect("valid json");
+        assert_eq!(value.as_object().map(|obj| obj.len()), Some(2));
+        for key in [
+            "url",
+            "destination",
+            "ip",
+            "ip_address",
+            "user_agent",
+            "user-agent",
+            "stack",
+            "message",
+        ] {
+            assert!(value.get(key).is_none(), "{key} must not be sent");
+        }
+    }
+
     /// モック認証は "0" / "false"（大小文字無視）で止まり、未設定・他値は有効。
     #[test]
     fn mock_auth_enabled_disabled_by_zero_or_false() {
@@ -6661,6 +6936,36 @@ pub fn main() {
     {
         _ = console_log::init_with_level(log::Level::Debug);
         console_error_panic_hook::set_once();
+    }
+    // クライアント例外は件数だけを定期的に送る（メッセージ・URL・IP は保持しない）。
+    #[cfg(target_arch = "wasm32")]
+    if CLIENT_METRICS_ENABLED {
+        if let Some(window) = web_sys::window() {
+            let errors = Rc::new(Cell::new(0usize));
+            let counter = Rc::clone(&errors);
+            let on_error: EventClosure = Closure::new(move |_ev: web_sys::Event| {
+                counter.set(counter.get().saturating_add(1));
+            });
+            let _ =
+                window.add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref());
+            // リスナーをページ寿命で保持する（Rust 側の Closure を破棄しない）。
+            on_error.into_js_value();
+            let tick = {
+                let errors = Rc::clone(&errors);
+                Closure::<dyn FnMut()>::new(move || {
+                    let count = errors.get();
+                    if count > 0 {
+                        errors.set(0);
+                        report_ui_error(count);
+                    }
+                })
+            };
+            let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+                tick.as_ref().unchecked_ref(),
+                5_000,
+            );
+            tick.into_js_value();
+        }
     }
     mount_to_body(|| view! { <App /> });
 }

@@ -3,11 +3,13 @@ use wasm_bindgen::prelude::*;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, ImageData};
 
 /// デコンプレッション bomb 対策。サーバーの取得上限 10 MiB に対して
-/// 8000x8000 = 64M ピクセル（RGBA で 256 MB）を上限とする。
+/// 8000x8000 = 64M ピクセル（RGBA で 256 MB）を「寸法上限」とする。
+/// 面積上限 MAX_PIXELS は MAX_DIMENSION² より故意に小さく設定し、
+/// 8000x8000 のような極端な正方形を面積ガードで実効的に拒否する。
 /// 入力バイト数の 10 MiB 上限はサーバー側の取得・検証で担保されるため、
 /// クライアント側では重複チェックせず、デコード前後の寸法のみを検証する。
 const MAX_DIMENSION: u32 = 8000;
-const MAX_PIXELS: u64 = 64_000_000;
+const MAX_PIXELS: u64 = 60_000_000;
 
 /// デコード前に寸法が安全かを判定する（WASM 非依存・テスト可能）。
 fn dimensions_allowed(width: u64, height: u64) -> bool {
@@ -49,7 +51,10 @@ mod tests {
     #[test]
     fn jxl_dimension_limits() {
         assert!(dimensions_allowed(1, 1));
-        assert!(dimensions_allowed(8000, 8000));
+        // 寸法は上限内でも、面積が MAX_PIXELS を超える 8000x8000 は拒否する。
+        assert!(!dimensions_allowed(8000, 8000));
+        assert!(dimensions_allowed(7500, 8000)); // 60M ちょうどは受理
+        assert!(!dimensions_allowed(7501, 8000)); // 60M 超は拒否
         assert!(dimensions_allowed(1920, 1080));
         assert!(!dimensions_allowed(0, 100));
         assert!(!dimensions_allowed(100, 0));
@@ -140,6 +145,7 @@ pub fn decode_jxl_to_canvas(jxl_data: &[u8], canvas: HtmlCanvasElement) -> Resul
         return Err(JsValue::from_str("JXL dimensions exceed the allowed limit"));
     }
 
+    // アニメーションは先頭フレーム固定（render_frame(0)）。後続フレームは描画しない。
     let render = image
         .render_frame(0)
         .map_err(|e| JsValue::from_str(&format!("JXL render error: {:?}", e)))?;

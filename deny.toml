@@ -80,6 +80,13 @@ ignore = [
 # wildcards = "deny" でレジストリ依存の無制約 version = "*" を拒否する。
 # client / server は public crate のため path 依存が wildcard と判定され、
 # allow-wildcard-paths が効かない。skip でこの2クレートのみ例外的に許可する。
+#
+# ADR-0013 P4（reqwest TLS 統一）の確認結果: openssl-probe / security-framework /
+# core-foundation の 2 バージョンずつは削除できない。Cargo.lock ではこれらは
+# native-tls ではなく rustls-native-certs 0.7.3（hyper-rustls 0.25.0 / libsql 経由）と
+# rustls-native-certs 0.8.5（rustls-platform-verifier 0.7.1 / reqwest 経由）の依存であり、
+# reqwest を rustls-tls へ統一しても残る。削除すると multiple-versions = "deny" が
+# 重複を検出して `cargo deny check bans sources` が失敗するため、根拠付きで維持する。
 [bans]
 multiple-versions = "deny"
 wildcards = "deny"

@@ -786,6 +786,21 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第61ラウンド（ADR-0013 P4 実装・全区分完了）: 3担当（server/client/deps）。
+  TimeoutLayer+REQUEST_TIMEOUT_SECS、tokio/tower/reqwest features絞り、workspace.dependencies集約、
+  common RSA feature分割（client wasmからRSA除外）、監査non-modal Tab、Support overlay、
+  再試行導線4画面+429文言、投票一覧401/403、ログイン403 IPv6、日時lang、JXL MAX_PIXELS=60M、
+  Blobエラー分類、ui_error、console.error/pageerror globalSetup、metrics Cookie、
+  失効閾値警告格下げ、logout Cookie、finalizer残件計上、refresh tx内、
+  back-channel再送、rows drop、DB_WRITE_LOCKSパスキー。
+  親がclippy2件・common cfg化・E2E strict mode3件・doctor request_timeout診断・
+  コメント陳腐化・reqwest workspace指定・R4指摘3件を修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  client89/server492、npm audit3lockfile、markdownlint40ファイル、wasm green、RSA除外確認）。
+  ADR-0013 の P1（設定）P2（バックアップ）P3（CI）P4（ランタイム/UX）がすべて実装完了。
+  以降は通常の review/discovery サイクルへ戻り、残存する設計判断待ち（区分A：外部入力依存）
+  は方針のみ決定済みとして記録を維持する。
+
 - 2026-11-23 コンボ第60ラウンド（ADR-0013 P3 実装）: 3担当（E2E/CIクライアント/CI）。
   ERR trap段階名付き::error::、playwright install 3回再試行、MAX_CHROME_MAJOR=140 fail-closed、
   E2E_MOBILE opt-in、E2E_SERVER_PORT/E2E_API_BASE、build-gate境界テスト、

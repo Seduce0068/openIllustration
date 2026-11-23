@@ -77,7 +77,7 @@ test.describe('Error paths (network error / HTTP 500)', () => {
     await expect(dashboardError).toHaveAttribute('role', 'alert');
     // R2-CLIENT-UX: エラー時は role=status が古い件数を読み上げず、
     // 取得失敗の告知へ切り替わる（既存ケース内へ統合、新規ケースなし）。
-    const liveStatus = page.locator('[role="status"][aria-live="polite"]');
+    const liveStatus = page.locator('p[role="status"][aria-live="polite"].sr-only');
     await expect(liveStatus).toContainText('コンテンツを取得できませんでした');
     await expect(liveStatus).not.toContainText('件のコンテンツを表示中');
     expect(contentAborted).toBe(true);

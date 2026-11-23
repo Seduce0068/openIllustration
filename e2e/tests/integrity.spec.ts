@@ -464,6 +464,41 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     for (const raw of rawDates) {
       expect(raw).toContain('T');
     }
+    // P4: 日時要素と言語宣言。UTC 固定ラベルだけが lang="ja" の子要素になる。
+    await expect(createdAtCells.first()).toHaveAttribute('lang', 'ja');
+    await expect(createdAtCells.first().locator('span[lang="ja"]').last())
+      .toContainText('(協定世界時)');
+
+    // P4: 監査の 429 は専用文言＋共通「再読み込み」導線（dedicated role=status）を出す。
+    let auditRateLimited = true;
+    await card.getByRole('button', { name: 'CLOSE' }).click();
+    await page.unroute(`**/content/${MOCK_CID}/audit`);
+    await page.route(`**/content/${MOCK_CID}/audit`, async route => {
+      if (auditRateLimited) {
+        await route.fulfill({
+          status: 429,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(auditLogs),
+      });
+    });
+    await card.getByRole('button', { name: 'Audit' }).click();
+    await expect(card.getByTestId('audit-error')).toBeVisible({ timeout: 10000 });
+    await expect(card.getByTestId('audit-error')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    await expect(card.getByTestId('audit-retry-status')).toHaveAttribute('role', 'status');
+    await expect(card.getByTestId('audit-retry-status')).toHaveText('しばらく待って再試行してください。');
+    // 再読み込みで成功し、専用文言が消えること。
+    auditRateLimited = false;
+    await card.getByTestId('audit-retry').getByRole('button', { name: '再読み込み' }).click();
+    await expect(card.getByTestId('audit-created-at').first())
+      .toContainText('2026', { timeout: 10000 });
+    await expect(card.getByTestId('audit-error')).toHaveCount(0);
   });
 
   test('R2: Audit toggle exposes ARIA state and dialog closes on Escape', async ({ page }) => {
@@ -701,13 +736,15 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // toBeFocused の自動待ち（expect retries）に任せ、固定 sleep は置かない。
     await expect(closeButton).toBeFocused();
 
-    // モーダル中核契約②: フォーカストラップ。CLOSE フォーカス中に Tab / Shift+Tab を
-    // 送っても背後のトグル等へ抜けず CLOSE に留まる（ContentViewer の on:keydown フォーカス制御）。
+    // P4: このパネルは non-modal。CLOSE フォーカス中に Tab / Shift+Tab を送ると
+    // prevent_default せず背景の操作可能要素へ移動する（Escape / CLOSE で閉じる契約は維持）。
     await page.keyboard.press('Tab');
-    await expect(closeButton).toBeFocused();
-    await page.keyboard.press('Shift+Tab');
-    await expect(closeButton).toBeFocused();
-
+    await expect(closeButton).not.toBeFocused();
+    const afterTab = await page.evaluate(() => {
+      const active = document.activeElement as HTMLElement | null;
+      return active ? (active.getAttribute('data-testid') ?? active.textContent?.trim() ?? '') : '';
+    });
+    expect(afterTab).not.toBe('CLOSE');
     // Escape ではなく dialog 内の CLOSE ボタンで閉じる（audit_close_ref / forensic_panel_id のパネル）。
     await closeButton.click();
 

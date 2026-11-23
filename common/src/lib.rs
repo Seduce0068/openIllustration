@@ -2,7 +2,9 @@ pub mod age;
 pub mod env;
 pub mod instance_lock;
 
+#[cfg(feature = "audit")]
 use rsa::sha2::Sha256 as RsaSha256;
+#[cfg(feature = "audit")]
 use rsa::{
     Pkcs1v15Sign, PrivateKey, PublicKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey},
@@ -55,11 +57,15 @@ pub fn verify_checksum(data: &[u8], expected_checksum: &str) -> bool {
 }
 
 /// PKCS#1 v1.5 署名の受付長（RSA 2048〜4096 bit）。
+#[cfg(feature = "audit")]
 const MIN_RSA_SIGNATURE_LEN: usize = 256;
+#[cfg(feature = "audit")]
 const MAX_RSA_SIGNATURE_LEN: usize = 512;
 /// 公開鍵 DER の受付上限（2 KiB）。RSA 4096 bit の SPKI でも十分に収まる。
+#[cfg(feature = "audit")]
 const MAX_PUBLIC_KEY_DER_LEN: usize = 2 * 1024;
 
+#[cfg(feature = "audit")]
 pub fn verify_rsa_signature(
     public_key_der: &[u8],
     data: &[u8],
@@ -679,6 +685,7 @@ impl SignedAuditSnapshot {
 }
 
 /// PEM 秘密鍵でスナップショットに署名する。
+#[cfg(feature = "audit")]
 pub fn sign_audit_snapshot(
     snapshot: &SignedAuditSnapshot,
     private_key_pem: &str,
@@ -714,6 +721,7 @@ pub fn sign_audit_snapshot(
 }
 
 /// 公開鍵 DER でスナップショット署名を検証する。
+#[cfg(feature = "audit")]
 pub fn verify_audit_snapshot(
     snapshot: &SignedAuditSnapshot,
     public_key_der: &[u8],
@@ -735,6 +743,7 @@ pub fn verify_audit_snapshot(
 }
 
 /// PEM 秘密鍵から公開鍵 DER を導出する（配布用）。
+#[cfg(feature = "audit")]
 pub fn public_key_der_from_private_pem(private_key_pem: &str) -> Result<Vec<u8>, ForensicError> {
     let key = PrivateKey::from_pkcs8_pem(private_key_pem)
         .map_err(|e| ForensicError::Crypto(format!("Invalid private key: {e}")))?;
@@ -744,7 +753,7 @@ pub fn public_key_der_from_private_pem(private_key_pem: &str) -> Result<Vec<u8>,
         .map_err(|e| ForensicError::Crypto(format!("Public key encoding failed: {e}")))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "audit"))]
 mod tests {
     use super::*;
 

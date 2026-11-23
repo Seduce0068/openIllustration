@@ -15,15 +15,15 @@ crate-type = ["cdylib"]
 # `dep:` 構文で optional dependency の暗黙 feature を作らない。
 [features]
 dev-console = ["dep:console_log", "dep:console_error_panic_hook", "dep:log"]
-
 [dependencies]
-common = { path = "../common" }
+# ADR-0013 P4: audit feature を外し、RSA 署名検証スタックを推移的に除外する。
+common = { path = "../common", default-features = false, features = ["checksum"] }
 leptos = { version = "0.8", features = ["csr"] }
 console_error_panic_hook = { version = "0.1", optional = true }
 console_log = { version = "1.0", optional = true }
 log = { version = "0.4", optional = true }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 gloo-net = { version = "0.7", features = ["http"] }
 # client/src が直接参照する web-sys 型をすべて明示する（推移依存の feature
@@ -34,13 +34,14 @@ js-sys = "0.3"
 jxl-oxide = "0.12"
 pulldown-cmark = { version = "0.13.4", features = ["default"] }
 
-# rsa 0.10 が getrandom 0.4 を要求する。
-# wasm32 では wasm_js バックエンドを明示的に有効化する。
+# wasm32 の乱数バックエンドを明示的に有効化する。
+# 旧 rsa 0.10 由来の要件は audit feature 分離で client から消えたが、
+# 他クレートの RNG 解決を変えないため残す（削除は別途検証して判断する）。
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-getrandom = { version = "0.4", features = ["wasm_js"] }
 
-# client の直接依存からは除外（common が通常依存で保持するため推移的には本番 wasm へ残る）。
+# client の直接依存からは除外（common の checksum feature のみを有効化するため
+# RSA 署名検証スタックは推移的にも本番 wasm へ入らない）。
 [dev-dependencies]
-sha2 = "0.11"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 

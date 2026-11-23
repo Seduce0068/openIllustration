@@ -54,6 +54,9 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     expect(text).toContain('2026');
     expect(text).not.toContain(generatedAtRaw);
     await expect(generatedAt).toHaveAttribute('title', generatedAtRaw);
+    // P4: 日時要素と言語宣言（UTC 固定ラベルは lang="ja" の子要素）。
+    await expect(generatedAt).toHaveAttribute('lang', 'ja');
+    await expect(generatedAt.locator('span[lang="ja"]')).toContainText('(協定世界時)');
   };
 
   // client/src/lib.rs の stats_error_message(StatsFailure::Parse) を grep して確定した
@@ -915,6 +918,8 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     // 後続フェーズで成功／壊れたフィールド型の JSON へ差し替えるためのフラグ。
     let brokenPayload = false;
     let serveSuccess = false;
+    // P4: 401 / 403 / 429 の分岐を同じケース内で切り替えるためのステータス。
+    let reportStatus: number = 500;
     await page.route('**/mod/reports', async route => {
       reportRequests.push({
         method: route.request().method(),
@@ -947,7 +952,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
         return;
       }
       await route.fulfill({
-        status: 500,
+        status: reportStatus,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'SERVER_DETAIL_MUST_NOT_BE_SHOWN' }),
       });
@@ -965,6 +970,33 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     expect(reportRequests).toEqual([
       { method: 'GET', path: '/mod/reports', authorization: 'Bearer mock_jwt_token' },
     ]);
+
+    // P4: 投票一覧の 401 / 403 / 429 分岐と共通「再読み込み」導線を既存ケース内で検証する。
+    // auth.spec.ts は担当外のため、ここに境界オラクルを集約する（新規 test() なし）。
+    const reportsReload = page.getByTestId('reports-retry').getByRole('button', { name: '再読み込み' });
+    await expect(page.getByTestId('reports-retry-status')).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('reports-retry-status')).toHaveText(reportsHttpErrorText(500));
+
+    reportStatus = 401;
+    await reportsReload.click();
+    await expect(reportsError).toHaveText('再ログインが必要です。', { timeout: 10000 });
+    await expect(page.getByTestId('reports-relogin-hint')).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('reports-relogin-hint'))
+      .toContainText('LOG OUT からログアウトし、再度 JPKI でログインしてください。');
+    await expect(reportsError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+
+    reportStatus = 403;
+    await reportsReload.click();
+    await expect(reportsError).toHaveText('投票一覧は運用者のみ閲覧できます。', { timeout: 10000 });
+    await expect(page.getByTestId('reports-relogin-hint')).toHaveCount(0);
+    await expect(reportsError).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+
+    reportStatus = 429;
+    await reportsReload.click();
+    await expect(page.getByTestId('reports-retry-status'))
+      .toHaveText('しばらく待って再試行してください。', { timeout: 10000 });
+    await expect(page.locator('body')).not.toContainText('SERVER_DETAIL_MUST_NOT_BE_SHOWN');
+    reportStatus = 500;
 
     // 追加フェーズ: 同じケース内でステータス200だがフィールド型が壊れた JSON へ差し替え、
     // 再マウントして初回フェッチをやり直す。固定文言のみを出し、サーバー本文と

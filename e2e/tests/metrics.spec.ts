@@ -118,6 +118,8 @@ test.describe('Neutralized URL metrics (MET-01)', () => {
     // 認証情報や IP をペイロードへ含めない（ブラウザが付与する User-Agent ヘッダは対象外）。
     expect(call.headers['authorization']).toBeUndefined();
     expect(call.headers['x-forwarded-for']).toBeUndefined();
+    // 監視送信に Cookie（refresh_token 等）を一切載せない。
+    expect(call.headers['cookie']).toBeUndefined();
     await expect(page.getByRole('alert')).toHaveCount(0);
 
     // PERF-01 Level 0: 観測値を保存するだけ。大小比較・閾値判定は行わない（ADR-0011 合意待ち）。

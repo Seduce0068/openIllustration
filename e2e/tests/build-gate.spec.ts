@@ -142,6 +142,20 @@ test.describe('Build gate (BG-01)', () => {
     const extractIndex = gateLines.findIndex((line) => line.includes('tar -xzf'));
     expect(verifyIndex).toBeGreaterThanOrEqual(0);
     expect(extractIndex).toBeGreaterThan(verifyIndex);
+
+    // R2-P4: E2E グローバル setup で console.error / pageerror を収集し、
+    // 許可リスト外で失敗する構成になっていることの静的オラクル（新規 test() なし）。
+    const configPath = path.join(e2eDir, 'playwright.config.ts');
+    const setupPath = path.join(e2eDir, 'global-setup.ts');
+    const configText = fs.readFileSync(configPath, 'utf8');
+    const setupText = fs.readFileSync(setupPath, 'utf8');
+    expect(configText).toContain("globalSetup: './global-setup.ts'");
+    expect(setupText).toContain("page.on('console'");
+    expect(setupText).toContain("page.on('pageerror'");
+    expect(setupText).toContain('message.type() !== \'error\'');
+    // 既存の履歴警告は許可リストへ（fail-closed オラクル economy.spec.ts と同じ文言）。
+    expect(setupText).toContain('履歴の更新に失敗しました。');
+    expect(setupText).toContain('offenders.length > 0');
   });
 
   test('genuine archive passes the gate and is extracted', () => {

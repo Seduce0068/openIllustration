@@ -1390,7 +1390,12 @@ pub async fn callback(
 
     // JWT と refresh token の発行が両方完了してから旧閾値を削除する。
     // 発行が失敗した場合はここへ到達せず、旧 JWT の失効が維持される（R2-AUTH item1）。
-    crate::clear_superseded_revocation(&state, &user_hash, old_threshold).await?;
+    // ADR-0013 P4: 削除失敗は 500 ではなく警告＋メトリクスへ格下げ、
+    // 発行済みの VerifyResponse をそのまま返す（旧閾値は残る）。
+    if let Err(error) = crate::clear_superseded_revocation(&state, &user_hash, old_threshold).await
+    {
+        crate::note_revocation_clear_failure(&state, &error);
+    }
 
     // R2-SESSION-COOKIE: session JWT は応答本文（VerifyResponse.token）のみで搬送し、
     // session Cookie は発行しない。SET_COOKIE は refresh と state 削除の2本だけ。
@@ -1461,22 +1466,9 @@ pub async fn refresh(
         return Err(AppError::Unauthorized("refresh token expired".to_string()));
     }
 
-    // sub の失効閾値が DB に残っている間は refresh を許可しない。
-    // back-channel logout と refresh が競合して未使用トークンが残っても、
-    // 再認証前にセッションを延長できないようにする（再起動後も DB で効く）。
-    let sub_revoked = {
-        let mut revoked_rows = state
-            .db
-            .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub.clone()])
-            .await?;
-        revoked_rows.next().await?.is_some()
-    };
-    if sub_revoked {
-        revoke_refresh_tokens_for_sub(&state, &sub).await?;
-        return Err(AppError::Unauthorized(
-            "session for this subject has been revoked".to_string(),
-        ));
-    }
+    // ADR-0013 P4 item7: sub 失効チェックは write_lock 後の tx 内へ移動する。
+    // 下の (d) のトランザクション内で CHECK + 未使用トークン消費を原子的に行い、
+    // back-channel logout との競合で失効済みトークンが取り残されないようにする。
 
     // (a) BAN チェックは BEGIN より前に移動する。共通ゲートでの拒否を
     //     write_lock 保持中に行わない（判定順序は従来どおり fail-closed）。
@@ -1514,6 +1506,28 @@ pub async fn refresh(
     //     write_lock が Mutex poison を検出しても panic せず、ここでの `?` により
     //     AppError::Internal として伝播する（begin_write_tx_sql 経由）。
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
+    // sub の失効閾値が DB に残っている間は refresh を許可しない。
+    // 判定とトークン消費を同じ tx に閉じ込め、競合時の取りこぼしを防ぐ。
+    let mut revoked_rows = tx
+        .query("SELECT 1 FROM revoked_subs WHERE sub = ?", [sub.clone()])
+        .await?;
+    let sub_revoked = revoked_rows.next().await?.is_some();
+    drop(revoked_rows);
+    if sub_revoked {
+        // 失効済み sub に紐づく未使用リフレッシュトークンを同一 tx で消費する。
+        tx.execute(
+            "UPDATE refresh_tokens SET used_at = datetime('now') WHERE sub = ? AND used_at IS NULL",
+            [sub.clone()],
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|e| AppError::Internal(format!("Transaction commit failed: {e}")))?;
+        drop(write_guard);
+        return Err(AppError::Unauthorized(
+            "session for this subject has been revoked".to_string(),
+        ));
+    }
     let updated = tx
         .execute(
             "UPDATE refresh_tokens SET used_at = datetime('now') WHERE token_hash = ? AND used_at IS NULL",
@@ -1586,17 +1600,17 @@ async fn revoke_sub_from_logout_token(
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
     drop(write_guard);
 
-    // 変更0件 = 同一 iat の再送、または閾値を前進させない古いトークン。
-    // この場合はメモリ更新とリフレッシュトークン消費をスキップする。
-    if changed == 0 {
-        return Ok(());
+    // ADR-0013 P4 item8: 変更 0 件（同一 iat の再送／古いトークン）でも
+    // メモリ更新は不要だが、未使用リフレッシュトークンの消費は必ず実行する。
+    // 以前はここで早期 return し、UPSERT だけコミット済みで消費前の部分失敗を
+    // 再送した際にトークンが取り残されていた。UPDATE は冪等なので再送に安全。
+    if changed > 0 {
+        state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .insert(sub.to_string(), revoked_at);
     }
-
-    state
-        .revoked_subs_before
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .insert(sub.to_string(), revoked_at);
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。
     revoke_refresh_tokens_for_sub(state, sub).await?;

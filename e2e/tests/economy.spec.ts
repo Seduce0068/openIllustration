@@ -113,13 +113,19 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     const contentArea = page.getByTestId('content-card').first();
     await expect(contentArea).toBeVisible({ timeout: 20000 });
     const supportOverlay = page.getByTestId('support-overlay');
-    await supportOverlay.focus();
-    // フォーカスがオーバーレイへ実際に当たったことを activeElement で確認する。
-    expect(
-      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.getAttribute('data-testid'))
-    ).toBe('support-overlay');
+    // P4: 支援は無効なのでタブ停止点（tabindex）を作らず、
+    // aria-disabled と言語付きの説明テキストで状態を伝える。
+    await expect(supportOverlay).not.toHaveAttribute('tabindex');
+    await expect(supportOverlay).toHaveAttribute('aria-disabled', 'true');
+    const disabledNote = supportOverlay.getByTestId('support-disabled-note');
+    await expect(disabledNote).toHaveAttribute('lang', 'en');
+    await expect(disabledNote).toHaveText(
+      'JPYC settlement verification is in development. Support is disabled until then.',
+    );
 
     const pendingButton = page.getByRole('button', { name: 'Settlement Pending' });
+    // タブ停止点を外したため、hover で表示状態へ遷移させる（group-hover）。
+    await supportOverlay.hover();
     // オーバーレイは opacity-0 → group-hover / group-focus-within:opacity-100 の遷移がある。
     // toBeVisible() は opacity:0 でも通るため、親のオーバーレイが完全に
     // 表示される（opacity:1）まで待ってからボタンを検証する。
@@ -181,6 +187,24 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
       'page',
     );
     await expect(page.getByTestId('export-section')).toBeVisible();
+
+    // P4: Dashboard も 429 で専用文言＋共通「再読み込み」導線を出す（既存ケース内）。
+    await page.unroute('**/content');
+    await page.route('**/content', async route => {
+      await route.fulfill({
+        status: 429,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'RATE_LIMIT_SENTINEL_MUST_NOT_BE_SHOWN' }),
+      });
+    });
+    await page.getByRole('button', { name: 'Search', exact: true }).click();
+    await expect(page.getByTestId('dashboard-error')).toHaveText(
+      'しばらく待って再試行してください。',
+      { timeout: 10000 },
+    );
+    await expect(page.getByTestId('dashboard-retry-status')).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('dashboard-retry')).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('RATE_LIMIT_SENTINEL_MUST_NOT_BE_SHOWN');
   });
 
   type TransactionsHandler = (route: Route) => Promise<void>;
@@ -220,8 +244,8 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     const transactionsGate = new Promise<void>(resolve => {
       releaseTransactions = resolve;
     });
-    // 同じケース内で 500 → 401 の2フェーズを切り替える（新規 test() は追加しない）。
-    let transactionStatus: 500 | 401 = 500;
+    // 同じケース内で 500 → 401 → 429 のフェーズを切り替える（新規 test() は追加しない）。
+    let transactionStatus: 500 | 401 | 429 = 500;
     const { error, noTransactions, loading } = await setupLedgerFailurePage(page, async route => {
       await transactionsGate;
       await route.fulfill({
@@ -244,6 +268,11 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     await expect(error).toHaveAttribute('lang', 'ja');
     await expect(error).toContainText('取引履歴の取得に失敗しました。');
     await expect(noTransactions).toHaveCount(0);
+    // P4: 失敗時は共通の「再読み込み」ボタンと dedicated role=status を出す。
+    await expect(page.getByTestId('ledger-retry').getByRole('button', { name: '再読み込み' }))
+      .toBeVisible();
+    await expect(page.getByTestId('ledger-retry-status')).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('ledger-retry-status')).toHaveText('取引履歴の取得に失敗しました。');
 
     // 401 フェーズ: 同じ Ledger ケース内で再取得し、dedicated role=status の
     // 「再ログインが必要です。」＋ LOG OUT 案内を検証する（他エラー文言は不変）。
@@ -260,6 +289,16 @@ test.describe('Support & Ledger Flow (ECO-01)', () => {
     // 401 では従来の role=alert を出し続けず、dedicated status へ切り替える。
     await expect(error).toHaveCount(0);
     await expect(noTransactions).toHaveCount(0);
+
+    // 429 フェーズ: レート制限専用文言と共通の再読み込み導線を検証する。
+    transactionStatus = 429;
+    await page.getByRole('button', { name: 'BROWSE' }).click();
+    await page.getByRole('button', { name: 'LEDGER' }).click();
+    await expect(error).toHaveText('しばらく待って再試行してください。', { timeout: 10000 });
+    await expect(page.getByTestId('ledger-retry-status')).toHaveAttribute('role', 'status');
+    await expect(page.getByTestId('ledger-retry-status'))
+      .toHaveText('しばらく待って再試行してください。');
+    await expect(page.locator('body')).not.toContainText('ledger unavailable');
   });
 
   test('ledger shows a fixed error and no empty-state on network abort', async ({ page }) => {

@@ -78,6 +78,9 @@ const serverDatabaseUrl = reuseExistingServer
 
 export default defineConfig({
   testDir: './tests',
+  // R2-P4: 全テスト開始前に console.error / pageerror を収集し、
+  // 許可リスト外のメッセージで失敗させる（新規 test() は追加しない）。
+  globalSetup: './global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

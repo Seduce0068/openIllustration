@@ -5,12 +5,23 @@ edition = "2024"
 license.workspace = true
 rust-version.workspace = true
 
+# ADR-0013 P4: RSA 署名検証スタックを feature で分離する。
+# - default = audit: 監査署名の生成/検証に必要な rsa を有効化（server は既定を維持）。
+# - checksum: チェックサム/ハッシュ連鎖のみ。client は default-features = false で
+#   これを選び、RSA スタックを推移的に外す。
+# ADR-0013 P4: common/src の RSA 参照は #[cfg(feature = "audit")] 配下にあり、
+# client は checksum のみを選ぶことで wasm から RSA スタックを除外する。
+[features]
+default = ["audit"]
+audit = ["rsa", "sha2", "hex"]
+checksum = ["sha2", "hex"]
+
 [dependencies]
-base64 = "0.23"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-sha2 = "0.11"
-hex = "0.4"
-rsa = { version = "0.10", features = ["pkcs1v15"] }
-thiserror = "2.0"
-chrono = { version = "0.4", features = ["serde"] }
+base64 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+rsa = { workspace = true, optional = true, features = ["pkcs1v15"] }
+thiserror = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
