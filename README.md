@@ -112,6 +112,14 @@ cargo test -p server
 # 共通クレート（年齢検証・チェックサム・監査ログ）
 cargo test -p common
 
+# CI と同じローカル再現ゲート（手元で緑にしてから push する）
+bash scripts/test-doc-numbers.sh
+for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
+shfmt -l scripts/*.sh e2e/*.sh   # 出力が空なら OK
+bash scripts/test-backup-rotate.sh
+bash scripts/test-backup-cron-wrapper.sh
+bash scripts/test-prepare-distribution.sh
+
 # E2E（開発用・ローカル反復向け。初回は cd e2e && npm ci）
 # 前提: Google Chrome・trunk v0.21.14・Node 22 以上。
 # 既定は chromium のみ。firefox/webkit は E2E_PROJECTS=firefox,webkit で opt-in。

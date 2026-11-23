@@ -106,6 +106,13 @@ cargo test --workspace
 cargo deny check licenses
 cargo deny check advisories
 cargo build -p client --target wasm32-unknown-unknown --locked
+# CI と同じドキュメント／シェル／バックアップ回帰ゲート
+bash scripts/test-doc-numbers.sh
+for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
+shfmt -l scripts/*.sh e2e/*.sh   # 出力が空なら OK
+bash scripts/test-backup-rotate.sh
+bash scripts/test-backup-cron-wrapper.sh
+bash scripts/test-prepare-distribution.sh
 # デプロイ前ゲート: 本番相当の環境変数を注入して実行（秘密値は秘密管理基盤から）
 cargo run -p server --bin doctor -- --strict
 ```

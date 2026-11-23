@@ -232,6 +232,13 @@ if [[ ! -e "${work}/offsite" ]] || [[ -z "$(ls -A "${work}/offsite")" ]]; then
 else
 	echo "PASS offsite artifact"
 fi
+# 成果物と同世代の .audit-root もオフサイトへ送られることを固定する。
+if compgen -G "${work}/offsite/*.audit-root" >/dev/null; then
+	echo "PASS offsite audit root"
+else
+	echo "FAIL offsite audit root missing"
+	failures=$((failures + 1))
+fi
 
 cat >"${work}/fail.sh" <<'EOF'
 #!/usr/bin/env bash

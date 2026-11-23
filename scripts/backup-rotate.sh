@@ -272,6 +272,13 @@ if [[ -n "$offsitecopy" ]]; then
 	fi
 	echo "==> offsite copy: ${artifact} -> ${offsitedest}"
 	"$offsitecopy" "$artifact" "$offsitedest"
+	# 監査 root は成果物と世代をなす対として同じ先へ送る。欠けるとオフサイト先での
+	# --expect-root 照合（欠落・末尾切詰め検知）が不能になるため必須。
+	if [[ ! -f "$audit_root_output" ]]; then
+		echo "error: audit root ${audit_root_output} is missing for offsite copy" >&2
+		exit 1
+	fi
+	"$offsitecopy" "$audit_root_output" "$offsitedest"
 fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は

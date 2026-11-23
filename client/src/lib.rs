@@ -933,7 +933,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     for (label, value) in totals {
         let _ = writeln!(
             html,
-            "<div class=\"border border-white/10 p-3\"><p class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
+            "<div class=\"border border-white/10 p-3\"><p lang=\"en\" class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
             escape_html_text(&value.to_string())
         );
     }
@@ -1006,7 +1006,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     for (label, value) in totals {
         let _ = writeln!(
             html,
-            "<div class=\"border border-white/10 p-3\"><p class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
+            "<div class=\"border border-white/10 p-3\"><p lang=\"en\" class=\"text-[8px] uppercase tracking-widest text-gray-500\">{label}</p><p class=\"text-lg font-bold text-green-500\">{}</p></div>",
             escape_html_text(&value.to_string())
         );
     }
@@ -4585,7 +4585,7 @@ where
                                         </a>
                                         <span lang="en" class="text-[8px] border border-red-500/20 text-red-500 px-1 uppercase">"Reported"</span>
                                     </div>
-                                    <p class="text-[10px] text-gray-300 italic">"Reason: " {report.reason.clone()}</p>
+                                    <p class="text-[10px] text-gray-300 italic"><span lang="en">"Reason: "</span><span lang=move || error_lang(&report.reason)>{report.reason.clone()}</span></p>
                                     <div class="grid grid-cols-2 gap-4">
                                         <button lang="en" on:click=move |_| do_vote(rid, "Approve".to_string())
                                             disabled=move || vote_busy.get() || !reports_error.get().is_empty()
