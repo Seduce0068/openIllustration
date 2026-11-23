@@ -11026,6 +11026,11 @@ fn test_rsa_public_pem(private_pem: &str) -> String {
 fn test_jwt_rs256_kid_verification() {
     let pem = test_rsa_private_pem();
     let keys = crate::jwt::JwtKeys::from_rsa_private_key_pem(&pem).expect("valid RSA key");
+    // セッション JWT の nbf 検証も OIDC 側と同じく明示有効（jsonwebtoken 既定は false）。
+    assert!(
+        keys.validation().validate_nbf,
+        "session JWT must validate nbf"
+    );
     let kid = keys
         .header()
         .kid

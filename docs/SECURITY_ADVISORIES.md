@@ -170,9 +170,10 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 - paste は leptos のマクロ展開などビルド時に使われ、生成物に実行時
   コードとして残らない。
-- ttf-parser は `imageproc` → `ab_glyph` 経由で入る。`client/Cargo.toml`
-  は `image`（28 行目）、`imageproc`（29 行目）、`image-webp`（30 行目）を
-  宣言するが、`client/src` から参照されていない。
+- ttf-parser は `imageproc` → `ab_glyph` 経由で入る。**2026-11-15 時点の履歴**として、
+  当時の `client/Cargo.toml` は `image` / `imageproc` / `image-webp` を宣言していたが、
+  `client/src` から参照されておらず、その後削除済み（§8 参照）。現行の `client/Cargo.toml`
+  にはこれらの直接依存は存在しない。
 - paste（RUSTSEC-2024-0436）は RustSec DB 上で検出されなくなり、2026-11-22 に
   ignore から削除済み（解消）。ttf-parser は未使用依存の削除により
   依存グラフから外れた（2026-11-15）。

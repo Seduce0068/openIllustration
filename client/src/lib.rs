@@ -224,8 +224,9 @@ const API_BASE: ApiOrigin = ApiOrigin;
 /// 未設定（既定）は送信を継続する（未リリース機能の既定契約を維持するため）。
 const CLIENT_METRICS_ENABLED: bool = metrics_enabled_from_env(option_env!("OIL_CLIENT_METRICS"));
 
-/// ビルド時真偽値の共通判定（const fn）。サーバ側の受理値方針に合わせ、
-/// `"0"` / `"false"`（大小文字無視）を無効、未設定とその他を有効とみなす。
+/// ビルド時真偽値の共通判定（const fn）。`"0"` / `"false"`（大小文字無視）を無効、
+/// 未設定とその他を有効とみなす。サーバ側 parse_bool_env は受理値外を fail-closed で
+/// 拒否するが、ビルド時フラグは開発既定を維持するため受理値外も有効として扱う点が異なる。
 const fn build_flag_enabled(value: Option<&str>) -> bool {
     match value {
         Some(v) => {
@@ -2700,6 +2701,11 @@ fn ExportMyData(token: String) -> impl IntoView {
     let token_stored = StoredValue::new(token);
 
     let on_export = move |_| {
+        // R2-BUSY: disabled が DOM へ反映される前に届く2回目のクリックも
+        // claim_submission で同期に排除し、/me/export を1本だけにする。
+        if !claim_submission(busy.get()) {
+            return;
+        }
         let token = token_stored.get_value();
         set_error.set(String::new());
         set_status.set(String::new());
@@ -2708,6 +2714,8 @@ fn ExportMyData(token: String) -> impl IntoView {
         set_download_hint.set(String::new());
         set_busy.set(true);
         spawn_local(async move {
+            // 成否いずれの分岐でもスコープ離脱時の Drop で busy を解除する。
+            let _release = BusyGuard(set_busy);
             let result: Result<String, String> = async {
                 let response = api_fetch(
                     |jwt| {
@@ -2743,7 +2751,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 Ok(message)
             }
             .await;
-            set_busy.set(false);
+            // busy 解除は BusyGuard の Drop へ一本化（手動 set_busy(false) は削除）。
             // リリース wasm は無ログ方針。EXPORT_RESULT の出力は dev-console
             // feature を明示指定した開発ビルドだけに限定する（詳細設計・メトリクス方針と一致）。
             #[cfg(feature = "dev-console")]
@@ -2775,6 +2783,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 on:click=on_export
                 disabled=busy
                 aria-label=move || if busy.get() { "エクスポート中" } else { "データをエクスポート" }
+                aria-busy=move || if busy.get() { "true" } else { "false" }
                 data-testid="export-my-data"
                 class="py-3 px-6 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10 transition-colors disabled:opacity-50"
             >
@@ -3515,6 +3524,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
     };
 
     let sign_and_upload = move |_| {
+        // R2-BUSY: ファイル/MIME/価格ゲートより前に送信中を同期で排除する。
+        // disabled の DOM 反映前に届く2回目のクリックは通信開始前にここで止める。
+        if !claim_submission(loading.get()) {
+            return;
+        }
         // ファイル未選択（サイズ拒否を含む）ではパニックせずエラー表示する。
         let Some(f) = file.get() else {
             set_failed.set("ERROR: Select a file first.".to_string());
@@ -3555,6 +3569,8 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
         const RESPONSE_ERROR: &str = "アップロード結果の読み取りに失敗しました。";
 
         spawn_local(async move {
+            // 成否いずれの分岐でもスコープ離脱時の Drop で loading を解除する。
+            let _release = BusyGuard(set_loading);
             // 準備・通信の各段を Result で伝播させ、パニックで loading が戻らない事故を防ぐ。
             let outcome: Result<String, &'static str> = async move {
                 let array_buffer = wasm_bindgen_futures::JsFuture::from(f.array_buffer())
@@ -3636,8 +3652,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 Ok(message) => set_failed.set(message),
                 Err(message) => set_failed.set(message.to_string()),
             }
-            // finally 相当: 成否にかかわらずボタンを再活性化する。
-            set_loading.set(false);
+            // finally 相当の解除は BusyGuard の Drop が担う（手動 set_loading(false) は削除）。
         });
     };
 

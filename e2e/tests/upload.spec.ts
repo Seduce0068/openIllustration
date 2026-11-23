@@ -40,7 +40,9 @@ test.describe('Content Upload Flow', () => {
     // 送信中フェーズを観測するため、レスポンスを明示的に解放するまで保留する。
     let releaseUpload: () => void = () => {};
     const uploadHeld = new Promise<void>(resolve => { releaseUpload = resolve; });
+    let uploadRequestCount = 0;
     await page.route('**/content/upload', async route => {
+      uploadRequestCount += 1;
       await uploadHeld;
       await route.fulfill({
         status: 200,
@@ -57,12 +59,18 @@ test.describe('Content Upload Flow', () => {
     // 送信中: aria-busy="true" になり、ボタンは disabled になる。
     await expect(submitButton).toHaveAttribute('aria-busy', 'true', { timeout: 10000 });
     await expect(submitButton).toBeDisabled();
+    // R2-BUSY: レスポンス保留中に disabled を迂回した2回目の click イベントを
+    // dispatchEvent で届かせても、claim_submission が同期で排除する。
+    await submitButton.dispatchEvent('click');
+    expect(uploadRequestCount).toBe(1);
     releaseUpload();
 
     // 完了: aria-busy="false" に戻り、ボタンが再活性化する。
     await expect(submitButton).toHaveAttribute('aria-busy', 'false', { timeout: 10000 });
     await expect(submitButton).toBeEnabled({ timeout: 10000 });
     await expect(page.locator('text=SUCCESS: Content registered')).toBeVisible({ timeout: 15000 });
+    // R2-BUSY: ガードが無い場合は2本目が到達するため、完了後も1本であることを固定する。
+    await expect.poll(() => uploadRequestCount).toBe(1);
   });
 
   test('should reject files over 10 MiB before upload', async ({ page }) => {

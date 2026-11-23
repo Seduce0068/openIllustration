@@ -79,7 +79,7 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
   追加された5件はいずれも `server/src/tests.rs` のサーバー側テスト（MET-02 の4件と PAY-05 の1件）である。
   今回の3CLIへのテスト追加（doctor 54件（既存29件＋境界テスト7件＋OIDC URL検証3件＋
   oidc_required_assurance1件＋設定検証3件＋ヘルプ優先2件＋AUDIT_EXPECT_ROOT1件＋
-  AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件） / verify_audit_export 20件 / verify_backup 19件）も
+  AGE_POLICY_CONFIGURED3件＋バックアップ/TZ診断3件＋バックアップ生値判定1件＋LOG_FORMAT診断1件） / verify_audit_export 20件 / verify_backup 19件）も
   全て `server/src/bin/` 配下のサーバー側 bin テストであり、E2E 定義数は当時59件のまま（現在69件）。
   直近の SSRF 2件 / XFF 11件 / doctor 追加4件もサーバー側テストであり、E2E 定義数は当時59件のまま（現在69件）。
    直近の年齢ゲート共通化（callback / refresh の設定必須403）・TZ 境界・`/me/export` の
@@ -567,7 +567,7 @@ doctor のテスト数は 53 のままだった（R2-ENV で 54 へ追随）。
 に変更する（`bin/doctor.rs` の期待値も同じ文言へ更新）。サーバーは session Cookie を発行しないため。
 カテゴリ数（check23）・テスト数（doctor54）・件数は不変。
 
-上表の「設定判定」42件のうち `oidc_max_auth_age` カテゴリは、共通バリデータの固定文言をそのまま警告へ流す。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過
+上表の「設定判定」43件のうち `oidc_max_auth_age` カテゴリは、共通バリデータの固定文言をそのまま警告へ流す。上限 `MAX_AUTH_AGE_MAX_SECS = 2_592_000`（30日）超過
   （固定文言 `OIDC_MAX_AUTH_AGE_SECS must not exceed 2592000 seconds (30 days)`、`u64::MAX` 境界を含む）は既存テスト内のアサーション追加で検証し、
   設定値はエコーしない（テスト数・件数は不変）。
 
@@ -1959,9 +1959,9 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `report_reason_byte_error_enforces_utf8_boundary` | 通報理由の UTF-8 境界を検査 |
 | `content_empty_state_message_switches_on_active_filters` | 空状態文言が絞り込みで切り替わる |
 | `illustration_aria_label_uses_cid_prefix_when_title_blank` | 無題時に CID 接頭辞を aria ラベルへ使用 |
-| `client_metrics_enabled_disabled_by_zero_or_false` | 0 のみクライアントメトリクスを無効化 |
+| `client_metrics_enabled_disabled_by_zero_or_false` | "0"/"false"（大小文字無視）でクライアントメトリクスを無効化 |
 | `client_metrics_gate_controls_payload` | ゲートがペイロード送信を制御 |
-| `mock_auth_enabled_disabled_by_zero_or_false` | 0 のみモック認証を無効化（未設定は有効） |
+| `mock_auth_enabled_disabled_by_zero_or_false` | "0"/"false"（大小文字無視）でモック認証を無効化（未設定は有効） |
 
 ## CI 前提条件の検証契約（数値不変）
 
@@ -2314,3 +2314,24 @@ E2E69件 / check23 / doctor54 / migrations14 の数値は不変。
 新規テスト関数は追加しない（既存テスト内への回帰追加のみ）。doc→code テスト名
 照合値は tests156 のまま、E2E69件 / check23 / doctor54 / migrations14 も不変
 （履歴記載の数値は変更しない）。
+
+## R2-BUSY の受け入れ契約（2026-11-23）
+
+1. **エクスポートの二重送信防止（high）**: `client/src/lib.rs` の `on_export`
+   先頭で `if !claim_submission(busy.get()) { return; }` を実行し、応答保留中の
+   二重クリックで `/me/export` が1本だけになることを固定する。
+   `spawn_local` 内は `let _release = BusyGuard(set_busy);` で解除を一本化し、
+   `data-testid="export-my-data"` ボタンへ `aria-busy` の
+   `"false" → "true" → "false"` 遷移を追加する。既存の固定文言・
+   `data-testid`・`aria-label` は変更しない。`e2e/tests/export.spec.ts` の
+   既存1件目内で、レスポンス保留中の二重クリックによる1本性と
+   `aria-busy` 遷移を検証する。
+2. **アップロードの二重送信防止（high）**: `sign_and_upload` の入口で
+   `claim_submission(loading.get())` をファイル/MIME/価格ゲートより前に
+   判定し、`spawn_local` 内は `BusyGuard(set_loading)` で成否にかかわらず
+   解除する。既存の手動 `set_loading(false)` は削除して競合を避ける。
+   `e2e/tests/upload.spec.ts` の既存送信中ケース内で、レスポンス保留中の
+   二重クリックにより `POST /content/upload` が1本のみであることを検証する。
+
+いずれも既存 E2E ケース内へのアサーション追加のみで、新規 `test()` は追加しない。
+E2E69件 / check23 / doctor54 / migrations14 / tests156 の数値は不変。

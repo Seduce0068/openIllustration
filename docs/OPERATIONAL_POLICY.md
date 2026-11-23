@@ -18,7 +18,9 @@ generated:
 - `ALLOW_MOCK_AUTH=1` はローカル開発・隔離テスト専用。本番環境では設定しない。
 - クライアントのビルドでは本番成果物に `OIL_MOCK_AUTH=0` を指定し、
   ログイン画面の開発用モック認証注記（`data-testid="mock-auth-notice"`）を出さない。
-  未設定（既定）は注記を表示する開発用契約で、`"0"` のみが無効化する。`ALLOW_MOCK_AUTH` がサーバー起動時の設定であるのに対し、`OIL_MOCK_AUTH` はクライアントのビルド時設定である。
+  未設定（既定）は注記を表示する開発用契約で、`"0"` / `"false"`（大小文字無視）が無効化する。
+  サーバ側の起動時真偽値は受理値外を fail-closed で拒否するが、ビルド時フラグは開発既定を維持するため
+  未設定・その他の値を有効として扱う（契約の差に注意）。`ALLOW_MOCK_AUTH` がサーバー起動時の設定であるのに対し、`OIL_MOCK_AUTH` はクライアントのビルド時設定である。
   
 - `JWT_SECRET` は必須。32バイト未満は起動時に拒否する。十分な強度のランダム値を秘密管理基盤から注入し、ソース・ログ・配布物に含めない。
 - `JWT_RSA_PRIVATE_KEY_PEM` を設定すると RS256 で署名する。検証用の公開鍵は
@@ -477,7 +479,7 @@ generated:
    `count=1000` の連投による増幅は60/分/IPのレート制限へ低減される。
   累積値は実際の被害や不正の規模を保証しない。判断には認証済みデータや
   サーバー側の独立した記録を突き合わせる。
-- クライアント側メトリクス送信の無効化: ビルド時に `OIL_CLIENT_METRICS=0` を指定すると
+- クライアント側メトリクス送信の無効化: ビルド時に `OIL_CLIENT_METRICS=0`（または `false`、大小文字無視）を指定すると
   `POST /metrics/client-events` を一切送らない（未設定・その他の値は送信する）。
   有効時のペイロードは `event`（固定値 `neutralized_url`）と `count`（1〜1000 の整数）のみで、
   URL 本文・IP アドレス・User-Agent・認証情報は含めず、サーバーも受信・記録・ログ出力しない。
@@ -940,3 +942,22 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   check23 は不変。
 - 回帰はいずれも既存テスト内への追加のみで、新規 test 関数は追加しない。
   E2E69件 / check23 / doctor54 / migrations14 / tests156 の各数値は不変。
+
+### R2-BUSY 追加契約（2026-11-23）
+
+- **エクスポートの同期二重送信ガード**: `on_export` の先頭で
+  `claim_submission(busy.get())` を判定し、DOM の `disabled` 反映前に届く
+  2回目のクリックでは `/me/export` を送らない。通信は `spawn_local` 内で
+  `BusyGuard(set_busy)` を保持し、成否いずれの分岐でも `Drop` で busy を
+  解除する（手動の `set_busy(false)` は置換）。ボタンの `aria-busy` は
+  `"true"` / `"false"` の文字列トークンで遷移させ、既存の固定文言と
+  `data-testid` は変更しない。
+- **アップロードの同期二重送信ガード**: `sign_and_upload` の入口で
+  `claim_submission(loading.get())` を判定し、ファイル/MIME/価格ゲートより
+  前（通信開始前）に2回目のクリックを排除する。`spawn_local` 内では
+  `BusyGuard(set_loading)` により早期 return を含め必ず loading を解除し、
+  手動の `set_loading(false)` と競合させない。二重クリックでも
+  `POST /content/upload` は1本のみとする。
+- 回帰はいずれも既存 E2E ケース内へのアサーション追加のみで、新規 `test()`
+  は追加しない。E2E69件 / check23 / doctor54 / migrations14 / tests156 の
+  各数値は不変。

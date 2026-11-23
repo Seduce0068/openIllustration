@@ -57,14 +57,18 @@ test.describe('R5-04: Export My Data', () => {
     let requestCount = 0;
     // 後続フェーズでレスポンスを不正 JSON へ差し替えるためのフラグ。
     let malformedResponse = false;
+    // R2-BUSY: 最初の応答を明示的に解放するまで保留し、保留中の二重クリックを
+    // 固定スリープに依存せず決定論的に観測する。
+    let releaseExport: () => void = () => {};
+    const exportHeld = new Promise<void>(resolve => { releaseExport = resolve; });
 
     await page.route('**/me/export', async route => {
       requestCount += 1;
       requestMethod = route.request().method();
       authHeader = route.request().headers()['authorization'];
       if (!malformedResponse) {
-        // busy 中のアクセシブル名を決定論的に観測するため、応答を短く遅らせる。
-        await new Promise(resolve => setTimeout(resolve, 300));
+        // busy 中の aria-busy / アクセシブル名を決定論的に観測するため応答を保留する。
+        await exportHeld;
       }
       if (malformedResponse) {
         await route.fulfill({
@@ -104,11 +108,20 @@ test.describe('R5-04: Export My Data', () => {
     const exportButton = page.getByTestId('export-my-data');
     // R2-CLIENT-08: idle → busy → idle で aria-label が切り替わる。
     await expect(exportButton).toHaveAttribute('aria-label', 'データをエクスポート');
+    // R2-BUSY: ARIA boolean は "true"/"false" の文字列トークンを要求する。
+    await expect(exportButton).toHaveAttribute('aria-busy', 'false');
     await exportButton.click();
     await expect.poll(() => exportButton.getAttribute('aria-label')).toBe('エクスポート中');
+    await expect(exportButton).toHaveAttribute('aria-busy', 'true');
     await expect(exportButton).toBeDisabled();
+    // R2-BUSY: レスポンス保留中に disabled を迂回した2回目の click イベントを
+    // dispatchEvent で届かせても、claim_submission が同期で排除する。
+    await exportButton.dispatchEvent('click');
+    expect(requestCount).toBe(1);
+    releaseExport();
     const download = await downloadPromise;
     await expect.poll(() => exportButton.getAttribute('aria-label')).toBe('データをエクスポート');
+    await expect(exportButton).toHaveAttribute('aria-busy', 'false');
     await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
 
     const longDelays = await page.evaluate(() =>
@@ -118,6 +131,7 @@ test.describe('R5-04: Export My Data', () => {
     );
     expect(longDelays.some(delay => delay > 10_000)).toBe(true);
 
+    // R2-BUSY: 保留中の二重クリック後も /me/export は1本のまま。
     expect(requestCount).toBe(1);
     expect(requestMethod).toBe('GET');
     expect(authHeader).toBe('Bearer mock_jwt_token');

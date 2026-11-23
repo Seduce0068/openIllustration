@@ -172,9 +172,12 @@ impl JwtKeys {
         header
     }
 
-    /// 検証設定。許可アルゴリズムを起動時の値に限定する。
+    /// 検証設定。許可アルゴリズムを起動時の値に限定し、OIDC 側と同じく nbf も検証する
+    /// （jsonwebtoken 12 の既定は validate_nbf=false のため明示有効化が必要）。
     pub fn validation(&self) -> Validation {
-        Validation::new(self.algorithm)
+        let mut validation = Validation::new(self.algorithm);
+        validation.validate_nbf = true;
+        validation
     }
 
     pub fn encoding_key(&self) -> &EncodingKey {
