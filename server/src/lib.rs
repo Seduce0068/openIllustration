@@ -5537,6 +5537,7 @@ pub async fn ban_user(
     let revoked_at = chrono::Utc::now().timestamp() as usize;
 
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+    let mut already_banned = false;
     let mut rows = tx
         .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
         .await?;
@@ -5557,18 +5558,24 @@ pub async fn ban_user(
         )
         .await?;
     } else {
-        tx.execute(
-            "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'), ban_until = NULL
-             WHERE user_hash = ?",
-            [user_hash],
-        )
-        .await?;
+        let updated = tx
+            .execute(
+                "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'), ban_until = NULL
+                 WHERE user_hash = ? AND is_banned = FALSE",
+                [user_hash],
+            )
+            .await?;
+        // 既に BAN 済み（0 行）なら再送とみなし、監査行の重複のみを避ける。
+        // 閾値 UPSERT と下流のトークン消費は必ず実行する（未使用トークン残存を防ぐ）。
+        already_banned = updated == 0;
     }
     let details = match body.duration_days {
         Some(days) => Some(format!("{{\"duration_days\":{days}}}")),
         None => Some("{\"indefinite\":true}".to_string()),
     };
-    record_governance_action(&tx, "BAN", user_hash, &claims.sub, reason, details).await?;
+    if !already_banned {
+        record_governance_action(&tx, "BAN", user_hash, &claims.sub, reason, details).await?;
+    }
     // プロセス再起動後も失効を維持するため、DB 側の閾値を users 更新と同じ
     // トランザクションで確定する。より新しい閾値だけを反映し、古い値で
     // 上書きされないようにする。
@@ -5642,11 +5649,13 @@ pub async fn unban_user(
         return Err(AppError::NotFound);
     }
     drop(rows);
-    tx.execute(
-        "UPDATE users SET is_banned = FALSE, banned_at = NULL, ban_until = NULL WHERE user_hash = ?",
-        [user_hash],
-    )
-    .await?;
+    let unbanned = tx
+        .execute(
+            "UPDATE users SET is_banned = FALSE, banned_at = NULL, ban_until = NULL
+             WHERE user_hash = ? AND is_banned = TRUE",
+            [user_hash],
+        )
+        .await?;
     // BAN 由来の失効閾値を削除すると、BAN 以前に発行された JWT（iat <= 旧閾値）が
     // UNBAN を境に復活してしまう。閾値は削除せず、sub epoch を現在時刻へ進めて
     // 旧 JWT を失効のままにする。back-channel logout 由来の閾値も同じ行で保持され、
@@ -5670,7 +5679,10 @@ pub async fn unban_user(
         )
         .await?;
     }
-    record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
+    // 既に UNBAN 済み（0 行）なら再送とみなし、監査行の重複を避ける。
+    if unbanned > 0 {
+        record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
+    }
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;

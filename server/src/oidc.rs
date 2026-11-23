@@ -1066,6 +1066,13 @@ async fn verify_id_token(
             "ID token issuer mismatch".to_string(),
         ));
     }
+    // 空／空白のみの sub はすべて sha256("") に集約され、主体分離が崩れる。
+    // verified_age 経路と同じ fail-closed 契約で拒否する。
+    if claims.sub.trim().is_empty() {
+        return Err(AppError::Unauthorized(
+            "ID token subject is empty".to_string(),
+        ));
+    }
 
     // 保証レベル (acr) と認証方法 (amr) は設定時のみ検証する。
     // 要求値があるのにクレームが欠ける場合は本番有効化しない（fail-closed）。
@@ -1185,10 +1192,13 @@ async fn verify_logout_token(
     // 本システムのリフレッシュ失効は revoked_subs の sub に依存している。
     // sid のみを受理すると refresh から新しいセッションが発行され、
     // ログアウトしたはずのセッションが復活するため、fail-closed で sub を必須化する。
-    if claims.sub.is_none() {
-        return Err(AppError::Unauthorized(
-            "logout token requires sub".to_string(),
-        ));
+    match claims.sub.as_deref() {
+        Some(sub) if !sub.trim().is_empty() => {}
+        _ => {
+            return Err(AppError::Unauthorized(
+                "logout token requires a non-empty sub".to_string(),
+            ));
+        }
     }
 
     Ok(claims)

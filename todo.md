@@ -786,6 +786,24 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第81ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: OIDC ID/logoutトークンの空subをfail-closed拒否、
+  BAN/UNBANのusers UPDATEをCAS化して再送時の監査重複を防止
+  （BANは0行でも閾値UPSERT+トークン消費を継続）、
+  公開集計鮮度判定を非wasm純粋関数(is_stale_seconds)へ分離し単体テスト追加、
+  backup-rotate件数コメントを実測31/16/47へ修正。
+  R4指摘（BAN早期returnでトークン消費がスキップされる/UNBAN未冪等）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  wasm/tsc green、E2E_CLIENT_PORT=18123で実施）。cargo deny一時障害は再試行で解消。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe WCAG AA導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、jxl fuzz独立オラクル、Node/Chrome比較分岐テスト、
+  CIツールchecksumピン留め、署名公開失敗回帰、pushState失敗告知、
+  ナビ/LOG OUT/投票の24pxタッチ目標、Markdown heading階層オフセット、
+  投票.disabled理由、noscript/fallback、公開集計閾値の設定化、RuntimeConfig一括化、
+  doctor MIGRATIONS_DIR診断、sign_audit 2ログ原子スナップショット、
+  logout失効記録なし200のfail-open、孤立ピンrescan、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第80ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: クライアントfetchにタイムアウト追加（futures::select +
   setTimeout/JsFuture、30秒でgloo_net::Errorを返しBusyGuard解除を保証）。

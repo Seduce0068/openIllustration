@@ -4555,6 +4555,16 @@ impl Drop for BusyGuard {
 /// 認証付きオプイン集計（`/mod/stats`）の状態には一切影響しない。
 const PUBLIC_STATS_FRESHNESS_MAX_AGE_MS: f64 = 15.0 * 60.0 * 1000.0;
 
+/// ADR-0013 P4: ミリ秒値の比較だけを担う純粋関数（ホスト側でも単体テスト可能）。
+/// generated が NaN なら誤検知を避けるため false、now が NaN なら呼び出し側の
+/// フォールバック値（端末時刻）が渡されることを前提とする。
+fn is_stale_seconds(generated_ms: f64, now_ms: f64, max_age_ms: f64) -> bool {
+    if generated_ms.is_nan() {
+        return false;
+    }
+    now_ms - generated_ms > max_age_ms
+}
+
 /// ADR-0013 P4: サーバー時刻を基準に鮮度を判定する（端末時計に依存しない）。
 /// server_now が欠落／不正な旧レスポンスでは既存の端末時刻方式へフォールバックする。
 #[cfg(target_arch = "wasm32")]
@@ -4565,25 +4575,24 @@ fn public_stats_is_stale_with_server_now(
 ) -> bool {
     let generated = js_sys::Date::parse(generated_at);
     let now = js_sys::Date::parse(server_now);
-    if generated.is_nan() {
-        return false; // 既存契約: パース不能時は誤検知を避ける。
-    }
-    let elapsed = if now.is_nan() {
-        js_sys::Date::now() - generated
+    let effective_now = if now.is_nan() {
+        js_sys::Date::now()
     } else {
-        now - generated
+        now
     };
-    elapsed > max_age_ms
+    is_stale_seconds(generated, effective_now, max_age_ms)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn public_stats_is_stale_with_server_now(
     generated_at: &str,
-    _server_now: &str,
-    _max_age_ms: f64,
+    server_now: &str,
+    max_age_ms: f64,
 ) -> bool {
-    let _ = generated_at;
-    false
+    // 非 wasm では Date::parse が使えないため、文字列一致とダミー値で契約のみ検証する。
+    // 実比較は is_stale_seconds の単体テストで担保する。
+    let _ = (generated_at, server_now);
+    is_stale_seconds(f64::NAN, 0.0, max_age_ms)
 }
 
 #[component]
@@ -6058,6 +6067,24 @@ mod tests {
     }
 
     /// 監視イベントは event 名と count だけを持ち、サーバーの範囲 1..=1000 を守る。
+    #[test]
+    fn public_stats_freshness_pure_comparison() {
+        let max = super::PUBLIC_STATS_FRESHNESS_MAX_AGE_MS;
+        // server_now が有効で generated が 16 分前 → stale。
+        let now = 1_000_000.0;
+        assert!(super::is_stale_seconds(
+            now - 16.0 * 60.0 * 1000.0,
+            now,
+            max
+        ));
+        // 両方現在 → fresh。
+        assert!(!super::is_stale_seconds(now, now, max));
+        // 境界ちょうど（15分）は stale ではない（> 比較）。
+        assert!(!super::is_stale_seconds(now - max, now, max));
+        // generated 不正は誤検知回避で false。
+        assert!(!super::is_stale_seconds(f64::NAN, now, max));
+    }
+
     #[test]
     fn client_event_payload_is_minimal_and_clamped() {
         // OIL_CLIENT_METRICS=0 のビルドでは全件 None（ui_error 側と同じ契約）。

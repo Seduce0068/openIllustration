@@ -6,8 +6,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/backup-rotate.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-# expect_* 呼び出し件数（実数）: expect_failure 31 件 / expect_success 15 件（計 46 件）。
-# ※ ケース8（実 gpg、環境依存で SKIP の場合あり）は doc-numbers の行頭照合対象外。
+# expect_* 呼び出し件数（実数）: expect_failure 31 件 / expect_success 16 件（計 47 件）。
+# doc-numbers の空白許容 grep がケース8（実 gpg）も計上する。
 # 件数を扱う docs は担当外のため、ケースを増減したらこのコメントを実数へ更新すること。
 
 mkdir -p "${work}/bin" "${work}/backups" "${work}/offsite"
