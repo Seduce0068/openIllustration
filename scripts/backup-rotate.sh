@@ -30,6 +30,7 @@ alert_cmd="${ALERT_CMD:-}"
 rotation_list=""
 tmp_dir=""
 tmp_db=""
+heartbeat_tmp=""
 # 失敗通知に添える段階名。初期値は setup とし、各検証・公開段階の直前で更新する。
 stage="setup"
 on_failure() {
@@ -39,6 +40,9 @@ on_failure() {
 	fi
 	if [[ -n "$rotation_list" ]]; then
 		rm -f -- "$rotation_list" || true
+	fi
+	if [[ -n "$heartbeat_tmp" ]]; then
+		rm -f -- "$heartbeat_tmp" || true
 	fi
 	if ((code == 0)); then
 		return 0
@@ -202,6 +206,9 @@ fi
 # 暗号化の有無にかかわらず同じ世代名（<prefix>-<stamp>.audit-root）を使う。
 audit_root_output="${backup_dir}/${prefix}-${stamp}.audit-root"
 assert_publishable "$audit_root_output" || exit 1
+# 鮮度監視用ハートビート（固定名）。成功時にのみ UTC RFC3339 で上書きする。
+# 固定パスなので assert_publishable は使わず、公開時に非通常ファイルを拒否する。
+heartbeat_file="${backup_dir}/.last-success"
 
 # 予測可能な最終パスへ直接書き込まず、mktemp の私有ディレクトリで生成して
 # 検証後に atomic rename で公開する（VACUUM INTO は既存ファイルへ書けない）。
@@ -252,13 +259,29 @@ if [[ -n "$gpg_recipient" ]]; then
 		rm -f "$tmp_encrypted"
 		exit 1
 	fi
-	# 暗号化成功後は暗号文を先に公開し、その成功後に平文を削除する。
+	# ADR-0013 P2: 暗号化成功後に detached 署名を生成する。
+	# 署名鍵は暗号化に使う既存の GPG 秘密鍵と同じもの（監査署名鍵とは別）で、
+	# --local-user を指定せず鍵リングの既定秘密鍵を使用する。
+	# 復元前の署名検証は verify_backup 側の担当外のため、ここでは署名生成と
+	# Runbook へ渡す署名ファイル名（.asc）の出力のみを行う。
+	# 公開前に署名を作るため、署名失敗時は平文が残り成果物は出ない（fail-closed）。
+	stage="sign"
+	tmp_signature="${tmp_encrypted}.asc"
+	if ! "$gpg_bin" --batch --yes --detach-sign --armor \
+		--output "$tmp_signature" "$tmp_encrypted"; then
+		rm -f -- "$tmp_signature" "$tmp_encrypted"
+		exit 1
+	fi
+	# 暗号化・署名の成功後は暗号文を先に公開し、その成功後に平文を削除する。
 	# assert_publishable / mv が失敗した場合は平文が残り復元できる（fail-closed）。
 	stage="publish"
 	assert_publishable "$encrypted" || exit 1
 	mv -T -- "$tmp_encrypted" "$encrypted"
+	assert_publishable "${encrypted}.asc" || exit 1
+	mv -T -- "$tmp_signature" "${encrypted}.asc"
 	rm -f "$output"
 	echo "==> plaintext removed: ${output}"
+	echo "==> detached signature: ${encrypted##*/}.asc"
 fi
 # rmdir 失敗時に実際の処理と一致する段階名を通知する。
 stage="finalize"
@@ -270,15 +293,21 @@ if [[ -n "$offsitecopy" ]]; then
 	if [[ -n "$gpg_recipient" ]]; then
 		artifact="${output}.gpg"
 	fi
-	echo "==> offsite copy: ${artifact} -> ${offsitedest}"
-	"$offsitecopy" "$artifact" "$offsitedest"
 	# 監査 root は成果物と世代をなす対として同じ先へ送る。欠けるとオフサイト先での
 	# --expect-root 照合（欠落・末尾切詰め検知）が不能になるため必須。
 	if [[ ! -f "$audit_root_output" ]]; then
-		echo "error: audit root ${audit_root_output} is missing for offsite copy" >&2
+		echo "error: audit root is missing for offsite copy" >&2
 		exit 1
 	fi
+	# ADR-0013 P2: 監査 root を先に送り、成果物を後に送る。
+	echo "==> offsite copy: audit root then artifact"
 	"$offsitecopy" "$audit_root_output" "$offsitedest"
+	if ! "$offsitecopy" "$artifact" "$offsitedest"; then
+		# 2回目失敗で片方だけ残る場合は値・パスをエコーせず固定文言で警告する。
+		# 片方だけ残ったオフサイト先は手動 cleanup が必要（Runbook 参照）。
+		echo "WARNING: offsite copy partially completed: the audit root was sent but the artifact was not; manual cleanup at the offsite destination is required (see Runbook)" >&2
+		exit 1
+	fi
 fi
 
 # 新しい順（ファイル名の UTC タイムスタンプ順）に並べ、直近 min_keep 件は
@@ -307,10 +336,29 @@ while IFS= read -r -d '' file; do
 		# 同一世代の監査 root も合わせて削除し、古い世代の root が誤選択されないようにする。
 		# .audit-root はローテーション列挙には含めない（kept/pruned 件数を変えないため）。
 		rm -f -- "${file%.db}.audit-root" "${file%.db.gpg}.audit-root"
+		# 対応する detached 署名も同時に削除する（列挙対象には入れず kept/pruned 件数は維持）。
+		rm -f -- "${file}.asc"
 		pruned=$((pruned + 1))
 		echo "pruned: ${file}"
 	fi
 done <"$rotation_list"
+
+# ADR-0013 P2: ここまで全段階が成功したときだけハートビートを更新する。
+# 固定パスを mktemp → atomic rename で上書きし、シンボリックリンクや
+# 通常ファイル以外は拒否する（公開ファイルと同じ fail-closed 契約）。
+stage="heartbeat"
+if [[ -L "$heartbeat_file" || ( -e "$heartbeat_file" && ! -f "$heartbeat_file" ) ]]; then
+	echo "Refusing to write heartbeat through a non-regular target" >&2
+	exit 1
+fi
+heartbeat_tmp="$(mktemp "${backup_dir}/.${prefix}-heartbeat.XXXXXX")"
+# stamp は YYYYmmddTHHMMSSZ（16桁）。最新世代と同じ時刻を RFC3339 で公開する。
+heartbeat_ts="${stamp:0:4}-${stamp:4:2}-${stamp:6:2}T${stamp:9:2}:${stamp:11:2}:${stamp:13:2}Z"
+printf '%s\n' "$heartbeat_ts" >"$heartbeat_tmp"
+chmod 600 "$heartbeat_tmp"
+mv -T -- "$heartbeat_tmp" "$heartbeat_file"
+heartbeat_tmp=""
+echo "==> heartbeat: ${heartbeat_file}"
 
 # kept は走査カウンタ scanned ではなく実際の保持件数 (scanned - pruned) を報告する。
 echo "==> complete: kept=$((scanned - pruned)) pruned=${pruned} retention_days=${retention_days}"

@@ -6,6 +6,9 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/backup-rotate.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+# expect_* 呼び出し件数（実数）: expect_failure 31 件 / expect_success 15 件（計 46 件）。
+# ※ ケース8（実 gpg、環境依存で SKIP の場合あり）は doc-numbers の行頭照合対象外。
+# 件数を扱う docs は担当外のため、ケースを増減したらこのコメントを実数へ更新すること。
 
 mkdir -p "${work}/bin" "${work}/backups" "${work}/offsite"
 # backup-rotate.sh は既存のバックアップ先が 0700 でない場合に拒否するため、
@@ -261,6 +264,115 @@ if [[ -s "${ALERT_LOG}" ]]; then
 	echo "PASS alert invoked"
 else
 	echo "FAIL alert not invoked"
+	failures=$((failures + 1))
+fi
+
+echo "=== オフサイト 2回コピーの順序と部分失敗（ADR-0013 P2）==="
+# 呼び出し順をファイル名で記録するコピースタブ。
+cat >"${work}/order-copy.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "${1##*/}" >> "$COPY_LOG"
+cp "$1" "$2/"
+EOF
+chmod +x "${work}/order-copy.sh"
+export COPY_LOG="${work}/copy-order.log"
+: >"$COPY_LOG"
+order_dir="${work}/offsite-order"
+mkdir -p "$order_dir"
+chmod 700 "$order_dir"
+order_dest="${work}/offsite-order-dest"
+mkdir -p "$order_dest"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+expect_success "offsite copies audit root before artifact" env BACKUP_DIR="$order_dir" BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/order-copy.sh" OFFSITE_DEST="$order_dest" "$script"
+mapfile -t copy_calls <"$COPY_LOG"
+if ((${#copy_calls[@]} == 2)) && [[ "${copy_calls[0]}" == *.audit-root ]] && [[ "${copy_calls[1]}" == *.db.gpg ]]; then
+	echo "PASS offsite order: audit root first, artifact second"
+else
+	echo "FAIL offsite copy order"
+	printf 'actual: %s\n' "${copy_calls[*]}" >&2
+	failures=$((failures + 1))
+fi
+if compgen -G "${order_dest}/*.audit-root" >/dev/null &&
+	compgen -G "${order_dest}/*.db.gpg" >/dev/null; then
+	echo "PASS offsite destination has both audit root and artifact"
+else
+	echo "FAIL offsite destination missing one of the pair"
+	failures=$((failures + 1))
+fi
+
+# 2回目（成果物）のコピーだけ失敗させ、片方だけ残る状態を検証する。
+cat >"${work}/second-copy-fail.sh" <<'EOF'
+#!/usr/bin/env bash
+count=0
+if [[ -f "${COPY_COUNT}" ]]; then
+  count="$(cat "${COPY_COUNT}")"
+fi
+count=$((count + 1))
+printf '%s' "$count" >"${COPY_COUNT}"
+if ((count == 1)); then
+  cp "$1" "$2/"
+  exit 0
+fi
+echo "simulated second offsite copy failure" >&2
+exit 17
+EOF
+chmod +x "${work}/second-copy-fail.sh"
+export COPY_COUNT="${work}/partial-copy-count"
+: >"$COPY_COUNT"
+: >"${ALERT_LOG}"
+partial_dir="${work}/offsite-partial"
+mkdir -p "$partial_dir"
+chmod 700 "$partial_dir"
+partial_dest="${work}/offsite-partial-dest"
+mkdir -p "$partial_dest"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+expect_failure "second offsite copy failure propagates" env BACKUP_DIR="$partial_dir" BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/second-copy-fail.sh" OFFSITE_DEST="$partial_dest" ALERT_CMD="${work}/alert.sh" COPY_COUNT="$COPY_COUNT" "$script"
+warning_line="$(grep -F 'offsite copy partially completed' "${work}/out.log" || true)"
+if [[ -n "$warning_line" ]] &&
+	[[ "$warning_line" != *"$partial_dir"* ]] &&
+	[[ "$warning_line" != *"$partial_dest"* ]] &&
+	[[ "$warning_line" != *"db.gpg"* ]]; then
+	echo "PASS partial-copy warning is fixed text without values or paths"
+else
+	echo "FAIL partial-copy warning leaked values/paths or is missing"
+	failures=$((failures + 1))
+fi
+if compgen -G "${partial_dest}/*.audit-root" >/dev/null &&
+	! compgen -G "${partial_dest}/*.db.gpg" >/dev/null; then
+	echo "PASS partial state: audit root only (manual cleanup required)"
+else
+	echo "FAIL partial state not as expected"
+	failures=$((failures + 1))
+fi
+if grep -Fq 'openIllustration backup failed at offsite' "${ALERT_LOG}"; then
+	echo "PASS alert invoked on second offsite copy failure"
+else
+	echo "FAIL alert missing on second offsite copy failure"
+	failures=$((failures + 1))
+fi
+
+echo "=== ハートビート（.last-success）==="
+heartbeat_dir="${work}/heartbeat"
+mkdir -p "$heartbeat_dir"
+chmod 700 "$heartbeat_dir"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+expect_success "heartbeat published on success" env BACKUP_DIR="$heartbeat_dir" BACKUP_GPG_RECIPIENT=test "$script"
+heartbeat="${heartbeat_dir}/.last-success"
+if [[ -f "$heartbeat" ]] && [[ "$(stat -c %a "$heartbeat")" == "600" ]] &&
+	[[ "$(cat "$heartbeat")" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+	echo "PASS heartbeat published with UTC RFC3339 timestamp (0600)"
+else
+	echo "FAIL heartbeat missing or malformed"
+	failures=$((failures + 1))
+fi
+heartbeat_before="$(cat "$heartbeat" 2>/dev/null || true)"
+: >"${ALERT_LOG}"
+sleep 1 # タイムスタンプ付きファイル名の衝突を避ける
+expect_failure "heartbeat not updated on failure" env BACKUP_DIR="$heartbeat_dir" BACKUP_GPG_RECIPIENT=test OFFSITE_COPY_CMD="${work}/fail.sh" OFFSITE_DEST="${work}/offsite" "$script"
+if [[ "$(cat "$heartbeat" 2>/dev/null || true)" == "$heartbeat_before" ]]; then
+	echo "PASS heartbeat unchanged on failed run (staleness detectable)"
+else
+	echo "FAIL heartbeat updated on failed run"
 	failures=$((failures + 1))
 fi
 
@@ -563,6 +675,59 @@ expect_failure "cleanup on gpg failure" env BACKUP_DIR="$cleanup_dir" GPG_BIN="$
 cleanup_no_leftovers "gpg failure" "$cleanup_dir"
 assert_plaintext_retained "gpg failure" "$cleanup_dir"
 
+echo "=== GPG detached 署名（ADR-0013 P2）==="
+sig_dir="${work}/signature"
+new_backup_dir "$sig_dir"
+expect_success "detached signature published" env BACKUP_DIR="$sig_dir" BACKUP_GPG_RECIPIENT=test "$script"
+mapfile -d '' sig_ciphers < <(find "$sig_dir" -maxdepth 1 -type f -name 'openillustration-*.db.gpg' -print0)
+mapfile -d '' sig_files < <(find "$sig_dir" -maxdepth 1 -type f -name 'openillustration-*.db.gpg.asc' -print0)
+sig_name=""
+if ((${#sig_ciphers[@]} == 1)) && ((${#sig_files[@]} == 1)) &&
+	[[ "${sig_files[0]}" == "${sig_ciphers[0]}.asc" ]] && [[ -s "${sig_files[0]}" ]]; then
+	sig_name="${sig_files[0]##*/}"
+	echo "PASS detached signature published beside ciphertext"
+else
+	echo "FAIL detached signature missing or misplaced"
+	failures=$((failures + 1))
+fi
+if [[ -n "$sig_name" ]] && grep -Fq -- "detached signature: ${sig_name}" "${work}/out.log"; then
+	echo "PASS signature filename reported for Runbook"
+else
+	echo "FAIL signature filename not reported"
+	failures=$((failures + 1))
+fi
+
+# 署名失敗は fail-closed: 平文を残し、暗号文・署名を公開しない。
+cat >"${work}/sign-fail-gpg" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+while (($#)); do
+  if [[ "$1" == --detach-sign ]]; then
+    echo "simulated sign failure" >&2
+    exit 14
+  fi
+  if [[ "$1" == --output ]]; then
+    printf 'dummy encrypted' >"$2"
+    exit 0
+  fi
+  shift
+done
+exit 1
+EOF
+chmod +x "${work}/sign-fail-gpg"
+sign_fail_dir="${work}/sign-fail"
+new_backup_dir "$sign_fail_dir"
+expect_failure "signature failure is fail-closed" env BACKUP_DIR="$sign_fail_dir" GPG_BIN="${work}/sign-fail-gpg" BACKUP_GPG_RECIPIENT=test "$script"
+assert_plaintext_retained "signature failure" "$sign_fail_dir"
+if compgen -G "${sign_fail_dir}/openillustration-*.db.gpg" >/dev/null ||
+	compgen -G "${sign_fail_dir}/openillustration-*.db.gpg.asc" >/dev/null; then
+	echo "FAIL signature failure: ciphertext or signature published"
+	failures=$((failures + 1))
+else
+	echo "PASS signature failure: no ciphertext or signature published"
+fi
+cleanup_no_leftovers "signature failure" "$sign_fail_dir"
+
 # 暗号文公開失敗時に平文が残り復元可能であること（完全喪失の回帰防止）。
 # gpg 暗号化は成功させた上で、公開直前の assert_publishable / mv を失敗させる。
 
@@ -773,6 +938,20 @@ EOF
 					echo "FAIL case 8: decrypted plaintext differs from original"
 					failures=$((failures + 1))
 				fi
+			fi
+			# ADR-0013 P2: 実 gpg の detached 署名が検証可能であることを確認する。
+			mapfile -d '' case8_sigs < <(find "$gpg_backup_dir" -maxdepth 1 -type f \
+				-name 'openillustration-*.db.gpg.asc' -print0)
+			if ((${#case8_sigs[@]} != 1)) || [[ "${case8_sigs[0]}" != "${case8_ciphers[0]:-}.asc" ]]; then
+				echo "FAIL case 8: expected exactly one detached signature beside ciphertext"
+				failures=$((failures + 1))
+			elif ! GNUPGHOME="$gnupg_home" "$real_gpg" --batch --verify \
+				"${case8_sigs[0]}" "${case8_ciphers[0]}" >"${work}/case8-verify.log" 2>&1; then
+				echo "FAIL case 8: detached signature verification failed"
+				cat "${work}/case8-verify.log" >&2
+				failures=$((failures + 1))
+			else
+				echo "PASS case 8: detached signature verifies against ciphertext"
 			fi
 		fi
 	fi

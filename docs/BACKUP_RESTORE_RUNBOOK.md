@@ -44,6 +44,89 @@ generated:
   プロキシ側で `max-age` / `includeSubDomains` / `preload` を設定すること
   （[OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
 
+## 復旧目標（RPO/RTO）と署名検証ゲート
+
+- 復旧目標は RPO=24 時間、RTO=4 時間とする
+  （[ADR-0013 P2](adr/ADR-0013-deferred-decisions.md) / DEC-07）。
+  日次バックアップ窓（03:17、`RandomizedDelaySec=300`）の成功を毎日確認し、
+  直近成功世代からの損失が24時間以内に収まることを担保する。復旧訓練では
+  停止から `/health` / `/ready` 200 と `verify_audit_log` 成功までを計測し、
+  4時間以内に完了することを確認する。計測条件は同一ハードウェア・
+  コールドキャッシュ・ローカル libSQL とし、受入値の確定は DEC-07 の合意後に行う。
+- HSTS は TLS 終端プロキシの責任である（上記「前提」に記載済み）。アプリ側は付与しないため、
+  ここでは重複して設定項目を定義しない。
+- 本番成果物は暗号文（`<stamp>.db.gpg`、配布用 `<stamp>.tar.gz`）に加え、
+  同じ stamp の detached 署名（`<stamp>.db.gpg.asc` / `<stamp>.tar.gz.sig`）を
+  世代対として公開する。署名鍵は監査署名鍵と同等に管理し、
+  秘密鍵の内容を CLI 引数・環境変数へ渡さない。
+- 本番公開鍵の trust は `ultimately trusted`（`5`）に設定する。
+  `--trust-model always` は署名検証を実質的に迂回するため使用しない。
+
+### 本番公開鍵の trust 設定
+
+```bash
+# Kubuntu / バックアップ検証ホスト（対象公開鍵の fingerprint を明示）
+gpg --list-keys --keyid-format long
+gpg --edit-key <本番公開鍵の fingerprint>
+# プロンプトで "trust" → "5 = ultimately trusted" → "quit" を選択
+gpg --list-keys --keyid-format long
+```
+
+`gpg --list-keys` の trust 表示が `ultimate` であることを確認する。
+信頼性が解決できない鍵は署名検証失敗として扱い、復元へ進まない（fail-closed）。
+`--trust-model always` は使わない。
+
+### 復元前の署名検証（必須ゲート）
+
+復元対象の stamp を明示し、アーカイブと detached 署名の組を検証する。
+検証は `gpg --decrypt` と `verify_backup` の**前**に実行し、成功した世代だけを
+復元対象とする（下記「リストア（復旧訓練）」の step も参照）。
+
+```bash
+# Kubuntu / バックアップ保管ホスト（stamp を明示、ワイルドカード指定ではない）
+STAMP=20261123T031700Z
+PREFIX=openillustration
+gpg --verify "${PREFIX}-${STAMP}.tar.gz.sig" "${PREFIX}-${STAMP}.tar.gz"
+# 暗号化 DB へ直接署名する運用では次の組を使う
+gpg --verify "${PREFIX}-${STAMP}.db.gpg.asc" "${PREFIX}-${STAMP}.db.gpg"
+```
+
+署名ファイル欠落・検証失敗・鍵信頼性の解決不能のいずれも復元を拒否し、
+`ALERT_CMD` 設定時は通知する。検証に使った stamp と結果は運用ログへ記録する
+（署名や鍵の内容はログへ出さない）。
+
+### 署名付き gzip アーカイブの世代対の手動 cleanup
+
+`backup-rotate.sh` の自動ローテーション対象は `.db` / `.db.gpg` であり、
+署名付き gzip アーカイブ（`.tar.gz` + `.tar.gz.sig`）と同世代の `.audit-root` は
+手動で世代対を管理する。削除は stamp を明示し、ワイルドカード一括削除を行わない。
+
+1. 削除対象 stamp を決め、`.tar.gz` / `.tar.gz.sig` / `.audit-root` の3点が揃うことを確認する。
+1. 上記の署名検証を実行し、成功した世代であることを確認する。検証失敗の世代は
+   「失敗アーカイブ」として7世代保持し、復元対象から外す（ADR-0013 P2）。
+1. 保持期間と最低保持件数（`RETENTION_DAYS` / `MIN_KEEP` 相当）を満たすか判断し、
+   不要なら3点をまとめて削除する。
+1. オフサイト 2回コピー（監査 root を先、成果物を後）で片方だけ残った場合は、
+   その世代を不完全として固定文言で警告し、孤立ファイルを明示的に削除する。
+   完全な世代対だけを再送し、片方だけの状態を完成扱いにしない。
+1. 削除後に同じ stamp の残骸が無いことを確認し、stamp・理由・実施者を運用ログへ記録する。
+
+```bash
+# Kubuntu / バックアップ保管ホスト（対象 stamp を明示）
+STAMP=20261123T031700Z
+PREFIX=openillustration
+ls -l "${PREFIX}-${STAMP}.tar.gz" \
+      "${PREFIX}-${STAMP}.tar.gz.sig" \
+      "${PREFIX}-${STAMP}.audit-root"
+gpg --verify "${PREFIX}-${STAMP}.tar.gz.sig" "${PREFIX}-${STAMP}.tar.gz"
+# 3点が揃い検証成功した世代だけを削除する
+rm -- "${PREFIX}-${STAMP}.tar.gz" \
+      "${PREFIX}-${STAMP}.tar.gz.sig" \
+      "${PREFIX}-${STAMP}.audit-root"
+# 残骸が無いことを確認
+ls -l "${PREFIX}-${STAMP}"* 2>/dev/null || true
+```
+
 ## バックアップ取得
 
 ```bash
@@ -421,6 +504,10 @@ rm /path/to/backups/openillustration.db-wal
 ## リストア（復旧訓練）
 
 1. 対象サーバーを停止する（SIGTERM）。readiness `/ready` が 503 になることを確認する。
+   **復元前の署名検証（必須ゲート）**: 対象世代の detached 署名を `gpg --verify` で検証し、
+   成功した世代だけを復元対象とする（`--trust-model always` は使わない）。
+   署名欠落・検証失敗・鍵信頼性の解決不能は復元を拒否する（fail-closed）。
+   手順は上記「復元前の署名検証（必須ゲート）」を参照。
    暗号化成果物は `<stamp>.db.gpg` である。`.db.gpg` の場合は `gpg --decrypt` で平文へ戻し、
    復号先をシェル変数 `RESTORED_DB` に統一する。下記 step2 の `restore_db --backup` でも
    同じ `RESTORED_DB` を指定する。`verify_backup` の成功を復元の前提とし、失敗した場合は

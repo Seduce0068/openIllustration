@@ -90,6 +90,25 @@ JPKI、JPYC、第三者検証可能な監査は、実装前だからといって
    `client/src/lib.rs` のクライアント側単体テストである。いずれも E2E 定義を増やさず、
    E2E 定義数は当時59件のまま変更しない（現在69件）。
 
+### export ファイル名の世代契約（R2-P2-DOCS）
+
+- `client/src/lib.rs` の `export_filename_from_generated_at` は `generated_at`
+  （`YYYY-MM-DDTHH:MM:SS(.小数秒)?Z`）の日時成分だけから安全な UTC 接尾辞
+  `YYYYMMDDTHHMMSSZ` を組み立て、`openillustration-export-<接尾辞>.json` を返す。
+  小数秒は秒精度へ丸める（サーバーは `to_rfc3339()` の小数秒を返すため）。
+- `Z` 欠落・オフセット付き・区切り不正・数字以外・範囲外の月日時分秒・欠落は
+  `openillustration-export-unknown.json` へフォールバックする（fail-closed）。
+- ファイル名へ入れるのは検証済みの日時数字と固定文字だけとし、`sub` / JWT /
+  レスポンス本文 / ユーザー入力は一切使わない（パス区切りも生成しない）。
+- `e2e/tests/export.spec.ts` の既存1件目（ダウンロード成功シナリオ）内で、
+  フィクスチャ `generated_at: '2026-11-18T00:00:00Z'` に対する
+  `openillustration-export-20261118T000000Z.json` と
+  `^openillustration-export-\d{8}T\d{6}Z\.json$` 形式を検証し、
+  `sub` / JWT がファイル名へ含まれないことも確認する。
+  新規 `test()` は追加せず、export 3件・全体69件を維持する。
+- クライアント側単体テスト `export_filename_is_fixed_constant` は既存1件のまま、
+  正常系・小数秒・`unknown` フォールバックのアサーションを追加し、tests156 を維持する。
+
 ## 2. 実装済みテストの概要
 
 | 領域 | 現行カバレッジ | 制約 |
@@ -740,8 +759,8 @@ loopback 拒否を既存 `test_production_config_fail_closed` と doctor の
 `AUDIT_EXPECT_ROOT` の更新ライフサイクルと配布物生成の回帰はシェル側で担保する。
 `scripts/test-backup-rotate.sh` には既存 AUDIT_EXPECT_ROOT ケース内へ、計算 root の
 `.audit-root` 世代保存（成果物と同一 stamp・0600・内容一致・stdout/stderr 非エコー）の
-オラクルを追加した（新規 `expect_*` 呼び出しなし、`expect_failure` 28件 /
-`expect_success` 12件を維持）。
+オラクルを追加した（新規 `expect_*` 呼び出しなし、`expect_failure` 31件 /
+`expect_success` 15件を維持）。
 `scripts/test-prepare-distribution.sh` には `..` 成分拒否・`repo_root`／祖先置換拒否・
 `jq` / `cargo` 未検出 fail-closed・`INT` / `TERM` → rollback・旧成果物削除失敗時の
 published rollback の5ケースを追加した。実 `repo_root` を壊さないため

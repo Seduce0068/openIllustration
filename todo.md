@@ -786,6 +786,17 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第59ラウンド（ADR-0013 P2 実装）: 3担当（backup/server/docs）。
+  .last-successハートビート+cron鮮度チェック/timeout1800+flock、オフサイト順序
+  （audit root→成果物）+部分失敗警告、detached署名(.asc)生成、audit root 64hex厳密化、
+  sign_audit_exportのrename廃止(hard_linkのみ)、DB symlink拒否+canonicalizeロック、
+  exportファイル名へgenerated_at由来UTC世代、RPO24h/RTO4h+GPG trust+署名検証必須。
+  親がdoctor 128hex化(置換連鎖)/clippy needless_borrow/署名ファイル名パス露出/
+  doc-numbers件数(31/15/46)/Runbook .sig→.asc を修正。
+  R4指摘2件も修正。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、backup-rotate 46ケース、npm audit3lockfile、markdownlint40ファイル）。
+  次は ADR-0013 P3（テスト／CI の信頼性）へ進む。
+
 - 2026-11-23 コンボ第58ラウンド（ADR-0013 P1 実装）: 3担当（server設定一式/migration/deploy+docs）。
   BIND_ADDR/PORT（既定[::]:3000・不正/特権/範囲外fail-closed・doctor production診断）、
   RUST_LOG不正値警告、PINATA_JWTのAppState起動時確定、数値env範囲外警告（7変数）、

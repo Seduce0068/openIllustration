@@ -20,6 +20,18 @@ MAILTO=__SET_ME__
 # 制限付き KEY=VALUE パーサ（source/eval なし、値はリテラル）で読み込み、
 # systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
 # コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
+# 【バックアップ鮮度監視／ハートビート（ADR-0013 P2）】
+# backup-rotate.sh は全段階成功時に ${BACKUP_DIR}/.last-success へ UTC RFC3339
+# （例: 2026-11-23T18:41:47Z）を公開する。失敗・ハング・重複スキップ時は更新されない。
+# 想定窓は 03:17 + RandomizedDelaySec=300 + 1日 = 24時間05分（1445分）。
+# これを超過しても当日世代が無い（ハートビートが古い／存在しない）場合は
+# ALERT_CMD へ固定文言のみを渡して通知する（値・パスはエコーしない）。
+# 実監視基盤へ接続する場合は、ALERT_CMD のラッパーで既存の通知経路へ転送するか、
+# 監視基盤側で .last-success の mtime／RFC3339 内容を直接監視すること。
+# 以下は /etc/cron.d 用のジョブ例（コメント解除して使用）。root crontab に置く場合は
+# ユーザー欄 root を外す。% を含まないため cron のエスケープは不要。
+# /usr/local/bin/openillustration-alert は ALERT_CMD 実行ファイルの例（配置先へ差し替える）。
+# 30 4 * * * root [ -z "$(find /var/backups/openillustration -maxdepth 1 -name .last-success -mmin -1445 -print -quit)" ] && /usr/local/bin/openillustration-alert "openIllustration backup stale: no successful generation within the expected window"
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
 # 停止→backup→起動のオーケストレーションが必須。この cron ジョブは openillustration
 # ユーザーで backup-cron-wrapper.sh のみを実行し、systemctl の stop/start は行わない
@@ -31,7 +43,7 @@ MAILTO=__SET_ME__
 # root の crontab でラッパーの前後に stop/start を置く一行だけを有効にする（二者択一）。
 # root crontab にも MAILTO=<実宛先> を明示すること（cron の MAILTO は crontab 単位で、
 # /etc/cron.d 側の指定は root ジョブへは適用されない）。
-#   17 3 * * * /usr/bin/systemctl stop openillustration.service && { /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; } || rc=$?; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}
+#   17 3 * * * /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /bin/bash -c '/usr/bin/systemctl stop openillustration.service && { /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; } || rc=$?; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}'
 #   （DATABASE_URL / BACKUP_DIR 等は backup.env 側へ集約して渡す。wrapper の allowlist
 #     に DATABASE_URL / DATABASE_TOKEN が含まれるため env ファイル経由で伝播する。
 #     start は backup 成否にかかわらず実行する。）
@@ -42,4 +54,12 @@ MAILTO=__SET_ME__
 # root 側スケジューラで stop→wrapper→start を併設するまで有効化しないこと。
 # 配置後はラッパーを手動で1回実行し、backup_ok: / backup_verification: OK の成功ログを
 # 確認してから有効化する（Runbook「自動オーケストレーション」を参照）。
-17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /opt/openIllustration/scripts/backup-cron-wrapper.sh
+# 【タイムアウト／重複実行防止（ADR-0013 P2）】
+# 下記ジョブ行は flock -n で非ブロックの排他ロックを取得し、timeout 1800 で
+# GPG／オフサイト転送のハングを遮断する（systemd 版の TimeoutStartSec=1800 と同じ上限）。
+# 既に別実行がロックを保持しているときは flock が即座に終了コード 1 を返し、
+# 二重バックアップ・停止/起動の競合を防ぐ（fail-closed）。ロックファイルは
+# BACKUP_DIR（openillustration 所有・0700）配下に置くため、初期配置時にディレクトリを
+# 作成しておくこと。タイムアウトで強制終了した実行はハートビートが更新されないため、
+# 上記の鮮度チェックが検知する。
+17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /opt/openIllustration/scripts/backup-cron-wrapper.sh

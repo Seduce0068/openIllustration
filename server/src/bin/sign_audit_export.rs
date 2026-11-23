@@ -153,12 +153,16 @@ fn create_snapshot_output(path: &str) -> anyhow::Result<std::fs::File> {
 /// 0600 の一時ファイルへ書き、fsync のうえ最終パスへ公開する。
 /// 公開は `hard_link` で create_new 相当の原子的処理を行い、既存ファイルを
 /// 上書きしない（存在チェックと公開の間の競合ウィンドウをなくす）。
-/// hard_link が使えない環境（クロスデバイス等）では rename へフォールバックし、
-/// その際も最終パスの存在を再確認して競合を検出する。
+/// ADR-0013 P2: hard_link が使えない環境（クロスデバイス等）でも rename へは
+/// 一切フォールバックせず固定文言で失敗させ、既存ファイルを上書きしない。
 /// 公開失敗時は一時ファイルを残し、値や CID をエコーせず固定文言でエラーを返す。
 fn publish_snapshot_atomic(path: &str, json: &[u8]) -> anyhow::Result<()> {
     publish_snapshot_atomic_with(path, json, |p: &std::path::Path| std::fs::remove_file(p))
 }
+
+/// hard_link が使えない環境で rename 代替を拒否する固定文言（パスや値はエコーしない）。
+const SNAPSHOT_PUBLISH_HARDLINK_FAILED: &str =
+    "failed to publish snapshot via hard_link; refusing to fall back to rename";
 
 /// `remove_staging` を差し替え可能な本体。テストから削除失敗を決定的に注入するために分離する。
 fn publish_snapshot_atomic_with<F>(path: &str, json: &[u8], remove_staging: F) -> anyhow::Result<()>
@@ -202,32 +206,28 @@ where
 
     // hard_link は既存の最終パスに対して EEXIST で失敗するため、
     // 存在チェックと公開の間の TOCTOU ウィンドウが無い（create_new 相当）。
-    match std::fs::hard_link(&tmp, target) {
-        Ok(()) => {
-            // hard_link による公開はここで完了済み。staging 削除に失敗しても公開の
-            // 成否は変えず、警告ログへ留めて Ok(()) を返す。誤った「失敗」通知と
-            // 再実行拒否（既存出力を競合として拒否する挙動）を防ぐためである。
-            // staging パスはログへ出してよいが、スナップショットの値や CID は出さない。
-            if let Err(error) = remove_staging(&tmp) {
-                eprintln!(
-                    "warning: failed to remove staging snapshot after publish ({}): {error}",
-                    tmp.display()
-                );
-            }
-            Ok(())
+    // ADR-0013 P2: 失敗時に rename へフォールバックしない（競合ウィンドウを再導入しない）。
+    if std::fs::hard_link(&tmp, target).is_err() {
+        // hard_link が失敗したら最終パスの存在を再確認して競合を検出する。
+        // 既存ファイルがあれば上書きせず拒否する（値や CID はエコーしない）。
+        if std::fs::symlink_metadata(target).is_ok() {
+            return Err(anyhow!("snapshot output must not already exist: {path}"));
         }
-        Err(_) => {
-            // hard_link が失敗したら最終パスの存在を再確認して競合を検出する。
-            // 既存ファイルがあれば上書きせず拒否する（値や CID はエコーしない）。
-            // 無ければクロスデバイス等で hard_link が使えない環境とみなし、
-            // rename 直前の存在確認を兼ねて旧 rename へフォールバックする。
-            if std::fs::symlink_metadata(target).is_ok() {
-                return Err(anyhow!("snapshot output must not already exist: {path}"));
-            }
-            std::fs::rename(&tmp, target)
-                .with_context(|| format!("failed to publish snapshot via rename fallback: {path}"))
-        }
+        // クロスデバイス等で hard_link が使えない場合も rename は使わず固定文言で失敗。
+        // 生の I/O エラー・パス・値・CID は一切エコーせず、一時ファイルは残す。
+        return Err(anyhow!("{SNAPSHOT_PUBLISH_HARDLINK_FAILED}"));
     }
+    // hard_link による公開はここで完了済み。staging 削除に失敗しても公開の
+    // 成否は変えず、警告ログへ留めて Ok(()) を返す。誤った「失敗」通知と
+    // 再実行拒否（既存出力を競合として拒否する挙動）を防ぐためである。
+    // staging パスはログへ出してよいが、スナップショットの値や CID は出さない。
+    if let Err(error) = remove_staging(&tmp) {
+        eprintln!(
+            "warning: failed to remove staging snapshot after publish ({}): {error}",
+            tmp.display()
+        );
+    }
+    Ok(())
 }
 
 /// 本番相当（`ALLOW_MOCK_AUTH` 無効）では平文理由のエクスポートを既定で拒否する。
@@ -392,7 +392,7 @@ async fn main() -> anyhow::Result<()> {
     let json = serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
     // restore_db の staging + safety copy と同じ方式: 0600 一時ファイルへ書き
     // fsync してから hard_link で原子的に公開する。既存の最終パスは上書きせず、
-    // hard_link が使えない環境のみ rename フォールバックで存在を再確認する。
+    // hard_link が使えない環境では rename 代替なしで固定文言の失敗とする。
     // 公開失敗時は一時ファイルを残し、値や CID はエコーしない。
     publish_snapshot_atomic(&output, json.as_bytes())?;
     println!(
@@ -717,6 +717,28 @@ mod tests {
             !millis.is_empty() && millis.chars().all(|c| c.is_ascii_digit()),
             "staging name must include unix_millis: {}",
             staging[0]
+        );
+
+        // ADR-0013 P2: rename フォールバックが無いことを固定する。
+        // 末尾 `/` 付きの存在しない最終パスは hard_link を失敗させ、旧 rename 経路では
+        // 「rename fallback」文言が返っていた。ここでは hard_link 固定文言のみを許す。
+        let path_with_slash = format!("{}/", path_str(&dir.child("no-fallback")));
+        let error = publish_snapshot_atomic(&path_with_slash, b"replacement")
+            .expect_err("hard_link failure must not fall back to rename");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to fall back to rename"),
+            "{error:#}"
+        );
+        assert!(
+            !error.to_string().contains("rename fallback"),
+            "rename fallback must be removed: {error:#}"
+        );
+        // 公開経路が既存ファイルを上書きしないこと（ここでは出力先が存在しないため新規生成も不可）。
+        assert!(
+            std::fs::symlink_metadata(dir.child("no-fallback")).is_err(),
+            "failed publish must not create the target"
         );
     }
 

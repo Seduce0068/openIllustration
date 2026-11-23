@@ -2856,11 +2856,20 @@ fn test_production_config_fail_closed() {
         crate::production_audit_expect_root_error(false, non_utf8_root),
         Some(AUDIT_ROOT_ERROR)
     );
+    // ADR-0013 P2: 64hex 固定へ厳密化。1文字・奇数長・63桁・65桁・非hex を拒否する。
+    let short_63 = "a".repeat(63);
+    let long_65 = "a".repeat(65);
+    let non_hex_64 = "g".repeat(64);
     for invalid in [
         "",
         " \t ",
         "deadbeefcafebabe-nothex-ZZZZ",
         "  ABCDEF0123456789  ",
+        "a",
+        "abc",
+        short_63.as_str(),
+        long_65.as_str(),
+        non_hex_64.as_str(),
     ] {
         assert_eq!(
             crate::production_audit_expect_root_error(
@@ -2872,7 +2881,15 @@ fn test_production_config_fail_closed() {
         );
         assert!(!crate::is_hex_merkle_root(invalid));
     }
-    for valid in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+    // 64桁のみ受理（小文字・大文字・混在を許容）。
+    let valid_lower = "ab".repeat(32);
+    let valid_upper = "AB".repeat(32);
+    let valid_mixed = format!("{}{}", "a".repeat(32), "B".repeat(32));
+    for valid in [
+        valid_lower.as_str(),
+        valid_upper.as_str(),
+        valid_mixed.as_str(),
+    ] {
         assert!(crate::is_hex_merkle_root(valid));
         assert_eq!(
             crate::production_audit_expect_root_error(
@@ -2889,6 +2906,52 @@ fn test_production_config_fail_closed() {
         common::env::EnvValue::Utf8(String::new()),
     ] {
         assert_eq!(crate::production_audit_expect_root_error(true, value), None);
+    }
+
+    // ADR-0013 P2: DB シンボリックパスの境界（本番拒否 / 開発許容 / ロックは実パス共有）。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+        let as_str = |path: &std::path::Path| path.to_string_lossy().into_owned();
+        let dir = std::env::temp_dir().join(format!(
+            "openillustration_p2_dbsymlink_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir for db symlink test");
+        let real_db = dir.join("real.db");
+        std::fs::write(&real_db, b"db").expect("seed real db");
+        let alias_db = dir.join("alias.db");
+        symlink(&real_db, &alias_db).expect("create db symlink");
+
+        // 本番相当（mock 無効）では symlink パスを固定文言で拒否（値・パスは非エコー）。
+        assert_eq!(
+            crate::production_database_symlink_error(false, &as_str(&alias_db)),
+            Some(crate::DATABASE_SYMLINK_REJECTED)
+        );
+        assert!(!crate::DATABASE_SYMLINK_REJECTED.contains("alias"));
+        // 通常ファイル・存在しないパスは symlink ではないので受理。
+        assert_eq!(
+            crate::production_database_symlink_error(false, &as_str(&real_db)),
+            None
+        );
+        assert_eq!(
+            crate::production_database_symlink_error(false, &as_str(&dir.join("missing.db"))),
+            None
+        );
+        // 開発（mock 有効）では従来どおり symlink も受理。
+        assert_eq!(
+            crate::production_database_symlink_error(true, &as_str(&alias_db)),
+            None
+        );
+
+        // canonicalize 後の実パスからロックを導出するため、別 symlink 経由でも同一ロック。
+        let lock_from_alias = crate::database_lock_path(&as_str(&alias_db));
+        let lock_from_real = crate::database_lock_path(&as_str(&real_db));
+        assert_eq!(lock_from_alias, lock_from_real);
+        assert!(lock_from_alias.ends_with("real.db.instance.lock"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // R2-AGE-ORIGINS: ALLOWED_ORIGINS を本番起動ゲートへ昇格。共有ヘルパの直接検証。

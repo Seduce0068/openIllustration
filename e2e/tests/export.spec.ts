@@ -135,7 +135,13 @@ test.describe('R5-04: Export My Data', () => {
     expect(requestCount).toBe(1);
     expect(requestMethod).toBe('GET');
     expect(authHeader).toBe('Bearer mock_jwt_token');
-    expect(download.suggestedFilename()).toBe('openillustration-export.json');
+    // R2-P2-DOCS: ファイル名は generated_at 由来の UTC 世代を含む（既存ケース内で検証）。
+    const suggestedFilename = download.suggestedFilename();
+    expect(suggestedFilename).toBe('openillustration-export-20261118T000000Z.json');
+    expect(suggestedFilename).toMatch(/^openillustration-export-\d{8}T\d{6}Z\.json$/);
+    // 機微情報（sub / JWT / 本文）はファイル名へ一切含まれない。
+    expect(suggestedFilename).not.toContain(exportFixture.sub);
+    expect(suggestedFilename).not.toContain('mock_jwt_token');
     await expect(page.getByRole('alert')).toHaveCount(0);
     await expect(page.getByTestId('export-status')).toContainText('エクスポート完了');
 

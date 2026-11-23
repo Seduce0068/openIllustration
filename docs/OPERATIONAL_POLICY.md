@@ -385,6 +385,19 @@ generated:
   常時稼働環境では `instance.lock` で拒否されるため、root 側スケジューラで
   stop→wrapper→start を併設するまで有効化しない。配置後は手動1回実行して成功ログを確認する。
   詳細は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+- RPO/RTO と復元前の署名検証必須ゲート
+  （[ADR-0013 P2](adr/ADR-0013-deferred-decisions.md) / DEC-07）:
+  バックアップの復旧目標は RPO=24 時間、RTO=4 時間とする。日次取得の成功確認と
+  復旧訓練（停止から `/health` / `/ready` 200 と `verify_audit_log` 成功まで4時間以内）で
+  達成を検証し、計測条件は同一ハードウェア・コールドキャッシュ・ローカル libSQL に固定する。
+  受入値の確定は DEC-07 の合意後に行い、未測定の段階で数値を確定しない。
+  本番の暗号文・署名付き gzip アーカイブは detached 署名（`<stamp>.tar.gz.sig` 等）を
+  同世代の対として公開し、復元前に `gpg --verify` の成功を必須ゲートとする。
+  署名欠落・検証失敗・鍵信頼性の解決不能は復元を拒否する（fail-closed）。
+  本番公開鍵は `ultimately trusted` に設定し、`--trust-model always` は使わない。
+  HSTS は TLS 終端プロキシが責任を持ち、アプリ側は付与しない（既述の方針を維持）。
+  署名付き gzip アーカイブと `.audit-root` の世代対の手動 cleanup は
+  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
 - 定期実行スケジューラは systemd timer＋window unit
   （`deploy/openillustration-backup.timer` ＋ `deploy/openillustration-backup-window.service`）
   と cron（`deploy/openillustration-backup.cron`）の**二者択一**とし、両方を有効にしない。

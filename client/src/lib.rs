@@ -1735,6 +1735,86 @@ fn export_status_details(payload: &serde_json::Value) -> Option<(String, String)
     ))
 }
 
+/// `generated_at` の日時成分だけから安全な UTC 接尾辞 `YYYYMMDDTHHMMSSZ` を組み立てる。
+/// 受け付けるのは `Z` 終わりの RFC 3339（小数秒は秒精度へ切捨て）のみ。
+/// 区切り位置・ ASCII 数字・日時範囲を厳密検証し、`sub` / JWT / 本文 /
+/// ユーザー入力等は一切通さない（パス区切りも生成しない、fail-closed）。
+fn export_timestamp_suffix(iso: &str) -> Option<String> {
+    let bytes = iso.as_bytes();
+    if !bytes.ends_with(b"Z") || bytes.len() < 20 {
+        return None;
+    }
+    // 末尾の `Z` を除いた日時部分。小数秒がある場合は秒精度へ丸める。
+    let date_time = &bytes[..bytes.len() - 1];
+    let core = if date_time.len() == 19 {
+        date_time
+    } else if date_time.len() > 20
+        && date_time[19] == b'.'
+        && date_time[20..].iter().all(|byte| byte.is_ascii_digit())
+    {
+        &date_time[..19]
+    } else {
+        return None;
+    };
+    const SEPARATORS: [(usize, u8); 5] = [(4, b'-'), (7, b'-'), (10, b'T'), (13, b':'), (16, b':')];
+    for (index, expected) in SEPARATORS {
+        if core[index] != expected {
+            return None;
+        }
+    }
+    for (index, byte) in core.iter().enumerate() {
+        if SEPARATORS.iter().any(|(position, _)| *position == index) {
+            continue;
+        }
+        if !byte.is_ascii_digit() {
+            return None;
+        }
+    }
+    let two_digits = |at: usize| -> Option<u32> {
+        std::str::from_utf8(&core[at..at + 2])
+            .ok()?
+            .parse::<u32>()
+            .ok()
+    };
+    let month = two_digits(5)?;
+    let day = two_digits(8)?;
+    let hour = two_digits(11)?;
+    let minute = two_digits(14)?;
+    let second = two_digits(17)?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 59
+    {
+        return None;
+    }
+    // 検証済みの数字と固定文字だけを並べるため機微情報は混入しない。
+    let mut suffix = String::with_capacity(16);
+    for (index, byte) in core.iter().enumerate() {
+        if SEPARATORS.iter().any(|(position, _)| *position == index) {
+            continue;
+        }
+        suffix.push(*byte as char);
+    }
+    suffix.insert(8, 'T');
+    suffix.push('Z');
+    Some(suffix)
+}
+
+/// `/me/export` の保存ファイル名。`generated_at` 由来の UTC 世代を付与する。
+/// 欠落・不正なタイムスタンプは固定の `unknown` 接尾辞へ倒す（fail-closed）。
+/// 渡す値は `generated_at` のみで、`sub` / JWT / レスポンス本文は使わない。
+fn export_filename_from_generated_at(generated_at: &str) -> String {
+    let stem = EXPORT_FILENAME
+        .strip_suffix(".json")
+        .unwrap_or("openillustration-export");
+    match export_timestamp_suffix(generated_at) {
+        Some(suffix) => format!("{stem}-{suffix}.json"),
+        None => format!("{stem}-unknown.json"),
+    }
+}
+
 /// ダウンロード開始に失敗したときに表示する固定文言。
 /// JS 側の例外メッセージは機微情報を含み得るため表示には使わない。
 fn download_start_error_message() -> &'static str {
@@ -2777,7 +2857,14 @@ fn ExportMyData(token: String) -> impl IntoView {
                     set_generated_at.set(formatted);
                     set_sub_label.set(sub);
                 }
-                download_json_file(&payload, EXPORT_FILENAME)?;
+                // R2-P2-DOCS: 保存ファイル名は generated_at 由来の UTC 世代を付与する。
+                // payload から読み取るのは生成日時だけとし、sub / JWT / 本文は渡さない。
+                let raw_generated_at = payload
+                    .get("generated_at")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("");
+                let filename = export_filename_from_generated_at(raw_generated_at);
+                download_json_file(&payload, &filename)?;
                 Ok(message)
             }
             .await;
@@ -6224,10 +6311,34 @@ mod tests {
         );
     }
 
-    /// 保存ファイル名は固定値で、ユーザー入力から組み立てられないこと。
+    /// 保存ファイル名の基底は固定値で、ユーザー入力から組み立てられないこと。
+    /// R2-P2-DOCS: generated_at 由来の世代付与と unknown フォールバックを同じ1件で検証する。
     #[test]
     fn export_filename_is_fixed_constant() {
         assert_eq!(super::EXPORT_FILENAME, "openillustration-export.json");
+        assert_eq!(
+            super::export_filename_from_generated_at("2026-11-18T00:00:00Z"),
+            "openillustration-export-20261118T000000Z.json"
+        );
+        // 小数秒は秒精度へ丸める（サーバーは to_rfc3339() の小数秒を返す）。
+        assert_eq!(
+            super::export_filename_from_generated_at("2026-11-18T00:00:00.123456789Z"),
+            "openillustration-export-20261118T000000Z.json"
+        );
+        // 欠落・不正・機微値は固定の unknown 接尾辞へ倒す（fail-closed）。
+        let invalid_values = [
+            "",
+            "not-a-timestamp",
+            "2026-11-18T00:00:00",
+            "mock_sub_hash",
+            "2026-11-18T00:00:00+00:00",
+        ];
+        for invalid in invalid_values {
+            assert_eq!(
+                super::export_filename_from_generated_at(invalid),
+                "openillustration-export-unknown.json"
+            );
+        }
     }
 
     /// 通報は CID・理由が空（空白のみ含む）なら POST 前に止める。

@@ -1847,7 +1847,8 @@ mod tests {
     #[test]
     fn audit_expect_root_warns_in_production_without_disclosing_value() {
         const EXPECTED: &str = "AUDIT_EXPECT_ROOT is required in production (a hex Merkle root)";
-        const INVALID: &str = "deadbeefcafebabe-nothex-ZZZZ";
+        const INVALID: &str =
+            "deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef-nothex-ZZZZ";
         // 本番相当（mock 無効）: 未設定・空白のみ・不正 hex は警告。
         let scenarios: [&[(&str, &str)]; 4] = [
             &[],
@@ -1864,7 +1865,11 @@ mod tests {
             assert!(!errors[0].contains(INVALID), "設定値が漏洩: {}", errors[0]);
         }
         // 有効 hex は警告なし（生値判定のため前後の空白は許容しない）。
-        for value in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+        for value in [
+            "deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef",
+            "0123456789abcdefdeadbeefcafebabe0123456789abcdefdeadbeefcafebabe",
+            "ABCDEF0123456789DEADBEEFCAFEBABEABCDEF0123456789DEADBEEFCAFEBABE",
+        ] {
             let results = check_all_with(lookup_from(&[("AUDIT_EXPECT_ROOT", value)]));
             assert!(
                 errors_for(&results, "audit_expect_root").is_empty(),
@@ -1873,14 +1878,18 @@ mod tests {
         }
         // 前後空白付き hex は生値へ hex 判定するため警告（backup-rotate と統一）。
         // 固定文言なので設定値は一切含まれない（値のエコーなし）。
-        const PADDED: &str = "  ABCDEF0123456789  ";
+        const PADDED: &str = "  ABCDEF0123456789DEADBEEFCAFEBABEABCDEF0123456789DEADBEEFCAFEBABE  ";
         let results = check_all_with(lookup_from(&[("AUDIT_EXPECT_ROOT", PADDED)]));
         let errors = errors_for(&results, "audit_expect_root");
         assert_eq!(errors.len(), 1, "errors={errors:?}");
         assert_eq!(errors[0], EXPECTED);
         assert!(!errors[0].contains("ABCDEF"), "設定値が漏洩: {}", errors[0]);
         // mock 有効時は開発環境として警告しない（後方互換を維持）。
-        for value in ["", INVALID, "deadbeefcafebabe"] {
+        for value in [
+            "",
+            INVALID,
+            "deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef",
+        ] {
             let results = check_all_with(lookup_from(&[
                 ("ALLOW_MOCK_AUTH", "1"),
                 ("AUDIT_EXPECT_ROOT", value),
@@ -1905,7 +1914,11 @@ mod tests {
             production_audit_expect_root_error(false, non_utf8),
             Some(EXPECTED)
         );
-        for value in ["deadbeefcafebabe", "0123456789abcdef", "ABCDEF0123456789"] {
+        for value in [
+            "deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef",
+            "0123456789abcdefdeadbeefcafebabe0123456789abcdefdeadbeefcafebabe",
+            "ABCDEF0123456789DEADBEEFCAFEBABEABCDEF0123456789DEADBEEFCAFEBABE",
+        ] {
             assert_eq!(
                 production_audit_expect_root_error(
                     false,
@@ -2149,7 +2162,10 @@ mod tests {
         let mut pairs: Vec<(&str, &str)> = oidc_complete_pairs("https://issuer.example.jp");
         pairs.extend([
             ("PINATA_JWT", "real-production-jwt"),
-            ("AUDIT_EXPECT_ROOT", "deadbeefcafebabe"),
+            (
+                "AUDIT_EXPECT_ROOT",
+                "deadbeefcafebabe0123456789abcdefdeadbeefcafebabe0123456789abcdef",
+            ),
             ("ALLOWED_ORIGINS", "https://example.jp"),
             ("OIDC_REQUIRED_ACR", "urn:example:acr"),
             ("OIDC_REQUIRED_AMR", "pwd,mfa"),

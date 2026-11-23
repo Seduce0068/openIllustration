@@ -1447,6 +1447,41 @@ pub fn production_database_url_error(
     }
 }
 
+/// 本番相当で DB の `file:` パスが symlink だったときの固定文言（パスはエコーしない）。
+pub const DATABASE_SYMLINK_REJECTED: &str =
+    "DATABASE_URL local file path must not be a symbolic link in production";
+
+/// 本番相当（モック認証無効）で DB のローカルファイルパスが symlink なら起動拒否する。
+///
+/// 開発（`allow_mock_auth = true`）では従来どおり symlink を許容し `None` を返す。
+/// `symlink_metadata` は最終コンポーネントが symlink なら（リンク先が存在しなくても）
+/// `file_type().is_symlink()` を真にする。存在しないパスや通常ファイルは受理する。
+/// パス・生バイト・設定値は固定文言へ一切含めない。
+pub fn production_database_symlink_error(
+    allow_mock_auth: bool,
+    path: &str,
+) -> Option<&'static str> {
+    if allow_mock_auth {
+        return None;
+    }
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Some(DATABASE_SYMLINK_REJECTED),
+        _ => None,
+    }
+}
+
+/// 単一ライター用 `instance.lock` のベースパスを実パスから導出する。
+///
+/// `canonicalize` により symlink と `..` を解決した実パスを使うため、同一 DB へ
+/// 別の symlink 経由で起動しても同じロックファイルを共有できる（開発モック経路でも有効）。
+/// canonicalize に失敗した場合は入力パスをそのまま使い、従来の挙動を維持する。
+fn database_lock_path(path: &str) -> String {
+    let base = std::fs::canonicalize(path)
+        .map(|real| real.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| path.to_string());
+    format!("{base}.instance.lock")
+}
+
 /// DB 接続先の解決エラー。設定値・生バイト・トークンを一切保持しない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DatabaseUrlError {
@@ -1489,12 +1524,14 @@ pub fn resolve_database_url(
         .ok_or(DatabaseUrlError::Required)
 }
 
-/// `AUDIT_EXPECT_ROOT` の生値が非空かつ全バイト ASCII hex かを判定する純粋ヘルパ。
+/// `AUDIT_EXPECT_ROOT` の生値が「小文字または大文字の hex 64 桁」かを判定する純粋ヘルパ。
 ///
-/// `backup-rotate.sh` の `[0-9a-fA-F]+` 判定と同じく前後の空白を trim しない。
+/// ADR-0013 P2: 監査ルートは SHA-256 の 64hex 固定へ厳密化する。前後の空白は trim せず、
+/// 1 文字・奇数長・63 桁・65 桁・非 hex・空はすべて拒否する（大小文字の混在は受理）。
+/// `doctor` / `production_audit_expect_root_error` / 署名監査 CLI の共有判定として使う。
 /// 判定結果だけを返し、値や生バイトは保持・出力しない。
 pub fn is_hex_merkle_root(value: &str) -> bool {
-    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// 本番相当（モック認証無効）で `AUDIT_EXPECT_ROOT` が必須設定を満たすかを検証する純粋関数。
@@ -1771,6 +1808,19 @@ pub async fn run() -> anyhow::Result<()> {
     // 本番相当では production_database_url_error が固定文言で起動拒否し、開発（mock 有効）では
     // 従来どおり file:local.db へフォールバックする（値はエコーしない）。
     let database_url_env = common::env::read_env("DATABASE_URL");
+    // DB 接続先と symlink 判定・ロック導出で同じ値を使う（前後空白を trim）。
+    // 本番相当は上の検査で絶対 file: パスが必須であり、開発のみ暗黙既定へフォールバックする。
+    let db_url = match &database_url_env {
+        common::env::EnvValue::Utf8(value) => value.trim().to_string(),
+        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
+            "file:local.db".to_string()
+        }
+    };
+    let local_path = if !is_remote_database_url(&db_url) {
+        Some(db_url.strip_prefix("file:").unwrap_or(&db_url).to_string())
+    } else {
+        None
+    };
     let mut config_errors = production_config_errors(
         allow_mock_auth,
         oidc_validation.required_present,
@@ -1780,6 +1830,13 @@ pub async fn run() -> anyhow::Result<()> {
         allow_mock_auth,
         database_url_env.clone(),
     ));
+    // ADR-0013 P2: 本番相当では DB の file: パスが symlink なら起動拒否する。
+    // DB 生成・lock 取得より前の設定フェーズで確定させ、部分適用を残さない（値は非エコー）。
+    if let Some(path) = &local_path
+        && let Some(message) = production_database_symlink_error(allow_mock_auth, path)
+    {
+        config_errors.push(message);
+    }
     // AUDIT_EXPECT_ROOT も DB 接続・マイグレーション・instance.lock・FK 検査より前に
     // 起動拒否を確定させる（doctor の audit_expect_root と同じ共有判定）。
     config_errors.extend(production_audit_expect_root_error(
@@ -1851,25 +1908,11 @@ pub async fn run() -> anyhow::Result<()> {
         age_policy.settings_always_public
     );
 
-    let db_url = match &database_url_env {
-        // 検証側（production_database_url_error）と同じ trim を適用し、
-        // 受理した値と実際に接続へ使う値を一致させる（前後空白でスキーム解釈が壊れないように）。
-        common::env::EnvValue::Utf8(value) => value.trim().to_string(),
-        // 開発（mock 有効）のみ従来の暗黙既定を使う。本番相当は上の検査で既に拒否済み。
-        common::env::EnvValue::Missing | common::env::EnvValue::NonUtf8 => {
-            "file:local.db".to_string()
-        }
-    };
+    // db_url / local_path は設定フェーズで一度だけ解決済み（検証と接続で同じ値を使う）。
     // DATABASE_TOKEN も共通分類器で一度だけ読む。非 UTF-8 は「未設定」として
     // 空トークンへ倒さず、固定文言で起動拒否する（値・生バイトはエコーしない）。
     // sign_audit_export の database_token_from_env_value と同じ契約。
     let db_token = database_token_from_env_value(common::env::read_env("DATABASE_TOKEN"))?;
-
-    let local_path = if !is_remote_database_url(&db_url) {
-        Some(db_url.strip_prefix("file:").unwrap_or(&db_url).to_string())
-    } else {
-        None
-    };
 
     let db = if let Some(path) = &local_path {
         let connection = Builder::new_local(path).build().await?.connect()?;
@@ -1893,7 +1936,9 @@ pub async fn run() -> anyhow::Result<()> {
     // 第二インスタンスの起動を fail-closed で拒否する。
     // リモート DB はこの排他が使えないため警告に留める。
     let instance_lock = if let Some(path) = &local_path {
-        let lock_path = format!("{path}.instance.lock");
+        // canonicalize 後の実パスからロック名を導出し、別 symlink 経由の起動でも
+        // 同一 DB なら同じロックを共有する（本番では symlink 自体を既に拒否済み）。
+        let lock_path = database_lock_path(path);
         acquire_instance_lock(&lock_path)?;
         tracing::info!("single-writer lock acquired: {lock_path}");
         Some(lock_path)
