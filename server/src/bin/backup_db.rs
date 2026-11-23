@@ -122,8 +122,17 @@ fn ensure_no_live_instance(db_path: &str) -> anyhow::Result<()> {
 /// 部分的に生成されたバックアップ出力を片付けてからエラーを返す。
 /// 削除自体が失敗しても元のエラーを隠さず、利用者へは元の失敗理由を伝える。
 fn fail_backup_with_cleanup<T>(path: &Path, error: impl Into<anyhow::Error>) -> anyhow::Result<T> {
-    let _ = std::fs::remove_file(path);
-    Err(error.into())
+    // 部分スナップショットの削除失敗も元エラーへ併記する（restore_db と同じ契約）。
+    match std::fs::remove_file(path) {
+        Ok(()) => Err(error.into()),
+        Err(cleanup_error) => Err(error.into()).with_context(|| {
+            format!(
+                "partial backup could not be removed: {}: {}",
+                path.display(),
+                cleanup_error
+            )
+        }),
+    }
 }
 
 #[tokio::main]

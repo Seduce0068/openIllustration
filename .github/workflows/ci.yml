@@ -101,6 +101,9 @@ jobs:
         # SC2016 は test-backup-rotate.sh の systemd 契約検証用リテラルのみで行単位除外する。
         for f in scripts/*.sh e2e/*.sh; do shellcheck "$f"; done
         shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi
+        # 本番相当のダミー設定で doctor --strict を実行し、起動前設定診断をゲート化する。
+        # ダミー本番値が後続のモック E2E へ漏れないようサブシェルで隔離する。
+        ( source scripts/doctor-ci-env.sh && cargo run -p server --bin doctor --quiet -- --strict )
         bash scripts/test-backup-rotate.sh
         bash scripts/test-backup-cron-wrapper.sh
         bash scripts/test-prepare-distribution.sh

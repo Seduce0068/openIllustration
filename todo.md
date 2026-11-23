@@ -786,6 +786,40 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第52ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  【high】doctor --strictをCIゲート化（ダミー本番envをscripts/doctor-ci-env.shへ、
+  後続モックE2Eへの漏れを防ぐためサブシェル隔離）、Moderation finalizerの
+  read-then-BEGIN順序、backup_db部分バックアップ削除失敗のエラー集約。
+  親が初回全ゲートでdoctor用envがE2Eへ漏れて失敗したことを検出し修正。
+  R4 指摘なし。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 23 check(s) 0 problem(s)、npm audit3lockfile、markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、E2E本番相当昇格、
+  Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  build.rs rerun-if-env-changed、リクエストタイムアウト、E2E artifact公開、GPG署名、
+  RPO/RTO定義、バックアップ鮮度監視/ハートビート、trunk部分アーカイブ、cronタイムアウト/
+  flock、GPG trust、cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、
+  axe自動スキャン、開発モックuser_hash衝突、再試行導線、クライアント例外テレメトリ、
+  refresh失敗メトリクス、playwright install再試行、window unit停止済みアプリ再起動、
+  監査スクロール到達/non-modal Tab統一、E2Eビルド::error::、reqwest TLS二重スタック、
+  tokio/tower features、resolver3、CIバイナリキャッシュ、失効閾値削除失敗の警告格下げ、
+  logout sub不一致時Cookie削除、finalizer BEGIN失敗計上、NTP同期要件、ブラウザエラー観測、
+  429/503再試行、JXLアニメーション/MAX_PIXELS、日時フォールバック/鮮度NaNオラクル/
+  オプイン集計鮮度、cron設定集約、audit root 64hex検証（既存16hexテストと互換検討）、
+  ライセンス本文件数照合、アーカイブ保持寿命、exportファイル名世代、real-api宛先env化、
+  deny.toml copyleft方針/bans skip副作用、R2-REFRESH-ORIGIN E2E、systemd/cron構文CIゲート、
+  backup.service OnFailure、E2Eセットアップ失敗::error::、署名公開rename TOCTOU、
+  IPFSチェックサム不一致時フェイルオーバー、429専用文言、nonce取得失敗の上書き、
+  aria-describedby/aria-invalid、Auditボタン/dialog lang、export sub 8文字以下契約、
+  Blob/URL生成エラー分岐、common RSA推移依存、HSTS方針、日時locale固定、
+  DBシンボリックパスのinstance.lock回避、オフサイト2回コピーの世代対中途失敗、
+  投票一覧401/403分岐、console.error/pageerror監視、CLI-02群テーブル3件欠落、
+  metrics Cookie非含有オラクル、E2E_SERVER_PORT、価格入力指数表記、
+  AUDIT_EXPECT_ROOT 64hex、RUST_LOG不正値警告、DB_WRITE_LOCKSポインタキー）は記録のみで保留。
+
 - 2026-11-23 コンボ第51ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   【high】ALLOW_MOCK_AUTH=1と本番相当設定の併用を起動拒否（doctorと共通判定、

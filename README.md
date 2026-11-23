@@ -154,7 +154,8 @@ DB 接続3 CLI（`backup_db` / `sign_audit_export` / `verify_audit_log`）は
 
 ```bash
 # Kubuntu / リポジトリルート
-cargo run -p server --bin doctor -- --strict
+# ダミー本番設定で CI と同じスモークを再現（秘密値は不要）
+( source scripts/doctor-ci-env.sh && cargo run -p server --bin doctor -- --strict )
 cargo run -p server --bin backup_db -- --database-url file:/path/to/local.db --output /path/to/backup.db
 cargo run -p server --bin verify_backup -- --input /path/to/backup.db
 # 既存 DB を原子的に置換します。safety copy は <target>.pre-restore-<timestamp> に平文で残るため、

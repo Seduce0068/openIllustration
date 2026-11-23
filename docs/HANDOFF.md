@@ -114,7 +114,8 @@ bash scripts/test-backup-rotate.sh
 bash scripts/test-backup-cron-wrapper.sh
 bash scripts/test-prepare-distribution.sh
 # デプロイ前ゲート: 本番相当の環境変数を注入して実行（秘密値は秘密管理基盤から）
-cargo run -p server --bin doctor -- --strict
+# ダミー本番設定で CI と同じスモークを再現（秘密値は不要）
+( source scripts/doctor-ci-env.sh && cargo run -p server --bin doctor -- --strict )
 ```
 
 CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない

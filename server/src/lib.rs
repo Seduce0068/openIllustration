@@ -2492,6 +2492,8 @@ async fn finalize_due_reports_with_guard(
         let report_id: i64 = row.get(0)?;
         report_ids.push(report_id);
     }
+    // read-then-BEGIN 順序を他箇所と統一するため、BEGIN 前にカーソルを閉じる。
+    drop(rows);
 
     let mut finalized = 0usize;
     let mut failed = 0usize;
