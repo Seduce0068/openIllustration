@@ -1229,7 +1229,7 @@ cd e2e && npm test -- upload.spec.ts   # R1-14 / INT-02 / CONTENT-01 / R2 a11y U
 
 E2E の初回実行時は `cd e2e && npm ci` で依存を導入する。
 実行対象は条件付きで選択する。`E2E_PROJECTS=chromium,firefox,webkit` の明示指定は
-厳守し、未知値は拒否する。ブラウザ導入は選定（キャッシュ走査）より前に実行する。
+厳守し、未知値は拒否する。ブラウザ選定（E2E_PROJECTS 明示値の厳守／キャッシュ走査）→ 導入（npm ci / playwright install）→ 実行の順である。キャッシュ走査は selected_projects を決めない。
 CI（`CI` 設定時）では未指定でも3プロジェクトを明示指定として扱い、firefox / webkit を
 必ず導入・実行する。chromium 単一へフォールバックした場合は CI 限定で
 `::error::E2E browser fallback to chromium is not allowed in CI ...` を出して失敗とし、
@@ -1972,13 +1972,17 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 ## CI 前提条件の検証契約（数値不変）
 
+- `doctor --strict` ゲートは `scripts/doctor-ci-env.sh` を source して本番相当のダミー値
+  （OIDC 必須7変数・`AUDIT_EXPECT_ROOT`・`BACKUP_GPG_RECIPIENT`・`TZ` 等）を注入する。
+  ダミー値は秘密情報を含まず、後続のモック E2E へ漏れないようサブシェルで隔離する。
+
 - バックアップローテーションのケース8（実 gpg の暗号化→復号→バイト一致）は、
   gpg 不在・鍵生成失敗・fingerprint 取得失敗をローカルでは `SKIP case 8: <理由>`
   （PASS と区別する専用出力）として扱う。CI（`CI` 設定時）では同じ条件を
   `FAIL case 8: required precondition missing in CI (<理由>)` として失敗させ、
   黙スキップを禁止する。runner には `apt_packages` で `gpg` を導入し、
   `shellcheck` / `shfmt` は維持する。既存 `expect_failure` / `expect_success` 件数は不変。
-- E2E はブラウザ導入を選定より前に実行し、CI では未指定時も
+- E2E はブラウザ選定（E2E_PROJECTS 明示値／CI 未指定時は3プロジェクト）→ 導入 → 実行の順で、CI では未指定時も
   `chromium,firefox,webkit` を明示指定として扱う。chromium 単一へのフォールバックは
   CI ではエラー終了とし、選択の明示厳守・未知値拒否のルールは不変。
   E2E69件、フルスイートの内訳は不変。

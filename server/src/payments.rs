@@ -863,7 +863,7 @@ pub async fn verify_order(
             "UPDATE payment_orders
              SET status = ?, tx_hash = ?, log_index = ?, block_number = ?,
                  confirmations = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-             WHERE order_id = ? AND status = ? AND status <> ?",
+             WHERE order_id = ? AND status = ? AND status <> ? AND status <> 'MISMATCH'",
             (
                 STATUS_DETECTED,
                 verification.tx_hash.clone(),
@@ -905,7 +905,7 @@ pub async fn verify_order(
     tx.execute(
         "UPDATE payment_orders
          SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE order_id = ? AND status = ? AND status <> ?",
+         WHERE order_id = ? AND status = ? AND status <> ? AND status <> 'MISMATCH'",
         (
             next_status,
             order_id.clone(),

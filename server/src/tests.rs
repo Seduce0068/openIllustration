@@ -7128,6 +7128,97 @@ async fn test_payment_verify_stage2_cas_rejects_race_after_detected() {
     );
 }
 
+/// MISMATCH は terminal 状態。再検証で DETECTED / FINALIZED へ進まないことを固定する。
+#[tokio::test]
+async fn test_payment_verify_mismatch_is_terminal() {
+    let receiving = "0x1111111111111111111111111111111111111111";
+    let wallet_key = SigningKey::from_slice(&[0x11u8; 32]).expect("valid k256 test scalar");
+    let wallet = crate::payments::address_from_verifying_key(wallet_key.verifying_key());
+    let db = Arc::new(
+        Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap()
+            .connect()
+            .unwrap(),
+    );
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('test_user')", ())
+        .await
+        .unwrap();
+    db.execute(
+        "INSERT INTO contents (cid, type, owner_hash, checksum, status, price)
+             VALUES ('QmYwAPJzv5CZsnAzt8auVZRn6PqfrJxkNyUdxuWz5A111Z', 'Novel', 'test_user', 'abc', 'Approved', 1000)",
+        (),
+    )
+    .await
+    .unwrap();
+    let verifier = Arc::new(MockVerifier::default());
+    *verifier.verification.lock().unwrap() = Some(PaymentVerification {
+        chain_id: 137,
+        tx_hash: "0xmismatch-reverify".to_string(),
+        log_index: 0,
+        block_number: 100,
+        confirmations: 256,
+        from: wallet.clone(),
+        to: receiving.to_string(),
+        amount_wei: "1000000000000000000000".to_string(),
+    });
+    let shared_state = Arc::new(AppState {
+        db: db.clone(),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: false,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: Some(receiving.to_string()),
+        payment_receiving_xprv: None,
+        payment_verifier: Some(verifier),
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::new()),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
+        rate_limit: None,
+        allowed_origins: vec![],
+    });
+    let app = build_router(shared_state);
+    let token = generate_token(TEST_JWT_SECRET, "test_user").await;
+    let (order_id, _) = create_payment_order(&app, &token, &wallet, 137, 1000).await;
+    bind_payment_order(&app, &token, &order_id, &wallet_key, 137, receiving, 1000).await;
+
+    // 他ノードの確定済み不一致判定を模して MISMATCH にする。
+    db.execute(
+        "UPDATE payment_orders SET status = ? WHERE order_id = ?",
+        (crate::payments::STATUS_MISMATCH, order_id.clone()),
+    )
+    .await
+    .unwrap();
+
+    let response = verify_payment_order(&app, &token, &order_id).await;
+    assert!(
+        response.status() == StatusCode::CONFLICT || response.status() == StatusCode::BAD_REQUEST,
+        "MISMATCH must not be reverted to DETECTED/FINALIZED"
+    );
+    let mut rows = db
+        .query(
+            "SELECT status FROM payment_orders WHERE order_id = ?",
+            [order_id.clone()],
+        )
+        .await
+        .unwrap();
+    let status: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        status,
+        crate::payments::STATUS_MISMATCH,
+        "MISMATCH must remain terminal after re-verification"
+    );
+}
+
 /// R1-24: ウォレット所有証明の記録が無い注文は verify を拒否する。
 #[tokio::test]
 async fn test_payment_verify_requires_wallet_binding() {

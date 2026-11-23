@@ -543,7 +543,7 @@ generated:
 | `JWT_REQUIRE_KID` | 本番推奨 | 0 | 受理値は `1`/`true`（有効）と `0`/`false`（無効）のみ。`1` 設定時は `kid` 付きトークンのみ受理し、`kid` 無しレガシートークンを拒否（fail-closed）。RS256 限定。HS256 と併用すると起動拒否。受理値外（yes/no/空など）も起動拒否し、`doctor` の `jwt` カテゴリで警告。DB接続・マイグレーション・instance.lock取得・FK検査の前に検証し、失敗時にこれらを残さない。 |
 | `JWT_RSA_VERIFICATION_KEYS` | 任意 | なし | RS256 のみ有効。`kid` → SPKI 公開鍵 PEM（`BEGIN PUBLIC KEY`）の JSON オブジェクト。旧鍵を検証用に保持して無停止ローテーションを行う。`add_verification_key` は引数 `kid` と`kid_from_public_pem`（SPKI DER の SHA-256 先頭16バイト）の導出値を照合し、不一致なら登録を拒否する。未知 `kid` は拒否（fail-closed）。`kid` 無しの旧トークンは現行署名鍵で検証する。手順は [KEY_ROTATION_RUNBOOK.md](KEY_ROTATION_RUNBOOK.md)。 |
 | `DATABASE_URL` | 本番相当では全プロセス必須（開発 mock 時のみ任意） | なし（本番）/ `file:local.db`（開発 mock 時のみ） | libSQL 接続先。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空白のみ・旧既定の相対 `file:local.db`・リモート DSN（`file:` で始まらず `://` を含む `libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を起動拒否（fail-closed、値・トークンはエコーしない）。`file:/var/lib/openillustration/local.db` 等の絶対パスのみ指定する。`doctor` の FK 検査は未設定・非 UTF-8（Unresolved）のときに `file:local.db` へフォールバックせず、検査失敗として fail-closed 警告を出す（値はエコーしない）。 |
-| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`verify_audit_log` / `backup_db` / `restore_db` も含め全 CLI で `--database-token` は拒否し、`DATABASE_TOKEN` 環境変数のみを使用する。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
+| `DATABASE_TOKEN` | 任意 | 空 | リモートlibSQLの認証トークン。`sign_audit_export` は環境変数からのみ読み、`--database-token` はエラーとなる（argv 露出対策）。`--database-token` は7つの運用CLIすべてが拒否するが、`DATABASE_TOKEN` 環境変数を使用するのは`backup_db` / `sign_audit_export` / `verify_audit_log` の3CLIのみ。`restore_db`（ローカルDBのみ）と`verify_backup` / `verify_audit_export`（DB非接続）はトークン自体を使わない。サーバー `run()` と doctor の FK 検査用 DB 接続も `common::env::read_env` で同じ値を読み、非 UTF-8 は `sign_audit_export` の `database_token_from_env_value` と同じ契約で固定文言 `DATABASE_TOKEN must be a valid UTF-8 string` の起動拒否／doctor 警告（fail-closed）へ倒す（未設定は空文字、UTF-8 はその値）。値・生バイトはエコーしない。`doctor --strict` は同じ判定を `production` カテゴリの警告へ反映するため、起動拒否なのに `23 check(s), 0 problem(s)` となる false pass は起こらない（check23 不変）。 |
 | `ALLOWED_ORIGINS` | 本番では必須 | 開発用オリジン3件（`ALLOW_MOCK_AUTH=1` のときのみ） | CORS許可オリジン（カンマ区切り。開発 mock 時は有効な `http(s)://` のみ、本番相当では `https://` で始まり userinfo / path / query / loopback を含まないオリジンのみ。末尾スラッシュは除去）。`null` は設定不可（起動時に無視し、`/auth/refresh` の完全一致検査にも入れない）。信頼できないサブドメインを入れない。本番相当（`ALLOW_MOCK_AUTH` 無効）では未設定・非 UTF-8・空・全不正（有効な `https` オリジンが1つも無い場合）を起動拒否（fail-closed、値・オリジンはエコーしない）。判定は共有ヘルパ `production_allowed_origins_error` が担い、実パーサは `is_production_https_origin`（`client` の `is_https_non_local_origin` と同基準）を共有する。`run()` の設定フェーズと `doctor` の `allowed_origins` カテゴリが同じ固定文言を返す（`doctor` は既定で警告のみ、`--strict` のときだけ失敗）。 |
 | `LOG_FORMAT` | 任意 | 未設定（テキスト） | `json` のとき1行1JSONの構造化ログを出力。未設定はテキスト形式（詳細は OPERATIONAL_POLICY のログ節）。読取は `common::env::read_env` に一本化し、未設定と `json` / `text`（大小文字不問）のみ受理。タイポ・非 UTF-8 は固定文言 `LOG_FORMAT must be json or text; using text (invalid value)` の警告のうえテキスト形式へフォールバックし、`doctor` の `production` カテゴリが同じ判定で `--strict` の警告対象にする（値・生バイトはエコーしない）。 |
 | `RETENTION_DAYS` | バックアップ運用 | 30 | `backup-rotate.sh` の保持日数。0 以上で先頭ゼロなし。 |
@@ -564,6 +564,11 @@ generated:
 | `AGE_COUNTRY_OVERRIDES` | 任意（非秘密） | 空 | 国別しきい値上書き（`CC=NN,...`）。 |
 | `AGE_TARGET_REGIONS` | 任意（非秘密） | 空 | 対象地域コード（カンマ区切り）。 |
 | `AGE_ENFORCEMENT_MODE` | 任意（非秘密） | `self_reported` | `self_reported` 系または `trusted_attribute_required` 系。後者は現時点でフェイルクローズ。非 UTF-8 の値は「未設定」ではなく不正値として、受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
+| `AGE_TRUSTED_ISSUERS` | 信頼属性モードで必須 | 空 | カンマ区切りの許可 issuer。信頼属性必須モードでは1つ以上必須、空なら起動拒否（値は非エコー）。 |
+| `AUDIT_EXPORT_INCLUDE_REASONS` | 任意 | 空 | 監査エクスポートで平文理由を含める break-glass オプトイン。本番では `--include-reasons` 併用時のみ有効。 |
+| `BACKUP_PREFIX` | 任意 | openillustration | バックアップ成果物のファイル名接頭辞。パス区切り・`..` は拒否される。 |
+| `GPG_BIN` | 任意 | gpg | 暗号化に使う gpg 実行ファイルのパス。cron ラッパーの allowlist 対象。 |
+| `FIND_BIN` | 任意 | find | ローテーション列挙に使う find 実行ファイルのパス。cron ラッパーの allowlist 対象。 |
 | `AGE_REQUIRE_EXPLICIT_CONFIGURATION` | 任意（非秘密） | `false` | 明示設定未完了時に年齢検証を拒否するフェイルクローズ選択肢。真偽値は `1`/`true`/`0`/`false` のみ。非 UTF-8 および受理値外は受理値を列挙した固定文言で起動拒否（fail-closed、値・生バイトはエコーしない）。`doctor` の `age_policy` カテゴリでも同じ警告を出す。 |
 | `AGE_POLICY_CONFIGURED`（廃止） | — | — | 旧手動フラグ。読取を廃止し設定されても無視される。充足判定は `AGE_DEFAULT_MINIMUM` / `AGE_COUNTRY_OVERRIDES` / `AGE_TARGET_REGIONS` の実効値から導出（`AgePolicy::configuration_satisfied()`）。 |
 | `TZ` | 任意 | 未設定（UTC として扱う） | 年齢判定の基準日（ローカルの「今日」）を決める。`Asia/Tokyo` は日本の固定オフセット UTC+9、`Etc/GMT±N` は POSIX 規約に従い符号反転（例: `Etc/GMT-9` = UTC+9）。未設定・未対応名は UTC の日付へフォールバック。JST 深夜では UTC 日付と境界が 1 日ずれ得るため、対象地域に合わせて明示設定する（[AGE_VALIDATION_POLICY.md](AGE_VALIDATION_POLICY.md) 参照）。読取は `configured_tz()`（`common::env::read_env` ベース）に一本化し、非 UTF-8 は `None`（UTC フォールバック）として doctor の固定文言警告対象にする。生バイトは保持・エコーしない。 |
@@ -595,7 +600,7 @@ generated:
 | `ALERT_CMD` | 任意 | 空（無効） | 失敗通知コマンドの実行ファイルパス。設定時は1引数（メッセージ）で呼び出し、通知が失敗しても元の終了コードを維持。成功時は通知しない。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_COPY_CMD` | 任意（`OFFSITE_DEST` と対で設定） | 空（無効） | オフサイトコピーコマンドの実行ファイルパス。`<成果物> <宛先>` の2引数で呼び出す（eval 不使用）。実行不可なら起動拒否（fail-closed）。 |
 | `OFFSITE_DEST` | 任意（`OFFSITE_COPY_CMD` と対で設定） | 空（無効） | オフサイト保存の宛先。片方だけの設定は起動拒否、コピー失敗時はスクリプト全体を失敗させる（fail-closed）。 |
-| `E2E_PROJECTS` | 任意（E2E時） | `chromium`（ローカル）／`chromium,firefox,webkit`（CI 未指定時） | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。CI（`CI` 環境変数設定時）は未指定でも3プロジェクトを明示指定として扱い、ブラウザ導入を選定より前に実行して firefox / webkit を必ず導入・実行する。chromium 単一へのフォールバックが CI で発生した場合は `::error::` を出して失敗する（黙って SKIP しない）。ローカル未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクト、片方でも不可なら警告付きで `chromium` へフォールバックする。GitHub Actions の step summary には firefox / webkit の可否と選択プロジェクトを記録する。 |
+| `E2E_PROJECTS` | 任意（E2E時） | `chromium`（ローカル）／`chromium,firefox,webkit`（CI 未指定時） | E2E で実行する Playwright プロジェクト（カンマ区切り）。明示時は指定を厳守し未知値は拒否する。CI（`CI` 環境変数設定時）は未指定でも3プロジェクトを明示指定として扱い、ブラウザ選定（E2E_PROJECTS 厳守・キャッシュ走査）→ 導入（npm ci / playwright install）→ 実行の順で firefox / webkit を必ず導入・実行する。chromium 単一へのフォールバックが CI で発生した場合は `::error::` を出して失敗する（黙って SKIP しない）。ローカル未指定時は firefox / webkit の実行可能性（導入済みバイナリと共有ライブラリが解決できるか）を検出し、両方可能なら3プロジェクト、片方でも不可なら警告付きで `chromium` へフォールバックする。GitHub Actions の step summary には firefox / webkit の可否と選択プロジェクトを記録する。 |
 
 - 本番相当（`ALLOW_MOCK_AUTH` 無効）では `DATABASE_URL` が全プロセス（サーバーおよび DB 接続3 CLI）
   で必須。サーバーは未設定・非 UTF-8・trim 後空・旧既定の相対 `file:local.db`・
@@ -717,7 +722,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   前提条件の欠落を黙って PASS にしない。CI runner には
   `.github/workflows/ci.yml` の `apt_packages` で `gpg` を導入する
   （`shellcheck` / `shfmt` は維持）。既存の `expect_failure` / `expect_success` 件数は不変。
-- E2E のブラウザ導入は選定（キャッシュ走査）より前に実行する。CI では
+- E2E のブラウザ選定（E2E_PROJECTS 厳守・キャッシュ走査）→ 導入 → 実行の順で行う。CI では
   `E2E_PROJECTS` 未指定時に `chromium,firefox,webkit` を明示指定として扱い、
   firefox / webkit を必ず導入・実行する。chromium 単一へのフォールバックは
   CI では `::error::` アノテーションを出して失敗とし、黙って SKIP しない。
