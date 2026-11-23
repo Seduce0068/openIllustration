@@ -539,7 +539,8 @@ async fn perform_refresh() -> (RefreshOutcome, Option<String>) {
     let Ok(request) = request else {
         return (RefreshOutcome::Failed, None);
     };
-    let Ok(response) = request.send().await else {
+    // 通信路上のハングもタイムアウトで Failed に落とす（起動時復元/単一フライト共通）。
+    let Ok(response) = fetch_with_timeout(request).await else {
         return (RefreshOutcome::Failed, None);
     };
     if !response.ok() {
@@ -2402,13 +2403,19 @@ pub fn App() -> impl IntoView {
         if let Some(jwt) = token {
             spawn_local(async move {
                 // 既存の /auth/logout 契約どおり Bearer でセッションを失効させる。
-                let result = Request::post(&format!("{API_BASE}/auth/logout"))
+                let logout_request = Request::post(&format!("{API_BASE}/auth/logout"))
                     .header("Authorization", &format!("Bearer {}", jwt))
                     // refresh_token Cookie も送り、サーバ側でファミリを失効させる
                     // （api_fetch と同じ credentials 契約）。
                     .credentials(RequestCredentials::Include)
-                    .send()
-                    .await;
+                    .build()
+                    .ok();
+                let result = match logout_request {
+                    Some(request) => fetch_with_timeout(request).await,
+                    None => Err(gloo_net::Error::JsError(gloo_utils::errors::JsError::from(
+                        js_sys::Error::new("invalid logout request"),
+                    ))),
+                };
                 // 画面遷移は成否にかかわらず既にログイン済み。失敗だけ dedicated
                 // role=alert で告知し、生エラーやステータス本文は出さない。
                 match result {

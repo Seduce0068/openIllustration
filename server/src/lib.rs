@@ -5537,7 +5537,6 @@ pub async fn ban_user(
     let revoked_at = chrono::Utc::now().timestamp() as usize;
 
     let (_write_guard, tx) = begin_write_tx(&state.db).await?;
-    let mut already_banned = false;
     let mut rows = tx
         .query("SELECT 1 FROM users WHERE user_hash = ?", [user_hash])
         .await?;
@@ -5549,14 +5548,18 @@ pub async fn ban_user(
     // 期間付き BAN は ban_until に期限を記録する。NULL は無期限を表す。
     // duration_days は上流で 1..=3650 に検証済みのため文字列連結による SQL 注入はないが、
     // 引数としてバインドして日数を組み立てる。
-    if let Some(days) = body.duration_days {
-        tx.execute(
-            "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'),
-                    ban_until = datetime('now', '+' || ? || ' days')
-             WHERE user_hash = ?",
-            libsql::params![days, user_hash.to_string()],
-        )
-        .await?;
+    // 既に BAN 済み（0 行）なら再送とみなし、監査行の重複と期限の暗黙延長を防ぐ。
+    // 閾値 UPSERT と下流のトークン消費は両分岐で必ず実行する（未使用トークン残存を防ぐ）。
+    let already_banned = if let Some(days) = body.duration_days {
+        let updated = tx
+            .execute(
+                "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'),
+                        ban_until = datetime('now', '+' || ? || ' days')
+                 WHERE user_hash = ? AND is_banned = FALSE",
+                libsql::params![days, user_hash.to_string()],
+            )
+            .await?;
+        updated == 0
     } else {
         let updated = tx
             .execute(
@@ -5565,10 +5568,8 @@ pub async fn ban_user(
                 [user_hash],
             )
             .await?;
-        // 既に BAN 済み（0 行）なら再送とみなし、監査行の重複のみを避ける。
-        // 閾値 UPSERT と下流のトークン消費は必ず実行する（未使用トークン残存を防ぐ）。
-        already_banned = updated == 0;
-    }
+        updated == 0
+    };
     let details = match body.duration_days {
         Some(days) => Some(format!("{{\"duration_days\":{days}}}")),
         None => Some("{\"indefinite\":true}".to_string()),
