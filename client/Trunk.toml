@@ -3,7 +3,10 @@ target = "index.html"
 dist = "dist"
 
 [watch]
-watch = ["src", "index.html", "Trunk.toml", "input.css", "tailwind.css"]
+# input.css は Trunk の watch 対象から外す。CSS は npm run build-css で
+# tailwind.css を生成する別ステップのため、watch に含めても自動生成されない
+# （設定と実動作の乖離を避ける）。変更時は build-css を手動実行すること。
+watch = ["src", "index.html", "Trunk.toml", "tailwind.css"]
 
 [serve]
 addresses = ["127.0.0.1"]

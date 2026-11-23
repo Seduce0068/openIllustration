@@ -18573,7 +18573,17 @@ async fn test_public_mod_stats_response_contains_no_forbidden_fields() {
     let root = value.as_object().unwrap();
     let mut root_keys: Vec<&String> = root.keys().collect();
     root_keys.sort();
-    assert_eq!(root_keys, vec!["generated_at", "monthly", "totals"]);
+    // ADR-0013 P4: server_now は鮮度判定用のサーバー時刻（機微情報なし）。
+    assert_eq!(
+        root_keys,
+        vec!["generated_at", "monthly", "server_now", "totals"]
+    );
+    assert!(
+        root["server_now"].as_str().is_some_and(
+            |value| value.contains('T') && (value.ends_with('Z') || value.ends_with("+00:00"))
+        ),
+        "server_now must be RFC3339 UTC"
+    );
 
     let mut total_keys: Vec<&String> = root["totals"].as_object().unwrap().keys().collect();
     total_keys.sort();

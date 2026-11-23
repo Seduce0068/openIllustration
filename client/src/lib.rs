@@ -1703,6 +1703,9 @@ pub struct PublicModerationStatsMonthly {
 pub struct PublicModerationStats {
     #[serde(default)]
     pub generated_at: String,
+    /// ADR-0013 P4: サーバー時刻（欠落時空文字で端末時刻へフォールバック）。
+    #[serde(default)]
+    pub server_now: String,
     #[serde(default)]
     pub totals: PublicModerationStatsTotals,
     #[serde(default)]
@@ -3124,10 +3127,23 @@ fn retry_control(
     let status_id = format!("{test_id}-retry-status");
     // lang 判定と本文で同じ値を参照するため、クロージャ用に複製する。
     let message_for_lang = message.clone();
+    // 連打ガード: 1 操作 = 1 リクエストとし、自己誘発の 429 を防ぐ。
+    let (retry_busy, set_retry_busy) = signal(false);
     view! {
         <div data-testid=container_id class="flex flex-wrap items-center gap-3 mb-4">
             <button type="button" lang=move || error_lang(RETRY_BUTTON_LABEL)
-                on:click=move |_| on_retry()
+                aria-busy=move || retry_busy.get()
+                on:click=move |_| {
+                    if set_retry_busy
+                        .try_update(|busy| std::mem::replace(busy, true))
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+                    // 同期トリガのみ（fetch Effect 側の generation guard が古い応答を捨てる）。
+                    on_retry();
+                    set_retry_busy.set(false);
+                }
                 class="px-3 py-1 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10">
                 {RETRY_BUTTON_LABEL}
             </button>
@@ -4371,15 +4387,34 @@ impl Drop for BusyGuard {
 /// 認証付きオプイン集計（`/mod/stats`）の状態には一切影響しない。
 const PUBLIC_STATS_FRESHNESS_MAX_AGE_MS: f64 = 15.0 * 60.0 * 1000.0;
 
-/// 生成時刻が閾値を超えて古いか。パース不能時は誤検知を避けるため警告を出さない。
+/// ADR-0013 P4: サーバー時刻を基準に鮮度を判定する（端末時計に依存しない）。
+/// server_now が欠落／不正な旧レスポンスでは既存の端末時刻方式へフォールバックする。
 #[cfg(target_arch = "wasm32")]
-fn public_stats_is_stale(generated_at: &str, max_age_ms: f64) -> bool {
+fn public_stats_is_stale_with_server_now(
+    generated_at: &str,
+    server_now: &str,
+    max_age_ms: f64,
+) -> bool {
     let generated = js_sys::Date::parse(generated_at);
-    !generated.is_nan() && js_sys::Date::now() - generated > max_age_ms
+    let now = js_sys::Date::parse(server_now);
+    if generated.is_nan() {
+        return false; // 既存契約: パース不能時は誤検知を避ける。
+    }
+    let elapsed = if now.is_nan() {
+        js_sys::Date::now() - generated
+    } else {
+        now - generated
+    };
+    elapsed > max_age_ms
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn public_stats_is_stale(_generated_at: &str, _max_age_ms: f64) -> bool {
+fn public_stats_is_stale_with_server_now(
+    generated_at: &str,
+    _server_now: &str,
+    _max_age_ms: f64,
+) -> bool {
+    let _ = generated_at;
     false
 }
 
@@ -4536,8 +4571,9 @@ where
                                 set_public_stats_error.set(String::new());
                                 set_public_stats_loaded.set(true);
                                 // GENERATED_AT の鮮度だけを警告し、オプイン集計の状態は変更しない。
-                                set_public_stats_stale.set(public_stats_is_stale(
+                                set_public_stats_stale.set(public_stats_is_stale_with_server_now(
                                     &stats.generated_at,
+                                    &stats.server_now,
                                     PUBLIC_STATS_FRESHNESS_MAX_AGE_MS,
                                 ));
                             }

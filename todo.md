@@ -786,6 +786,24 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第69ラウンド（ADR完了後8回目review/discovery）: 全7担当完了。
+  高は0件。R6 で以下を是正: global-setup.tsをtsc型検査対象へ追加（型エラーも修正）、
+  公開集計の鮮度判定をサーバー時刻(server_now)方式へ移行（旧サーバーは端末時刻へ
+  フォールバック、ホワイトリストテスト更新）、pinレスポンス検証失敗時の孤立ピン
+  カウンタ計上、retry連打ガード(aria-busy)、DOCUMENT_STATUS DEC-01自己矛盾、
+  Trunk watchからinput.css除外（手動build-css明記）。
+  R4指摘2件（MOD-13のserver_now記述・DEC-01外部条件文言）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  server全テスト green、tsc green、E2E_CLIENT_PORT=18123で実施）。
+  discovery静的は指摘0。残存（次ラウンド: axe WCAG AA自動スキャン導入、
+  retry_status二重アナウンス・再試行フィードバック、nav landmark名、タブbutton→a、
+  error_lang中国語判定、RuntimeConfig一括化、doctor MIGRATIONS_DIR診断、
+  REQUEST_TIMEOUT二重読込、restore原子的ロールバック、ContentViewer世代ガード、
+  バックアップunit network-online、REVIEW_REPORT未更新、TimeoutLayer408統合テスト、
+  url_decode不正percentテスト、ui_errorテスト仕様化、SHOW STATS 403案内、
+  logout文言、aria-invalid関連付け、file inputクリア、ハンドル済みUI失敗テレメトリ）は
+  記録のみで保留。
+
 - 2026-11-24 コンボ第68ラウンド（ADR完了後7回目review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: 復元必須ゲートが存在しない.tar.gz/.tar.gz.sigを参照していた問題
   （Runbook/OPERATIONAL_POLICYを実生成物.db.gpg/.db.gpg.asc/.audit-rootの3点世代対へ統一）。

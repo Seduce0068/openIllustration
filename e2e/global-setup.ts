@@ -40,7 +40,7 @@ async function waitForServer(url: string): Promise<void> {
 
 export default async function globalSetup(config: FullConfig): Promise<void> {
   const project = config.projects.find(candidate => candidate.use?.baseURL);
-  const baseURL = (project?.use?.baseURL ?? config.use?.baseURL) as string | undefined;
+  const baseURL = project?.use?.baseURL as string | undefined;
   if (!baseURL) {
     throw new Error('[E2E global setup] baseURL is not configured');
   }

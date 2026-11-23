@@ -52,7 +52,7 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 ```bash
 cargo install trunk --version 0.21.14 --locked   # CI と同じ版を推奨（E2E の前提）
 rustup target add wasm32-unknown-unknown
-cd client && npm ci && npm run build-css && cd ..   # Tailwind CSS をビルド時に生成
+cd client && npm ci && npm run build-css && cd ..   # Tailwind CSS（input.css 変更時は再実行）
 ```
 
 本番ビルドでは API オリジンを明示してください（`OIL_API_BASE` 未設定時は開発既定

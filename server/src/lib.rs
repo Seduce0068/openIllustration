@@ -5938,13 +5938,31 @@ pub async fn pin_to_ipfs(
         )));
     }
 
-    let json: serde_json::Value = res
-        .json()
-        .await
-        .map_err(|e| AppError::Internal(format!("Invalid Pinata response: {}", e)))?;
+    // ADR-0013 P4: ピン作成成功後にレスポンス検証が失敗すると CID を取得できず
+    // upload_content の補償ブロックへ到達しない。ここで孤立ピンを記録し、
+    // 手動 cleanup の追跡可能性を確保する（生レスポンス・CID は出さない）。
+    let json: serde_json::Value = match res.json().await {
+        Ok(json) => json,
+        Err(_) => {
+            state
+                .metrics
+                .unpin_compensation_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Err(AppError::Internal("Invalid Pinata response".to_string()));
+        }
+    };
 
     // 外部レスポンスの IpfsHash は保存前に厳密検証する（不正なら Internal）。
-    cid_from_pinata_response(&json)
+    match cid_from_pinata_response(&json) {
+        Ok(cid) => Ok(cid),
+        Err(_) => {
+            state
+                .metrics
+                .unpin_compensation_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Err(AppError::Internal("Invalid Pinata CID".to_string()))
+        }
+    }
 }
 
 /// 実 Pinata へのピン留め後に DB 側の確定が失敗したときの補償。
@@ -6346,6 +6364,10 @@ pub struct PublicModStatsMonthly {
 pub struct PublicModStatsResponse {
     /// RFC 3339（UTC）。集計元から引き継ぐ。
     pub generated_at: String,
+    /// ADR-0013 P4: 鮮度判定の基準となるサーバー現在時刻（RFC 3339 UTC）。
+    /// 旧サーバー互換のため欠落時は既定値を許容する（クライアントは generated_at へ倒す）。
+    #[serde(default)]
+    pub server_now: String,
     pub totals: PublicModStatsTotals,
     pub monthly: Vec<PublicModStatsMonthly>,
 }
@@ -6444,6 +6466,7 @@ pub fn build_mod_stats(
 pub fn build_public_mod_stats(source: &ModStatsResponse) -> PublicModStatsResponse {
     PublicModStatsResponse {
         generated_at: source.generated_at.clone(),
+        server_now: chrono::Utc::now().to_rfc3339(),
         totals: PublicModStatsTotals {
             reports: source.totals.reports,
             concluded: source.totals.concluded,
