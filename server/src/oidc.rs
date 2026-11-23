@@ -219,6 +219,21 @@ where
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|seconds| (CLOCK_SKEW_MIN_SECS..=CLOCK_SKEW_MAX_SECS).contains(seconds))
         .unwrap_or(DEFAULT_CLOCK_SKEW_SECS);
+    // 保証レベル強制（acr/amr/scopes）の非 UTF-8 は「未設定」へ倒さず起動拒否する。
+    // そうしないと設定のエンコーディ不具合だけでトークンの保証レベル検査が黙って無効化される。
+    for name in [
+        "OIDC_REQUIRED_ACR",
+        "OIDC_REQUIRED_AMR",
+        "OIDC_SCOPES",
+        "OIDC_CLOCK_SKEW_SECS",
+    ] {
+        if matches!(
+            common::env::classify(lookup(name)),
+            common::env::EnvValue::NonUtf8
+        ) {
+            hard_errors.push(OIDC_NON_UTF8_ERROR);
+        }
+    }
     let split_present = |name: &str| {
         lookup(name)
             .ok()

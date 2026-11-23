@@ -2026,6 +2026,10 @@ pub async fn run() -> anyhow::Result<()> {
         warn!("{warning}");
     }
     let drain_timeout = graceful_drain_timeout(drain_timeout_input);
+    // ドレイン上限は「shutdown シグナルを受けた後」にだけ適用する。
+    // server future 全体を timeout で包むと、シグナルが無い通常運用でも
+    // drain_timeout（既定30秒）でプロセスが終了してしまう。
+    let mut drain_watch = shutdown_tx.subscribe();
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -2039,13 +2043,25 @@ pub async fn run() -> anyhow::Result<()> {
         tokio::time::sleep(READINESS_DRAIN_WINDOW).await;
     });
 
-    match tokio::time::timeout(drain_timeout, server).await {
-        Ok(result) => result?,
-        Err(_) => {
-            warn!(
-                "Graceful shutdown drain timed out after {:?}; closing remaining connections",
-                drain_timeout
-            );
+    // シグナル前は無期限で待ち、シグナル receipt 後だけ drain_timeout を適用する。
+    let mut server = Box::pin(server.into_future());
+    tokio::select! {
+        result = &mut server => {
+            result?;
+        }
+        changed = drain_watch.changed() => {
+            if changed.is_err() {
+                warn!("shutdown watch channel closed before drain completed");
+            }
+            match tokio::time::timeout(drain_timeout, &mut server).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    warn!(
+                        "Graceful shutdown drain timed out after {:?}; closing remaining connections",
+                        drain_timeout
+                    );
+                }
+            }
         }
     }
     match finalizer.await {

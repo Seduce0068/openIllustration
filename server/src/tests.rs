@@ -19747,6 +19747,24 @@ fn test_validate_oidc_config_with_required_and_hard_errors() {
     assert!(result.enabled, "値が存在するため enabled は真");
     assert!(!result.required_present, "不正値は充足扱いにしない");
     assert_eq!(result.hard_errors, vec![NON_UTF8_ERROR]);
+
+    // 保証レベル強制（acr/amr/scopes）と clock skew の NonUtf8 も
+    // 「未設定」へ倒さず固定文言で起動拒否する（fail-open 防止）。
+    for name in [
+        "OIDC_REQUIRED_ACR",
+        "OIDC_REQUIRED_AMR",
+        "OIDC_SCOPES",
+        "OIDC_CLOCK_SKEW_SECS",
+    ] {
+        let validated =
+            crate::validate_oidc_config_with(result_lookup(&env, &["OIDC_CLIENT_SECRET", name]));
+        let errors = format!("{:?}", validated.hard_errors);
+        assert!(
+            validated.hard_errors.contains(&NON_UTF8_ERROR),
+            "{name} の NonUtf8 が harg_errors に積まれない: {errors}"
+        );
+        assert!(!errors.contains("0xff"), "生バイトが露出: {errors}");
+    }
 }
 
 /// ハードエラーは固定文言のみで、秘密値も設定値も保持・露出しない。
