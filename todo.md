@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第80ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: クライアントfetchにタイムアウト追加（futures::select +
+  setTimeout/JsFuture、30秒でgloo_net::Errorを返しBusyGuard解除を保証）。
+  他: Node22下限検査、TEST_SPEC CI3ブラウザ必須記述、Runbook 7世代誤引用修正、
+  iOS PWA用PNGアイコン(180/192/512)追加、監査見出しh3化。
+  R4指摘1件（icon-192/512のcopy-file漏れ）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  wasm/tsc green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe WCAG AA導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、jxl fuzz独立オラクル、Node/Chrome比較分岐テスト、
+  backup-cron-wrapper所有者/mode分岐テスト、CIツールchecksumピン留め、
+  署名公開失敗回帰、pushState失敗告知、ナビ/LOG OUT/投票の24pxタッチ目標、
+  Markdown heading階層オフセット、投票.disabled理由、noscript/fallback、
+  公開集計閾値の設定化、RuntimeConfig一括化、doctor MIGRATIONS_DIR診断、
+  sign_audit 2ログ原子スナップショット、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第79ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: bindをfinalizer spawn前に移動（起動失敗時のデタッチ防止）、
   canvas aria-labelをdecode/load失敗状態へ連動+E2E回帰、

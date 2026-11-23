@@ -129,6 +129,12 @@ jobs:
         else
           betterleaks git . --redact --config .betterleaks.toml
         fi
+        # markdownlint-cli2 0.24.2 は Node>=22 を要求するため、先に下限を検証する。
+        node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
+        if [[ ! "$node_major" =~ ^[0-9]+$ ]] || ((node_major < 22)); then
+          echo "::error::Node 22+ is required for markdownlint-cli2 (found ${node_major})"
+          exit 1
+        fi
         npm ci --ignore-scripts --no-fund
         npx --no-install markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
         # npm 監査: ルート / e2e / client の3 lockfile を対象にする。

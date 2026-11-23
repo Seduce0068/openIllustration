@@ -595,6 +595,45 @@ async fn join_refresh() -> RefreshOutcome {
     outcome
 }
 
+/// クライアント側の通信タイムアウト（ミリ秒）。サーバ側 TimeoutLayer はサーバ内部の
+/// 処理時間のみを制限するため、ネットワーク途上の応答停滞はここで遮断する。
+const CLIENT_FETCH_TIMEOUT_MS: i32 = 30_000;
+
+/// 指定ミリ秒後に解決するタイマー future（JsFuture 経由、外部 timer crate 不使用）。
+fn fetch_timeout_future() -> wasm_bindgen_futures::JsFuture {
+    let promise = js_sys::Promise::new(&mut |resolve, _| {
+        if let Some(window) = web_sys::window() {
+            let callback = Closure::<dyn FnMut()>::new(move || {
+                let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
+            });
+            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
+                callback.as_ref().unchecked_ref(),
+                CLIENT_FETCH_TIMEOUT_MS,
+            );
+            callback.into_js_value();
+        }
+    });
+    wasm_bindgen_futures::JsFuture::from(promise)
+}
+
+/// fetch をタイムアウトで遮断する。タイムアウト時は Err を返し、
+/// 呼び出し側の BusyGuard を確実に解除する（通信停滞で永続 busy にならない）。
+async fn fetch_with_timeout(request: Request) -> Result<Response, gloo_net::Error> {
+    use futures::future::{Either, select};
+    let send = Box::pin(request.send());
+    let timeout = Box::pin(fetch_timeout_future());
+    match select(send, timeout).await {
+        Either::Left((result, _)) => result,
+        Either::Right((_, send)) => {
+            drop(send);
+            // タイムアウトは固定のネットワークエラーとして扱う（生エラー非露出）。
+            Err(gloo_net::Error::JsError(gloo_utils::errors::JsError::from(
+                js_sys::Error::new("network timeout"),
+            )))
+        }
+    }
+}
+
 /// 共通の再試行ループ。`make` は試行ごとに新規 `Request` を組み立てる。
 /// gloo-net 0.7 は `RequestBuilder::body/json` が `Request` を返して builder を
 /// 返さないため、ボディ付き呼び出しは `api_fetch_request` 側で `Request` を渡す。
@@ -605,7 +644,8 @@ where
     let mut jwt = current_jwt().unwrap_or_default();
     let mut refreshed = false;
     loop {
-        let response = make(&jwt)?.send().await?;
+        // 応答が返らない通信路上のハングを遮断し、BusyGuard の解除を保証する。
+        let response = fetch_with_timeout(make(&jwt)?).await?;
         let status = response.status();
         let has_www_authenticate = response.headers().get("www-authenticate").is_some();
         if !should_refresh(status, auth, has_www_authenticate) || !allows_retry(status, refreshed) {
@@ -3345,7 +3385,7 @@ where
     // 監査パネルのフォーカス管理用。CLOSE / Escape でトグルへ戻す。
     let audit_toggle_ref = NodeRef::<leptos::html::Button>::new();
     // パネル展開時の初期フォーカス先（FORENSIC_TIMELINE 見出し）。
-    let audit_heading_ref = NodeRef::<leptos::html::H4>::new();
+    let audit_heading_ref = NodeRef::<leptos::html::H3>::new();
     // CLOSE は Tab 到達可能な通常ボタンとして残す（初期フォーカス先ではない）。
     let audit_close_ref = NodeRef::<leptos::html::Button>::new();
 
@@ -3757,9 +3797,9 @@ where
                         aria-label="Forensic Timeline"
                         class="absolute inset-0 bg-black/95 z-20 p-4 overflow-y-auto border border-white/20">
                         // パネル展開時の初期フォーカス先。tabindex=-1 で Tab 停止点は増やさない。
-                        <h4 lang="en" tabindex="-1" data-testid="audit-timeline-heading"
+                        <h3 lang="en" tabindex="-1" data-testid="audit-timeline-heading"
                             node_ref=audit_heading_ref
-                            class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h4>
+                            class="text-[10px] font-bold mb-4 border-b border-white/10 pb-2">"FORENSIC_TIMELINE"</h3>
                         <Show when=move || !audit_error.get().is_empty() fallback=|| ()>
                             <p role="alert" data-testid="audit-error" lang=move || error_lang(&audit_error.get()) class="text-[8px] text-red-500">
                                 {move || audit_error.get()}

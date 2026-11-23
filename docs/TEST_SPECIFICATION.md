@@ -1266,8 +1266,9 @@ CI（`CI` 設定時）では未指定でも3プロジェクトを明示指定と
 `::warning::E2E browser fallback: firefox=<0|1> webkit=<0|1>; running <projects>`
 annotation を出す。GitHub Actions の step summary には firefox / webkit の可否と
 選択プロジェクトを記録し、フォールバック時も選択プロジェクトを残す。
-本ホスト（Kubuntu 26.04）では Playwright 未対応プラットフォームのため
-firefox / webkit の実実行は未検証（CI 環境での導入・検証は別途検討）。
+CI では `chromium,firefox,webkit` の3プロジェクトが必須で、フォールバック時は
+`::error::` を出して fail-closed となる（未指定時も3プロジェクトを選択）。
+未検証なのはローカルホスト（Kubuntu 26.04）のみで、CI では3ブラウザを実行する。
 開発サーバーとクライアントは `e2e/playwright.config.ts` の `webServer` が
 自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、ローカルでは開発用の
 固定 JWT シークレット。`E2E_JWT_SECRET` で上書きできる）。
