@@ -5,6 +5,21 @@
 # ローカル実行は `cd e2e && npm test`（docs/TEST_SPECIFICATION.md）。
 set -euo pipefail
 
+# e2e_stage_fail の定義より前に呼ばれる検査（major version 等）用の失敗ヘルパ。
+# 素の診断行を残しつつ ::error:: を 1 本だけ出し、重複を防ぐ。
+E2E_ERROR_REPORTED="${E2E_ERROR_REPORTED:-0}"
+E2E_STAGE="${E2E_STAGE:-startup}"
+e2e_stage_fail_early() {
+	local message="$1"
+	echo "$message" >&2
+	if ((E2E_ERROR_REPORTED)); then
+		exit 1
+	fi
+	E2E_ERROR_REPORTED=1
+	printf '::error::E2E setup failed at stage "%s": %s\n' "$E2E_STAGE" "$message" >&2
+	exit 1
+}
+
 # major バージョン（抽出値・閾値とも）を検査する共通ヘルパ。
 # allow_empty=1 のときだけ空文字を「未設定」として許容する（MAX_* の既定）。
 # 空以外の非数値は bash 算術で 0 として扱われ、下限/上限チェックが黙って
@@ -17,13 +32,11 @@ assert_major_numeric() {
 		if ((allow_empty)); then
 			return 0
 		fi
-		echo "${label} is empty: expected a numeric major version." >&2
-		exit 1
+		e2e_stage_fail_early "${label} is empty: expected a numeric major version."
 	fi
 	# 先頭ゼロは算術解釈を 8 進数化して fail-open を招くため拒否する。
 	if [[ ! "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then
-		echo "${label} is not numeric: '${value}'." >&2
-		exit 1
+		e2e_stage_fail_early "${label} is not numeric: '${value}'."
 	fi
 	# 巨大整数は算術で 2^64+1 → 1 のようにラップし得るため、backup-rotate.sh と
 	# 同じ「桁数＋辞書順」方式で上限を拒否する（算術は使わない）。先頭ゼロは
@@ -31,14 +44,12 @@ assert_major_numeric() {
 	# major version は実用上 3 桁程度であり、9 桁 (999999999) を上限とする。
 	local max_major="999999999"
 	if ((${#value} > ${#max_major})); then
-		echo "${label} exceeds the supported major version range." >&2
-		exit 1
+		e2e_stage_fail_early "${label} exceeds the supported major version range."
 	fi
 	if ((${#value} == ${#max_major})) &&
 		[[ "$value" != "$max_major" ]] &&
 		printf '%s\n%s\n' "$max_major" "$value" | sort -C; then
-		echo "${label} exceeds the supported major version range." >&2
-		exit 1
+		e2e_stage_fail_early "${label} exceeds the supported major version range."
 	fi
 }
 
@@ -63,6 +74,8 @@ select_e2e_projects() {
 	local -n out_projects="$4"
 	local -n out_warning="$5"
 	local -a all_projects=(chromium firefox webkit)
+	# iphone / pixel は E2E_MOBILE=1 のオプトイン専用で、自動選択の既定には入れない。
+	local -a allowed_projects=(chromium firefox webkit iphone pixel)
 	local -a parsed=()
 	local project
 
@@ -73,9 +86,9 @@ select_e2e_projects() {
 		IFS=',' read -r -a parsed <<<"$explicit"
 		for project in "${parsed[@]}"; do
 			case "$project" in
-			chromium | firefox | webkit) ;;
+			chromium | firefox | webkit | iphone | pixel) ;;
 			*)
-				echo "unknown E2E project: ${project} (allowed: ${all_projects[*]})" >&2
+				echo "unknown E2E project: ${project} (allowed: ${allowed_projects[*]})" >&2
 				return 1
 				;;
 			esac
@@ -163,6 +176,36 @@ if [[ "${E2E_LIB_ONLY:-0}" == "1" ]]; then
 	exit 1
 fi
 
+# セットアップ/ビルド段階の失敗へ段階名付き ::error:: を付ける ERR trap。
+# テスト失敗時の report_e2e_failure と同じ ::error:: 経路を、ビルド前の
+# 失敗にも適用するのが目的（後段の report_e2e_failure とフラグを共有する）。
+# E2E_LIB_ONLY の source ではここへ到達しないため、テストが source する純粋
+# 関数（assert_major_numeric 等）には一切影響しない。
+# E2E_ERROR_REPORTED は明示的に ::error:: を出した経路との重複を防ぐ。
+E2E_STAGE="bootstrap"
+E2E_ERROR_REPORTED=0
+e2e_stage_fail() {
+	local message="$1"
+	if ((E2E_ERROR_REPORTED)); then
+		echo "$message" >&2
+		exit 1
+	fi
+	E2E_ERROR_REPORTED=1
+	printf '::error::E2E setup failed at stage "%s": %s\n' "$E2E_STAGE" "$message" >&2
+	exit 1
+}
+e2e_err_trap() {
+	local status="$1"
+	if ((E2E_ERROR_REPORTED)); then
+		exit "$status"
+	fi
+	E2E_ERROR_REPORTED=1
+	printf '::error::E2E setup failed at stage "%s" (exit %d)\n' \
+		"$E2E_STAGE" "$status" >&2
+	exit "$status"
+}
+trap 'e2e_err_trap $?' ERR
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -177,6 +220,7 @@ trunk_sha256="f2b4680cd239693a646a2795e4633c625328d7b2a044fbe749fa3a2fe9e7036b"
 
 workdir="$(mktemp -d)"
 trap 'rm -rf "$workdir"' EXIT
+E2E_STAGE="trunk-install"
 
 # 固定版 trunk のアーカイブをローカルへキャッシュし、再ダウンロードを避ける。
 # キャッシュの有無にかかわらず checksum を検証し、検証済みアーカイブから
@@ -219,13 +263,13 @@ npm --version
 # 関数だけを source して実挙動を検証できるようにしている（VG-01）。
 
 # 最低バージョンを検証する（ルート package.json の engines.node と整合）。
+E2E_STAGE="version-check"
 min_node_major="${MIN_NODE_MAJOR:-22}"
 assert_major_numeric "MIN_NODE_MAJOR" "$min_node_major" 1
 node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
 assert_major_numeric "Node major version" "$node_major"
 if ((10#$node_major < 10#$min_node_major)); then
-	echo "Node ${node_major} is older than the required major ${min_node_major}." >&2
-	exit 1
+	e2e_stage_fail "Node ${node_major} is older than the required major ${min_node_major}."
 fi
 # 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_node_major="${MAX_NODE_MAJOR:-}"
@@ -243,8 +287,7 @@ if command -v google-chrome >/dev/null 2>&1; then
 elif [ -x /opt/google/chrome/chrome ]; then
 	chrome_bin="/opt/google/chrome/chrome"
 else
-	echo "Google Chrome が見つからない。channel: chrome を使う E2E には必須。" >&2
-	exit 1
+	e2e_stage_fail "Google Chrome が見つからない。channel: chrome を使う E2E には必須。"
 fi
 chrome_version="$($chrome_bin --version)"
 echo "$chrome_version"
@@ -253,14 +296,20 @@ assert_major_numeric "MIN_CHROME_MAJOR" "$min_chrome_major" 1
 chrome_major="$(echo "$chrome_version" | grep -oE '[0-9]+' | head -1)"
 assert_major_numeric "Chrome major version" "$chrome_major"
 if ((10#$chrome_major < 10#$min_chrome_major)); then
-	echo "Chrome ${chrome_major} is older than the required major ${min_chrome_major}." >&2
-	exit 1
+	e2e_stage_fail "Chrome ${chrome_major} is older than the required major ${min_chrome_major}."
 fi
-# 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
+# Chrome の上限は CI で明示する（MIN_CHROME_MAJOR=120 と合わせた互換範囲）。
+# README は担当外のため根拠をここに残す: ADR-0013 P3 の例に従い ci.yml 側で
+# ci-e2e.sh の CI 分岐で MAX_CHROME_MAJOR=140 を既定適用する（ci.yml の設定は不要）。
+# 実環境の Chrome がこれより新しい場合は ci.yml で検証済み値へ上書きする。
+# 上限超過は警告ではなく失敗（fail-closed）。
 max_chrome_major="${MAX_CHROME_MAJOR:-}"
+if [[ -n "${CI:-}" && -z "$max_chrome_major" ]]; then
+	max_chrome_major="140"
+fi
 assert_major_numeric "MAX_CHROME_MAJOR" "$max_chrome_major" 1
 if [[ -n "$max_chrome_major" ]] && ((10#$chrome_major > 10#$max_chrome_major)); then
-	echo "warning: Chrome ${chrome_major} is newer than the validated major ${max_chrome_major}." >&2
+	e2e_stage_fail "Chrome ${chrome_major} is newer than the supported major ${max_chrome_major}."
 fi
 
 # 失敗時の調査用アーカイブの出力先（既定はリポジトリ直下の e2e-artifacts/）。
@@ -321,6 +370,14 @@ e2e_projects_explicit="${E2E_PROJECTS:-}"
 if [[ -n "${CI:-}" && -z "$e2e_projects_explicit" ]]; then
 	e2e_projects_explicit="chromium,firefox,webkit"
 fi
+# モバイルはオプトイン（E2E_MOBILE=1）時だけ選択へ追加する（既定の chromium は維持）。
+# playwright.config.ts と同じプロジェクト名・同じ契約。
+if [[ "${E2E_MOBILE:-0}" == "1" ]]; then
+	if [[ -z "$e2e_projects_explicit" ]]; then
+		e2e_projects_explicit="chromium"
+	fi
+	e2e_projects_explicit="${e2e_projects_explicit},iphone,pixel"
+fi
 firefox_executable=0
 webkit_executable=0
 if [[ -z "$e2e_projects_explicit" ]]; then
@@ -337,11 +394,12 @@ declare warn_fallback=0
 if ! select_e2e_projects \
 	"$e2e_projects_explicit" "$firefox_executable" "$webkit_executable" \
 	selected_projects warn_fallback; then
-	exit 1
+	e2e_stage_fail_early "E2E project selection failed"
 fi
 # CI で chromium 単一へのフォールバックが発生した場合は fail-closed で失敗させる
 # （SKIP 扱いにせず、選択が導入より先行する回帰を検知できるようにする）。
 if ((warn_fallback)) && [[ -n "${CI:-}" ]]; then
+	E2E_ERROR_REPORTED=1
 	echo "::error::E2E browser fallback to chromium is not allowed in CI (E2E_PROJECTS=${e2e_projects_explicit})" >&2
 	exit 1
 fi
@@ -361,7 +419,31 @@ for project in "${selected_projects[@]}"; do
 	esac
 done
 
+# playwright install の再試行ラッパ（有限回数・指数バックオフ）。
+# 一時的なネットワーク障害で CI 全体が落ちないよう最大 3 回だけ試行し、
+# 最終失敗時は非 0 を返して呼び出し側が ::error:: を残す（fail-closed）。
+PLAYWRIGHT_INSTALL_MAX_ATTEMPTS=3
+install_playwright_browsers() {
+	local -a browsers=("$@")
+	local attempt=1
+	local delay="${PLAYWRIGHT_INSTALL_BACKOFF_SECONDS:-2}"
+	while ((attempt <= PLAYWRIGHT_INSTALL_MAX_ATTEMPTS)); do
+		if (cd e2e && npx playwright install "${browsers[@]}"); then
+			return 0
+		fi
+		if ((attempt == PLAYWRIGHT_INSTALL_MAX_ATTEMPTS)); then
+			return 1
+		fi
+		echo "warning: playwright install failed (attempt ${attempt}/${PLAYWRIGHT_INSTALL_MAX_ATTEMPTS}); retrying in ${delay}s." >&2
+		sleep "$delay"
+		delay=$((delay * 2))
+		attempt=$((attempt + 1))
+	done
+	return 1
+}
+
 # ブラウザ導入は選定の後・実行の前に行う（CI では firefox/webkit を必ず導入）。
+E2E_STAGE="npm-ci"
 echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しない）"
 # npm ci の引数はクライアント側（下の `(cd client && npm ci ...)`）と完全一致させ、
 # 両者を同一の依存導入契約として扱う（lifecycle script を --ignore-scripts で抑制）。
@@ -369,10 +451,16 @@ echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しな�
 # lifecycle script ではないため、--ignore-scripts でも従来どおり動作する。
 (cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund)
 if ((${#install_browsers[@]} > 0)); then
+	E2E_STAGE="browser-install"
 	# --with-deps は root 権限が必要なため CI では使わない。
 	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
 	echo "==> Playwright ブラウザ導入: ${install_browsers[*]}"
-	(cd e2e && npx playwright install "${install_browsers[@]}")
+	if ! install_playwright_browsers "${install_browsers[@]}"; then
+		E2E_ERROR_REPORTED=1
+		printf '::error::E2E setup failed at stage "browser-install" after %d attempts\n' \
+			"$PLAYWRIGHT_INSTALL_MAX_ATTEMPTS" >&2
+		exit 1
+	fi
 fi
 
 # 導入後に実行可能性を再検出し、annotation / step summary へ可視化する。
@@ -391,19 +479,21 @@ format_e2e_browser_selection \
 write_e2e_browser_selection "$annotation_e2e_browser" "$summary_e2e_browser"
 
 echo "==> サーバーとクライアントを事前ビルド"
+E2E_STAGE="server-build"
 cargo build -p server --locked
 # Tailwind はビルド時 CSS のみを使う（実行時 CDN は禁止）。
+E2E_STAGE="npm-ci"
 (cd client && npm ci --ignore-scripts --no-audit --no-fund && npm run build-css)
+E2E_STAGE="trunk-build"
 (cd client && trunk build)
 # 外部 CDN / フォントへの参照が残っていないことをゲートする。
 # 先に対象ファイルの存在を明示確認する（欠落時に grep が 2 を返す前に fail-fast）。
+E2E_STAGE="external-asset-gate"
 if [[ ! -f client/dist/index.html ]]; then
-	echo "required file is missing: client/dist/index.html" >&2
-	exit 1
+	e2e_stage_fail "required file is missing: client/dist/index.html"
 fi
 if [[ ! -f client/input.css ]]; then
-	echo "required file is missing: client/input.css" >&2
-	exit 1
+	e2e_stage_fail "required file is missing: client/input.css"
 fi
 
 # grep の終了コードは 0（一致）/1（不一致）/2（エラー）を区別し、意図的に
@@ -418,15 +508,13 @@ assert_no_external_asset_reference() {
 	grep -qE 'cdn\.tailwindcss\.com|fonts\.googleapis\.com|fonts\.gstatic\.com' "$target_file" || grep_status=$?
 	case "$grep_status" in
 	0)
-		echo "external asset reference remains in ${target_file}" >&2
-		exit 1
+		e2e_stage_fail "external asset reference remains in ${target_file}"
 		;;
 	1)
 		# 不一致は想定どおり。この終了コードだけを意図的に無視する。
 		;;
 	*)
-		echo "failed to scan ${target_file} for external asset references (grep status: ${grep_status})." >&2
-		exit 1
+		e2e_stage_fail "failed to scan ${target_file} for external asset references (grep status: ${grep_status})."
 		;;
 	esac
 }
@@ -440,8 +528,7 @@ external_css_files=(client/input.css)
 # 一時ファイルへ出力してから明示的に成否を確認する（workdir は EXIT trap で削除）。
 generated_css_list="${workdir}/generated-css.list"
 if ! find client/dist -type f -name '*.css' -print >"$generated_css_list"; then
-	echo "failed to enumerate generated CSS under client/dist." >&2
-	exit 1
+	e2e_stage_fail "failed to enumerate generated CSS under client/dist."
 fi
 while IFS= read -r generated_css; do
 	external_css_files+=("$generated_css")
@@ -451,14 +538,35 @@ for css_file in "${external_css_files[@]}"; do
 done
 
 echo "==> 型チェック"
+E2E_STAGE="typecheck"
 (cd e2e && npm run typecheck)
+
+# 失敗アーカイブのパスを GITHUB_OUTPUT / GITHUB_STEP_SUMMARY へ渡す準備。
+# artifact の公開は ci.yml 側（担当外）が独立ジョブで行うため、ここではパスの
+# 受け渡しのみ行う。GitHub Actions 外・要約ファイル欠落・書込不可では no-op。
+write_e2e_artifact_output() {
+	local archive_path="$1"
+	[[ -n "${GITHUB_ACTIONS:-}" ]] || return 0
+	if [[ -n "${GITHUB_OUTPUT:-}" && -f "${GITHUB_OUTPUT}" && -w "${GITHUB_OUTPUT}" ]]; then
+		printf 'e2e_failure_archive=%s\n' "$archive_path" >>"${GITHUB_OUTPUT}" || true
+	fi
+	if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "${GITHUB_STEP_SUMMARY}" && -w "${GITHUB_STEP_SUMMARY}" ]]; then
+		printf '### E2E failure artifact\n\n- archive: %s\n' "$archive_path" >>"${GITHUB_STEP_SUMMARY}" || true
+	fi
+	return 0
+}
 
 echo "==> Playwright テスト: ${selected_projects[*]}"
 # extra_gates では artifact を回収できないため、失敗時は Playwright が
 # 生成した error-context をジョブログへ出し、Checks にアノテーションを残す。
 report_e2e_failure() {
 	local label="$1"
-	echo "::error::Playwright E2E failed (${label})"
+	# ERR trap が段階名付き ::error:: を出す前に明示的なアノテーションを
+	# 出した経路なので、二重出力を避けるためフラグを立てる。
+	if ((E2E_ERROR_REPORTED == 0)); then
+		E2E_ERROR_REPORTED=1
+		echo "::error::Playwright E2E failed (${label})"
+	fi
 	find e2e/test-results -name 'error-context.md' -print 2>/dev/null || true
 	find e2e/test-results -name 'error-context.md' -exec head -c 20000 {} \; 2>/dev/null || true
 
@@ -467,6 +575,7 @@ report_e2e_failure() {
 	archive="${artifact_dir}/e2e-failure-${label}-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
 	if tar -czf "$archive" -C "$repo_root" e2e/test-results e2e/playwright-report 2>/dev/null; then
 		echo "E2E failure artifacts: ${archive}"
+		write_e2e_artifact_output "$archive"
 	else
 		echo "warning: failed to archive E2E artifacts" >&2
 	fi
@@ -488,11 +597,11 @@ fi
 # 読み込む。プロセス置換は find の終了コードを隠すため使わない。
 # find/sort の失敗は set -o pipefail 下のパイプラインを if ! で判定して
 # fail-closed に検出し、0 件ならエラー終了する。順序は LC_ALL=C sort で安定化。
+E2E_STAGE="test-discovery"
 remaining_specs_list="${workdir}/remaining-specs.list"
 if ! find e2e/tests -maxdepth 1 -name '*.spec.ts' ! -name 'real-api.spec.ts' -print0 |
 	LC_ALL=C sort -z >"$remaining_specs_list"; then
-	echo "failed to enumerate remaining E2E specs under e2e/tests." >&2
-	exit 1
+	e2e_stage_fail "failed to enumerate remaining E2E specs under e2e/tests."
 fi
 remaining_specs=()
 while IFS= read -r -d '' spec_path; do
@@ -500,8 +609,7 @@ while IFS= read -r -d '' spec_path; do
 	remaining_specs+=("tests/${spec_path##*/}")
 done <"$remaining_specs_list"
 if ((${#remaining_specs[@]} == 0)); then
-	echo "no remaining E2E specs found under e2e/tests (excluding real-api.spec.ts)." >&2
-	exit 1
+	e2e_stage_fail "no remaining E2E specs found under e2e/tests (excluding real-api.spec.ts)."
 fi
 if ! (cd e2e && npm test -- "${remaining_specs[@]}" "${project_args[@]}"); then
 	report_e2e_failure "unit-specs"

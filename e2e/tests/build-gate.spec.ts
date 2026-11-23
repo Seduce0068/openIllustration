@@ -92,6 +92,21 @@ test.describe('Build gate (BG-01)', () => {
     return { status: result.status, stdout: result.stdout, stderr: result.stderr };
   };
 
+  // 入力検証（TRUNK_* 未設定 / 不正値 / アーカイブ欠落 / 展開先未指定）を
+  // 環境変数の差し替えだけで実行する（既存 runGate と同じ spawn 契約）。
+  const runGateWithEnv = (
+    overrides: Record<string, string | undefined>,
+  ): GateResult => {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === undefined) delete env[key];
+      else env[key] = value;
+    }
+    const result = spawnSync('bash', [gatePath], { encoding: 'utf8', env });
+    if (result.error) throw result.error;
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+  };
+
   test('checksum gate is wired before extraction in ci-e2e.sh', () => {
     const script = fs.readFileSync(scriptPath, 'utf8');
     const gate = fs.readFileSync(gatePath, 'utf8');
@@ -140,7 +155,7 @@ test.describe('Build gate (BG-01)', () => {
   });
 
   test('tampered archive fails with exit 1 and is never extracted', () => {
-    const { tempDir, tamperedArchive, expectedSha256 } = createFixtures();
+    const { tempDir, goodArchive, tamperedArchive, expectedSha256 } = createFixtures();
     const extractDir = path.join(tempDir, 'extract-tampered');
 
     const result = runGate(tamperedArchive, expectedSha256, extractDir);
@@ -150,6 +165,54 @@ test.describe('Build gate (BG-01)', () => {
     expect(result.stderr).toContain('sha256 が一致しない');
     // 展開可能だった改ざんアーカイブでも、ゲート失敗後は tar -xzf が走らない。
     expect(fs.existsSync(path.join(extractDir, 'trunk'))).toBe(false);
+
+    // --- 入力検証（ fail-closed ）---------------------------------------
+    // 同じフィクスチャの正規アーカイブと checksum を使い、入力の違いだけを検証する。
+
+    // TRUNK_ARCHIVE 未設定。
+    const unsetArchive = runGateWithEnv({
+      TRUNK_ARCHIVE: undefined,
+      TRUNK_SHA256: expectedSha256,
+      TRUNK_EXTRACT_DIR: path.join(tempDir, 'extract-unset-archive'),
+    });
+    expect(unsetArchive.status).toBe(1);
+    expect(unsetArchive.stderr).toContain('TRUNK_ARCHIVE is not set.');
+
+    // TRUNK_SHA256 が 64 桁に満たない。
+    const shortHash = runGateWithEnv({
+      TRUNK_ARCHIVE: goodArchive,
+      TRUNK_SHA256: 'abc123',
+      TRUNK_EXTRACT_DIR: path.join(tempDir, 'extract-short-hash'),
+    });
+    expect(shortHash.status).toBe(1);
+    expect(shortHash.stderr).toContain('TRUNK_SHA256 must be a 64-digit lowercase hex value.');
+
+    // TRUNK_SHA256 が大文字（小文字 hex のみ受理）。
+    const upperHash = runGateWithEnv({
+      TRUNK_ARCHIVE: goodArchive,
+      TRUNK_SHA256: expectedSha256.toUpperCase(),
+      TRUNK_EXTRACT_DIR: path.join(tempDir, 'extract-upper-hash'),
+    });
+    expect(upperHash.status).toBe(1);
+    expect(upperHash.stderr).toContain('TRUNK_SHA256 must be a 64-digit lowercase hex value.');
+
+    // アーカイブ欠落（checksum 検証より前に fail-fast）。
+    const missingArchive = runGateWithEnv({
+      TRUNK_ARCHIVE: path.join(tempDir, 'missing.tar.gz'),
+      TRUNK_SHA256: expectedSha256,
+      TRUNK_EXTRACT_DIR: path.join(tempDir, 'extract-missing'),
+    });
+    expect(missingArchive.status).toBe(1);
+    expect(missingArchive.stderr).toContain('trunk archive is missing:');
+
+    // TRUNK_EXTRACT_DIR 未指定は検証のみを行い、展開せず成功する。
+    const noExtractDir = runGateWithEnv({
+      TRUNK_ARCHIVE: goodArchive,
+      TRUNK_SHA256: expectedSha256,
+      TRUNK_EXTRACT_DIR: undefined,
+    });
+    expect(noExtractDir.status).toBe(0);
+    expect(noExtractDir.stdout).toContain(': OK');
   });
 });
 
@@ -243,6 +306,16 @@ test.describe('Version gate (VG-01)', () => {
     expect(result.stderr).toContain('Node major version exceeds the supported major version range.');
     // 固定エラーであり、拒否した値がエコーされないこと。
     expect(result.stderr).not.toContain('18446744073709551617');
+
+    // 境界値: 9 桁の上限 999999999 は受理、+1 の 1000000000 は拒否。
+    const atLimit = runAssertMajorNumeric('Node major version', '999999999');
+    expect(atLimit.status).toBe(0);
+    expect(atLimit.stderr).toBe('');
+
+    const overLimit = runAssertMajorNumeric('Node major version', '1000000000');
+    expect(overLimit.status).toBe(1);
+    expect(overLimit.stderr).toContain('Node major version exceeds the supported major version range.');
+    expect(overLimit.stderr).not.toContain('1000000000');
   });
 
   test('ordinary major is accepted', () => {
@@ -328,18 +401,34 @@ test.describe('E2E project selection (EPS-01)', () => {
   const runWriter = (
     annotation: string,
     summary: string,
-    options: { githubActions?: string; writeSummary?: boolean } = {},
+    options: {
+      githubActions?: string;
+      writeSummary?: boolean;
+      summaryMode?: 'normal' | 'missing' | 'unwritable';
+    } = {},
   ): WriterResult => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'e2e-writer-'));
     tempDirs.push(tempDir);
     const summaryPath = path.join(tempDir, 'summary.md');
-    fs.writeFileSync(summaryPath, '');
 
     const env: NodeJS.ProcessEnv = { ...process.env, E2E_LIB_ONLY: '1' };
     delete env.GITHUB_ACTIONS;
     delete env.GITHUB_STEP_SUMMARY;
     if (options.githubActions !== undefined) env.GITHUB_ACTIONS = options.githubActions;
-    if (options.writeSummary) env.GITHUB_STEP_SUMMARY = summaryPath;
+
+    // 異常系: 要約ファイル欠落（存在しないパス）/ 書込不可（chmod 444）。
+    // githubActions のみ（writeSummary なし）は GITHUB_STEP_SUMMARY 未設定のまま。
+    const mode = options.summaryMode ?? 'normal';
+    if (mode === 'normal') {
+      fs.writeFileSync(summaryPath, '');
+      if (options.writeSummary) env.GITHUB_STEP_SUMMARY = summaryPath;
+    } else if (mode === 'missing') {
+      env.GITHUB_STEP_SUMMARY = path.join(tempDir, 'missing-summary.md');
+    } else {
+      fs.writeFileSync(summaryPath, '');
+      fs.chmodSync(summaryPath, 0o444);
+      env.GITHUB_STEP_SUMMARY = summaryPath;
+    }
 
     const inner = 'source "$1"; shift; write_e2e_browser_selection "$@"';
     const result = spawnSync('bash', ['-c', inner, '_', scriptPath, annotation, summary], {
@@ -350,7 +439,7 @@ test.describe('E2E project selection (EPS-01)', () => {
     return {
       status: result.status,
       stdout: result.stdout,
-      summaryFile: fs.readFileSync(summaryPath, 'utf8'),
+      summaryFile: fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : '',
     };
   };
 
@@ -460,6 +549,34 @@ test.describe('E2E project selection (EPS-01)', () => {
     );
     expect(written.summaryFile).toContain('Running projects: chromium');
     expect(written.summaryFile).toContain('Fallback to chromium: 1');
+
+    // step summary 異常系: GITHUB_ACTIONS のみ / 要約ファイル欠落 / 書込不可は
+    // いずれも no-op（終了コード 0・annotation なし・要約ファイル未変更）。
+    const annotationOnly = runWriter(annotation, summary, { githubActions: 'true' });
+    expect(annotationOnly.status).toBe(0);
+    expect(annotationOnly.stdout).toBe('');
+    expect(annotationOnly.summaryFile).toBe('');
+
+    const missingSummary = runWriter(annotation, summary, {
+      githubActions: 'true',
+      summaryMode: 'missing',
+    });
+    expect(missingSummary.status).toBe(0);
+    expect(missingSummary.stdout).toBe('');
+    expect(missingSummary.summaryFile).toBe('');
+
+    // 書込不可ガード（`-w "$summary_path"`）は常に構造的に存在する。
+    // root は permission bit を無視して書けるため、挙動確認は非 root のみ行う。
+    expect(fs.readFileSync(scriptPath, 'utf8')).toContain('-w "$summary_path"');
+    if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+      const unwritableSummary = runWriter(annotation, summary, {
+        githubActions: 'true',
+        summaryMode: 'unwritable',
+      });
+      expect(unwritableSummary.status).toBe(0);
+      expect(unwritableSummary.stdout).toBe('');
+      expect(unwritableSummary.summaryFile).toBe('');
+    }
 
     await testInfo.attach('compat-selection', {
       body: JSON.stringify([

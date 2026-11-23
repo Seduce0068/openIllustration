@@ -786,6 +786,19 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第60ラウンド（ADR-0013 P3 実装）: 3担当（E2E/CIクライアント/CI）。
+  ERR trap段階名付き::error::、playwright install 3回再試行、MAX_CHROME_MAJOR=140 fail-closed、
+  E2E_MOBILE opt-in、E2E_SERVER_PORT/E2E_API_BASE、build-gate境界テスト、
+  client/build.rs rerun-if-env-changed、hash/view/sub境界/NULL列テスト、
+  CIバイナリキャッシュ+--version検証、go不在時ダウンロード、systemd/cron構文ゲート、
+  CLI-02群テーブル3件+双方向照合、ライセンス本文数動的表現。
+  親がshellcheck SC2016、export_status_details配列fail-closed、doc-numbers据え置き、
+  R4指摘2件（早期失敗::error::・Chrome上限ドキュメント）を修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  client87/server491/doctor54 green、npm audit3lockfile、markdownlint40ファイル）。
+  cargo deny advisory DBのSSL一時障害は再試行で解消。
+  次は ADR-0013 P4（ランタイム保護／UX）へ進む。
+
 - 2026-11-23 コンボ第59ラウンド（ADR-0013 P2 実装）: 3担当（backup/server/docs）。
   .last-successハートビート+cron鮮度チェック/timeout1800+flock、オフサイト順序
   （audit root→成果物）+部分失敗警告、detached署名(.asc)生成、audit root 64hex厳密化、

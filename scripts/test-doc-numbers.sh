@@ -497,6 +497,124 @@ if ((${#cli01_doc_test_names[@]} > 0 && ${#doctor_test_fn_names[@]} > 0)); then
 	done
 fi
 
+# --- 7b. CLI-02/03 群内訳テーブルの件数合計＋テスト名双方向照合 ---------------
+# CLI-01 と同じ照合を CLI-02（verify_audit_export）/ CLI-03（verify_backup）へ拡張する。
+# 上の CLI-01 ブロックとセクション5の bin 総数照合は変更せず、総数照合と併用する。
+# テーブルが無い・件数不一致・名前の重複/欠落/typo・属性の無い同名 fn は fail-closed で FAIL。
+check_cli_group_table() {
+	local label="$1" heading_re="$2" bin_file="$3"
+	local group_sum name_cells actual_tests name
+	local -a all_names=()
+	local -A doc_names=() code_names=()
+
+	group_sum="$(
+		awk -F'|' -v heading_re="$heading_re" '
+			$0 ~ heading_re { in_cli = 1; next }
+			in_cli && /^#### CLI-/ { exit }
+			in_cli && /^\| *群 *\|/ { in_table = 1; next }
+			in_table && /^\|/ {
+				cell = $3
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+				if (cell ~ /^[0-9]+$/) { sum += cell; n++ }
+				next
+			}
+			in_table && n > 0 { exit }
+			END { if (n > 0) print sum }
+		' "$spec" || true
+	)"
+	if [[ ! "$group_sum" =~ ^[0-9]+$ ]]; then
+		echo "FAIL ${label} group breakdown: no valid '| 群 | 件数 |' table in ${spec}" >&2
+		failures=$((failures + 1))
+		return
+	fi
+	actual_tests="$(grep -cE '^[[:space:]]*#\[(tokio::)?test\]' "$bin_file" || true)"
+	assert_numbers_match "${label} group breakdown sum" "$actual_tests" "$group_sum"
+
+	name_cells="$(
+		awk -F'|' -v heading_re="$heading_re" '
+			$0 ~ heading_re { in_cli = 1; next }
+			in_cli && /^#### CLI-/ { exit }
+			in_cli && /^\| *群 *\|/ { in_table = 1; next }
+			in_table && /^\|/ {
+				cell = $3
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", cell)
+				if (cell ~ /^[0-9]+$/) { print $4; printed++ }
+				next
+			}
+			in_table && printed > 0 { exit }
+		' "$spec" || true
+	)"
+	mapfile -t all_names < <(
+		printf '%s\n' "$name_cells" |
+			grep -oE $'\x60[A-Za-z0-9_]+\x60' |
+			tr -d '`' || true
+	)
+	if ((${#all_names[@]} == 0)); then
+		echo "FAIL ${label} group test names: no backtick test name in '| 群 | 件数 | テスト名 |' table in ${spec}" >&2
+		failures=$((failures + 1))
+	fi
+
+	for name in "${all_names[@]}"; do
+		[[ -z "$name" ]] && continue
+		if [[ -n "${doc_names[$name]:-}" ]]; then
+			echo "FAIL ${label} group test names: duplicate '${name}'" >&2
+			failures=$((failures + 1))
+		fi
+		doc_names["$name"]=1
+	done
+	if ((${#all_names[@]} != ${#doc_names[@]})); then
+		echo "FAIL ${label} group test names: duplicates (extracted ${#all_names[@]}, unique ${#doc_names[@]})" >&2
+		failures=$((failures + 1))
+	fi
+	# 一意名の数は群「件数」列の合計と一致しなければならない（欠落検出）。
+	if ((${#doc_names[@]} != group_sum)); then
+		echo "FAIL ${label} group test names: ${#doc_names[@]} unique vs sum ${group_sum} in ${spec}" >&2
+		failures=$((failures + 1))
+	fi
+
+	# 実コード側は #[test] / #[tokio::test] が付いた fn 名のみを集合にする（ヘルパー fn は除外）。
+	while IFS= read -r name; do
+		[[ -z "$name" ]] && continue
+		code_names["$name"]=1
+	done < <(
+		awk '
+			/^[[:space:]]*#\[(tokio::)?test\]/ { pending = 1; next }
+			pending && /^[[:space:]]*$/ { next }
+			pending && /^[[:space:]]*#\[/ { next }
+			pending && /^[[:space:]]*\/\// { next }
+			pending && /^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]/ {
+				line = $0
+				sub(/^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]+/, "", line)
+				sub(/[^A-Za-z0-9_].*$/, "", line)
+				if (line != "") { print line; pending = 0 }
+				next
+			}
+			{ pending = 0 }
+		' "$bin_file" | sort -u || true
+	)
+	if ((${#code_names[@]} == 0)); then
+		echo "FAIL ${label} #[test] names: no #[test]/#[tokio::test] fn found in ${bin_file}" >&2
+		failures=$((failures + 1))
+	fi
+
+	# 双方向の集合差を検証する（ドキュメント側のみ・実コード側のみの名前は共に FAIL）。
+	for name in "${!doc_names[@]}"; do
+		if [[ -z "${code_names[$name]:-}" ]]; then
+			echo "FAIL ${label} group test name: '${name}' in table but no #[test] fn in ${bin_file}" >&2
+			failures=$((failures + 1))
+		fi
+	done
+	for name in "${!code_names[@]}"; do
+		if [[ -z "${doc_names[$name]:-}" ]]; then
+			echo "FAIL ${label} #[test] name: '${name}' in ${bin_file} but not in group table in ${spec}" >&2
+			failures=$((failures + 1))
+		fi
+	done
+}
+
+check_cli_group_table "CLI-02 verify_audit_export" '^#### CLI-02:' server/src/bin/verify_audit_export.rs
+check_cli_group_table "CLI-03 verify_backup" '^#### CLI-03:' server/src/bin/verify_backup.rs
+
 # --- 8. backup-rotate expect_* 件数と他ドキュメントの照合 -------------------
 # scripts/test-backup-rotate.sh の expect_failure / expect_success 呼び出し数を実測し、
 # HANDOFF.md / TASK_INVENTORY.md の

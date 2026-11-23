@@ -639,7 +639,8 @@ status: current
   （既定120）を検査し、下回れば失敗。拒否ケース（999指定）と通常実行（9件成功）を確認。
 - [対応済み] E2E 依存バージョンの固定: `package-lock.json` が `@playwright/test` 1.60.0 等を固定し `npm ci` が厳密に再現。`ci-e2e.sh`
   の下限検査と併せて環境ばらつきを抑制。
-- [対応済み] Node/Chrome の上限バージョン可視化: `MAX_NODE_MAJOR` / `MAX_CHROME_MAJOR` 設定時に検証済み上限超過を警告（失敗はしない）。警告が出ても E2E 9件が成功することを確認。
+- [対応済み] Node/Chrome の上限バージョン可視化: `MAX_NODE_MAJOR` は上限超過を警告、`MAX_CHROME_MAJOR` は CI で既定 140 を適用し
+上限超過を fail-closed で失敗。警告が出ても E2E 9件が成功することを確認。
 - [対応済み] タイムアウト見直しの判断材料: ローカル全ゲート（fmt/clippy/test/wasm/denies/E2E）はホットキャッシュで約57秒（trunk キャッシュ導入後、2026-11-17 再計測。
   導入前は約64秒）。CI の `timeout_minutes: 30` はコールドキャッシュ（依存ビルド・`cargo install cargo-deny`・Chrome 導入）を含むため現状維持と判断。
   コールド実測が取れた時点で再検討。

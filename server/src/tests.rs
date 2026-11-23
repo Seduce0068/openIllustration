@@ -19457,6 +19457,76 @@ async fn test_get_content_audit_masks_reason_but_preserves_entry_hash() {
     assert_eq!(stored_hash, logs[0].entry_hash);
 }
 
+/// content_audit_log の NULL 許容列（cid / old_status / new_status / changed_by /
+/// reason / previous_log_hash）が `Option<String>` として読め、NULL 行でも
+/// 共通ロジックによる監査連鎖検証が完了することの回帰。
+/// sign_audit_export / verify_audit_log の実 CLI ではなく共通ロジック経由で確認する。
+#[tokio::test]
+async fn test_content_audit_nullable_columns_read_as_option_and_verify() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+
+    // entry_hash は NOT NULL なので 64 hex を与え、それ以外の 6 列はすべて NULL にする。
+    db.execute(
+        "INSERT INTO content_audit_log
+             (log_id, cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash)
+         VALUES (1, NULL, NULL, NULL, NULL, NULL, NULL,
+                 '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef')",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let mut rows = db
+        .query(
+            "SELECT cid, old_status, new_status, changed_by, reason, previous_log_hash, entry_hash
+             FROM content_audit_log ORDER BY log_id",
+            (),
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+
+    // NULL 列は Option<String> として読め、すべて None になる（読み取り側の回帰オラクル）。
+    let cid: Option<String> = row.get(0).unwrap();
+    let old_status: Option<String> = row.get(1).unwrap();
+    let new_status: Option<String> = row.get(2).unwrap();
+    let changed_by: Option<String> = row.get(3).unwrap();
+    let reason: Option<String> = row.get(4).unwrap();
+    let previous_log_hash: Option<String> = row.get(5).unwrap();
+    assert!(cid.is_none());
+    assert!(old_status.is_none());
+    assert!(new_status.is_none());
+    assert!(changed_by.is_none());
+    assert!(reason.is_none());
+    assert!(previous_log_hash.is_none());
+
+    // 共通ロジックへは未設定を空文字として渡し、NULL 行でも検証が完了することを確認する。
+    let entry = common::AuditLogEntry {
+        log_id: Some(1),
+        cid: cid.unwrap_or_default(),
+        old_status: old_status.unwrap_or_default(),
+        new_status: new_status.unwrap_or_default(),
+        changed_by: changed_by.unwrap_or_default(),
+        reason: reason.unwrap_or_default(),
+        previous_log_hash: previous_log_hash.unwrap_or_default(),
+    };
+    assert_eq!(entry.calculate_hash().len(), 64);
+    assert_eq!(entry.calculate_hash_v2().len(), 64);
+
+    let stored_entry_hash: String = row.get(6).unwrap();
+    let digest = common::compute_audit_chain_digest(&[(1, stored_entry_hash)]).unwrap();
+    assert_eq!(digest.count, 1);
+    assert_eq!(digest.first_log_id, Some(1));
+    assert_eq!(digest.last_log_id, Some(1));
+    assert_eq!(digest.root_hash.len(), 64);
+}
+
 /// 未認証の GET /mod/reports は従来どおり 401。
 #[tokio::test]
 async fn list_reports_requires_auth() {

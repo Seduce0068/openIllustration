@@ -1728,6 +1728,11 @@ fn shorten_export_sub(sub: &str) -> String {
 
 /// 成功時に dedicated 要素へ出す生成日時と sub 短縮表示。解析失敗時は None。
 fn export_status_details(payload: &serde_json::Value) -> Option<(String, String)> {
+    // DataExport は #[serde(default)] のため、配列やスカラーがデフォルト値として
+    // デシリアライズされる。object 以外は明示的に拒否する（fail-closed）。
+    if !payload.is_object() {
+        return None;
+    }
     let data = serde_json::from_value::<DataExport>(payload.clone()).ok()?;
     Some((
         format_export_generated_at(&data.generated_at),
@@ -6567,6 +6572,84 @@ mod tests {
         assert!(!super::mock_auth_enabled_from_env(Some("0")));
         assert!(!super::mock_auth_enabled_from_env(Some("false")));
         assert!(!super::mock_auth_enabled_from_env(Some("FALSE")));
+    }
+
+    /// hash の先頭 `#` 有無・クエリ分離・ログイン正規化・未知 slug の倒し方を
+    /// 3 つの純粋関数で一括検証する（初回読込 / popstate / navigate で同じ契約）。
+    #[test]
+    fn hash_view_routing_normalizes_known_and_unknown_hashes() {
+        // hash_view_token: 先頭 `#` は取り除き、`?` 以降のクエリは view に含めない。
+        assert_eq!(super::hash_view_token("#upload?cid=QmFoo"), "upload");
+        assert_eq!(super::hash_view_token("upload?cid=QmFoo"), "upload");
+        assert_eq!(super::hash_view_token("#moderation"), "moderation");
+        assert_eq!(super::hash_view_token("ledger"), "ledger");
+        assert_eq!(super::hash_view_token("#unknown-slug"), "unknown-slug");
+        assert_eq!(super::hash_view_token(""), "");
+
+        // view_from_hash: 既知 view は維持し、login と未知 slug は dashboard へ正規化。
+        assert_eq!(super::view_from_hash("#upload?cid=QmFoo"), "upload");
+        assert_eq!(super::view_from_hash("upload"), "upload");
+        assert_eq!(super::view_from_hash("#moderation"), "moderation");
+        assert_eq!(super::view_from_hash("ledger"), "ledger");
+        assert_eq!(super::view_from_hash("#login"), "dashboard");
+        assert_eq!(super::view_from_hash("#unknown-slug"), "dashboard");
+        assert_eq!(super::view_from_hash(""), "dashboard");
+
+        // is_known_view_hash: ナビ対象だけ許容し、TOC の `#slug` 等は早期 return 対象。
+        for known in [
+            "#dashboard",
+            "upload",
+            "#upload?cid=QmFoo",
+            "#moderation",
+            "ledger",
+            "#login",
+        ] {
+            assert!(super::is_known_view_hash(known), "known hash: {known}");
+        }
+        for unknown in ["#unknown-slug", "section-1", "", "#"] {
+            assert!(
+                !super::is_known_view_hash(unknown),
+                "unknown hash: {unknown}"
+            );
+        }
+    }
+
+    /// sub 短縮は 8 文字を境界に省略記号を付け、
+    /// export_status_details は不正なペイロードを None として捨てる。
+    #[test]
+    fn export_status_details_handles_sub_boundary_and_invalid_payload() {
+        // ちょうど 8 文字は省略なし、9 文字目があれば省略記号を付ける（文字単位）。
+        assert_eq!(super::shorten_export_sub("abcdefgh"), "abcdefgh");
+        assert_eq!(super::shorten_export_sub("abcdefghi"), "abcdefgh…");
+        assert_eq!(
+            super::shorten_export_sub("あいうえおかきく"),
+            "あいうえおかきく"
+        );
+        assert_eq!(
+            super::shorten_export_sub("あいうえおかきくけこ"),
+            "あいうえおかきく…"
+        );
+        assert_eq!(super::shorten_export_sub(""), "");
+
+        // 正常ペイロードは Some（host ビルドでは generated_at の生 ISO が返る）。
+        let valid = serde_json::json!({"generated_at": "2026-11-18T00:00:00Z", "sub": "abcdefghi"});
+        let details = super::export_status_details(&valid).expect("valid export payload");
+        assert_eq!(details.0, "2026-11-18T00:00:00Z");
+        assert_eq!(details.1, "abcdefgh…");
+
+        // 型違反・配列・スカラーは DataExport へ変換できず None（fail-closed）。
+        for invalid in [
+            serde_json::json!([]),
+            serde_json::json!({"version": "not-a-number"}),
+            serde_json::json!({"generated_at": 123}),
+            serde_json::json!("plain string"),
+            serde_json::json!(null),
+        ] {
+            assert!(
+                super::export_status_details(&invalid).is_none(),
+                "invalid payload must be dropped: {invalid}"
+            );
+        }
     }
 }
 

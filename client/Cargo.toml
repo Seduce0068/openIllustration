@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license.workspace = true
 rust-version.workspace = true
+# build.rs は option_env! 対象の環境変数変更を監視するだけ（生成物なし）。
+build = "build.rs"
 
 [lib]
 crate-type = ["cdylib"]

@@ -35,7 +35,9 @@ jobs:
       timeout_minutes: 30
       # シェル静的ゲート（extra_gates）で shellcheck / shfmt を使うため、
       # 共通ワークフローの apt 導入ステップでインストールする。
-      apt_packages: shellcheck shfmt gpg
+      # golang-go: betterleaks 未導入時の go install 前提（ADR-0013 P3）。
+      # systemd: systemd-analyze verify による deploy unit 構文ゲート用。
+      apt_packages: shellcheck shfmt gpg golang-go systemd
       env_vars: |
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
@@ -45,6 +47,16 @@ jobs:
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"
       wasm_targets: wasm32-unknown-unknown
       extra_gates: |
+        # --- ADR-0013 P3: CI バイナリキャッシュ -------------------------------
+        # cargo-deny 0.20.2 / betterleaks v1.10.1 をバージョン＋checksum 付きで
+        # $HOME/.cache/oil-ci-tools へキャッシュする。このディレクトリが actions/cache
+        # の復元／保存対象（キーは tool 名＋固定バージョン＋checksum）となり、
+        # ヒット時も sha256sum -c と固定版 --version を再確認して fail-closed にする。
+        # キャッシュが無い／検証失敗の場合は従来の cargo install / go install を維持する。
+        tool_cache_dir="${HOME}/.cache/oil-ci-tools"
+        mkdir -p "$tool_cache_dir"
+        cargo_deny_version="0.20.2"
+        betterleaks_version="v1.10.1"
         # dev-console feature 配下（初期化・EXPORT_RESULT）もコンパイル/テストして未検証経路を残さない。
         cargo clippy -p client --all-targets --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         cargo test -p client --all-features --quiet
@@ -54,11 +66,40 @@ jobs:
         # --staged は checkout 直後に index が HEAD と一致し 0 バイト走査になるため、
         # CI では --log-opts でイベント別の範囲を明示して走査する。
         # pull_request は base..head（マルチコミット PR を漏らさない）、push は before..HEAD。
-        # ランナーに betterleaks が無い環境では go install で固定版を導入し PATH を更新する。
-        if ! command -v betterleaks >/dev/null 2>&1; then
-          go install github.com/betterleaks/betterleaks@v1.10.1
-          export PATH="$(go env GOPATH)/bin:${PATH}"
+        # go ツールチェーン前提（ADR-0013 P3）: go install の前に command -v go を検査し、
+        # 無い場合は固定版リリースバイナリを checksum 検証付きで直接ダウンロードする。
+        betterleaks_bin="${tool_cache_dir}/betterleaks-${betterleaks_version}"
+        betterleaks_sum="${betterleaks_bin}.sha256"
+        betterleaks_hit=0
+        if [[ -x "$betterleaks_bin" && -f "$betterleaks_sum" ]] &&
+           (cd "$tool_cache_dir" && sha256sum -c "$(basename "$betterleaks_sum")" >/dev/null 2>&1); then
+          betterleaks_hit=1
         fi
+        if ((betterleaks_hit == 0)); then
+          if command -v go >/dev/null 2>&1; then
+            # 従来の go install フォールバック（固定版を維持）。
+            go install github.com/betterleaks/betterleaks@${betterleaks_version}
+            cp "$(go env GOPATH)/bin/betterleaks" "$betterleaks_bin"
+          else
+            # go 不在: 固定版リリース資産と付属 checksum を取得して検証する。
+            bl_asset="betterleaks_${betterleaks_version#v}_linux_amd64.tar.gz"
+            bl_base="https://github.com/betterleaks/betterleaks/releases/download/${betterleaks_version}"
+            curl -fsSL -o "${RUNNER_TEMP:-/tmp}/${bl_asset}" "${bl_base}/${bl_asset}"
+            curl -fsSL -o "${RUNNER_TEMP:-/tmp}/${bl_asset}.sha256" "${bl_base}/${bl_asset}.sha256"
+            (cd "${RUNNER_TEMP:-/tmp}" && sha256sum -c "${bl_asset}.sha256")
+            tar -xzf "${RUNNER_TEMP:-/tmp}/${bl_asset}" -C "${RUNNER_TEMP:-/tmp}" betterleaks
+            cp "${RUNNER_TEMP:-/tmp}/betterleaks" "$betterleaks_bin"
+          fi
+          (cd "$tool_cache_dir" && sha256sum "$(basename "$betterleaks_bin")" > "$(basename "$betterleaks_sum")")
+        fi
+        # キャッシュヒット／ミスを問わず固定版 --version を確認する（ADR-0013 P3）。
+        "$betterleaks_bin" --version 2>&1 | grep -qF "${betterleaks_version#v}" || {
+          echo "::error::betterleaks version mismatch: expected ${betterleaks_version}" >&2
+          exit 1
+        }
+        ln -sf "$(basename "$betterleaks_bin")" "${tool_cache_dir}/betterleaks"
+        export PATH="${tool_cache_dir}:${PATH}"
+        echo "betterleaks cache_hit=${betterleaks_hit}"
         command -v betterleaks && betterleaks --version
         case "${{ github.event_name }}" in
           pull_request)
@@ -90,7 +131,27 @@ jobs:
         npm audit --prefix e2e --audit-level=high
         npm audit --prefix client --audit-level=high
         bash scripts/test-doc-numbers.sh
-        cargo install cargo-deny --version 0.20.2 --locked
+        # cargo-deny のキャッシュ（バージョン＋checksum）。ミス時は従来の cargo install を維持。
+        cargo_deny_bin="${tool_cache_dir}/cargo-deny-${cargo_deny_version}"
+        cargo_deny_sum="${cargo_deny_bin}.sha256"
+        cargo_deny_hit=0
+        if [[ -x "$cargo_deny_bin" && -f "$cargo_deny_sum" ]] &&
+           (cd "$tool_cache_dir" && sha256sum -c "$(basename "$cargo_deny_sum")" >/dev/null 2>&1); then
+          cargo_deny_hit=1
+        fi
+        if ((cargo_deny_hit == 0)); then
+          cargo install cargo-deny --version "$cargo_deny_version" --locked
+          cp "$(command -v cargo-deny)" "$cargo_deny_bin"
+          (cd "$tool_cache_dir" && sha256sum "$(basename "$cargo_deny_bin")" > "$(basename "$cargo_deny_sum")")
+        fi
+        # キャッシュヒット／ミスを問わず固定版 --version を確認する（ADR-0013 P3）。
+        "$cargo_deny_bin" --version 2>&1 | grep -qF "$cargo_deny_version" || {
+          echo "::error::cargo-deny version mismatch: expected ${cargo_deny_version}" >&2
+          exit 1
+        }
+        ln -sf "$(basename "$cargo_deny_bin")" "${tool_cache_dir}/cargo-deny"
+        export PATH="${tool_cache_dir}:${PATH}"
+        echo "cargo-deny cache_hit=${cargo_deny_hit}"
         cargo deny check licenses
         cargo deny check advisories
         cargo deny check bans sources
@@ -101,6 +162,50 @@ jobs:
         # SC2016 は test-backup-rotate.sh の systemd 契約検証用リテラルのみで行単位除外する。
         for f in scripts/*.sh e2e/*.sh; do shellcheck "$f"; done
         shfmt_files="$(shfmt -l scripts/*.sh e2e/*.sh)" || exit 1; if [ -n "$shfmt_files" ]; then echo "shfmt: unformatted: $shfmt_files" >&2; exit 1; fi
+        # --- systemd/cron 構文ゲート（ADR-0013 P3） --------------------------
+        # deploy の unit/timer を一時ディレクトリへコピーする。OnFailure 先の .example は
+        # 拡張子を落とした正式 unit 名で配置し、参照を解決可能にする。
+        # Exec* の未配置パスは「テンプレート」として /bin/true へ差し替え、実在を要求しない。
+        systemd_check_dir="$(mktemp -d)"
+        for unit_src in deploy/*.service deploy/*.timer deploy/*.service.example; do
+          [[ -f "$unit_src" ]] || continue
+          unit_name="${unit_src##*/}"
+          unit_name="${unit_name%.example}"
+          sed -E \
+            -e 's#^(Exec(Start|StartPre|StartPost|Stop|StopPost|Reload)=[+-]?)[^[:space:]].*$#\1/bin/true#' \
+            -e 's#__SET_ME__#/bin/true#' \
+            "$unit_src" > "${systemd_check_dir}/${unit_name}"
+        done
+        SYSTEMD_UNIT_PATH="${systemd_check_dir}:" systemd-analyze verify "${systemd_check_dir}"/*.service "${systemd_check_dir}"/*.timer
+        rm -rf "$systemd_check_dir"
+        # cron: /etc/cron.d 形式（5時刻フィールド + user + command = 7 フィールド以上）を検証し、
+        # /opt/openIllustration/... で参照するリポジトリ内実行ファイルの存在も照合する。
+        for cron_src in deploy/*.cron; do
+          [[ -f "$cron_src" ]] || continue
+          while IFS= read -r cron_line; do
+            [[ -z "$cron_line" ]] && continue
+            field_count="$(awk '{print NF}' <<<"$cron_line")"
+            if ((field_count < 7)); then
+              echo "::error::${cron_src}: cron job line needs >= 7 fields, got ${field_count}: ${cron_line}" >&2
+              exit 1
+            fi
+            read -r c_minute c_hour c_dom c_month c_dow _ <<<"$cron_line"
+            for c_field in "$c_minute" "$c_hour" "$c_dom" "$c_month" "$c_dow"; do
+              if [[ ! "$c_field" =~ ^[0-9A-Za-z*,/-]+$ ]]; then
+                echo "::error::${cron_src}: invalid cron field '${c_field}': ${cron_line}" >&2
+                exit 1
+              fi
+            done
+          done < <(grep -vE '^[[:space:]]*(#|$)' "$cron_src")
+          while IFS= read -r referenced; do
+            [[ -z "$referenced" ]] && continue
+            rel_path="${referenced#/opt/openIllustration/}"
+            if [[ -n "$rel_path" && ! -f "$rel_path" ]]; then
+              echo "::error::${cron_src}: referenced executable '${referenced}' not found as '${rel_path}'" >&2
+              exit 1
+            fi
+          done < <(grep -oE '/opt/openIllustration/[A-Za-z0-9_./-]+\.(sh|py|bin)' "$cron_src" | sort -u || true)
+        done
         # 本番相当のダミー設定で doctor --strict を実行し、起動前設定診断をゲート化する。
         # ダミー本番値が後続のモック E2E へ漏れないようサブシェルで隔離する。
         ( source scripts/doctor-ci-env.sh && cargo run -p server --bin doctor --quiet -- --strict )

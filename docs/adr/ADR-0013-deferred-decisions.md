@@ -82,7 +82,7 @@ generated:
 | go ツールチェーン前提 | `command -v go` を事前検査し、無い場合は固定版バイナリを直接ダウンロード。 |
 | playwright install 再試行 | 有限回数（3 回）のリトライとバックオフを追加。 |
 | モバイル viewport | オプトインのモバイルプロジェクトを追加し、主要画面のスモークを既存ケース内へ統合。 |
-| Chrome 上限固定 | `MAX_CHROME_MAJOR` を CI で明示し、下限（`MIN_CHROME_MAJOR=120`）とともに検証。 |
+| Chrome 上限固定 | `ci-e2e.sh` の CI 分岐で `MAX_CHROME_MAJOR=140` を既定適用し、下限（`MIN_CHROME_MAJOR=120`）とともに検証。超過時は fail-closed。 |
 | build.rs rerun-if-env-changed | `OIL_API_BASE`／`OIL_MOCK_AUTH`／`OIL_CLIENT_METRICS` を監視し、環境変更時の再ビルドを保証。 |
 | real-api 宛先 env 化 | `E2E_SERVER_PORT`／`E2E_API_BASE` を追加し、3000 ハードコードを解消。 |
 | ライセンス本文数照合 | `prepare-distribution.sh` の生成件数を実測し、`DOCUMENT_STATUS` と照合するゲートを追加。 |

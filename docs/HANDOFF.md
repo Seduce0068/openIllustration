@@ -149,7 +149,8 @@ CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現で�
 
 E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
 再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が `MIN_NODE_MAJOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。`MAX_NODE_MAJOR` /
-`MAX_CHROME_MAJOR` を設定すると、検証済み上限を超えた環境で警告を出す（失敗はしない）。失敗時は `e2e/test-results` と `e2e/playwright-report` を
+CI では `MAX_CHROME_MAJOR=140` を既定適用し、上限超過時は fail-closed で失敗する
+（`MAX_NODE_MAJOR` は警告のみ）。失敗時は `e2e/test-results` と `e2e/playwright-report` を
 `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。

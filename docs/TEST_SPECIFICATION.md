@@ -675,11 +675,19 @@ doctor のテスト数は 53 のままだった（R2-ENV で 54 へ追随）。
 
 | 群 | 件数 | テスト名 |
 | --- | --- | --- |
-| 引数パース | 6 | `parse_args_accepts_all_flags` / `parse_args_without_expect_root_is_valid` / `parse_args_accepts_help_without_required_args` / `parse_args_rejects_unknown_argument` / `parse_args_rejects_missing_values` / `parse_args_rejects_missing_required_arguments` |
+| 引数パース | 9 | `parse_args_accepts_all_flags` / `parse_args_without_expect_root_is_valid` / `parse_args_accepts_help_without_required_args` / `parse_args_rejects_unknown_argument` / `parse_args_rejects_missing_values` / `parse_args_rejects_missing_required_arguments` / `help_text_does_not_advertise_database_token` / `database_token_argument_is_rejected_without_leaking_value` / `option_like_token_is_rejected_as_value` |
 | 受理 | 2 | `valid_v3_snapshot_from_temp_files_is_accepted` / `matching_expect_root_is_accepted_case_insensitively` |
 | 拒否 | 5 | `mismatched_expect_root_is_rejected` / `tampered_entry_is_rejected` / `tampered_merkle_root_is_rejected` / `tampered_signature_is_rejected` / `unsupported_versions_1_and_2_are_rejected` |
 | マスク出力 | 3 | `masked_snapshot_output_has_no_secret_or_reason_body` / `plaintext_reason_snapshot_output_still_hides_reasons` / `rejected_output_has_no_secret_or_reason_body` |
 | 一時ファイル | 1 | `temp_files_are_removed_on_drop` |
+
+群テーブルの合計は 20テスト（9+2+5+3+1）で `verify_audit_export.rs` の実数と一致する。
+`scripts/test-doc-numbers.sh` は CLI-02 / CLI-03 についても群テーブルのテスト名と
+`#[test]` / `#[tokio::test]` 付き fn 名を双方向に照合する（ADR-0013 P3）。
+HT/DB トークン関連の3件（`help_text_does_not_advertise_database_token` /
+`database_token_argument_is_rejected_without_leaking_value` /
+`option_like_token_is_rejected_as_value`）は conventional な引数パース群に含め、
+値はエラー文言へエコーしない契約を維持する。
 
 改ざん entry / Merkle root / 署名はいずれも `Invalid signature` で拒否され、version 1 / 2 は
 `unsupported audit snapshot version: N` で拒否される。マーカー

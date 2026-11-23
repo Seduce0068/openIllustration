@@ -1,11 +1,30 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
 // ポートは server/src/lib.rs（3000）と client/Trunk.toml（8080）に合わせる。
 // 8080 が他プロセス（例: code-server）に使われている場合は、ローカル実行に
 // 限り E2E_CLIENT_PORT でクライアントの待受ポートを変更できる。
-const serverUrl = 'http://127.0.0.1:3000';
+// real-api の宛先は E2E_SERVER_PORT / E2E_API_BASE で上書きできる（未設定時は
+// 従来どおり 127.0.0.1:3000）。設定値はテスト開始時にログへ出し、どの環境へ
+// 向かっているか（帰属）を可視化する。
+const serverPortFromEnv = process.env.E2E_SERVER_PORT || '';
+const apiBaseFromEnv = process.env.E2E_API_BASE || '';
+const serverPort = serverPortFromEnv || '3000';
+const serverUrl = `http://127.0.0.1:${serverPort}`;
+const effectiveApiBase = apiBaseFromEnv || serverUrl;
+console.log(
+  `[E2E config] serverUrl=${serverUrl} (source: ${serverPortFromEnv ? 'E2E_SERVER_PORT' : 'default 3000'})`,
+);
+console.log(
+  `[E2E config] API_BASE=${effectiveApiBase} (source: ${
+    apiBaseFromEnv
+      ? 'E2E_API_BASE'
+      : serverPortFromEnv
+        ? 'E2E_SERVER_PORT'
+        : 'default 127.0.0.1:3000'
+  })`,
+);
 const clientPort = process.env.E2E_CLIENT_PORT ?? '8080';
 const clientUrl = `http://127.0.0.1:${clientPort}`;
 
@@ -17,6 +36,34 @@ const e2eJwtSecret =
 
 // ブラウザ間で共通のビューポート（既存の chromium 設定を維持）。
 const viewport = { width: 1280, height: 720 };
+
+// モバイルはオプトイン（E2E_MOBILE=1）時だけ追加する。device descriptor の
+// isMobile / hasTouch / viewport / userAgent を引き継ぎつつ、ブラウザは CI で
+// 確実に導入済みの system Chrome へ固定する（iPhone=WebKit 既定を上書き）。
+const mobileOptIn = process.env.E2E_MOBILE === '1';
+const mobileUse = (deviceName: 'iPhone 13' | 'Pixel 7') => {
+  const device = devices[deviceName];
+  return {
+    viewport: device.viewport,
+    userAgent: device.userAgent,
+    deviceScaleFactor: device.deviceScaleFactor,
+    isMobile: device.isMobile,
+    hasTouch: device.hasTouch,
+    browserName: 'chromium' as const,
+    channel: 'chrome',
+  };
+};
+const mobileProjects = [
+  { name: 'iphone', use: mobileUse('iPhone 13') },
+  { name: 'pixel', use: mobileUse('Pixel 7') },
+];
+console.log(
+  `[E2E config] mobile projects: ${
+    mobileOptIn
+      ? mobileProjects.map((project) => project.name).join(',')
+      : '<disabled; E2E_MOBILE=1 to enable>'
+  }`,
+);
 
 // ローカルは既存プロセスと `server/local.db` を再利用する。CI は常に
 // 起動し直し、`E2E_REUSE=0` でローカルでも再利用を無効化できる。
@@ -68,6 +115,7 @@ export default defineConfig({
           viewport,
         },
       },
+      ...(mobileOptIn ? mobileProjects : []),
     ];
     // CI は E2E_PROJECTS を export せず --project 引数だけで選択するため、
     // 3 プロジェクトを登録しておき、選択は --project 側へ委ねる。
@@ -79,6 +127,13 @@ export default defineConfig({
     // 完全に未指定のときだけ既定へ。区切りだけの "," や末尾カンマは
     // 空要素として残し、ci-e2e.sh と同じく unknown として拒否する。
     if (configured.trim() === '') return [all[0]];
+    // モバイルはオプトイン時のみ追加する。既定の chromium 1280x720 と E2E69 件の
+    // 基数は変えない（追加されるのはプロジェクト＝実行回数であり test() 定義数ではない）。
+    if (mobileOptIn) {
+      for (const project of mobileProjects) {
+        if (!selected.includes(project.name)) selected.push(project.name);
+      }
+    }
     // 未知値は黙って無視せず fail-closed（ci-e2e.sh の select_e2e_projects と同契約）。
     const known = new Set(all.map((project) => project.name));
     const unknown = selected.filter((name) => !known.has(name));
@@ -96,6 +151,8 @@ export default defineConfig({
       env: {
         ...(serverDatabaseUrl ? { DATABASE_URL: serverDatabaseUrl } : {}),
         JWT_SECRET: e2eJwtSecret,
+        // E2E_SERVER_PORT を指定したときはサーバ側の待受ポート（PORT）にも反映する。
+        PORT: serverPort,
         ALLOW_MOCK_AUTH: '1',
         ALLOW_IPV4_LOCALHOST: '1',
         // クライアントのポートを変えた場合も CORS で許可する。

@@ -37,7 +37,22 @@ test.describe('Real server integration', () => {
   });
 
   // クライアント (client/src/lib.rs の API_BASE) と同じ実サーバー宛先。
-  const API_BASE = 'http://127.0.0.1:3000';
+  // E2E_API_BASE で直接、または E2E_SERVER_PORT でポートのみ上書きできる。
+  // 未設定時は従来どおり http://127.0.0.1:3000（playwright.config.ts と同契約）。
+  const apiBaseFromEnv = process.env.E2E_API_BASE || '';
+  const serverPortFromEnv = process.env.E2E_SERVER_PORT || '';
+  const API_BASE =
+    apiBaseFromEnv || `http://127.0.0.1:${serverPortFromEnv || '3000'}`;
+  // どの環境へ向かっているか（帰属）をテスト開始時に可視化する。
+  console.log(
+    `[real-api] API_BASE=${API_BASE} (source: ${
+      apiBaseFromEnv
+        ? 'E2E_API_BASE'
+        : serverPortFromEnv
+          ? 'E2E_SERVER_PORT'
+          : 'default 127.0.0.1:3000'
+    })`,
+  );
 
   type RealSession = {
     /** 実 /auth/verify が発行した JWT。 */
