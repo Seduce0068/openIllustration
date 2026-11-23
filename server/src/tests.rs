@@ -15822,6 +15822,21 @@ async fn read_neutralized_metric(app: &Router) -> u64 {
     read_metric(&body, "openillustration_neutralized_urls_total")
 }
 
+async fn read_ui_error_metric(app: &Router) -> u64 {
+    let response = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body =
+        String::from_utf8(to_bytes(response.into_body(), 8192).await.unwrap().to_vec()).unwrap();
+    read_metric(&body, "openillustration_client_ui_errors_total")
+}
+
 /// 中立化 URL イベントを 1 件送信する（既定 count を使う）。
 fn client_event_request(body: Body) -> Request<Body> {
     with_peer(
@@ -16155,6 +16170,19 @@ async fn test_client_events_neutralized_url_increments_counter() {
     // count の値にかかわらず、1 リクエストにつきカウンタは 1 だけ進む。
     assert_eq!(read_neutralized_metric(&app).await, before + 1);
 
+    // ADR-0013 P4: ui_error も受け付け、専用カウンタのみが進む（機微情報は送らない）。
+    let ui_before = read_ui_error_metric(&app).await;
+    let response = app
+        .clone()
+        .oneshot(client_event_request(Body::from(
+            r#"{"event":"ui_error","count":3}"#,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(read_ui_error_metric(&app).await, ui_before + 1);
+    assert_eq!(read_neutralized_metric(&app).await, before + 1);
+
     // count 省略時は 1。
     let response = app
         .clone()
@@ -16210,6 +16238,8 @@ async fn test_client_events_rejects_invalid_payloads() {
         r#"{"event":"neutralized_url","count":1,"url":"https://example.com/secret"}"#,
         r#"{"event":"neutralized_url","count":1,"ip":"203.0.113.1"}"#,
         r#"{"event":"neutralized_url","count":1,"user_agent":"ua"}"#,
+        r#"{"event":"ui_error","count":1,"url":"https://example.com/secret"}"#,
+        r#"{"event":"ui_error","count":1,"ip":"203.0.113.1"}"#,
         r#"{}"#,
         r#"[]"#,
         r#"not json"#,

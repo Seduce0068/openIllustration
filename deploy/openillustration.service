@@ -1,12 +1,15 @@
 [Unit]
 Description=OpenIllustration API server
-Documentation=file:///opt/openIllustration/docs/BACKUP_RESTORE_RUNBOOK.md
+Documentation=file:///opt/openIllustration/docs/OPERATIONAL_POLICY.md
 # アプリ本体の unit テンプレート（ADR-0013 P1「アプリ systemd unit テンプレート」）。
 # 配置時に /etc/systemd/system/openillustration.service へコピーし、以下を実環境へ
 # 合わせること: User/Group、ExecStart のバイナリパス、EnvironmentFile の所有者と権限。
 # unit failed 時に通知 unit を起動する（配置時に実宛先へ差し替えること）。
 # ALERT_CMD はバックアップ詳細、OnFailure は unit 結果の通知を担う（Runbook 参照）。
 OnFailure=openillustration-backup-alert.service
+# 設定不正による起動拒否の無限リトライを防ぎ、failed 遷移で OnFailure を発火させる。
+StartLimitIntervalSec=300
+StartLimitBurst=5
 After=network-online.target
 Wants=network-online.target
 
@@ -15,14 +18,16 @@ Type=simple
 WorkingDirectory=/opt/openIllustration
 User=openillustration
 Group=openillustration
-# 秘密情報（JWT_SECRET / PINATA_JWT / 決済鍵 等）は環境ファイルからのみ注入する。
-# 配置前に /etc/openillustration/server.env が所有者 openillustration・権限 0600
-# であることを確認すること（0600 必須。緩い権限では配置しない）。
-EnvironmentFile=/etc/openillustration/server.env
 # リポジトリに同梱した migrations の絶対パスを明示する（ADR-0013 P1）。
 # サーバー側の MIGRATIONS_DIR override が有効なときに参照される。
 # 開発フォールバック（CARGO_MANIFEST_DIR）に依存させないため、本番では必ず設定する。
 Environment=MIGRATIONS_DIR=/opt/openIllustration/migrations
+# 秘密情報（JWT_SECRET / PINATA_JWT / 決済鍵 等）は環境ファイルからのみ注入する。
+# 配置前に /etc/openillustration/server.env が所有者 openillustration・権限 0600
+# であることを確認すること（0600 必須。緩い権限では配置しない）。
+# systemd は Environment= / EnvironmentFile= を出現順に後勝ちでマージする。
+# 上の MIGRATIONS_DIR 既定を server.env で上書きできるよう、EnvironmentFile を後に置く。
+EnvironmentFile=/etc/openillustration/server.env
 # 起動時に作られる一時ファイルの既定権限を 0600 に制限する。
 UMask=0077
 # 設定不正による起動拒否を無限リトライしないため、失敗時のみ再起動する。

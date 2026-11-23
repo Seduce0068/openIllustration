@@ -138,7 +138,7 @@ JPYC 外部仕様は一次ソース未確認。R1-27 は信頼度 0.45 で「推
 | R2-10 | 「本人確認結果」が監査対象として定義されずエクスポートにも含まれない | 中 | `REQUIREMENTS_SPECIFICATION.md:38` vs `lib.rs:1285-1348`、`sign_audit_export.rs:105-140` | 0.80 |
 | R2-11 | モデレーションの「通知」「再審査」手続が未定義 | 中 | `REQUIREMENTS_SPECIFICATION.md:40`、`BASIC_DESIGN.md:73` | 0.80 |
 | R2-12 | JPYC の「手数料表示」と失敗・返金・紛争処理が仕様化されず実装も無い | 中 | `REQUIREMENTS_SPECIFICATION.md:46`、`BASIC_DESIGN.md:34`、`payments.rs:17-38` | 0.85 |
-| R2-13 | 画像デコード等の機能検出・理由表示・代替手段が未実装 | 中 | `REQUIREMENTS_SPECIFICATION.md:59`、`client/src/lib.rs:357-360`（R1-13 と同一コード） | 0.80 |
+| R2-13 | 画像デコード等の機能検出・理由表示・代替手段 — ADR-0013 方針拒否のため実装しない（ビルド時確定） | 方針拒否 | `REQUIREMENTS_SPECIFICATION.md:59`、`client/src/lib.rs:357-360`（R1-13 と同一コード） | 0.80 |
 | R2-14 | コンテンツ削除・法的要請対応の手順が未設計（UNPIN は判断記録のみ） | 中 | `REQUIREMENTS_SPECIFICATION.md:64`、`server/src/lib.rs:2055-2080` | 0.80 |
 | R2-15 | 「名前解決の単一障害点」「サービス停止権限」の脅威モデル化が無い | 中 | `REQUIREMENTS_SPECIFICATION.md:63`、`INFRA_NETWORK.md:36-42` | 0.70 |
 | R2-16 | 認証境界の例外リストに `/metrics` が含まれていない（解釈依存） | 低 | `REQUIREMENTS_SPECIFICATION.md:22` vs `server/src/lib.rs:1130-1133` | 0.60 |

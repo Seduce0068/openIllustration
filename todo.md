@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第63ラウンド（ADR完了後2回目review/discovery）: 全7担当完了。
+  R6 で以下を是正: 【high】ui_errorがサーバ側ホワイトリストで全件400拒否されていた問題
+  （ui_error受理+専用カウンタopenillustration_client_ui_errors_total+回帰テスト）、
+  unhandledrejectionリスナ追加（spawn_localの非同期例外を件数だけ計測）、
+  アプリunitへStartLimitIntervalSec/Burst+Environment順序+Documentation修正、
+  docsの機能検出旧記述をADR-0013のビルド時確定方針へ是正、OPERATIONAL_POLICYへ
+  ui_errorと2カウンタ明記、ci-extra-gates抽出/globalSetup認証/issuesは次ラウンド以降。
+  R4指摘1件（server側ui_error回帰テスト）も修正。
+  親が/tmp枯渇（過去ラウンドの一時target 17G）を解消して全ゲート green。
+  E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)。
+  残存（次ラウンド: ci-extra-gates抽出、globalSetup認証済み画面監視、
+  TimeoutLayer外側メトリクス、RuntimeConfig一括化、OIDC初回登録403/501、
+  restore原子的ロールバック、unpin補償メトリクス、Vote disabled理由、
+  公開集計鮮度警告、E2Eコメント行番号、5秒スリープ、gpg前提README、
+  Prometheus scrape、カードタッチ目標24px、監査初期フォーカス、
+  HANDOFF履歴、DOCUMENT_STATUS ADR反映）は記録のみで保留。
+
 - 2026-11-23 コンボ第62ラウンド（ADR完了後初回review/discovery）: 全7担当完了。
   R6 で以下を是正: オフサイト転送へdetached署名(.asc)追加（3点世代対）、
   アプリ/backup両unitへOnFailure、backup_db VACUUM INTO TOCTOU保護、

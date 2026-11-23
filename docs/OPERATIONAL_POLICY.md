@@ -496,7 +496,9 @@ generated:
   サーバーも受信・記録・ログ出力しない（監視用の `/metrics` とは異なり、IP ゲートと
   既存レート制限の適用対象）。
   `GET /metrics` は `openillustration_neutralized_urls_total`（Prometheus counter、
-  受け付けたイベント数の累積値）を公開する。カウンタはプロセス内で再起動時にゼロへ戻る。
+  受け付けたイベント数の累積値）を公開する。加えてクライアント側の未捕捉例外は
+  `{"event":"ui_error","count":N}` で送られ、`openillustration_client_ui_errors_total` に
+  集計される（event/count のみ・機微情報は送らない）。いずれも参考値であり単独アラートに使わない。カウンタはプロセス内で再起動時にゼロへ戻る。
   このカウンタは参考値であり、アラート判定や請求等の意思決定に単独で使わない。
   エンドポイントは認証不要だが、加算は1リクエストにつき1固定であり、
    `count=1000` の連投による増幅は60/分/IPのレート制限へ低減される。
@@ -504,7 +506,8 @@ generated:
   サーバー側の独立した記録を突き合わせる。
 - クライアント側メトリクス送信の無効化: ビルド時に `OIL_CLIENT_METRICS=0`（または `false`、大小文字無視）を指定すると
   `POST /metrics/client-events` を一切送らない（未設定・その他の値は送信する）。
-  有効時のペイロードは `event`（固定値 `neutralized_url`）と `count`（1〜1000 の整数）のみで、
+  有効時のペイロードは `event`（`neutralized_url` または `ui_error`）と
+  `count`（1〜1000 の整数）のみで、
   URL 本文・IP アドレス・User-Agent・認証情報は含めず、サーバーも受信・記録・ログ出力しない。
   送信を止めても `GET /metrics` の `openillustration_neutralized_urls_total` は
   それまでに受け付けたイベント数の累積値として残る。

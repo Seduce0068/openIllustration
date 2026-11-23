@@ -376,6 +376,8 @@ pub struct Metrics {
     pub errors: std::sync::atomic::AtomicU64,
     /// クライアントが中立化した危険 URL の件数。URL 本文自体は保持しない。
     pub neutralized_urls: std::sync::atomic::AtomicU64,
+    /// クライアント側の未捕捉例外件数（event/count のみ・機微情報は保持しない）。
+    pub ui_error_events: std::sync::atomic::AtomicU64,
     /// 周期 finalizer の tick 実行回数。
     pub finalizer_ticks: std::sync::atomic::AtomicU64,
     /// finalizer / 周期 purge が回収・確定したレコード件数。値や CID は保持しない。
@@ -601,6 +603,11 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
          # HELP openillustration_neutralized_urls_total Total neutralized dangerous URLs reported by clients.\n\
          # TYPE openillustration_neutralized_urls_total counter\n\
          openillustration_neutralized_urls_total {}\n\
+         # HELP openillustration_client_ui_errors_total Total client-side uncaught error events reported by clients.
+\
+         # TYPE openillustration_client_ui_errors_total counter
+\
+         openillustration_client_ui_errors_total {}\n\
          # HELP openillustration_finalizer_ticks_total Total moderation finalizer tick executions.\n\
          # TYPE openillustration_finalizer_ticks_total counter\n\
          openillustration_finalizer_ticks_total {}\n\
@@ -630,6 +637,10 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         state
             .metrics
             .neutralized_urls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .ui_error_events
             .load(std::sync::atomic::Ordering::Relaxed),
         state
             .metrics
@@ -718,15 +729,27 @@ pub async fn client_events(
         Ok(payload) => payload,
         Err(_) => return StatusCode::BAD_REQUEST.into_response(),
     };
-    // 新しい event 種別を増やすときはこのホワイトリストだけを拡張する。
-    if payload.event != "neutralized_url" || !(1..=1000).contains(&payload.count) {
+    // event/count のみを受け付ける（URL・IP・User-Agent は送らない既存契約を維持）。
+    // ADR-0013 P4: クライアント例外観測の ui_error もホワイトリストへ追加する。
+    if !(1..=1000).contains(&payload.count) {
         return StatusCode::BAD_REQUEST.into_response();
     }
     // count は互換のため1..=1000を受け入れるが、加算は1リクエストにつき1。
-    state
-        .metrics
-        .neutralized_urls
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    match payload.event.as_str() {
+        "neutralized_url" => {
+            state
+                .metrics
+                .neutralized_urls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        "ui_error" => {
+            state
+                .metrics
+                .ui_error_events
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    }
     StatusCode::NO_CONTENT.into_response()
 }
 
