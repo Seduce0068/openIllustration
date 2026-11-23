@@ -2011,6 +2011,11 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
+- **E2E プロジェクト選択の fail-closed**: `e2e/playwright.config.ts` は `E2E_PROJECTS` の
+  未知値を黙って chromium へフォールバックせず、`unknown E2E project` で失敗する
+  （`ci-e2e.sh` の `select_e2e_projects` と同じ契約）。未指定時はローカル chromium のみ、
+  CI 時は 3 プロジェクトを登録する。
+
 - **日時表示のタイムゾーン明示**: `format_local_datetime` は `timeZone: "UTC"` 固定を維持し、
   整形済み文字列へ `" (協定世界時)"` を付与する（ISO 文字列の "T" を残さない既存契約も維持し、ja-JP 利用者が JST と誤認しないように）。
   パース失敗時は元の ISO 文字列をそのまま返す既存契約は維持する。

@@ -75,11 +75,16 @@ export default defineConfig({
     const configured =
       process.env.E2E_PROJECTS ??
       (process.env.CI ? 'chromium,firefox,webkit' : 'chromium');
-    const selected = configured
-      .split(',')
-      .map((name) => name.trim())
-      .filter(Boolean);
-    if (selected.length === 0) return [all[0]];
+    const selected = configured.split(',').map((name) => name.trim());
+    // 完全に未指定のときだけ既定へ。区切りだけの "," や末尾カンマは
+    // 空要素として残し、ci-e2e.sh と同じく unknown として拒否する。
+    if (configured.trim() === '') return [all[0]];
+    // 未知値は黙って無視せず fail-closed（ci-e2e.sh の select_e2e_projects と同契約）。
+    const known = new Set(all.map((project) => project.name));
+    const unknown = selected.filter((name) => !known.has(name));
+    if (unknown.length > 0) {
+      throw new Error(`unknown E2E project: ${unknown.join(',')}`);
+    }
     return all.filter((project) => selected.includes(project.name));
   })(),
   // 開発サーバーを自動起動する。`cwd` は設定ファイルからの相対パスで解決され、

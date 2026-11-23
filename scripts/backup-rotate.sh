@@ -167,6 +167,11 @@ fi
 # mktemp の作業ディレクトリ（平文 tmp_db を含む）とローテーション列挙の
 # 一時ファイルは、成否にかかわらず EXIT 時に必ず削除する。
 # 既存のバックアップ先が 0700 より開いている場合は暗黙に修正せず拒否する（fail-closed）。
+if [[ -L "$backup_dir" ]]; then
+	# 公開先ファイルと同じく、ディレクトリ自体のシンボリックリンクも拒否する。
+	echo "error: backup directory ${backup_dir} must not be a symbolic link" >&2
+	exit 1
+fi
 if [[ -e "$backup_dir" ]]; then
 	existing_mode="$(stat -c %a "$backup_dir")"
 	if [[ "$existing_mode" != "700" ]]; then
