@@ -188,7 +188,11 @@ fn format_local_datetime(iso: &str) -> String {
     let locales = js_sys::Array::of1(&JsValue::from_str("ja-JP"));
     let formatter = js_sys::Intl::DateTimeFormat::new(&locales, &options);
     match formatter.format().call1(&JsValue::NULL, date.as_ref()) {
-        Ok(value) => value.as_string().unwrap_or_else(|| iso.to_string()),
+        // UTC 固定を維持するため、可視テキストにもタイムゾーンを明示する（誤読防止）。
+        Ok(value) => format!(
+            "{} (協定世界時)",
+            value.as_string().unwrap_or_else(|| iso.to_string())
+        ),
         Err(_) => iso.to_string(),
     }
 }

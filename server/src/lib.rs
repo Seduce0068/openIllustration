@@ -3497,27 +3497,8 @@ pub async fn auth_verify(
         None
     };
 
-    if trusted_mode {
-        // 検証済み birthdate / country で判定し、自己申告値は一切使わない。
-        let verified = verified_age
-            .as_ref()
-            .expect("trusted mode requires verified claims");
-        let tz = configured_tz();
-        let today = today_for_policy(chrono::Utc::now(), tz.as_deref());
-        let age = common::age::calculate_age(&verified.birthdate, today)
-            .map_err(age_validation_error_to_app_error)?;
-        let threshold = state.age_policy.minimum_age_for(&verified.country);
-        if age < threshold {
-            return Err(AppError::Forbidden(format!(
-                "Age verification failed for {}: age {}, required {}",
-                verified.country, age, threshold
-            )));
-        }
-    } else {
-        // 既定モードは自己申告ベースを維持（R1 item9: 自動昇格しない）。
-        validate_age(&state.age_policy, birth_date, country_code)?;
-    }
-
+    // nonce は年齢判定より先に消費する。年齢判定で 403/400 になっても
+    // 同一 nonce を別の署名済み属性で再提示できないようにするため（単回消費契約）。
     let verified_key = if payload.presentation_token == "mock_token" && state.allow_mock_auth {
         // 開発用モックでも nonce を必須化し、リプレイを防ぐ。
         let nonce = payload
@@ -3537,6 +3518,27 @@ pub async fn auth_verify(
                 }
             }
         }
+        if trusted_mode {
+            // 検証済み birthdate / country で判定し、自己申告値は一切使わない。
+            let verified = verified_age
+                .as_ref()
+                .expect("trusted mode requires verified claims");
+            let tz = configured_tz();
+            let today = today_for_policy(chrono::Utc::now(), tz.as_deref());
+            let age = common::age::calculate_age(&verified.birthdate, today)
+                .map_err(age_validation_error_to_app_error)?;
+            let threshold = state.age_policy.minimum_age_for(&verified.country);
+            if age < threshold {
+                return Err(AppError::Forbidden(format!(
+                    "Age verification failed for {}: age {}, required {}",
+                    verified.country, age, threshold
+                )));
+            }
+        } else {
+            // 既定モードは自己申告ベースを維持（R1 item9: 自動昇格しない）。
+            validate_age(&state.age_policy, birth_date, country_code)?;
+        }
+
         // PoP は opt-in。nonce の単回消費が完了した直後に検証し、検証失敗時も
         // nonce は消費済みのままとする（再提示は 400 で拒否される）。
         if let Some(pop) = &payload.proof_of_possession {

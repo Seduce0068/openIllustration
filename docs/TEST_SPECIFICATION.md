@@ -2011,6 +2011,10 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 
 ## R2-CLIENT の受け入れ契約（既存ケース内へ統合・数値不変）
 
+- **日時表示のタイムゾーン明示**: `format_local_datetime` は `timeZone: "UTC"` 固定を維持し、
+  整形済み文字列へ `" (協定世界時)"` を付与する（ISO 文字列の "T" を残さない既存契約も維持し、ja-JP 利用者が JST と誤認しないように）。
+  パース失敗時は元の ISO 文字列をそのまま返す既存契約は維持する。
+
 - SPA ビュー切替時のタブタイトル同期: `document.set_title` が `{label} — OpenIllustration` を設定し、
   search.spec.ts の既存ケース内で UPLOAD 遷移後の `toHaveTitle('UPLOAD — OpenIllustration')` を検証する
   （新規 test() なし・E2E69件維持）。

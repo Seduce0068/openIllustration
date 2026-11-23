@@ -11864,6 +11864,23 @@ async fn test_verified_age_rejects_reused_nonce() {
         StatusCode::BAD_REQUEST,
         "a consumed nonce must not be reusable"
     );
+
+    // 年齢拒否（403）経路でも nonce が消費済みとなることを固定する。
+    // nonce 消費が年齢判定より後ろへ戻ると、この再提示が 200 になり回帰を検出できる。
+    let underage_nonce = crate::issue_mock_nonce_for_test();
+    let underage_body = verified_verify_body(&underage_nonce, "jpki-test", "").replace(
+        "\"birthdate\":\"2000-01-01\"",
+        "\"birthdate\":\"2010-01-01\"",
+    );
+    let (status, _) = post_verify(&app, underage_body).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "underage must be rejected");
+    let (status, _) =
+        post_verify(&app, verified_verify_body(&underage_nonce, "jpki-test", "")).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "nonce must be consumed even when age verification rejects the request"
+    );
 }
 
 /// DEC-01-04: 未許可 issuer 拒否。

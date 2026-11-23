@@ -87,8 +87,12 @@ impl VerifiedAgeAdapter {
         if claims.attribute.nonce != nonce {
             return Err(trusted_attribute_forbidden());
         }
+        // country は ISO 3166-1 alpha-2（2 文字大文字）のみ受理する。
+        // 不正値はデフォルト閾値へフォールバックして国別ポリシーをすり抜けるため fail-closed。
+        let country = claims.country.trim();
         if claims.birthdate.trim().is_empty()
-            || claims.country.trim().is_empty()
+            || country.len() != 2
+            || !country.bytes().all(|b| b.is_ascii_uppercase())
             || claims.attribute.signed_subject.trim().is_empty()
             || chrono::NaiveDate::parse_from_str(&claims.birthdate, "%Y-%m-%d").is_err()
         {
@@ -99,7 +103,7 @@ impl VerifiedAgeAdapter {
             issuer: issuer.to_string(),
             signed_subject: claims.attribute.signed_subject.clone(),
             birthdate: claims.birthdate.clone(),
-            country: claims.country.clone(),
+            country: country.to_string(),
         })
     }
 }
@@ -242,6 +246,21 @@ mod tests {
                 )
                 .expect_err("empty signed_subject must be rejected")
         ));
+
+        // country は ISO 3166-1 alpha-2（2 文字大文字）のみ。不正値はデフォルト閾値
+        // へのフォールバックを防ぐため fail-closed で拒否する。
+        for bad_country in ["jp", "JPN", "J1", "", " J"] {
+            let mut bad = claims();
+            bad.country = bad_country.to_string();
+            assert!(
+                is_forbidden(
+                    &adapter()
+                        .verify("jpki-test", &bad, "fixture-nonce-0001", "test-client")
+                        .expect_err("invalid country must be rejected")
+                ),
+                "country={bad_country:?}"
+            );
+        }
     }
 
     #[test]

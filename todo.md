@@ -787,6 +787,30 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第45ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  JXLのchannels=0を明示拒否+NaN/±infのsaturating castオラクル、
+  auth_verifyのMOCK_NONCE消費を年齢判定より前に移動（拒否時も単回消費）、
+  署名済みcountryをISO 3166-1 alpha-2（2文字大文字）のみ受理し不正はfail-closed、
+  日時表示へ「(協定世界時)」付与（ISOのTを残さない既存契約維持）。
+  R4指摘2件（nonce/Countryの回帰オラクル）も既存テスト内へ追加。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、npm audit3lockfile、
+  markdownlint39ファイル、server485/jxl3 green）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2E本番相当昇格、Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  build.rs rerun-if-env-changed、リクエストタイムアウト、E2E artifact公開、GPG署名、
+  RPO/RTO定義、バックアップ鮮度監視、trunk部分アーカイブ、cronタイムアウト、GPG trust、
+  cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、axe自動スキャン、
+  開発モックuser_hash衝突、再試行導線、クライアント例外テレメトリ、refresh失敗メトリクス、
+  playwright install再試行、window unit停止済みアプリ再起動、監査スクロールキーボード到達、
+  E2Eビルド::error::、reqwest TLS二重スタック、tokio features full、CIバイナリキャッシュ、
+  失効閾値削除失敗の警告格下げ、logout sub不一致時Cookie削除、finalizer BEGIN失敗計上、
+  NTP同期要件、ブラウザエラー観測、429/503再試行、prefers-reduced-motion、
+  JXLアニメーション複数フレーム、MAX_PIXELS実効化、CI fallbackガード到達性）は記録のみで保留。
+
 - 2026-11-23 コンボ第44ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   異議通報のcreated_at欠損時にfail-closedで所有者のみ受理、

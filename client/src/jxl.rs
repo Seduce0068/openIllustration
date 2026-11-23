@@ -18,6 +18,11 @@ fn dimensions_allowed(width: u64, height: u64) -> bool {
         && width.saturating_mul(height) <= MAX_PIXELS
 }
 
+/// デコーダが返すチャンネル数が変換可能か（0 は不可）。
+fn channels_supported(channels: usize) -> bool {
+    channels > 0
+}
+
 /// インターリーブされたサンプルを RGBA に変換する。
 /// channels=1 はグレー、2 はグレー＋アルファ、3 は RGB、4 以上は RGBA として扱う。
 fn sample_to_rgba(buf: &[f32], offset: usize, channels: usize) -> [u8; 4] {
@@ -107,6 +112,13 @@ mod tests {
         // 値は 0..1 にクランプする。
         let over = [2.0, -1.0, 0.5, 1.0];
         assert_eq!(sample_to_rgba(&over, 0, 4), [255, 0, 127, 255]);
+        // NaN / ±inf は saturating cast により 0 として扱われる（機微情報は出さない）。
+        let nonfinite = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.5];
+        assert_eq!(sample_to_rgba(&nonfinite, 0, 4), [0, 255, 0, 127]);
+        // channels=0 はサポート外（decode 側で拒否する）。
+        assert!(!channels_supported(0));
+        assert!(channels_supported(1));
+        assert!(channels_supported(5));
     }
 }
 
@@ -136,6 +148,11 @@ pub fn decode_jxl_to_canvas(jxl_data: &[u8], canvas: HtmlCanvasElement) -> Resul
     let width = fb.width();
     let height = fb.height();
     let channels = fb.channels();
+
+    // channels=0 は透明黒として VERIFIED を通過し得るため明示拒否する。
+    if !channels_supported(channels) {
+        return Err(JsValue::from_str("JXL has no image channels"));
+    }
 
     // レンダ結果も再検証（ヘッダーと異なる寸法が返された場合の防御）。
     if !dimensions_allowed(width as u64, height as u64) {

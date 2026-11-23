@@ -50,6 +50,7 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     const text = (await generatedAt.textContent())?.trim() ?? '';
     // ロケール依存の完全一致は避け、生 ISO でないことと年が含まれることのみを確認する。
     expect(text).toMatch(/^GENERATED_AT: /);
+    expect(text).toContain('(協定世界時)');
     expect(text).toContain('2026');
     expect(text).not.toContain(generatedAtRaw);
     await expect(generatedAt).toHaveAttribute('title', generatedAtRaw);
