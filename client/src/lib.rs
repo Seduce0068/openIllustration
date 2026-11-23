@@ -3082,6 +3082,12 @@ fn ExportMyData(token: String) -> impl IntoView {
                     {move || error.get()}
                 </p>
             </Show>
+            <Show when=move || error.get() == "ログインが必要です" fallback=|| ()>
+                <p data-testid="export-relogin-hint" role="status" aria-live="polite"
+                    lang="ja" class="text-xs text-gray-400 mb-2">
+                    "LOG OUT からログアウトし、再度 JPKI でログインしてください。"
+                </p>
+            </Show>
             <Show when=move || !status.get().is_empty() fallback=|| ()>
                 <p role="status" data-testid="export-status" lang=move || error_lang(&status.get()) class="text-xs text-gray-400">
                     {move || status.get()}

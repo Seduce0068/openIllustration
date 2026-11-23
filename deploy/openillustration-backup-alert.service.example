@@ -13,9 +13,11 @@ Type=oneshot
 # READY=1 を送るラッパーへ差し替えた場合は NotifyAccess=all へ変更する。
 NotifyAccess=none
 # 差し替え必須: backup.env の ALERT_CMD と同じ「1引数（メッセージ）」契約の
-# 実行ファイルを指定する。%N は失敗した unit 名へ展開される。
-ExecStart=/usr/local/bin/__SET_ME__ "unit %N failed; see journalctl -u %N"
+# 実行ファイルを指定する。注意: %N はこの通知 unit 自身の名前へ展開されるため、
+# 失敗元 unit を特定したい場合は openillustration-backup-alert@.service テンプレート化し、
+# 各失敗 unit の OnFailure= で @%n.service を指定して %i から失敗元名を渡すこと。
+ExecStart=/usr/local/bin/__SET_ME__ "backup alert unit fired; see journalctl -u openillustration"
 # backup.env の ALERT_CMD を再利用する場合は [Service] へ
 #   EnvironmentFile=-/etc/openillustration/backup.env
-# を追加し、ExecStart=${ALERT_CMD} "unit %N failed" としてもよい。
+# を追加し、ExecStart=${ALERT_CMD} "backup alert unit fired" としてもよい。
 # 通知コマンド自体が失敗しても、OnFailure を呼んだ unit の結果は変わらない。

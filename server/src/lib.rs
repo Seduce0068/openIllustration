@@ -911,7 +911,7 @@ async fn acquire_purge_lock(
 /// `begin_write_tx_sql` の公開 API ラッパー。poison を含むロック取得失敗は
 /// すでに `AppError::Internal` として伝播済みであり、ここでは再ラップしない。
 /// ガードは戻り値に保持させ、コミット後にドロップする。
-async fn begin_write_tx(
+pub(crate) async fn begin_write_tx(
     db: &Connection,
 ) -> Result<(tokio::sync::OwnedMutexGuard<()>, libsql::Transaction), AppError> {
     begin_write_tx_sql(db).await
@@ -4387,22 +4387,8 @@ pub async fn logout(
             .map_err(|e| AppError::Unauthorized(format!("Invalid token: {}", e)))?
             .claims
     };
-    // R2-SERVER: 署名・期限だけでなく AuthClaims 抽出器と同じ sub 閾値を検査する。
-    // 抽出器を通さない理由は sid 側の冪等性（二重 logout も 200）を維持するため。
-    // BAN / back-channel logout 済みの sub はここで 401 とし、sid の書き込みも行わない。
-    // DB エラーは fail-closed（AppError::Internal）として失効なし扱いにしない。
-    if is_sub_revoked(&state.db, &claims.sub, claims.iat).await? {
-        return Err(AppError::Unauthorized("Session revoked".to_string()));
-    }
-    if let Some(sid) = &claims.sid {
-        // メモリ/DB の両方を確認し、既に失効済みなら二重 logout として成功扱い。
-        // revoke_session は INSERT OR IGNORE なので再記録自体は安全だが、
-        // ここでは不要な再書き込みを避けて冪等に 200 を返す。
-        if !is_session_revoked(&state, sid).await? {
-            revoke_session(&state, sid).await?;
-        }
-    }
-    // ADR-0013 P4: 削除 Cookie を先に組み立て、sub 不一致の 401 経路でも必ず付与する。
+    // ADR-0013 P4: 削除 Cookie を全分岐より先に組み立て、いずれの 401 / 失敗経路でも
+    // ブラウザ側の refresh_token を必ず消去する。
     // Secure 属性は発行側 refresh_cookie と同じ OIDC 設定を単一ソースとして共有する。
     // OIDC 未構成（mock 認証等）では Secure を付与する（fail-closed）。
     let secure = state
@@ -4411,6 +4397,39 @@ pub async fn logout(
         .map(|oidc| oidc.cookie_secure())
         .unwrap_or(true);
     let cookie = oidc::delete_refresh_cookie(secure)?;
+
+    // R2-SERVER: 署名・期限だけでなく AuthClaims 抽出器と同じ sub 閾値を検査する。
+    // BAN / back-channel logout 済みの sub は 401 とするが、Cookie は消去する。
+    if is_sub_revoked(&state.db, &claims.sub, claims.iat).await? {
+        let mut response = AppError::Unauthorized("Session revoked".to_string()).into_response();
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, cookie.clone());
+        return Ok(response);
+    }
+    if let Some(sid) = &claims.sid {
+        // sid 側の確認・再記録失敗も警告＋カウンタへ格下げし、削除 Cookie を必ず返す。
+        // DB 障害で失効記録が失敗しても、ブラウザ側トークンを残さないことを優先する。
+        match is_session_revoked(&state, sid).await {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Err(error) = revoke_session(&state, sid).await {
+                    state
+                        .metrics
+                        .token_cleanup_failures
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::warn!("logout session revocation failed: {error}");
+                }
+            }
+            Err(error) => {
+                state
+                    .metrics
+                    .token_cleanup_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::warn!("logout session revocation check failed: {error}");
+            }
+        }
+    }
 
     // リフレッシュトークンが添付されていれば、そのファミリを失効させる。
     // state Cookie と同じ基準で重複を拒否する（先勝ちで攻撃者の値を選ばない）。

@@ -1849,7 +1849,7 @@ E2E の `test()` 名も NEUT-URL-02 / NEUT-URL-03 へ改名済みで、仕様 ID
 | テスト名 | 短絡元と対象レスポンス | 期待差分 |
 | --- | --- | --- |
 | `test_metrics_count_rate_limited_response` | `rate_limit_test_state(1)` で quota を使い切り、2回目の `/no-such-path` が 429 | requests +2 / errors +1 |
-| `test_metrics_count_ipv4_forbidden_response` | `ALLOW_IPV4_LOCALHOST` 未設定、IPv4 ピア `203.0.113.1` の `/health` が 403 | requests +2 / errors +1 |
+| `test_metrics_count_ipv4_forbidden_response` | `ALLOW_IPV4_LOCALHOST` 未設定、IPv4 ピア `203.0.113.1` の `/no-such-path` が 403（`/health` / `/ready` は IP ゲート配下、`/metrics` のみ IPv4 スクレイプ可） | requests +2 / errors +1 |
 | `test_metrics_count_oversized_body_rejection` | `Content-Length` を `10 * 1024 * 1024 + 1` と宣言した `/content/upload` が 413 | requests +2 / errors +1 |
 | `test_metrics_count_cors_preflight` | `Origin` と `Access-Control-Request-Method: POST` 付き OPTIONS `/auth/login`（CorsLayer の短絡、成功） | requests +2 / errors 増なし |
 

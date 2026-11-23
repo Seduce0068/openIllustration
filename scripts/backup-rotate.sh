@@ -61,8 +61,8 @@ trap on_failure EXIT
 audit_expect_root="${AUDIT_EXPECT_ROOT:-}"
 # 非空時は Merkle root の hex 形式のみ受理する。空白のみ・先頭ダッシュ等の
 # 不正値は fail-closed で拒否し、エラーには設定名のみを出して値はエコーしない。
-if [[ -n "$audit_expect_root" && ! "$audit_expect_root" =~ ^[0-9a-fA-F]+$ ]]; then
-	echo "AUDIT_EXPECT_ROOT must be a non-empty hexadecimal Merkle root" >&2
+if [[ -n "$audit_expect_root" && ! "$audit_expect_root" =~ ^[0-9a-fA-F]{64}$ ]]; then
+	echo "AUDIT_EXPECT_ROOT must be a 64-character hexadecimal Merkle root" >&2
 	exit 1
 fi
 
@@ -233,9 +233,9 @@ fi
 # 成功出力の計算 root を取得して世代保存する。出力全体を捕捉して stdout へ出さない
 # ことで、root 値がログや ALERT へエコーされる経路を断つ（既存の非エコー契約を維持）。
 audit_verify_output="$(run_bin verify_audit_log "${audit_verify_args[@]}")"
-audit_root_line="$(printf '%s\n' "$audit_verify_output" | grep -E '^audit_chain_digest: .* root=[0-9a-fA-F]+' | tail -n 1 || true)"
+audit_root_line="$(printf '%s\n' "$audit_verify_output" | grep -E '^audit_chain_digest: .* root=[0-9a-fA-F]{64}$' | tail -n 1 || true)"
 audit_root="${audit_root_line##* root=}"
-if [[ ! "$audit_root" =~ ^[0-9a-fA-F]+$ ]]; then
+if [[ ! "$audit_root" =~ ^[0-9a-fA-F]{64}$ ]]; then
 	# 値・生バイトはエコーせず、段階名のみを通知する（fail-closed）。
 	echo "verify_audit_log did not report a valid Merkle root" >&2
 	exit 1

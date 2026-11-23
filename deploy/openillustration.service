@@ -35,7 +35,7 @@ Restart=on-failure
 RestartSec=5
 ExecStart=/opt/openIllustration/target/release/server
 # SIGTERM で graceful drain するため、drain 上限（GRACEFUL_DRAIN_TIMEOUT_SECS
-# 最大300秒）より大きく設定する。既定90秒では drain 完了前に kill される。
+# 既定30秒・最大300秒）より大きく設定する。330 = 300 + 予備。
 TimeoutStopSec=330
 SyslogIdentifier=openillustration
 

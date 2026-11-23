@@ -78,8 +78,9 @@ ignore = [
 # sha256 便宜 crate は sha2+hex へ置換して削除済み。sha2 / digest の skip は
 # leptos 経由で重複が残るため維持する（削除すると cargo deny が失敗するため残す）。
 # wildcards = "deny" でレジストリ依存の無制約 version = "*" を拒否する。
-# client / server は public crate のため path 依存が wildcard と判定され、
-# allow-wildcard-paths が効かない。skip でこの2クレートのみ例外的に許可する。
+# ADR-0013 P4: allow-wildcard-paths = true により workspace の path 依存を許可する。
+# 下記 skip の client / server は互換維持のため残すが、allow-wildcard-paths が
+# 有効な環境では実質的に冗長（将来 false へ戻す場合はこの skip が効く）。
 #
 # ADR-0013 P4（reqwest TLS 統一）の確認結果: openssl-probe / security-framework /
 # core-foundation の 2 バージョンずつは削除できない。Cargo.lock ではこれらは

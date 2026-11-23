@@ -2309,6 +2309,22 @@ async fn test_ipv4_public_address_forbidden() {
     );
     let response = app.oneshot(req).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // ADR-0013 P3: /metrics のみ IPv4 監視ネットワークからスクレイプ可能。
+    // /health は 403 のまま（上のアサーション）で、除去対象が /metrics だけであることを固定する。
+    let app = setup_app().await;
+    let metrics = app
+        .oneshot(with_peer(
+            Request::get("/metrics").body(Body::empty()).unwrap(),
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1)),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        metrics.status(),
+        StatusCode::OK,
+        "/metrics must remain scrapeable from IPv4 monitoring network"
+    );
 }
 
 /// NET-02: クライアント注入の X-Forwarded-For では IPv4 拒否を迂回できない。
@@ -16000,6 +16016,14 @@ async fn test_metrics_expose_finalizer_counters() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    // ADR-0013 P4: /metrics にも nosniff / X-Frame-Options / CSP を付与する。
+    // no-store は監視パス対象外のため、ここでは3ヘッダのみを個別検証する。
+    assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+    assert_eq!(response.headers()["X-Frame-Options"], "DENY");
+    assert_eq!(
+        response.headers()["Content-Security-Policy"],
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    );
     // R2-SERVER: 監視用パスは no-store の付与対象外（スクレイプを阻害しない）。
     assert!(
         !response.headers().contains_key(header::CACHE_CONTROL),

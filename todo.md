@@ -786,6 +786,24 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第72ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: リモートDBでmigrationがwrite_lockを取らず冪等でない
+  ALTER/DROP SQLが並行起動時に二重実行される問題（apply_migrationを
+  crate::begin_write_tx経由化、begin_write_txをpub(crate)化）。
+  他: back-channel poison格下げ、logoutのsub401/sid失敗もCookie付与、
+  backup-rotate Merkle root 64hex厳密化（root抽出+AUDIT_EXPECT_ROOT）、
+  OnFailure %Nコメント/TimeoutStopSec根拠修正、REQUEST_TIMEOUT_SECS表記、
+  Export 401再ログイン案内、/metrics IPv4 200+security headers回帰、
+  deny.tomlコメント/MET-02整合、R4指摘（AUDIT_EXPECT_ROOT側64hex）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: axe WCAG AA自動スキャン導入、globalSetup認証後ビュー監視、
+  fail-closedカウンタ2種のテスト・仕様、error_lang UTC例外テスト、
+  再試行フィードバック、RuntimeConfig一括化、doctor MIGRATIONS_DIR診断、
+  REQUEST_TIMEOUT二重読込、restore原子的ロールバック、ContentViewer世代ガード、
+  REVIEW_REPORT未更新、url_decode不正percentテスト、ui_errorテスト仕様化、
+  英語placeholderのlang付与、ハンドル済みUI失敗テレメトリ）は記録のみで保留。
+
 - 2026-11-24 コンボ第71ラウンド（残存a11y/UX一式）: 2担当（nav/UX）。
   nav landmarkへaria-label+lang、4タブをbuttonからhref付きaへ（clickでprevent_default後に
   navigate）、E2Eセレクタ71箇所をlinkへ更新。error_langをひらがな/カタカナ判定へ強化し

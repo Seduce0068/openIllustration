@@ -1608,11 +1608,16 @@ async fn revoke_sub_from_logout_token(
     // 以前はここで早期 return し、UPSERT だけコミット済みで消費前の部分失敗を
     // 再送した際にトークンが取り残されていた。UPDATE は冪等なので再送に安全。
     if changed > 0 {
-        state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-            .insert(sub.to_string(), revoked_at);
+        // ban_user / unban_user と同じく poison は警告へ格下げし、
+        // ロック失敗に関係なく下流のトークン消費へ進む（DB 閾値が正本）。
+        match state.revoked_subs_before.lock() {
+            Ok(mut before) => {
+                before.insert(sub.to_string(), revoked_at);
+            }
+            Err(_) => tracing::warn!(
+                "revoked_subs_before cache is poisoned; DB threshold remains authoritative"
+            ),
+        }
     }
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 状態なので再起動後も有効。

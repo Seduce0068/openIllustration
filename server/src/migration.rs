@@ -387,8 +387,10 @@ async fn apply_migration(
 
     info!("Applying migration {}: {}", version, name);
 
-    // Execute migration SQL in a transaction
-    let tx = db.transaction().await?;
+    // ADR-0013 P4: リモートDBでは instance.lock が強制されないため、
+    // write_lock を取得してから BEGIN する。ALTER/DROP は冪等でないため、
+    // 複数インスタンスの同時適用をここで直列化する。
+    let (_write_guard, tx) = crate::begin_write_tx(db).await?;
 
     // SQL-aware splitter: `;` / `--` inside quoted literals stay intact and
     // `--` comment text is removed before splitting.
@@ -398,9 +400,8 @@ async fn apply_migration(
     }
 
     // Record migration as applied
-    // 複数インスタンスが同時に同一 migration を適用しても冪等に成功させる。
-    // 適用済み判定はトランザクション外だが、INSERT の UNIQUE 競合は成功扱いとし、
-    // 片方が起動拒否されることを防ぐ（checksum 不一致は既に上で fail-closed）。
+    // 上位の write_lock で直列化済みのため、適用済み判定→INSERT の競合は起きない。
+    // INSERT ... ON CONFLICT DO NOTHING は保険（checksum 不一致は上で fail-closed）。
     tx.execute(
         &format!(
             "INSERT INTO {} (version, name, checksum) VALUES (?, ?, ?)

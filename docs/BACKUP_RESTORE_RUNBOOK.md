@@ -384,7 +384,10 @@ systemctl list-timers openillustration-backup.timer
 1. `ExecStart` の `__SET_ME__` を**実宛先の通知コマンド**（メール / チャット /
    Webhook 等のラッパー）へ差し替える。`backup.env` の `ALERT_CMD` を再利用する場合は
    `EnvironmentFile=-/etc/openillustration/backup.env` を追加し
-   `ExecStart=${ALERT_CMD} "unit %N failed"` とする。未差し替えでは通知が届かない。
+   `ExecStart=${ALERT_CMD} "backup alert unit fired"` とする。
+   `%N` は通知 unit 自身へ展開されるため失敗元を特定できない。失敗元を伝える場合は
+   `openillustration-backup-alert@.service` テンプレート化し、各 unit の `OnFailure=` を
+   `@%n.service` として `%i` から失敗元名を渡すこと。未差し替えでは通知が届かない。
 1. `systemctl daemon-reload` を実行し、`systemd-analyze verify` で構文を確認する。
 1. 通知確認: 通知コマンドを1回直接呼ぶか、失敗 unit を一時実行して実宛先へ
    `unit ... failed` のメッセージが届くことを確認する。あわせて
