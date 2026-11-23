@@ -786,6 +786,43 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第56ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  鍵ローテーションRunbook段階1を「旧公開鍵登録不要（現行署名鍵kidは自動登録、同kid登録は
+  duplicateで起動拒否）」へ修正（見出し/段階2/切り分け表も含む）、
+  ban_userのrevoked_subsメモリ更新をmax単調化、web-sys featuresへ直接使用型6つ明記、
+  DOCUMENT_STATUS generated.at更新、README Chrome120/npm audit追記、
+  OPERATIONAL_POLICYのnpm audit記述を実態へ、AUDIT_EXPORT_RUNBOOK 3手順へdatabase-url。
+  R4指摘4件（鍵Runbook残り3箇所・npm audit記述）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  npm audit3lockfile、markdownlint39ファイル）。npm audit一時障害は再試行で解消。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、E2E本番相当昇格、
+  Pinata timeout設定、migrations dir override、refresh Cookie __Host- prefix、
+  build.rs rerun-if-env-changed、リクエストタイムアウト/TimeoutLayer、E2E artifact公開、
+  GPG署名、RPO/RTO定義、バックアップ鮮度監視/ハートビート、trunk部分アーカイブ、
+  cronタイムアウト/flock、GPG trust、cron allowlistログキー、license_file相対パス、
+  BACKUP_PREFIX検証、axe自動スキャン、開発モックuser_hash衝突、再試行導線、
+  クライアント例外テレメトリ、refresh失敗メトリクス、playwright install再試行、
+  window unit停止済みアプリ再起動、監査スクロール/non-modal Tab、E2Eビルド::error::、
+  reqwest TLS二重スタック、tokio/tower features、CIバイナリキャッシュ、
+  失効閾値削除失敗警告格下げ、logout sub不一致Cookie削除、finalizer BEGIN失敗計上、
+  NTP同期、ブラウザエラー観測、429/503再試行、JXLアニメーション/MAX_PIXELS、
+  日時フォールバック/鮮度/端末時計、cron設定集約、audit root 64hex、ライセンス本文数、
+  アーカイブ寿命、exportファイル名世代、real-api宛先env化、deny.toml copyleft/bans skip、
+  R2-REFRESH-ORIGIN E2E、systemd/cron構文CIゲート、backup.service OnFailure、
+  E2Eセットアップ::error::、署名公開rename TOCTOU、IPFSチェックサムフェイルオーバー、
+  429専用文言、nonce取得失敗上書き、aria-describedby/aria-invalid、Audit/dialog lang、
+  export sub 8文字以下、Blob/URL生成エラー、common RSA推移依存、HSTS、日時locale、
+  DBシンボリックパス、オフサイト2回コピー世代対、投票一覧401/403、console.error/pageerror、
+  CLI-02群テーブル欠落、metrics Cookie、E2E_SERVER_PORT、価格指数表記、RUST_LOG不正値、
+  DB_WRITE_LOCKSポインタキー、mod_report/mod_vote rows drop、refresh sub失効競合、
+  back-channel logout部分失敗再送、モバイルviewport、ログイン403 IPv4案内、
+  バックアップ未実行検出、hash/viewルーティング単体テスト、verify_trunk_archive入力検証、
+  step summary異常系、assert_major_numeric境界、数値env範囲外警告、監査CLI NULL列、Support overlay tabindex）は記録のみで保留。
+
 - 2026-11-23 コンボ第55ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   verify_orderの1段目/2段目CASへstatus<>'MISMATCH'を追加し不一致確定の終端保護+

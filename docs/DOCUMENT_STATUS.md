@@ -5,7 +5,7 @@ description: 文書の確定範囲と本番公開前に必要な設計判断を�
 tags: [documentation, decisions, release-gates]
 generated:
   by: dsh
-  at: "2026-11-18T13:40:37+09:00"
+  at: "2026-11-23T14:02:17+09:00"
 ---
 
 ## 文書・設計判断の確定状況

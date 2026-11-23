@@ -4994,11 +4994,17 @@ pub async fn ban_user(
 
     // コミット後にメモリの失効閾値を更新する。DB 側が先に確定しているため、
     // メモリ更新が失敗しても再起動後は DB の閾値で失効が維持される。
-    state
-        .revoked_subs_before
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-        .insert(user_hash.to_string(), revoked_at);
+    // DB の UPSERT と同じ単調性をメモリにも適用する（unban_user と同契約）。
+    // 古い閾値で上書きすると /auth/refresh が iat を小さく採番し、
+    // 発行直後の新 JWT が失効する。
+    {
+        let mut before = state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+        let entry = before.entry(user_hash.to_string()).or_insert(0);
+        *entry = (*entry).max(revoked_at);
+    }
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 側の失効が先に確定しているため、
     // 中途失敗で JWT が有効なまま残る窓を縮める。

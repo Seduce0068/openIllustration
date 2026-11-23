@@ -42,7 +42,7 @@ RS256 JWT 署名鍵（`JWT_RSA_PRIVATE_KEY_PEM`）と検証鍵
 
 ## 無停止ローテーション（2段階）
 
-### 段階1: 旧公開鍵を検証用へ登録
+### 段階1: 新署名鍵の生成と kid 確認（旧公開鍵の登録不要）
 
 1. 新署名鍵を生成する（Kubuntu / 作業ディレクトリ）:
 
@@ -60,13 +60,13 @@ for f in current-signing-key.pub.pem new-signing-key.pub.pem; do
 done
 ```
 
-1. 現行（旧）公開鍵を `JWT_RSA_VERIFICATION_KEYS` へ追加して再起動する。
+1. 旧公開鍵の `JWT_RSA_VERIFICATION_KEYS` への登録は**不要**。
+   現行署名鍵の kid は `JwtKeys` 生成時に `verification_keys` へ自動登録されており、
+   同じ kid を手動登録すると `duplicate verification key kid` で起動拒否になる。
    この時点では署名鍵は旧のままなので、発行トークンは変わらない。
-   旧公開鍵も RSA 2048bit 以上であることを確認する（未満は起動時に拒否される）:
-
-```bash
-export JWT_RSA_VERIFICATION_KEYS="$(jq -n --arg kid "$OLD_KID" --rawfile pem old-signing-key.pub.pem '{($kid): $pem}')"
-```
+   旧公開鍵が RSA 2048bit 以上であることは事前に確認する（未満は署名鍵側で起動拒否）。
+   新公開鍵の kid は署名鍵差し替え時に自動登録されるため設定しない。
+   `JWT_RSA_VERIFICATION_KEYS` は段階2で旧公開鍵（旧 kid）を追加するときに設定する:
 
 1. `/health` と `/ready` が 200 であることを確認し、既存トークンで
    保護 API が通ることを確認する。XFF fail-closed 下では信頼済みプロキシ経由、
@@ -115,7 +115,7 @@ cut -d. -f1 <<<"$TOKEN" | tr '_-' '/+' | base64 -d 2>/dev/null | jq -r .kid
 | 症状 | 確認点 | 対応 |
 | --- | --- | --- |
 | 全トークンが 401 | `JWT_RSA_PRIVATE_KEY_PEM` の PEM 形式とビット長（2048以上） | 起動ログの `JWT_RSA_PRIVATE_KEY_PEM is invalid` を確認し鍵を修正 |
-| 旧トークンのみ 401 | `JWT_RSA_VERIFICATION_KEYS` に旧 `kid` が登録されているか | 段階1の手順で旧公開鍵を再登録 |
+| 旧トークンのみ 401 | `JWT_RSA_VERIFICATION_KEYS` に旧 `kid` が登録されているか | 段階2の手順で旧 kid の公開鍵が登録されていることを確認 |
 | 未知 `kid` のエラー | トークンの `kid` と登録済み `kid` の一致 | 署名鍵の導出 `kid` を再計算し登録 |
 | `/auth/oidc/callback` が 401 | `OIDC_REQUIRED_ACR` / `OIDC_REQUIRED_AMR` / `OIDC_MAX_AUTH_AGE_SECS` と ID トークンのクレーム | OP が要求保証を提供しない場合は本番有効化せず、OP 側のクレーム提供を確認する。設定を下げて回避しない（fail-closed 方針、[DOCUMENT_STATUS](DOCUMENT_STATUS.md) 参照） |
 | 再起動後にスケジュール障害 | バックアップは `ALERT_CMD` が通知しているか | [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照 |

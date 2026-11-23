@@ -760,7 +760,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   動的な理由文言へは `error_lang` の判定を子要素単位で適用する。
 - **依存監査**: `.github/workflows/ci.yml` に週次 `schedule` トリガを追加し、
   `cargo deny check advisories` を定期実行する。既存の push / pull_request /
-  workflow_dispatch トリガは維持する。`npm ci` の `--no-audit` を外し、
+  workflow_dispatch トリガは維持する。`npm ci` の `--no-audit` は残し、
   `npm audit --audit-level=high` を `extra_gates` へ追加する。
   監査対象の npm 依存はルート / `e2e/` / `client/` の3 lockfile（いずれも
   `devDependencies`）で、本番ランタイムへはインストールしない。

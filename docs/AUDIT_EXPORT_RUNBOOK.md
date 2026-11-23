@@ -117,11 +117,13 @@ cp /secure/path/audit-signing-key.pem "${check_dir}/loose-key.pem"
 chmod 644 "${check_dir}/loose-key.pem"
 cargo run -q -p server --bin sign_audit_export -- \
   --signing-key "${check_dir}/loose-key.pem" \
+  --database-url file:/path/to/local.db \
   --output "${check_dir}/should-not-exist.json"; echo "exit_code=$?"   # 1 (require owner-only 0600)
 
 echo "== 2. --database-token が拒否されること =="
 cargo run -q -p server --bin sign_audit_export -- \
   --signing-key /secure/path/audit-signing-key.pem \
+  --database-url file:/path/to/local.db \
   --database-token dummy \
   --output /tmp/should-not-exist.json; echo "exit_code=$?"   # 1 (not accepted)
 
@@ -129,6 +131,7 @@ echo "== 3. 既存出力の上書きが拒否されること =="
 echo 'existing' > /tmp/existing-snapshot.json
 cargo run -q -p server --bin sign_audit_export -- \
   --signing-key /secure/path/audit-signing-key.pem \
+  --database-url file:/path/to/local.db \
   --output /tmp/existing-snapshot.json; echo "exit_code=$?"   # 1 (must not already exist)
 cat /tmp/existing-snapshot.json   # 'existing' のまま（上書きされていない）
 ```
