@@ -186,6 +186,11 @@ jobs:
           [[ -f "$cron_src" ]] || continue
           while IFS= read -r cron_line; do
             [[ -z "$cron_line" ]] && continue
+            # コメントと /etc/cron.d の環境変数行（SHELL= / PATH= / MAILTO= 等）は
+            # ジョブ行ではないため検査対象外。これらをジョブ行と誤判定すると
+            # 自テンプレート自身が常時失敗する。
+            [[ "$cron_line" =~ ^[[:space:]]*# ]] && continue
+            [[ "$cron_line" =~ ^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*= ]] && continue
             field_count="$(awk '{print NF}' <<<"$cron_line")"
             if ((field_count < 7)); then
               echo "::error::${cron_src}: cron job line needs >= 7 fields, got ${field_count}: ${cron_line}" >&2

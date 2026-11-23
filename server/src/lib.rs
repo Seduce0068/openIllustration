@@ -378,6 +378,10 @@ pub struct Metrics {
     pub neutralized_urls: std::sync::atomic::AtomicU64,
     /// クライアント側の未捕捉例外件数（event/count のみ・機微情報は保持しない）。
     pub ui_error_events: std::sync::atomic::AtomicU64,
+    /// 失効確定後の未使用リフレッシュトークン消費失敗数。
+    pub token_cleanup_failures: std::sync::atomic::AtomicU64,
+    /// 孤立ピン補償（unpin）の失敗数。CID やトークンは保持しない。
+    pub unpin_compensation_failures: std::sync::atomic::AtomicU64,
     /// 周期 finalizer の tick 実行回数。
     pub finalizer_ticks: std::sync::atomic::AtomicU64,
     /// finalizer / 周期 purge が回収・確定したレコード件数。値や CID は保持しない。
@@ -608,6 +612,16 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
          # TYPE openillustration_client_ui_errors_total counter
 \
          openillustration_client_ui_errors_total {}\n\
+         # HELP openillustration_token_cleanup_failures_total Total post-revocation refresh token cleanup failures.
+\
+         # TYPE openillustration_token_cleanup_failures_total counter
+\
+         openillustration_token_cleanup_failures_total {}\n\
+         # HELP openillustration_unpin_compensation_failures_total Total failed unpin compensations.
+\
+         # TYPE openillustration_unpin_compensation_failures_total counter
+\
+         openillustration_unpin_compensation_failures_total {}\n\
          # HELP openillustration_finalizer_ticks_total Total moderation finalizer tick executions.\n\
          # TYPE openillustration_finalizer_ticks_total counter\n\
          openillustration_finalizer_ticks_total {}\n\
@@ -641,6 +655,14 @@ pub async fn metrics(State(state): State<Arc<AppState>>) -> Response {
         state
             .metrics
             .ui_error_events
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .token_cleanup_failures
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .metrics
+            .unpin_compensation_failures
             .load(std::sync::atomic::Ordering::Relaxed),
         state
             .metrics
@@ -5480,7 +5502,15 @@ pub async fn ban_user(
     // 失効前に発行された未使用リフレッシュトークンを消費し、refresh からの
     // 迂回（iat = 閾値+1 の JWT 発行）を防ぐ。DB 側の失効が先に確定しているため、
     // 中途失敗で JWT が有効なまま残る窓を縮める。
-    oidc::revoke_refresh_tokens_for_sub(&state, user_hash).await?;
+    // BAN / UNBAN 監査は同一 tx でコミット済み。トークン消費失敗は警告＋カウンタへ
+    // 格下げし、再試行で監査行が重複するのを防ぐ（DB 閾値は生きているため迂回不可）。
+    if let Err(error) = oidc::revoke_refresh_tokens_for_sub(&state, user_hash).await {
+        state
+            .metrics
+            .token_cleanup_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        tracing::warn!("post-revocation refresh token cleanup failed: {error}");
+    }
     Ok(Json(true))
 }
 
@@ -5540,14 +5570,19 @@ pub async fn unban_user(
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
     // DB コミットが先に確定した後に positive-only キャッシュも同じ epoch へ更新する。
     // より新しい閾値が並行して登録されていた場合は上書きしない。
-    let mut revoked_subs = state
-        .revoked_subs_before
-        .lock()
-        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-    let cached = revoked_subs
-        .entry(user_hash.to_string())
-        .or_insert(epoch as usize);
-    *cached = std::cmp::max(*cached, epoch as usize);
+    // DB コミットが正本。ban_user と同じく poison は警告へ格下げし、
+    // コミット済みの UNBAN を 500 にしない（再試行で監査行が重複するのを防ぐ）。
+    match state.revoked_subs_before.lock() {
+        Ok(mut revoked_subs) => {
+            let cached = revoked_subs
+                .entry(user_hash.to_string())
+                .or_insert(epoch as usize);
+            *cached = std::cmp::max(*cached, epoch as usize);
+        }
+        Err(_) => tracing::warn!(
+            "revoked_subs_before cache is poisoned; DB threshold remains authoritative"
+        ),
+    }
     Ok(Json(true))
 }
 
@@ -5919,6 +5954,10 @@ async fn compensate_unpin(state: &AppState, cid: &str) {
             tracing::info!("Unpin compensation completed");
         }
         _ => {
+            state
+                .metrics
+                .unpin_compensation_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             tracing::warn!("Unpin compensation failed; manual unpin is required");
         }
     }

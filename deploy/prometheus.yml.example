@@ -1,0 +1,23 @@
+# ADR-0013 P4: GET /metrics の Prometheus スクレイプ設定例。
+# 配置時に target を実ホストへ差し替える。IP ゲート・認証の対象外だが、
+# 公開オリジンへ晒さないよう監視ネットワーク内に限定すること。
+global:
+  scrape_interval: 60s
+  evaluation_interval: 60s
+
+scrape_configs:
+  - job_name: openillustration
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - '127.0.0.1:3000'
+        labels:
+          service: openillustration
+
+# カウンタはプロセス内で再起動時にゼロへ戻るため、生値ではなく
+# rate()/increase() で counter reset を扱うこと。例:
+#   rate(openillustration_http_errors_total[5m])
+#   increase(openillustration_client_ui_errors_total[1h])
+#   increase(openillustration_unpin_compensation_failures_total[24h])
+# いずれも参考値であり、単独のアラート判定や請求根拠には使わない。

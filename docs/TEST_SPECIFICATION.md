@@ -2114,9 +2114,11 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `data-testid="login-error"` の `role=alert` に表示してボタンを再活性化する。
   `auth.spec.ts` の既存 SEC-03 ケース内で role / 文言 / ボタン有効化を検証する。
 - **client 直接依存からのハッシュ依存除外**: `sha2` / `hex` は `client/Cargo.toml` の
-  `[dev-dependencies]` へ移した。なお `common` が通常依存として保持し `client` も
-  `common::verify_checksum` を呼ぶため、推移的には本番 wasm 依存グラフへ残る
-  （完全除外は common の feature 分離が必要で未実施）。`cargo test` は従来どおり動作。
+  `[dev-dependencies]` へ移した。`client` は `common::verify_checksum` を呼ぶため、
+  `sha2` / `hex` は本番 wasm 依存グラフへ残る。common の feature 分離
+  （default=audit / checksum）は ADR-0013 P4 で実装済みで、`client` は
+  `default-features = false, features = ["checksum"]` により RSA 署名検証スタックを
+  推移的にも除外している。
 - **英文 UI の言語宣言（追加分）**: アップロード各ラベル、通報フォームの
   `aria-label` / `placeholder`（TARGET CID / REASON）、お気に入りボタンの英文 `aria-label`、
   監査 dialog の `aria-label`、Ledger の英文警告へ `lang="en"` を付与する。

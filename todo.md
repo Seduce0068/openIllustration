@@ -19,7 +19,7 @@ status: current
 - [x] **OIDC エンドポイントの https 要件を doctor 診断へ反映** — 根拠
   `server/src/bin/doctor.rs:91-100` / `server/src/oidc.rs:249-314` / 発掘 R9 / 中。
   `oidc.rs` と同様に `doctor` も `oidc_endpoint_urls` で5エンドポイントURLの https を検証
-  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は53テスト。
+  （mock 有効時のみ localhost の http 許容、設定値は非出力）。doctor は54テスト。
 - [x] **エクスポート応答の value（機微値）漏洩を精査・是正** — 根拠
   `server/src/lib.rs:4486-4511` / `client/src/lib.rs:811-818` / 発掘 R9 / 中。
   エクスポートのレスポンス値・表示値に機微情報が混ざらないことを確認し是正済み。
@@ -785,6 +785,25 @@ P2（品質・保守・プロダクト拡張）:
    frontmatter 日時は `date` 実測値へ更新。git commit/push は親エージェントが実施。
 
 ## メモ
+
+- 2026-11-23 コンボ第65ラウンド（ADR完了後4回目review/discovery）: 全7担当完了。
+  R6 で以下を是正: 【high】CI cron構文ゲートがSHELL/PATH/MAILTO行をジョブ行と誤判定
+  して常時失敗する問題（KEY=VALUE行スキップ）、unban_userのmemory poisonを
+  ban_userと対称に警告格下げ、ban_userのトークン消費失敗も警告+専用カウンタへ格下げ
+  （再試行での監査重複防止）、unpin補償失敗の専用カウンタ追加、
+  deploy/prometheus.yml.example追加（counter resetはrate/increaseで扱う）、
+  TEST_SPECIFICATIONのfeature分離「未実施」陳腐化とtodo doctor53→54修正。
+  R4指摘1件（文章の句点欠落）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、npm audit3lockfile、markdownlint35ファイル）。
+  discovery静的のOIDC 403/501・通知/再審査・本人確認監査・脅威モデル等は
+  ADR-0013区分A（外部入力依存・方針のみ決定済み）の既知項目として重複却下。
+  残存（次ラウンド: retry_status二重アナウンス、再試行フィードバック、nav landmark名、
+  タブbutton→a、error_lang中国語判定、globalSetup認証済み画面、RuntimeConfig一括化、
+  restore原子的ロールバック、ContentViewer世代ガード、公開集計サーバー時刻方式、
+  バックアップunit network-online、REVIEW_REPORT未更新、owner不一致テスト、
+  license件数不整合テスト、TimeoutLayer408統合テスト、jxl fuzz不感、
+  url_decode不正percentテスト、ui_errorテスト仕様化、都度flask）は記録のみで保留。
 
 - 2026-11-23 コンボ第64ラウンド（ADR完了後3回目review/discovery）: 全7担当完了。
   高は0件、R6 で medium を中心に是正: TimeoutLayerをobserve_metrics内側へ移動し
