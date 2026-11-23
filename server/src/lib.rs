@@ -3779,6 +3779,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     // 公開オリジンへの露出制限は導入側のネットワーク設計で担保する。
     let metrics_route = Router::new()
         .route("/metrics", get(metrics))
+        // SEC-01: /metrics にも nosniff / X-Frame-Options / CSP を付与する。
+        // is_monitoring 判定により no-store は付与されない（既存契約を維持）。
+        .layer(from_fn(security_headers))
         .layer(from_fn(request_id_and_access_log))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

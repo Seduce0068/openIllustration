@@ -90,6 +90,8 @@ test.describe('Content Upload Flow', () => {
     });
 
     await expect(page.locator('text=ERROR: File exceeds the 10 MiB limit.')).toBeVisible({ timeout: 10000 });
+    // 英文の固定エラーには error_lang 経由で lang="en" が付与される（SEC-01/ID-06）。
+    await expect(page.getByTestId('upload-failed')).toHaveAttribute('lang', 'en');
 
     // 拒否後はファイルが保持されず、送信ボタンは無効になる。
     await expect(page.getByRole('button', { name: /Sign & Submit/i })).toBeDisabled();

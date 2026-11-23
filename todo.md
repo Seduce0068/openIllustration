@@ -786,6 +786,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第68ラウンド（ADR完了後7回目review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: 復元必須ゲートが存在しない.tar.gz/.tar.gz.sigを参照していた問題
+  （Runbook/OPERATIONAL_POLICYを実生成物.db.gpg/.db.gpg.asc/.audit-rootの3点世代対へ統一）。
+  medium: /metricsへsecurity_headers付与、.env.exampleのMIGRATIONS_DIRをコメントアウト
+  （空値起動拒否を回避）、moderation未認証401宛先をE2E_API_BASE/E2E_SERVER_PORTから解決、
+  英文role=alertへlang=enアサーション。R4指摘1件（旧gzip表記残存）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  E2E_CLIENT_PORT=18123で実施）。discovery静的は指摘0。
+  残存（次ラウンド: retry_status二重アナウンス・再試行フィードバック・nav landmark名・
+  タブbutton→a・error_lang中国語判定・RuntimeConfig一括化・doctor MIGRATIONS_DIR診断・
+  REQUEST_TIMEOUT二重読込・restore原子的ロールバック・ContentViewer世代ガード・
+  公開集計サーバー時刻方式・バックアップunit network-online・REVIEW_REPORT未更新・
+  TimeoutLayer408統合テスト・url_decode不正percentテスト・ui_errorテスト仕様化・
+  SHOW STATS 403案内・logout文言・aria-invalid関連付け・file inputクリア・
+  shfmtゲート名表記・ハンドル済みUI失敗テレメトリ）は記録のみで保留。
+
 - 2026-11-24 コンボ第67ラウンド（ADR完了後6回目review/discovery）: 全7担当完了。
   R6 でhigh2件を是正: 【high】/metricsがIPv4ゲートで403になる問題（ dedicated router
   化、/health /ready は従来どおり）、【high】logout部分失敗でCookie削除が付かない問題

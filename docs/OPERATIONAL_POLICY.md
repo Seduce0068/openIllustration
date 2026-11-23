@@ -391,13 +391,14 @@ generated:
   復旧訓練（停止から `/health` / `/ready` 200 と `verify_audit_log` 成功まで4時間以内）で
   達成を検証し、計測条件は同一ハードウェア・コールドキャッシュ・ローカル libSQL に固定する。
   受入値の確定は DEC-07 の合意後に行い、未測定の段階で数値を確定しない。
-  本番の暗号文・署名付き gzip アーカイブは detached 署名（`<stamp>.tar.gz.sig` 等）を
-  同世代の対として公開し、復元前に `gpg --verify` の成功を必須ゲートとする。
+  本番の暗号文（`<stamp>.db.gpg`）は detached 署名（`<stamp>.db.gpg.asc`）と監査 root
+  （`<stamp>.audit-root`）を同世代の対として公開し、復元前に
+  `gpg --verify <stamp>.db.gpg.asc <stamp>.db.gpg` の成功を必須ゲートとする。
   署名欠落・検証失敗・鍵信頼性の解決不能は復元を拒否する（fail-closed）。
   本番公開鍵は `ultimately trusted` に設定し、`--trust-model always` は使わない。
   HSTS は TLS 終端プロキシが責任を持ち、アプリ側は付与しない（既述の方針を維持）。
-  署名付き gzip アーカイブと `.audit-root` の世代対の手動 cleanup は
-  [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
+  暗号文(`.db.gpg`)・detached 署名(`.db.gpg.asc`)・監査root(`.audit-root`) の3点世代対の
+  手動 cleanup は [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md) を参照。
 - 定期実行スケジューラは systemd timer＋window unit
   （`deploy/openillustration-backup.timer` ＋ `deploy/openillustration-backup-window.service`）
   と cron（`deploy/openillustration-backup.cron`）の**二者択一**とし、両方を有効にしない。

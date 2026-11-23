@@ -55,9 +55,8 @@ generated:
   コールドキャッシュ・ローカル libSQL とし、受入値の確定は DEC-07 の合意後に行う。
 - HSTS は TLS 終端プロキシの責任である（上記「前提」に記載済み）。アプリ側は付与しないため、
   ここでは重複して設定項目を定義しない。
-- 本番成果物は暗号文（`<stamp>.db.gpg`、配布用 `<stamp>.tar.gz`）に加え、
-  同じ stamp の detached 署名（`<stamp>.db.gpg.asc` / `<stamp>.tar.gz.sig`）を
-  世代対として公開する。署名鍵は監査署名鍵と同等に管理し、
+- 本番成果物は暗号文（`<stamp>.db.gpg`）と、同じ stamp の detached 署名
+  （`<stamp>.db.gpg.asc`）、監査 root（`<stamp>.audit-root`）の3点を世代対として公開する。署名鍵は監査署名鍵と同等に管理し、
   秘密鍵の内容を CLI 引数・環境変数へ渡さない。
 - 本番公開鍵の trust は `ultimately trusted`（`5`）に設定する。
   `--trust-model always` は署名検証を実質的に迂回するため使用しない。
@@ -86,8 +85,6 @@ gpg --list-keys --keyid-format long
 # Kubuntu / バックアップ保管ホスト（stamp を明示、ワイルドカード指定ではない）
 STAMP=20261123T031700Z
 PREFIX=openillustration
-gpg --verify "${PREFIX}-${STAMP}.tar.gz.sig" "${PREFIX}-${STAMP}.tar.gz"
-# 暗号化 DB へ直接署名する運用では次の組を使う
 gpg --verify "${PREFIX}-${STAMP}.db.gpg.asc" "${PREFIX}-${STAMP}.db.gpg"
 ```
 
@@ -95,13 +92,13 @@ gpg --verify "${PREFIX}-${STAMP}.db.gpg.asc" "${PREFIX}-${STAMP}.db.gpg"
 `ALERT_CMD` 設定時は通知する。検証に使った stamp と結果は運用ログへ記録する
 （署名や鍵の内容はログへ出さない）。
 
-### 署名付き gzip アーカイブの世代対の手動 cleanup
+### 暗号文・署名・監査root（3点世代対）の手動 cleanup
 
-`backup-rotate.sh` の自動ローテーション対象は `.db` / `.db.gpg` であり、
-署名付き gzip アーカイブ（`.tar.gz` + `.tar.gz.sig`）と同世代の `.audit-root` は
-手動で世代対を管理する。削除は stamp を明示し、ワイルドカード一括削除を行わない。
+`backup-rotate.sh` の自動ローテーション対象は `.db` / `.db.gpg` / `.db.gpg.asc` であり、
+同世代の `.audit-root` と合わせた3点を世代対として管理する。削除は stamp を明示し、
+ワイルドカード一括削除を行わない。
 
-1. 削除対象 stamp を決め、`.tar.gz` / `.tar.gz.sig` / `.audit-root` の3点が揃うことを確認する。
+1. 削除対象 stamp を決め、`.db.gpg` / `.db.gpg.asc` / `.audit-root` の3点が揃うことを確認する。
 1. 上記の署名検証を実行し、成功した世代であることを確認する。検証失敗の世代は
    「失敗アーカイブ」として7世代保持し、復元対象から外す（ADR-0013 P2）。
 1. 保持期間と最低保持件数（`RETENTION_DAYS` / `MIN_KEEP` 相当）を満たすか判断し、
@@ -117,13 +114,13 @@ gpg --verify "${PREFIX}-${STAMP}.db.gpg.asc" "${PREFIX}-${STAMP}.db.gpg"
 # Kubuntu / バックアップ保管ホスト（対象 stamp を明示）
 STAMP=20261123T031700Z
 PREFIX=openillustration
-ls -l "${PREFIX}-${STAMP}.tar.gz" \
-      "${PREFIX}-${STAMP}.tar.gz.sig" \
+ls -l "${PREFIX}-${STAMP}.db.gpg" \
+      "${PREFIX}-${STAMP}.db.gpg.asc" \
       "${PREFIX}-${STAMP}.audit-root"
-gpg --verify "${PREFIX}-${STAMP}.tar.gz.sig" "${PREFIX}-${STAMP}.tar.gz"
+gpg --verify "${PREFIX}-${STAMP}.db.gpg.asc" "${PREFIX}-${STAMP}.db.gpg"
 # 3点が揃い検証成功した世代だけを削除する
-rm -- "${PREFIX}-${STAMP}.tar.gz" \
-      "${PREFIX}-${STAMP}.tar.gz.sig" \
+rm -- "${PREFIX}-${STAMP}.db.gpg" \
+      "${PREFIX}-${STAMP}.db.gpg.asc" \
       "${PREFIX}-${STAMP}.audit-root"
 # 残骸が無いことを確認
 ls -l "${PREFIX}-${STAMP}"* 2>/dev/null || true

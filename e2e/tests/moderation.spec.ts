@@ -755,8 +755,11 @@ test.describe('Moderation & Governance (GOV-01, GOV-02)', () => {
     await expect(page.getByTestId('public-mod-stats-stale')).toHaveAttribute('lang', 'ja');
 
     // 未認証 401: page.request（APIRequestContext）は page.route の対象外なので
-    // 実サーバーへ送る。絶対 URL でポート 3000 を明示する（client の baseURL:8080 を使わない）。
-    const unauthorized = await page.request.get('http://127.0.0.1:3000/mod/stats/public');
+    // 実サーバーへ送る（client の baseURL は使わない）。宛先は E2E_API_BASE /
+    // E2E_SERVER_PORT から解決し、real-api.spec.ts と同じ契約を維持する。
+    const serverPort = process.env.E2E_SERVER_PORT || '3000';
+    const apiBase = process.env.E2E_API_BASE || `http://127.0.0.1:${serverPort}`;
+    const unauthorized = await page.request.get(`${apiBase}/mod/stats/public`);
     expect(unauthorized.status()).toBe(401);
   });
 

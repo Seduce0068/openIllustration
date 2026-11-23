@@ -1418,10 +1418,11 @@ CI では HTML レポート・trace をアップロードしない（追加ゲ�
    serde の生エラー（フィールド名・型情報・解析位置）も出ないことを確認する。
    文言は `client/src/lib.rs` の `stats_error_message(StatsFailure::Parse)` の確定値を使う。
 
-7. **未認証401（実サーバー）**: `page.request.get('http://127.0.0.1:3000/mod/stats/public')`
+7. **未認証401（実サーバー）**: `page.request.get(`${apiBase}/mod/stats/public`)`
    で認証ヘッダなしのリクエストを送り、ステータス 401 を同じ test() 内で確認する。
    `page.request`（APIRequestContext）は `page.route` の対象外のため実サーバーへ届き、
-   client の baseURL（8080）ではなく絶対 URL のポート 3000 を明示する。
+   client の baseURL ではなく `E2E_API_BASE` / `E2E_SERVER_PORT` から解決した
+   絶対 URL を使う（real-api.spec.ts と同契約、未設定時はポート 3000）。
    未認証拒否（`AuthClaims` 必須）を E2E でも担保する。
 
 8. 公開集計の解析失敗（既存1件目の追加フェーズ）: `**/mod/stats/public` を200のまま
