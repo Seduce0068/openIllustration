@@ -2029,7 +2029,7 @@ pub async fn run() -> anyhow::Result<()> {
     // ドレイン上限は「shutdown シグナルを受けた後」にだけ適用する。
     // server future 全体を timeout で包むと、シグナルが無い通常運用でも
     // drain_timeout（既定30秒）でプロセスが終了してしまう。
-    let mut drain_watch = shutdown_tx.subscribe();
+    let drain_watch = shutdown_tx.subscribe();
     let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
@@ -2045,25 +2045,9 @@ pub async fn run() -> anyhow::Result<()> {
 
     // シグナル前は無期限で待ち、シグナル receipt 後だけ drain_timeout を適用する。
     let mut server = Box::pin(server.into_future());
-    tokio::select! {
-        result = &mut server => {
-            result?;
-        }
-        changed = drain_watch.changed() => {
-            if changed.is_err() {
-                warn!("shutdown watch channel closed before drain completed");
-            }
-            match tokio::time::timeout(drain_timeout, &mut server).await {
-                Ok(result) => result?,
-                Err(_) => {
-                    warn!(
-                        "Graceful shutdown drain timed out after {:?}; closing remaining connections",
-                        drain_timeout
-                    );
-                }
-            }
-        }
-    }
+    await_server_with_drain_timeout(server.as_mut(), drain_watch, drain_timeout)
+        .await
+        .map_err(AppError::Internal)?;
     match finalizer.await {
         Ok(()) => {}
         Err(error) => {
@@ -2099,6 +2083,29 @@ pub async fn run() -> anyhow::Result<()> {
 /// 停止シグナル受領後、readiness を先に 503 へ切り替えてから graceful shutdown を
 /// 開始するためのドレイン窓。LB のヘルスチェック間隔を考慮した固定値（値はログへ出さない）。
 const READINESS_DRAIN_WINDOW: Duration = Duration::from_secs(5);
+
+/// サーバー future を「シグナル受信前は無期限、受信後は drain_timeout のみ」で待つ。
+///
+/// `timeout(drain_timeout, server)` とするとシグナルが無い通常運用でも
+/// drain_timeout 経過でプロセスが終了するため、watch の changed() を境に分岐する。
+async fn await_server_with_drain_timeout(
+    mut server: std::pin::Pin<&mut dyn std::future::Future<Output = Result<(), std::io::Error>>>,
+    mut drain_watch: tokio::sync::watch::Receiver<()>,
+    drain_timeout: std::time::Duration,
+) -> Result<(), String> {
+    tokio::select! {
+        result = &mut server => result.map_err(|e| e.to_string()),
+        changed = drain_watch.changed() => {
+            if changed.is_err() {
+                return Err("shutdown watch channel closed".to_string());
+            }
+            match tokio::time::timeout(drain_timeout, server.as_mut()).await {
+                Ok(result) => result.map_err(|e| e.to_string()),
+                Err(_) => Err("drain timed out".to_string()),
+            }
+        }
+    }
+}
 
 /// SIGINT / SIGTERM を待つ。受信後は `axum::serve` が処理中リクエストの完了を待って停止する。
 async fn shutdown_signal() {

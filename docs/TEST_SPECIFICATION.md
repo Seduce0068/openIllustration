@@ -1764,9 +1764,10 @@ last_success_timestamp）について、公開形式と実際の進捗を下記�
   `is_safe_markdown_url` で拒否し、`href="#"` / `src="#"` へ中立化する。
   通常の相対 URL（`/chapter/1` / `../chapter/1`）は維持し、中立化カウントにも
   含める（`client/src/lib.rs:520-539,2507`）。
-- `neutralized_report_is_sent_once_per_render_source`: 描画ソース（markdown 本文）の
-  ハッシュをページ全体の `REPORTED` 集合へ記録し、同一ソースの再描画・再マウントでは
-  送信せず、別ソースのみ新たに1回送信する（`client/src/lib.rs:358-369,400-425,2615`）。
+- `neutralized_report_is_sent_once_per_render_source`: 描画ソース（markdown 本文）と
+  CID 由来 scope を合わせたハッシュをページ全体の `REPORTED` 集合へ記録し、同一 scope の
+  再描画・再マウントでは送信せず、別ソースまたは別 CID のみ新たに1回送信する
+  （`client/src/lib.rs` の `neutralized_report_key` / `claim_report_source`）。
 - `jxl_dimension_limits`（`client/src/jxl.rs`）: JXL 寸法上限ガード（デコンプレッション
   ボーム対策）を確認する。
 - `jxl_dimension_fuzz_property`（`client/src/jxl.rs`）: 疑似乱数入力で寸法ガードの
@@ -1804,7 +1805,7 @@ E2E の `test()` 名も NEUT-URL-02 / NEUT-URL-03 へ改名済みで、仕様 ID
 6. NEUT-URL-03（E2E test 名は `NEUT-URL-03: 同一本文の再描画では client event を再送しない`）:
    上記 MET-01 と同じ危険 URL 2件の本文で描画し、本文取得1回・POST1回を確認した後、
    BROWSE → UPLOAD → BROWSE で ContentViewer を再マウントする。本文取得は合計2回へ増えるが、
-   `REPORTED` 集合（描画ソースのハッシュ）により同一ソースの再描画では送信せず、
+   `REPORTED` 集合（本文 + CID 由来 scope のハッシュ）により同一ソースの再描画では送信せず、
    POST は1本のまま `{"event":"neutralized_url","count":2}` であることを確認する
    （`client/src/lib.rs:358-369,400-425`）。仕様 ID と E2E test 名は NEUT-URL-03 に統一済みである。
 

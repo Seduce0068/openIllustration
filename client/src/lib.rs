@@ -1247,6 +1247,13 @@ fn markdown_source_hash(markdown: &str) -> u64 {
     hasher.finish()
 }
 
+/// 中立化 URL 報告の送信済みキー。本文に CID 由来 scope を合わせることで、
+/// 同一本文の別コンテンツが過小計上されないようにする（URL/scope 自体は送信しない）。
+#[cfg(any(test, target_arch = "wasm32"))]
+fn neutralized_report_key(markdown: &str, scope: &str) -> u64 {
+    markdown_source_hash(&format!("{scope}\0{markdown}"))
+}
+
 /// 送信済み記録に対する純粋判定。新規ソースなら `true`、既出なら `false`。
 ///
 /// `HashSet::insert` の戻り値（新たに挿入されたか）をそのまま返すだけなので、
@@ -1286,7 +1293,7 @@ fn report_neutralized_urls(count: usize, markdown: &str, scope: &str) {
         };
         // 本文ハッシュだけだと同一本文の別コンテンツが過小計上されるため、
         // CID 由来のスコープもキーへ含める（URL 本文や CID 自体は送信しない）。
-        let source_hash = markdown_source_hash(&format!("{scope}\0{markdown}"));
+        let source_hash = neutralized_report_key(markdown, scope);
         if !should_report_source(source_hash) {
             return;
         }
@@ -5526,6 +5533,19 @@ mod tests {
         // ハッシュは描画ソースに対して安定し、別ソースとは衝突しない。
         assert_eq!(hash, super::markdown_source_hash(markdown));
         assert_ne!(hash, other_hash);
+
+        // 送信済みキーは本文 + CID 由来 scope。同一本文でも別 CID なら別送信、
+        // 同一 scope の再描画は同じキーで抑制される。
+        let key_a = super::neutralized_report_key(markdown, "cid-a");
+        assert_eq!(key_a, super::neutralized_report_key(markdown, "cid-a"));
+        assert_ne!(key_a, super::neutralized_report_key(markdown, "cid-b"));
+        let mut reported = std::collections::HashSet::new();
+        assert!(super::claim_report_source(&mut reported, key_a));
+        assert!(!super::claim_report_source(&mut reported, key_a));
+        assert!(super::claim_report_source(
+            &mut reported,
+            super::neutralized_report_key(markdown, "cid-b")
+        ));
 
         let mut reported = super::ReportedSources::new();
 

@@ -13191,6 +13191,126 @@ async fn test_ban_commits_db_threshold_before_memory_update() {
     );
 }
 
+/// ban_user のメモリ失効閾値が古い値で退行しないことを固定する。
+/// 退行すると /auth/refresh が小さい iat を採番し、発行直後の JWT が失効する。
+#[tokio::test]
+async fn test_ban_memory_threshold_is_monotonic() {
+    let db = Builder::new_local(":memory:")
+        .build()
+        .await
+        .unwrap()
+        .connect()
+        .unwrap();
+    init_schema(&db).await;
+    db.execute("INSERT INTO users (user_hash) VALUES ('target')", ())
+        .await
+        .unwrap();
+    let before: Arc<std::sync::Mutex<std::collections::HashMap<String, usize>>> =
+        Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let state = Arc::new(AppState {
+        db: Arc::new(db.clone()),
+        http_client: test_http_client(),
+        jwt_keys: test_jwt_keys(),
+        allow_mock_auth: true,
+        ipfs_gateways: Vec::new(),
+        ipfs_timeout: Duration::from_secs(15),
+        ipfs_max_attempts: 1,
+        payment_receiving_address: None,
+        payment_receiving_xprv: None,
+        payment_verifier: None,
+        oidc: None,
+        revoked_sessions: Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+        revoked_subs_before: Arc::clone(&before),
+        age_policy: common::age::AgePolicy::default(),
+        moderation_operators: Arc::new(std::collections::HashSet::from(["operator".to_string()])),
+        shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        metrics: Arc::new(crate::Metrics::default()),
+        expose_internal_errors: false,
+        rate_limit: None,
+        allowed_origins: vec![],
+    });
+    let claims = || {
+        crate::AuthClaims(Claims {
+            sub: "operator".to_string(),
+            exp: (chrono::Utc::now().timestamp() + 3600) as usize,
+            sid: None,
+            iat: Some(chrono::Utc::now().timestamp() as usize),
+        })
+    };
+    // 1回目: 大きい閾値を書き込む。
+    before
+        .lock()
+        .unwrap()
+        .insert("target".to_string(), 2_000_000_000);
+    let _ = crate::ban_user(
+        State(Arc::clone(&state)),
+        claims(),
+        Path("target".to_string()),
+        Json(crate::BanRequest {
+            reason: "first ban".to_string(),
+            duration_days: None,
+        }),
+    )
+    .await
+    .unwrap();
+    // 2回目: 現在時刻由来の小さい revoked_at でもメモリ閾値は退行しない。
+    let result = crate::ban_user(
+        State(Arc::clone(&state)),
+        claims(),
+        Path("target".to_string()),
+        Json(crate::BanRequest {
+            reason: "second ban".to_string(),
+            duration_days: None,
+        }),
+    )
+    .await;
+    // DB 側 UPSERT が古い閾値を拒否するため、2回目はエラーになり得る。
+    // いずれにせよメモリ閾値は最大値を保持しなければならない。
+    let _ = result;
+    let threshold = *before.lock().unwrap().get("target").unwrap();
+    assert_eq!(
+        threshold, 2_000_000_000,
+        "in-memory revocation threshold must not regress"
+    );
+}
+
+/// シグナル受信前は drain_timeout を超えてもサーバーが生存し続けることを固定する。
+/// 旧実装 `timeout(drain_timeout, server)` へ戻すとこのテストが失敗する。
+#[tokio::test]
+async fn test_server_drain_timeout_applies_only_after_shutdown_signal() {
+    let (_tx, rx) = tokio::sync::watch::channel(());
+    let short_timeout = Duration::from_millis(20);
+
+    // シグナル無し: 実際のサーバーは無期限に動く。ここでは 100ms の future を
+    // 20ms の timeout と競わせ、シグナルが無ければ timeout が効かないことを検証する。
+    let server = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        Ok::<(), std::io::Error>(())
+    };
+    let mut pinned = Box::pin(server);
+    let start = std::time::Instant::now();
+    let result = tokio::time::timeout(
+        Duration::from_millis(200),
+        crate::await_server_with_drain_timeout(pinned.as_mut(), rx, short_timeout),
+    )
+    .await
+    .expect("outer guard must not fire");
+    assert!(result.is_ok(), "no signal => no drain timeout");
+    assert!(
+        start.elapsed() >= Duration::from_millis(80),
+        "server future must have been awaited to completion"
+    );
+
+    // シグナル有り: drain_timeout が適用され、server が完了しなければ timeout になる。
+    let (tx2, rx2) = tokio::sync::watch::channel(());
+    tx2.send(()).unwrap();
+    let hanging = async { std::future::pending::<Result<(), std::io::Error>>().await };
+    let mut pinned2 = Box::pin(hanging);
+    let result = crate::await_server_with_drain_timeout(pinned2.as_mut(), rx2, short_timeout).await;
+    assert!(result.is_err(), "signal received => drain timeout applies");
+    assert_eq!(result.unwrap_err(), "drain timed out");
+}
+
 #[tokio::test]
 async fn test_ban_rejects_self_and_invalid_input() {
     let (app, db) = setup_mod_app_with_operators(&["operator"]).await;

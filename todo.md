@@ -786,6 +786,18 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第57ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  ban_user失効閾値max単調化の回帰テスト、drain timeoutシグナル後限定ロジックを
+  await_server_with_drain_timeoutヘルパへ抽出+回帰テスト、中立化URLキーへscope導入の
+  純粋関数化+テスト+仕様更新。
+  ※ ユーザーより「設計判断待ちの箇所は推奨方針を決めてよい」との委譲を受けた。
+  次ラウンド以降で設計判断待ちリストをカテゴリ別に整理し方針決定＋実装を進める。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、server487/client85、
+  doctor 0 problem(s)、npm audit3lockfile、markdownlint39ファイル）。
+  設計判断待ち（これまでの全項目。ユーザー委譲により方針決定対象へ移行）は
+  docs/adr/ADR-0012-design-decisions.md で整理する予定。
+
 - 2026-11-23 コンボ第56ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   鍵ローテーションRunbook段階1を「旧公開鍵登録不要（現行署名鍵kidは自動登録、同kid登録は
