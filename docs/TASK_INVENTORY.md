@@ -578,8 +578,9 @@ status: current
 
 ### 3.8 依存・セキュリティ衛生
 
-- [中] **既知の脆弱性勧告（受容中・10件）**: `libsql 0.10` 由来 10 件、`paste` 1 件（RUSTSEC-2024-0436）、
-  `chrono` 1 件（RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）。CI で
+- [中] **既知の脆弱性勧告（受容中・10件）**: `libsql` 由来 8 件、`chrono` 1 件
+  （RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）、`url` 1 件（RUSTSEC-2026-0592）の
+  計10件（脆弱性9/unmaintained1）。`paste` は解消済みで ignore から削除。CI で
   `cargo deny check advisories` を通過させつつ四半期/更新時に再評価。chrono は
   jiff/time への移行を計画（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
 - [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（2026-11-18 実測: 467件、TSV 822行）を生成（

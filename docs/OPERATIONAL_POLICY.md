@@ -694,10 +694,10 @@ runner への `shellcheck` / `shfmt` の導入は、
 apt 導入ステップでインストールされる）。本リポジトリには install 手順を置かない
 （未導入時に CI が赤化する構成を避けるため、導入要否はワークフロー側のコメントで明示する）。
 
-- Rust の toolchain 下限は workspace の `[workspace.package] rust-version = "1.85"` に一元化し、
-  `common` / `server` / `client` は `rust-version.workspace = true` で継承する（edition 2024 の下限）。
+- Rust の toolchain 下限は workspace の `[workspace.package] rust-version = "1.88"` に一元化し、
+  `common` / `server` / `client` は `rust-version.workspace = true` で継承する（let chains 使用のため 1.88 以上）。
   リポジトリには `rust-toolchain.toml` を置かず、`.github/workflows/ci.yml` にも `toolchain`
-  指定は存在しないため、将来的に指定を追加する場合は必ず 1.85 へ合わせる。
+  指定は存在しないため、将来的に指定を追加する場合は必ず 1.88 へ合わせる。
   `doctor` 自体は toolchain を指定せず、この MSRV でビルド・実行する。
 
 ## 9. CI 前提条件の黙スキップ禁止
@@ -770,7 +770,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   403 / 5xx / ネットワークエラーは「集計の取得に失敗しました。」を維持し、
   権限情報やサーバー本文（センチネル等）を画面へ出さない。
   既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 / migrations14 /
-  tests153 の数値は不変。
+  tests156 の数値は不変。
 - **R2-CLIENT の運用契約**: 投票一覧取得失敗中は投票ボタンを disabled にし、
   監査タイムラインはパネルを開くたびに再取得する。アップロード送信中は
   ファイル差し替えを拒否して送信バイト列を固定し、TOC の未知 hash からの
@@ -779,7 +779,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   集計 GENERATED_AT は整形表示して生 ISO を title 属性へ保持し、エクスポートの
   object URL は十分な余裕（60秒）後に失効させて失敗時は再試行案内を出す。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests153 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
+  migrations14 / tests156 の数値は不変。CI の E2E ゲートは `bash e2e/ci-e2e.sh`
   を唯一の合否根拠とし、`npm test` は開発用ローカル実行として扱う。
 
 ### R2-CLIENT 追加契約（2026-11-23）
@@ -799,7 +799,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   鮮度警告を出し、「更新」操作では公開集計のみを再取得する。認証付きオプイン集計
   （`/mod/stats`）のマウント条件・リクエスト本数・権限判定は変更しない。
   いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests153 の数値は不変。
+  migrations14 / tests156 の数値は不変。
 
 ### R2-CLIENT（第2次）追加契約（2026-11-23）
 
@@ -815,7 +815,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `required` を使わず `aria-required` と独自 `role=alert` で検証し、
   Enter 経路も同じ検証へ集約する。
 - いずれも既存 E2E ケース内へ統合し、E2E69件 / check23 / doctor54 /
-  migrations14 / tests153 の数値は不変。
+  migrations14 / tests156 の数値は不変。
 
 ### R2-ENV 追加契約（2026-11-23）
 
@@ -835,7 +835,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   固定文言警告のうえ既定値へフォールバックし、`doctor` も `classify` ベースで
   同じ警告を出す。これにより「不正値は既定へフォールバックし doctor が警告する」
   という契約を実装と一致させた（値・生バイトは非エコー）。
-  E2E69件 / check23 / migrations14 / tests153 は不変。
+  E2E69件 / check23 / migrations14 / tests156 は不変。
 
 ### R2-SERVER 追加契約（2026-11-23）
 
@@ -857,7 +857,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` と同じ順序に統一し、読み取りカーソルを残したまま書き込まない。
   既存のハッシュ連鎖・ログ ID 連続性・Merkle root の契約は変更しない。
   新規テスト関数は追加せず、E2E69件 / check23 / doctor54 / migrations14 /
-  tests153 の数値は不変。
+  tests156 の数値は不変。
 
 ### R2-SERVER（第2次）追加契約（2026-11-23）
 
@@ -880,7 +880,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   走っても二重付与しない。`/health` / `/ready` / `/metrics` は除外し、
   `/me/export` の個別設定と重複させない。
 - 新規サーバー側テスト2件を追加。E2E69件 / check23 / doctor54 / migrations14 は
-  不変で、doc→code テスト名照合値のみ 当時 tests148 → tests150 へ追随（現行照合値は tests153）する
+  不変で、doc→code テスト名照合値のみ 当時 tests148 → tests150 へ追随（現行照合値は tests156）する
   （履歴記載の数値は変更しない）。
 
 ### R2-SERVER（第2次・部分適用）追加契約（2026-11-23）
@@ -900,7 +900,7 @@ apt 導入ステップでインストールされる）。本リポジトリに�
   `migration.rs` / `update_content_status` と同じ順序に統一し、
   読み取りカーソルを残したまま書き込まない。
 - 新規テスト関数は追加せず、回帰は既存 `me_export_returns_only_own_data`
-  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests153 の
+  内へ追加する。E2E69件 / check23 / doctor54 / migrations14 / tests156 の
   各数値は不変。
 
 ### R2-CLIENT（第3次）追加契約（2026-11-23）
@@ -918,3 +918,25 @@ apt 導入ステップでインストールされる）。本リポジトリに�
 - **ビルド依存の明示化**: `client/Cargo.toml` の `web-sys` features へ `"Url"` を
   明示し、推移依存の feature unification に依存しない。既存の固定文言・
   data-testid・E2E69件 / check23 / doctor54 / migrations14 の数値は不変。
+
+### R2-AUTH 追加契約（2026-11-23）
+
+- **失効閾値の削除順序（再認証）**: `/auth/verify` と OIDC callback は、旧
+  `revoked_subs` 閾値をメモリから読んで `iat` を決めた後、JWT 署名と refresh
+  token 発行を先に完了させ、その成功後にだけ `clear_superseded_revocation` で
+  DB コミット削除 → メモリ削除の順に実行する。発行が失敗した時点では旧閾値が
+  DB・メモリの両方に残るため、旧 JWT（`iat <= 旧閾値`）が復活しない。
+  DB 削除が失敗した場合はメモリへ旧閾値を復元し、並行して登録された新しい
+  閾値は上書きしない（fail-closed 維持）。
+- **`/auth/logout` の sub 束縛**: refresh_token Cookie から `family_id` を読む際に
+  `refresh_tokens.sub` も SELECT し、`claims.sub` と不一致ならファミリ更新を
+  行わず固定文言の 401 を返す。値はエコーしない。sid 失効の冪等性（二重
+  logout も 200）と Cookie 削除の契約は従来どおり維持する。
+- **OIDC エンドポイントの userinfo 拒否**: `is_valid_oidc_endpoint` は
+  `url.username()` が空かつ `url.password()` が None を必須化し、userinfo
+  （`user@` / `user:pass@`）を含む URL をスキーム・mock 設定にかかわらず拒否する。
+  `validate_oidc_config_with` 経由で起動拒否と doctor の `oidc_endpoint_urls`
+  警告へ同じ固定文言を流し、設定値（userinfo の値を含む）は一切出力しない。
+  check23 は不変。
+- 回帰はいずれも既存テスト内への追加のみで、新規 test 関数は追加しない。
+  E2E69件 / check23 / doctor54 / migrations14 / tests156 の各数値は不変。

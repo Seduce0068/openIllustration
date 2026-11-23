@@ -8,9 +8,9 @@ resolver = "2"
 
 [workspace.package]
 license = "AGPL-3.0-or-later"
-# edition 2024 の minimum supported Rust version。toolchain 指定はリポジトリに置かず、
-# CI / ローカルいずれもこの値（1.85）以上を使う。
-rust-version = "1.85"
+# let chains (`if ... && let ...`) を使用するため 1.88 以上を要求。
+# toolchain 指定はリポジトリに置かず、CI / ローカルいずれもこの値以上を使う。
+rust-version = "1.88"
 
 [profile.release]
 strip = true

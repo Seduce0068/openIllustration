@@ -53,11 +53,18 @@ const BACKCHANNEL_LOGOUT_EVENT: &str = "http://schemas.openid.net/event/backchan
 ///
 /// 開発用の mock 認証が明示的に有効な場合だけ localhost の http を許容し、
 /// 本番相当では http / 不正文字列を拒否する（fail-closed）。
+/// userinfo（`user@` / `user:pass@`）を含む URL も、秘密情報の混入と
+/// なりすましリスクがあるため常に拒否する（`username()` が空かつ
+/// `password()` が None を必須化）。
 /// 戻り値は真偽のみで、判定対象の値は保持・露出しない。
 /// `validate_oidc_config_with` 経由で `from_env_with` と `doctor` が同じ判定を共有する。
 pub fn is_valid_oidc_endpoint(value: &str, allow_mock_auth: bool) -> bool {
     match reqwest::Url::parse(value) {
         Ok(url) => {
+            // userinfo 成分がある場合はスキームに関係なく拒否する。
+            if !url.username().is_empty() || url.password().is_some() {
+                return false;
+            }
             if url.scheme() == "https" {
                 true
             } else if url.scheme() == "http" && allow_mock_auth {
@@ -76,6 +83,8 @@ pub fn is_valid_oidc_endpoint(value: &str, allow_mock_auth: bool) -> bool {
 }
 
 // 起動拒否相当の固定文言。設定値は一切含めず、doctor の警告文と完全一致させる。
+// スキーム違反に加え userinfo 含有も同じ固定文言で拒否する（doctor の
+// `oidc_endpoint_urls` カテゴリが同じ文言を警告化するため、文言は変更しない）。
 const OIDC_ENDPOINT_URL_ERROR: &str = "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)";
 const OIDC_EMPTY_VALUE_ERROR: &str = "OIDC configuration values must not be empty";
 /// 必須値が非 UTF-8 のときの固定文言。生バイト（`OsString`）は保持・エコーしない。
@@ -1334,11 +1343,13 @@ pub async fn callback(
         .expect("valid timestamp")
         .timestamp() as usize;
     let (iat, old_threshold) = {
-        let mut revoked_subs = state
+        let revoked_subs = state
             .revoked_subs_before
             .lock()
             .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?;
-        let old = revoked_subs.remove(&user_hash);
+        // R2-AUTH: ここでは remove せず読むだけに留める。発行前に閾値を消すと
+        // JWT 署名 / refresh token 登録の失敗で旧 JWT（iat <= 旧閾値）が復活する。
+        let old = revoked_subs.get(&user_hash).copied();
         let issued_at = match old {
             Some(threshold) => std::cmp::max(now_ts, threshold.saturating_add(1)),
             None => now_ts,
@@ -1346,24 +1357,6 @@ pub async fn callback(
         // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
         (issued_at, old)
     };
-    // 再認証で旧セッション拒否の役割を終えた閾値を DB からも削除する。
-    // 古い閾値より新しい値が back-channel logout で登録された場合は残す
-    // （メモリ削除と DB 削除の間のレースで直近の失効が消えないようにする）。
-    if let Some(old_threshold) = old_threshold {
-        if let Err(err) =
-            delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await
-        {
-            // DB が失敗したら先に remove したメモリを旧閾値へ戻す（auth_verify と同じ）。
-            // 並行して新しい閾値が登録済みなら or_insert は上書きしない。
-            state
-                .revoked_subs_before
-                .lock()
-                .map_err(|_| crate::AppError::Internal("session store is poisoned".to_string()))?
-                .entry(user_hash.clone())
-                .or_insert(old_threshold);
-            return Err(err);
-        }
-    }
     let session_claims = Claims {
         sub: user_hash.clone(),
         exp: expiration,
@@ -1379,6 +1372,10 @@ pub async fn callback(
 
     let family_id = Uuid::new_v4().to_string();
     let refresh_token = issue_refresh_token(&state, &user_hash, &family_id).await?;
+
+    // JWT と refresh token の発行が両方完了してから旧閾値を削除する。
+    // 発行が失敗した場合はここへ到達せず、旧 JWT の失効が維持される（R2-AUTH item1）。
+    crate::clear_superseded_revocation(&state, &user_hash, old_threshold).await?;
 
     // R2-SESSION-COOKIE: session JWT は応答本文（VerifyResponse.token）のみで搬送し、
     // session Cookie は発行しない。SET_COOKIE は refresh と state 削除の2本だけ。
@@ -1608,16 +1605,16 @@ pub async fn backchannel_logout(
     let mut failures: Vec<String> = Vec::new();
 
     // sid 側の DB エラーで sub 側を止めないよう、結果をここで受け止めて次へ進む。
-    if let Some(sid) = claims.sid {
-        if let Err(error) = crate::revoke_session(&state, &sid).await {
-            failures.push(format!("sid revocation failed: {}", error));
-        }
+    if let Some(sid) = claims.sid
+        && let Err(error) = crate::revoke_session(&state, &sid).await
+    {
+        failures.push(format!("sid revocation failed: {}", error));
     }
 
-    if let Some(sub) = claims.sub {
-        if let Err(error) = revoke_sub_from_logout_token(&state, &sub, revoked_at).await {
-            failures.push(format!("sub revocation failed: {}", error));
-        }
+    if let Some(sub) = claims.sub
+        && let Err(error) = revoke_sub_from_logout_token(&state, &sub, revoked_at).await
+    {
+        failures.push(format!("sub revocation failed: {}", error));
     }
 
     if !failures.is_empty() {

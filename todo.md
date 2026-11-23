@@ -787,6 +787,25 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第41ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  【high】auth_verify/OIDC callbackの失効閾値削除をトークン発行後へ遅延（clear_superseded_revocation）、
+  logoutのrefresh token sub束縛、OIDC endpoint userinfo拒否、
+  MSRV 1.85→1.88（let chains使用）、.env.example追加、advisory内訳/README CI記述修正。
+  親がclippy collapsible_if 2件をlet chainsで修正、tests156追随。
+  R4指摘2件（旧1.85記述/env example不足）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、npm audit3lockfile、
+  markdownlint39ファイル）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2Eを本番相当へ昇格、リクエストタイムアウト、E2E artifact公開、GPG署名、RPO/RTO定義、
+  バックアップ鮮度監視、trunk部分アーカイブ、cronタイムアウト、GPG trust手順、
+  cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、doc-numbers照合拡張、
+  axe自動スキャン、8pxテキスト、TASK_INVENTORYメタデータ、APP_UNIT doctor診断、
+  ダッシュボード再試行、開発モックuser_hash衝突、旧JWT復活の完全回避検証）は記録のみで保留。
+
 - 2026-11-23 コンボ第40ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   BetterleaksのPATH更新/all-zero beforeフォールバック/wasm target clippy追加、

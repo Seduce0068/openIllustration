@@ -41,6 +41,9 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 
 ## 🚀 クイックスタート
 
+設定項目の全一覧は [`.env.example`](.env.example) を参照してください（すべてダミー値）。
+秘密情報は秘密管理基盤から注入し、本番でこのファイルを直接使わないでください。
+
 ### 1. 依存ツールのインストール
 
 ```bash
@@ -114,8 +117,9 @@ cargo test -p common
 # 開発サーバーは Playwright が自動起動する。
 cd e2e && npm test
 
-# CI E2E ゲート（本番相当の環境変数を注入した CI 環境で実行）
-# 前提: 本番相当 env・trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# CI E2E ゲート（開発用モック認証 ALLOW_MOCK_AUTH=1 で実行）
+# 前提: E2E_JWT_SECRET/DATABASE_URL 注入・trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# 本番相当の設定診断は doctor --strict 側（後述）で行う。
 # 共通ワークフロー rust-gates.yml の extra_gates から呼ばれる。
 bash e2e/ci-e2e.sh
 ```

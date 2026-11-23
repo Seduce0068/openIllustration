@@ -10031,6 +10031,68 @@ async fn test_backchannel_logout_for_sub_allows_reauthentication() {
     let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
     assert_eq!(count, 1, "revocation must be persisted");
 
+    // R2-AUTH item1 回帰: refresh token 発行をトリガで失敗させ、発行失敗時に
+    // 旧閾値が DB から消えない（旧 JWT が復活しない）ことを固定する。
+    // 旧順序（DB 削除 → 発行）ではここで count が 0 になり失敗する。
+    db.execute(
+        "CREATE TRIGGER fail_refresh_issue BEFORE INSERT ON refresh_tokens
+         BEGIN SELECT RAISE(ABORT, 'injected refresh issuance failure'); END",
+        (),
+    )
+    .await
+    .unwrap();
+
+    let start = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get("/auth/oidc/start")
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(start.status(), StatusCode::OK);
+    let started: serde_json::Value =
+        serde_json::from_slice(&to_bytes(start.into_body(), 4096).await.unwrap()).unwrap();
+    let failed_state = started["state"].as_str().unwrap().to_string();
+    let failed_nonce = oidc.pending_nonce(&failed_state).expect("pending nonce");
+    *mock.nonce.lock().unwrap() = Some(failed_nonce);
+    let failed = app
+        .clone()
+        .oneshot(with_peer(
+            Request::get(format!(
+                "/auth/oidc/callback?code=test-code&state={failed_state}"
+            ))
+            .header(header::COOKIE, format!("oidc_state={failed_state}"))
+            .body(Body::empty())
+            .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        failed.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "injected refresh-token issuance failure must fail the callback"
+    );
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM revoked_subs WHERE sub = ?",
+            [claims.sub.clone()],
+        )
+        .await
+        .unwrap();
+    let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        count, 1,
+        "issuance failure must keep the old revocation threshold in DB"
+    );
+
+    db.execute("DROP TRIGGER fail_refresh_issue", ())
+        .await
+        .unwrap();
+
     let new_body = oidc_login(&app, oidc.as_ref(), &mock).await;
     let new_token = new_body["token"].as_str().unwrap().to_string();
 
@@ -14523,6 +14585,63 @@ async fn test_logout_revokes_refresh_family() {
     let (login, refresh) = oidc_login_with_refresh(&app, &oidc, &mock).await;
     let token = login["token"].as_str().unwrap().to_string();
 
+    // R2-AUTH item2: JWT の sub と Cookie の refresh_tokens.sub が不一致なら
+    // ファミリを更新せず 401 を返す。別 sub / 別 family の行を仕込んで検証する。
+    let foreign = "foreign-sub-refresh-token";
+    db.execute(
+        "INSERT INTO refresh_tokens (token_hash, sub, family_id, expires_at)
+         VALUES (?, ?, ?, ?)",
+        (
+            sha256_hex(foreign.as_bytes()),
+            "foreign-sub".to_string(),
+            "foreign-family".to_string(),
+            (chrono::Utc::now() + chrono::Duration::days(30)).to_rfc3339(),
+        ),
+    )
+    .await
+    .unwrap();
+    let mismatch = app
+        .clone()
+        .oneshot(with_peer(
+            Request::post("/auth/logout")
+                .header("authorization", format!("Bearer {token}"))
+                .header(header::COOKIE, format!("refresh_token={foreign}"))
+                .body(Body::empty())
+                .unwrap(),
+            test_ipv6_peer(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        mismatch.status(),
+        StatusCode::UNAUTHORIZED,
+        "refresh token with a different sub must not be accepted for logout"
+    );
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND used_at IS NULL",
+            ["foreign-family".to_string()],
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        active, 1,
+        "mismatched sub must not revoke the foreign family"
+    );
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE used_at IS NULL",
+            (),
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(
+        active, 2,
+        "the real family must also stay active on mismatch"
+    );
+
     let response = app
         .clone()
         .oneshot(with_peer(
@@ -14545,13 +14664,23 @@ async fn test_logout_revokes_refresh_family() {
     );
     let mut rows = db
         .query(
-            "SELECT COUNT(*) FROM refresh_tokens WHERE used_at IS NULL",
-            (),
+            "SELECT COUNT(*) FROM refresh_tokens WHERE sub = ? AND used_at IS NULL",
+            [login["user_hash"].as_str().unwrap().to_string()],
         )
         .await
         .unwrap();
     let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
-    assert_eq!(active, 0);
+    assert_eq!(active, 0, "logout must revoke the matching family");
+    // 不一致側のファミリは最後まで未消費のまま（更新されなかった証拠）。
+    let mut rows = db
+        .query(
+            "SELECT COUNT(*) FROM refresh_tokens WHERE family_id = ? AND used_at IS NULL",
+            ["foreign-family".to_string()],
+        )
+        .await
+        .unwrap();
+    let active: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    assert_eq!(active, 1, "mismatched family must remain untouched");
 }
 
 /// back-channel logout の sub 失効は、失効前に発行された未使用 refresh token
@@ -19396,6 +19525,23 @@ fn test_is_valid_oidc_endpoint_host_boundaries() {
     for raw in ["not a url", "", "ftp://localhost/issuer", "https://"] {
         assert!(!crate::oidc::is_valid_oidc_endpoint(raw, true), "raw={raw}");
     }
+
+    // R2-AUTH: userinfo を含む URL はスキーム・mock 設定にかかわらず拒否する。
+    // username のみ / username+password / password のみの3形を固定する。
+    for raw in [
+        "https://user@issuer.example.jp/issuer",
+        "https://user:pass@issuer.example.jp/issuer",
+        "https://:pass@issuer.example.jp/issuer",
+        "http://user@localhost/issuer",
+        "http://user:pass@127.0.0.1/issuer",
+    ] {
+        for allow_mock_auth in [false, true] {
+            assert!(
+                !crate::oidc::is_valid_oidc_endpoint(raw, allow_mock_auth),
+                "userinfo must be rejected: raw={raw}, mock={allow_mock_auth}"
+            );
+        }
+    }
 }
 
 // --- 共通 OIDC バリデータ（validate_oidc_config_with） -----------------------
@@ -19476,6 +19622,28 @@ fn test_validate_oidc_config_with_errors_are_fixed_and_secret_free() {
         assert!(!error.contains(OIDC_SECRET));
         assert!(!error.contains(REMOTE_URL));
     }
+
+    // R2-AUTH: userinfo を含む URL も同じ固定文言で起動拒否になる。
+    // 秘密情報（userinfo の値）は一切エコーしない。
+    const USERINFO_SECRET: &str = "embedded-user-secret";
+    let mut userinfo_env = oidc_required_env();
+    userinfo_env.insert(
+        "OIDC_ISSUER".to_string(),
+        format!("https://{USERINFO_SECRET}@issuer.example.jp/issuer"),
+    );
+    let userinfo_result = crate::validate_oidc_config_with(result_lookup(&userinfo_env, &[]));
+    assert_eq!(
+        userinfo_result.hard_errors,
+        vec![
+            "OIDC endpoints must be https (http is allowed only for localhost when ALLOW_MOCK_AUTH is enabled)"
+        ],
+        "userinfo rejection must reuse the fixed startup/doctor message"
+    );
+    let debug = format!("{userinfo_result:?}");
+    assert!(
+        !debug.contains(USERINFO_SECRET),
+        "userinfo was echoed: {debug}"
+    );
 }
 
 /// オプション値の実効値が from_env_with が組み立てる設定と一致する。

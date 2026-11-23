@@ -3393,6 +3393,45 @@ fn verified_age_user_hash(verified: &verified_age::VerifiedAge) -> Result<String
     )))
 }
 
+/// セッション発行が完了した後にだけ、不要になった旧失効閾値を DB・メモリから削除する。
+///
+/// 発行（JWT 署名 / refresh token 登録）より前に旧閾値を消すと、その後の発行失敗で
+/// 旧 JWT（`iat <= 旧閾値`）が復活するため、`auth_verify` と OIDC callback は
+/// この関数を発行の完了後に呼ぶ。DB コミットを先に行い、成功後にメモリを更新する。
+/// 並行して back-channel logout が新しい閾値を登録した場合は削除しない。
+pub(crate) async fn clear_superseded_revocation(
+    state: &Arc<AppState>,
+    sub: &str,
+    old_threshold: Option<usize>,
+) -> Result<(), AppError> {
+    let Some(old_threshold) = old_threshold else {
+        return Ok(());
+    };
+    if let Err(err) = oidc::delete_superseded_revocation(&state.db, sub, old_threshold as i64).await
+    {
+        // DB が失敗したらメモリを旧閾値へ戻す（先に remove していないため通常は
+        // 不要だが、並行更新で消えていた場合に復元する）。新しい閾値は上書きしない。
+        state
+            .revoked_subs_before
+            .lock()
+            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
+            .entry(sub.to_string())
+            .or_insert(old_threshold);
+        return Err(err);
+    }
+    let mut revoked_subs = state
+        .revoked_subs_before
+        .lock()
+        .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
+    if revoked_subs
+        .get(sub)
+        .is_some_and(|current| *current <= old_threshold)
+    {
+        revoked_subs.remove(sub);
+    }
+    Ok(())
+}
+
 pub async fn auth_verify(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<VerifyRequest>,
@@ -3613,8 +3652,8 @@ pub async fn auth_verify(
         .timestamp() as usize;
 
     // 新しい認証セッションの発行により、過去セッション失効の閾値は不要になる。
-    // ban_user / backchannel と同じ「DB コミット先行」方針に合わせ、ここでは
-    // メモリから読むだけで削除しない（DB 削除が成功してから remove する）。
+    // ただしここでは閾値を読むだけに留め、削除は JWT 発行の完了後へ回す。
+    // 発行前に削除すると署名失敗時に旧 JWT（iat <= 旧閾値）が復活するため。
     let (iat, old_threshold) = {
         let revoked_subs = state
             .revoked_subs_before
@@ -3627,35 +3666,6 @@ pub async fn auth_verify(
         };
         (issued_at, old)
     };
-    // OIDC callback と同じく、不要になった旧閾値を DB から先に削除する。
-    // これを省くと再起動後に refresh が古い閾値で塞がる。
-    if let Some(old_threshold) = old_threshold {
-        if let Err(err) =
-            oidc::delete_superseded_revocation(&state.db, &user_hash, old_threshold as i64).await
-        {
-            // DB が失敗したらメモリを元の状態へ戻す（閾値を挿入し直す）。
-            // 並行して新しい閾値が登録済みなら上書きしない。
-            state
-                .revoked_subs_before
-                .lock()
-                .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?
-                .entry(user_hash.clone())
-                .or_insert(old_threshold);
-            return Err(err);
-        }
-        // DB コミット後にメモリの旧閾値を削除する。DB 側と同じく、削除後に
-        // 登録された新しい閾値は残す。
-        let mut revoked_subs = state
-            .revoked_subs_before
-            .lock()
-            .map_err(|_| AppError::Internal("session store is poisoned".to_string()))?;
-        if revoked_subs
-            .get(&user_hash)
-            .is_some_and(|current| *current <= old_threshold)
-        {
-            revoked_subs.remove(&user_hash);
-        }
-    }
 
     let claims = Claims {
         sub: user_hash.clone(),
@@ -3673,6 +3683,9 @@ pub async fn auth_verify(
         state.jwt_keys.encoding_key(),
     )
     .map_err(|e| AppError::Internal(format!("JWT generation failed: {}", e)))?;
+
+    // JWT 発行が成功してから旧閾値を削除する（発行失敗時は失効を維持）。
+    clear_superseded_revocation(&state, &user_hash, old_threshold).await?;
 
     Ok(Json(VerifyResponse {
         authorized: true,
@@ -3799,29 +3812,43 @@ pub async fn logout(
     if let Some(token) = oidc::refresh_cookie_from_headers(&headers) {
         let token_hash = sha256_hex(token.as_bytes());
         // 読み取りカーソルを先に閉じてから BEGIN する。
-        let family_id = {
+        // R2-AUTH: family_id だけでなく sub も読み、JWT の claims.sub と束縛する。
+        // 別 sub の Cookie を差し込まれてもファミリを失効させない（fail-closed）。
+        let token_row = {
             let mut rows = state
                 .db
                 .query(
-                    "SELECT family_id FROM refresh_tokens WHERE token_hash = ?",
+                    "SELECT family_id, sub FROM refresh_tokens WHERE token_hash = ?",
                     [token_hash],
                 )
                 .await?;
             rows.next()
                 .await?
-                .map(|row| -> Result<String, AppError> { Ok(row.get(0)?) })
+                .map(|row| -> Result<(String, String), AppError> { Ok((row.get(0)?, row.get(1)?)) })
                 .transpose()?
         };
-        if let Some(family_id) = family_id {
-            let (_write_guard, tx) = begin_write_tx(&state.db).await?;
-            tx.execute(
-                "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
-                [family_id],
-            )
-            .await?;
-            tx.commit()
-                .await
-                .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+        match token_row {
+            Some((family_id, token_sub)) if token_sub == claims.sub => {
+                let (_write_guard, tx) = begin_write_tx(&state.db).await?;
+                tx.execute(
+                    "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
+                    [family_id],
+                )
+                .await?;
+                tx.commit()
+                    .await
+                    .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+            }
+            Some(_) => {
+                // Cookie の sub が JWT と不一致。ファミリ更新を行わず 401 とする。
+                // 値はエコーしない固定文言（sid 失効は既に冪等に済んでいる）。
+                return Err(AppError::Unauthorized(
+                    "refresh token subject does not match the session".to_string(),
+                ));
+            }
+            None => {
+                // 未知のトークンは従来どおりファミリ更新なしで継続し、Cookie を削除する。
+            }
         }
     }
     // DB 側のファミリ失効だけではブラウザの Cookie が 30 日残るため、
