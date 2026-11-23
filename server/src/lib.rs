@@ -2415,6 +2415,12 @@ pub async fn run() -> anyhow::Result<()> {
     if let Some(warning) = request_timeout_warning {
         warn!("{warning}");
     }
+    // ポート占有等の bind 失敗時に finalizer をデタッチしないよう、bind を先に行う。
+    // BIND_ADDR / PORT は起動時に fail-closed で解決済み（未設定は `[::]:3000`）。
+    let addr = bind_addr;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("openIllustration Backend listening on {}", addr);
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
     let finalizer = tokio::spawn(run_moderation_finalizer_with_cleanup(
         worker_db,
@@ -2428,10 +2434,6 @@ pub async fn run() -> anyhow::Result<()> {
         },
     ));
 
-    // BIND_ADDR / PORT は起動時に fail-closed で解決済み（未設定は `[::]:3000`）。
-    let addr = bind_addr;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("openIllustration Backend listening on {}", addr);
     let drain_timeout_env = common::env::read_env("GRACEFUL_DRAIN_TIMEOUT_SECS");
     let (drain_timeout_input, drain_timeout_warning) = numeric_env_value_in_range(
         "GRACEFUL_DRAIN_TIMEOUT_SECS",

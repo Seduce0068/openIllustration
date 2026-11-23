@@ -380,7 +380,26 @@ if [[ "${E2E_MOBILE:-0}" == "1" ]]; then
 	if [[ -z "$e2e_projects_explicit" ]]; then
 		e2e_projects_explicit="chromium"
 	fi
-	e2e_projects_explicit="${e2e_projects_explicit},iphone,pixel"
+	# 既に iphone / pixel が明示されている場合は重複して渡さない。
+	mobile_names=()
+	IFS=',' read -ra mobile_names <<<"$e2e_projects_explicit"
+	merged=()
+	seen_mobile=0
+	for existing in "${mobile_names[@]}"; do
+		[[ -z "$existing" ]] && continue
+		merged+=("$existing")
+	done
+	for existing in iphone pixel; do
+		seen_mobile=0
+		for item in "${merged[@]}"; do
+			[[ "$item" == "$existing" ]] && seen_mobile=1 && break
+		done
+		((seen_mobile)) || merged+=("$existing")
+	done
+	e2e_projects_explicit="$(
+		IFS=','
+		echo "${merged[*]}"
+	)"
 fi
 firefox_executable=0
 webkit_executable=0

@@ -3670,7 +3670,17 @@ where
             <div class="aspect-square bg-white/5 flex items-center justify-center relative overflow-hidden group">
                 <canvas node_ref=canvas_ref
                     role="img"
-                    aria-label=move || canvas_aria_label.clone()
+                    aria-label=move || {
+                        // 失敗状態では有効な画像であるかのようなラベルを出さない（a11y）。
+                        let base = canvas_aria_label.clone();
+                        if !content_load_error.get().is_empty() {
+                            format!("画像を表示できません。{base}")
+                        } else if decode_error.get() || novel_decode_error.get() {
+                            format!("画像をデコードできません。{base}")
+                        } else {
+                            base
+                        }
+                    }
                     class=move || format!("max-w-full max-h-full object-contain {}", if verified.get() == Some(true) && ct_can == "Illustration" { "" } else { "hidden" }) />
 
                 <Show when=move || verified.get() == Some(true) && ct_nov == "Novel" fallback=|| ()>

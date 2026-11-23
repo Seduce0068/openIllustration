@@ -109,7 +109,9 @@ cargo build -p client --target wasm32-unknown-unknown --locked
 # CI と同じドキュメント／シェル／バックアップ回帰ゲート
 bash scripts/test-doc-numbers.sh
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
-shfmt -l scripts/*.sh e2e/*.sh   # 出力が空なら OK
+shfmt_out="$(shfmt -l scripts/*.sh e2e/*.sh)"
+[[ -z "$shfmt_out" ]] || { printf '%s\n' "$shfmt_out"; exit 1; }
+npx --no-install markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
 bash scripts/test-backup-rotate.sh
 bash scripts/test-backup-cron-wrapper.sh
 bash scripts/test-prepare-distribution.sh

@@ -130,6 +130,10 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     // R2-A11Y: × LOAD FAILED バッジの英文 span も lang="en" を宣言する。
     await expect(page.getByTestId('content-verification-badge')).toHaveAttribute('lang', 'en');
     await expect(page.getByTestId('content-verification-badge')).toHaveText('× LOAD FAILED');
+    await expect(page.locator('canvas[role="img"]')).toHaveAttribute(
+      'aria-label',
+      `画像を表示できません。無題のイラスト (${MOCK_CID.slice(0, 8)})`,
+    );
 
     // 追加フェーズ: 検証待ちスパンの role=status / aria-live / lang を既存検証フロー内で検証する。
     // 本文レスポンスを遅延させ、verified === None の表示を確実に捕捉する（既存 test 内のみ）。

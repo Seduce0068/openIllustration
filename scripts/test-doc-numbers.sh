@@ -934,21 +934,17 @@ while IFS=: read -r test_line_no test_line_body; do
 		[[ -n "$n" ]] && assert_numbers_match "doc test names current @ ${spec}:${test_line_no}" "${#doc_test_names[@]}" "$n"
 		continue
 	fi
-	# 履歴語と現行値が同一行に混在し得るため、トークン単位で直前の文言を判定する。
-	while IFS= read -r token_offset; do
-		[[ -z "$token_offset" ]] && continue
-		token="${test_line_body:$token_offset}"
-		token="${token%%[!0-9a-z_]*}"
-		[[ -z "$token" ]] && continue
-		context_start=$((token_offset > 30 ? token_offset - 30 : 0))
-		context="${test_line_body:$context_start:$((token_offset - context_start))}"
+	# 日本語行ではバイトオフセットと文字位置がずれるため、前文ごと抽出して判定する。
+	while IFS= read -r matched; do
+		[[ -z "$matched" ]] && continue
+		context="${matched%tests[0-9]*}"
 		if grep -qE '当時|旧|履歴|へ追随|以前|当初' <<<"$context"; then
 			continue
 		fi
-		n="$(grep -oE '[0-9]+' <<<"$token" | head -n1 || true)"
+		n="$(grep -oE 'tests[0-9]+' <<<"$matched" | grep -oE '[0-9]+' | head -n1 || true)"
 		[[ -z "$n" ]] && continue
 		assert_numbers_match "doc test names current @ ${spec}:${test_line_no}" "${#doc_test_names[@]}" "$n"
-	done < <(grep -boE 'tests[0-9]+' <<<"$test_line_body" | cut -d: -f1 || true)
+	done < <(grep -oE '.{0,30}tests[0-9]+' <<<"$test_line_body" || true)
 done < <(grep -nE 'tests[0-9]+' "$spec" || true)
 
 # --- 結果 ----------------------------------------------------------------

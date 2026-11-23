@@ -1984,7 +1984,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
 | `data_export_deserializes_all_agreed_fields` | 合意済み全フィールドを復元 |
 | `data_export_defaults_missing_fields` | 欠落フィールドは既定値 |
 | `download_start_error_message_is_fixed_phrase` | ダウンロード開始失敗は固定文言 |
-| `export_filename_is_fixed_constant` | ファイル名は固定定数 |
+| `export_filename_is_fixed_constant` | 固定 stem + generated_at 由来 UTC サフィックス、不正時は unknown フォールバック（テスト名は履歴） |
 | `report_validation_rejects_blank_cid_and_reason` | 空 CID/理由を拒否 |
 | `report_input_maxlength_matches_server_limits` | maxlength がサーバー上限と一致 |
 | `upload_maxlength_constants_match_common_byte_limits` | アップロード上限が common のバイト制限と一致 |

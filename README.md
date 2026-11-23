@@ -125,6 +125,7 @@ bash scripts/test-doc-numbers.sh
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
 shfmt_out="$(shfmt -l scripts/*.sh e2e/*.sh)"
 [[ -z "$shfmt_out" ]] || { printf '%s\n' "$shfmt_out"; exit 1; }
+npx --no-install markdownlint-cli2 "docs/**/*.md" ".amazonq/rules/**/*.md" "todo.md" "README.md" "index.md"
 npm audit --audit-level=high && npm audit --prefix e2e --audit-level=high && npm audit --prefix client --audit-level=high
 bash scripts/test-backup-rotate.sh
 bash scripts/test-backup-cron-wrapper.sh
