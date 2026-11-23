@@ -786,6 +786,26 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第83ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: READMEメトリクス完全名化+ルートnpm ci手順、
+  favoriteのaria-label固定化（状態はaria-pressed/★☆）+E2E testid化、
+  backup unit/cronのDATABASE_URLハードコード除去+backup.env同期必須、
+  prometheus target PORT追随注記、構成図HTTPS表記。
+  discovery指摘のうちdialog lang/live region常設化は既存E2E契約と衝突したため
+  元へ戻し（R2-LANG契約・toHaveCount(0)オラクルを維持）、E2Eを再green化。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、yaml/tsc green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe WCAG AA導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、aria-label/placeholderのlang、通信タイムアウトのテレメトリ、
+  export revoke delayオラクル汚染、fetch timeout分岐テスト、jxl fuzz独立オラクル、
+  BAN/UNBAN再送回帰テスト、空sub拒否回帰テスト、Node/Chrome比較分岐テスト、
+  CIツールchecksumピン留め、署名公開失敗回帰、pushState失敗告知、
+  ナビ/投票の24pxタッチ目標、Markdown heading階層、投票.disabled理由、
+  noscript/fallback、お気に入り削除の冪等性、governance_entries構造検証、
+  refresh iatのDB正本化、E2E_SERVER_PORTのクライアント伝播、npm auditトリアージ、
+  バックアップ鮮度timer、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第82ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: 期間付きBAN分岐のCAS漏れ（無期限BANが期間付きで上書きされ
   期限到達後に意図せず解除される／再送で監査重複・期限延長）を修正。

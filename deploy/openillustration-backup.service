@@ -20,7 +20,8 @@ Environment=BACKUP_DIR=/var/backups/openillustration
 Environment=BIN_DIR=/opt/openIllustration/target/release
 Environment=RETENTION_DAYS=30
 Environment=MIN_KEEP=3
-Environment=DATABASE_URL=file:/var/lib/openillustration/local.db
+# DATABASE_URL は backup.env で server.env と同じ絶対 file: パスを設定すること。
+# ここで既定を上書きすると server.env 変更時に旧 DB をバックアップしてしまう。
 # BACKUP_GPG_RECIPIENT（必須）と AUDIT_EXPECT_ROOT（本番必須）、ALERT_CMD /
 # OFFSITE_* は 600 権限の環境ファイルで管理する。
 # AUDIT_EXPECT_ROOT は別経路保存の Merkle root（hex、非機微）。設定時は

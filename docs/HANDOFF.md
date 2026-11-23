@@ -107,6 +107,7 @@ cargo deny check licenses
 cargo deny check advisories
 cargo build -p client --target wasm32-unknown-unknown --locked
 # CI と同じドキュメント／シェル／バックアップ回帰ゲート
+npm ci --ignore-scripts --no-fund
 bash scripts/test-doc-numbers.sh
 for f in scripts/*.sh e2e/*.sh; do bash -n "$f" && shellcheck "$f"; done
 shfmt_out="$(shfmt -l scripts/*.sh e2e/*.sh)"

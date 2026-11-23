@@ -404,7 +404,9 @@ systemctl list-timers openillustration-backup.timer
 
 `deploy/openillustration.service`（アプリ unit テンプレート）を配置する際は
 `/etc/openillustration/server.env` を所有者 `openillustration`・権限 `0600` で用意し、
-同梱 migrations のパス `MIGRATIONS_DIR=/opt/openIllustration/migrations` を確認すること
+同梱 migrations のパス `MIGRATIONS_DIR=/opt/openIllustration/migrations` を確認すること。
+`backup.env` の `DATABASE_URL` は `server.env` と同じ絶対 `file:` パスへ同期させること
+（unit/cron には既定値をハードコードしていないため、未設定なら起動前に失敗する）
 （サーバー側の `MIGRATIONS_DIR` override 実装と合わせて有効化）。
 
 - 停止待ち時間の契約: window unit の `TimeoutStartSec=1800` は自 unit の Exec にしかかからず、

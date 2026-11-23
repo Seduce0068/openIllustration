@@ -149,20 +149,20 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     await expect(page.getByText('Fav Story')).toBeVisible({ timeout: 20000 });
     await expect(page.getByText('Plain Story')).toBeVisible();
     await expect(
-      card('Fav Story').getByRole('button', { name: 'Remove from favorites' }),
+      card('Fav Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'true');
     await expect(
-      card('Plain Story').getByRole('button', { name: 'Add to favorites' }),
+      card('Plain Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'false');
 
     // ☆ → POST が呼ばれ、成功後に一覧が「1回だけ」再取得される。
     // 回数を固定し、かつリクエスト内容も完全一致で検証して過剰再フェッチを検出する。
-    await card('Plain Story').getByRole('button', { name: 'Add to favorites' }).click();
+    await card('Plain Story').getByTestId('favorite-toggle').click();
     await expect.poll(() => favoriteCalls).toEqual([
       { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
     ]);
     await expect(
-      card('Plain Story').getByRole('button', { name: 'Remove from favorites' }),
+      card('Plain Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(() => contentRequests).toEqual([
       { q: null, tag: null, type: null, favorite_only: null },
@@ -170,13 +170,13 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     ]);
 
     // ★ → DELETE が呼ばれ、ボタン状態が戻る。
-    await card('Fav Story').getByRole('button', { name: 'Remove from favorites' }).click();
+    await card('Fav Story').getByTestId('favorite-toggle').click();
     await expect.poll(() => favoriteCalls).toEqual([
       { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
       { method: 'DELETE', path: '/content/QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB/favorite' },
     ]);
     await expect(
-      card('Fav Story').getByRole('button', { name: 'Add to favorites' }),
+      card('Fav Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'false');
 
     // 「Favorites only」で favorite_only=1 が送られ、結果が絞り込まれる。
@@ -222,7 +222,7 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
     // R2-URL: 解除時は favorite_only が消え、生 search が空へ戻る（未知キーは残らない）。
     await expect.poll(() => new URL(page.url()).search).toBe('');
     await expect(page.getByText('Fav Story')).toBeVisible();
-    await card('Fav Story').getByRole('button', { name: 'Add to favorites' }).focus();
+    await card('Fav Story').getByTestId('favorite-toggle').focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => favoriteCalls).toEqual([
       { method: 'POST', path: '/content/QmexSeEPM8WkRztX1j1bj4bnBf497ghku4Bmzqq3yuDTiP/favorite' },
@@ -230,17 +230,17 @@ test.describe('Favorites / Bookmarks (R5-02)', () => {
       { method: 'POST', path: '/content/QmUoLUYcf44HS1LteR8Uuh98vPDDNXjyZXht8og27yNaxB/favorite' },
     ]);
     await expect(
-      card('Fav Story').getByRole('button', { name: 'Remove from favorites' }),
+      card('Fav Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'true');
 
     // API 失敗時はカード内にエラーが表示され、状態は変わらない。
     failNextToggle = true;
-    await card('Fav Story').getByRole('button', { name: 'Remove from favorites' }).click();
+    await card('Fav Story').getByTestId('favorite-toggle').click();
     await expect(card('Fav Story').getByRole('alert')).toContainText(
       'Failed to update favorite',
     );
     await expect(
-      card('Fav Story').getByRole('button', { name: 'Remove from favorites' }),
+      card('Fav Story').getByTestId('favorite-toggle'),
     ).toHaveAttribute('aria-pressed', 'true');
 
     // 一連の操作で飛んだ一覧リクエストはちょうど8件だけ（失敗トグルでは再取得しない）。

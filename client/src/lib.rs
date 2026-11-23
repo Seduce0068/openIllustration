@@ -3672,7 +3672,7 @@ where
                         data-testid="favorite-toggle"
                         disabled=move || favorite_busy.get()
                         lang="en"
-                        aria-label=move || if favorite.get() { "Remove from favorites" } else { "Add to favorites" }
+                        aria-label="Favorites"
                         aria-pressed=move || if favorite.get() { "true" } else { "false" }
                         class="min-h-6 min-w-6 text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
                         {move || if favorite.get() { "★" } else { "☆" }}

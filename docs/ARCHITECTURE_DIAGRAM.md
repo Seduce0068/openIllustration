@@ -39,7 +39,7 @@ ADR-0013 方針により実行時の機能検出は行わず、ビルド時フ�
 [Leptos CSR / Rust-Wasm]
       ├─ JXL/Wasm利用可能 ──► Wasm描画
       └─ 非対応 ──────────► 代替表示/ダウンロード案内（方式未決定）
-      │ HTTP API
+      │ HTTPS API（開発時のみローカル HTTP）
       ▼
 [Rust / Axum] ─────► [ローカル libSQL（file: 絶対パスのみ。リモート DSN は本番起動ゲートで拒否）]
       └─────────────► [Pinata API / IPFS gateways]

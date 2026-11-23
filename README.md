@@ -19,10 +19,13 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 - ログは標準出力へ出し、`RUST_LOG` で制御します（例: `RUST_LOG=server=debug`。未設定時は INFO）。
   `LOG_FORMAT=json` で1行1JSONの構造化ログを出力します（詳細は [HANDOFF](docs/HANDOFF.md)）。
 - `GET /metrics` で Prometheus メトリクスを公開します。代表例:
-  `openillustration_http_requests_total` / `http_errors_total` / `neutralized_urls_total` /
-  `client_ui_errors_total` / `unpin_compensation_failures_total` / `token_cleanup_failures_total` /
-  `finalizer_*_total`（以上 counter、再起動でゼロに戻る）と
-  `finalizer_last_success_timestamp_seconds` / `rate_limiter_keys`（以上 gauge、
+  `openillustration_http_requests_total` / `openillustration_http_errors_total` /
+  `openillustration_neutralized_urls_total` / `openillustration_client_ui_errors_total` /
+  `openillustration_unpin_compensation_failures_total` /
+  `openillustration_token_cleanup_failures_total` / `openillustration_finalizer_*_total`
+  （以上 counter、再起動でゼロに戻る）と
+  `openillustration_finalizer_last_success_timestamp_seconds` / `openillustration_rate_limiter_keys`
+  （以上 gauge、
   0 は「未成功／キーなし」を表す）。完全な一覧は `server/src/lib.rs` の HELP/TYPE 定義を参照。
   IP ゲート・認証の対象外のため、監視ネットワーク内に限定してください（設定例:
   [prometheus.yml.example](deploy/prometheus.yml.example)）。counter reset は
@@ -56,6 +59,7 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 ```bash
 cargo install trunk --version 0.21.14 --locked   # CI と同じ版を推奨（E2E の前提）
 rustup target add wasm32-unknown-unknown
+npm ci --ignore-scripts --no-fund   # ルートの markdownlint / npm audit 用
 cd client && npm ci && npm run build-css && cd ..   # Tailwind CSS（input.css 変更時は再実行）
 ```
 
