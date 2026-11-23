@@ -815,7 +815,7 @@ P2（品質・保守・プロダクト拡張）:
   backup.service OnFailure、E2Eセットアップ失敗の::error::、署名公開rename TOCTOU、
   IPFSチェックサム不一致時フェイルオーバー、429専用文言、nonce取得失敗の上書き、
   aria-describedby/aria-invalid、Auditボタン/dialog lang、export sub 8文字以下契約、
-  Blob/URL生成エラー分岐、common RSA推移依存、HSTS方針、 업로드 status失敗時クリア（契約衝突で却下）、
+  Blob/URL生成エラー分岐、common RSA推移依存、HSTS方針、 upload status失敗時クリア（契約衝突で却下）、
   監査パネルnon-modal Tab、投票キュー再取得、READMEローカル起動手順）は記録のみで保留。
 
 - 2026-11-23 コンボ第48ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
