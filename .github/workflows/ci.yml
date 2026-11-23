@@ -239,7 +239,9 @@ jobs:
           done < <(
             # 有効ジョブ行に加え、テンプレート内でコメントアウトされたジョブ行も検証する
             # （既定無効のテンプレートでも構文回帰を検出できるようにする）。
-            sed -E 's/^[[:space:]]*#[[:space:]]*//' "$cron_src" |
+            # cron-d-example マーカー行（root crontab 形式の例）は /etc/cron.d 検証対象外。
+            grep -v 'cron-d-example' "$cron_src" |
+              sed -E 's/^[[:space:]]*#[[:space:]]*//' |
               grep -E '^[0-9*][^=]+[[:space:]]/?'
           )
           while IFS= read -r referenced; do

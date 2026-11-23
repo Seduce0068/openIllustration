@@ -131,7 +131,7 @@ bash scripts/test-prepare-distribution.sh
 # 上限超過は fail-closed。CI ランナーの Chrome 更新時は ci.yml の MAX_CHROME_MAJOR を追随させる。
 # 既定は chromium のみ。firefox/webkit は E2E_PROJECTS=firefox,webkit で opt-in。
 # 開発サーバーは Playwright が自動起動する。
-cd e2e && npm test
+(cd e2e && npm test)
 
 # CI E2E ゲート（開発用モック認証 ALLOW_MOCK_AUTH=1 で実行）
 # 前提: trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
@@ -145,7 +145,7 @@ bash e2e/ci-e2e.sh
 `npm test` は開発用のローカル E2E 実行であり、CI の合否を決めるゲートではない。
 CI では `bash e2e/ci-e2e.sh` を必ず実行し、ブラウザ（chromium / firefox / webkit）
 の導入・型検査・シェル静的検査まで含めてゲートとする。ローカルで再現する場合は
-`cd e2e && npm test` を使い、必要なら `E2E_REUSE=0` でクリーンな DB から起動する。
+`(cd e2e && npm test)` を使い、必要なら `E2E_REUSE=0` でクリーンな DB から起動する。
 
 ### 5. 運用CLI（バックアップ・監査）
 

@@ -4419,7 +4419,19 @@ pub async fn logout(
 
     // R2-SERVER: 署名・期限だけでなく AuthClaims 抽出器と同じ sub 閾値を検査する。
     // BAN / back-channel logout 済みの sub は 401 とするが、Cookie は消去する。
-    if is_sub_revoked(&state.db, &claims.sub, claims.iat).await? {
+    // 失効判定の DB 失敗でも 500 にせず、Cookie 消去を完遂させる（下流の sid 側が正本）。
+    let sub_revoked = match is_sub_revoked(&state.db, &claims.sub, claims.iat).await {
+        Ok(revoked) => revoked,
+        Err(error) => {
+            state
+                .metrics
+                .token_cleanup_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("logout subject revocation check failed: {error}");
+            false
+        }
+    };
+    if sub_revoked {
         let mut response = AppError::Unauthorized("Session revoked".to_string()).into_response();
         response
             .headers_mut()
@@ -4457,7 +4469,8 @@ pub async fn logout(
         // 読み取りカーソルを先に閉じてから BEGIN する。
         // R2-AUTH: family_id だけでなく sub も読み、JWT の claims.sub と束縛する。
         // 別 sub の Cookie を差し込まれてもファミリを失効させない（fail-closed）。
-        let token_row = {
+        // sid 失効は確定済み。SELECT 失敗でも 500 にせず、削除 Cookie を必ず返す。
+        let token_row = match async {
             let mut rows = state
                 .db
                 .query(
@@ -4468,7 +4481,19 @@ pub async fn logout(
             rows.next()
                 .await?
                 .map(|row| -> Result<(String, String), AppError> { Ok((row.get(0)?, row.get(1)?)) })
-                .transpose()?
+                .transpose()
+        }
+        .await
+        {
+            Ok(row) => row,
+            Err(error) => {
+                state
+                    .metrics
+                    .token_cleanup_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::warn!("logout refresh token lookup failed: {error}");
+                None
+            }
         };
         match token_row {
             Some((family_id, token_sub)) if token_sub == claims.sub => {

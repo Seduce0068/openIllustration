@@ -786,6 +786,23 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第74ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh2件を是正: migration適用済み判定をwrite_lock取得後・tx内SELECTへ移動
+  （前回のwrite_lock化がロック外判定を残していた）、CI cronゲートがroot crontab例を
+  /etc/cron.d形式として解析し常時失敗する問題（cron-d-exampleマーカー除外）。
+  他: refresh再利用検知を常に401＋ファミリ失効失敗カウンタ格下げ、
+  logout全失敗経路で削除Cookie付与（R4指摘のis_sub_revokedも修正）、
+  README cdサブシェル化、PWAアセット静的検証。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  yaml/tsc OK、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: リロード時セッション復元、axe WCAG AA自動スキャン導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、jxl fuzz独立オラクル、pushState失敗告知、
+  ナビ/LOG OUT/投票の24pxタッチ目標、投票.disabled理由、noscript/fallback、
+  apple-touch-icon PNG、公開集計閾値の設定化、RuntimeConfig一括化、
+  doctor MIGRATIONS_DIR診断、REQUEST_TIMEOUT二重読込、REVIEW_REPORT未更新、
+  url_decode不正percentテスト、ui_errorテスト仕様化）は記録のみで保留。
+
 - 2026-11-24 コンボ第73ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: CI Chrome上限140がハードコードでランナー更新時に恒久赤になる問題
   （ci.yml env_varsでMAX_CHROME_MAJOR注入可能化、READMEに上限/更新手順）。

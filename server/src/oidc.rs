@@ -1459,8 +1459,15 @@ pub async fn refresh(
         row.ok_or_else(|| AppError::Unauthorized("unknown refresh token".to_string()))?;
 
     if used_at.is_some() {
-        // 既に消費済みのトークンの再利用は盗用の兆候。ファミリを全失効する。
-        revoke_refresh_family(&state, &family_id).await?;
+        // 盗用検知は常に 401。ファミリ失効の DB 失敗は警告＋カウンタへ格下げし、
+        // 検知シグナルが 500 に化けないようにする（冪等 UPDATE なので再送で再試行可）。
+        if let Err(error) = revoke_refresh_family(&state, &family_id).await {
+            state
+                .metrics
+                .token_cleanup_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("refresh reuse family revocation failed: {error}");
+        }
         return Err(AppError::Unauthorized(
             "refresh token reuse detected; token family revoked".to_string(),
         ));
@@ -1544,7 +1551,13 @@ pub async fn refresh(
             .await
             .map_err(|e| AppError::Internal(format!("Transaction rollback failed: {e}")))?;
         drop(write_guard);
-        revoke_refresh_family(&state, &family_id).await?;
+        if let Err(error) = revoke_refresh_family(&state, &family_id).await {
+            state
+                .metrics
+                .token_cleanup_failures
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!("refresh reuse family revocation failed: {error}");
+        }
         return Err(AppError::Unauthorized(
             "refresh token reuse detected; token family revoked".to_string(),
         ));

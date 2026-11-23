@@ -108,6 +108,21 @@ test.describe('Build gate (BG-01)', () => {
   };
 
   test('checksum gate is wired before extraction in ci-e2e.sh', () => {
+    // PWA アセット（第73ラウンド）の配信契約を静的に固定する（新規 test() なし）。
+    const clientRoot = path.resolve(__dirname, '../../client');
+    const manifestPath = path.join(clientRoot, 'manifest.webmanifest');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    expect(manifest.name).toBeTruthy();
+    expect(manifest.short_name).toBeTruthy();
+    expect(manifest.start_url).toBe('/');
+    expect(manifest.display).toBe('standalone');
+    expect(Array.isArray(manifest.icons) && manifest.icons.length > 0).toBe(true);
+    expect(fs.existsSync(path.join(clientRoot, 'favicon.svg'))).toBe(true);
+    const html = fs.readFileSync(path.join(clientRoot, 'index.html'), 'utf8');
+    expect(html).toContain('rel="manifest"');
+    expect(html).toContain('rel="icon"');
+    expect(html).toContain('name="theme-color"');
+
     const script = fs.readFileSync(scriptPath, 'utf8');
     const gate = fs.readFileSync(gatePath, 'utf8');
     const lines = script.split(/\r?\n/);

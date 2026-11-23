@@ -357,8 +357,13 @@ async fn apply_migration(
 ) -> Result<(), AppError> {
     let checksum = calculate_checksum(sql);
 
-    // Check if already applied with same checksum
-    let mut rows = db
+    // ADR-0013 P4: リモートDBでは instance.lock が強制されないため、
+    // write_lock を取得してから BEGIN し、適用済み判定も tx 内で再検証する。
+    // ALTER/DROP は冪等でないため、ロック外の判定だけで「未適用」と決めつけると
+    // 複数インスタンスの同時起動で二重適用になる（checksum 再読はロック後）。
+    let (_write_guard, tx) = crate::begin_write_tx(db).await?;
+
+    let mut rows = tx
         .query(
             &format!(
                 "SELECT checksum FROM {} WHERE version = ?",
@@ -371,26 +376,21 @@ async fn apply_migration(
     if let Some(row) = rows.next().await? {
         let existing_checksum: String = row.get(0)?;
         if existing_checksum == checksum {
+            drop(rows);
+            tx.commit().await?;
             info!("Migration {} ({}) already applied, skipping", version, name);
             return Ok(());
         } else {
+            drop(rows);
             return Err(AppError::Internal(format!(
                 "Migration {} ({}) checksum mismatch: file checksum {}, applied checksum {}",
                 version, name, checksum, existing_checksum
             )));
         }
     }
-    // 1 行読んだ時点で Rows を明示的に解放してから BEGIN する。
-    // 他箇所の read-then-BEGIN パターンと同じ順序にし、同一接続に
-    // 読み取りカーソルを残したままトランザクションを開始しない。
     drop(rows);
 
     info!("Applying migration {}: {}", version, name);
-
-    // ADR-0013 P4: リモートDBでは instance.lock が強制されないため、
-    // write_lock を取得してから BEGIN する。ALTER/DROP は冪等でないため、
-    // 複数インスタンスの同時適用をここで直列化する。
-    let (_write_guard, tx) = crate::begin_write_tx(db).await?;
 
     // SQL-aware splitter: `;` / `--` inside quoted literals stay intact and
     // `--` comment text is removed before splitting.
