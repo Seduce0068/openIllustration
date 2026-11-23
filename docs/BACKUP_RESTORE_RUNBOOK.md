@@ -96,10 +96,12 @@ Merkle root を `AUDIT_EXPECT_ROOT` へ設定する。設定時は `backup-rotat
 
 本番へ一括で設定を投入せず、次の順で段階的にゲートを効かせる。
 
-1. **空ログ root provision**: 監査ログが空の状態で `verify_audit_log --database-url <DB>` を
-   実行し、出力された Merkle root を別経路（秘密管理基盤等、root は非機微な hex）へ保存する。
-   この時点では `AUDIT_EXPECT_ROOT` をサーバー環境へ設定しない（`backup-rotate.sh` は未設定
-   でも内部整合性チェックのみで動作する従来契約を維持する）。
+1. **初期 root provision**: まず最初の監査エントリを1件発行してから
+   `verify_audit_log --database-url <DB>` を実行し、出力された Merkle root を別経路
+   （秘密管理基盤等、root は非機微な hex）へ保存する。空ログに対して `verify_audit_log` は
+   `--expect-root` 未指定でも固定文言で終了コード1となる（空ログを暗黙に有効としない契約）
+   ため、空の状態では root を取得できない。この時点では `AUDIT_EXPECT_ROOT` をサーバー環境へ
+   設定しない（`backup-rotate.sh` は未設定でも内部整合性チェックのみで動作する従来契約を維持する）。
 2. **`doctor --strict`**: 保存した root を `AUDIT_EXPECT_ROOT` へ設定し、本番相当の環境変数を
    注入して `cargo run -p server --bin doctor -- --strict` を実行する。`audit_expect_root`
    カテゴリが警告なし（hex 生値で前後空白なし）であることを確認する。未設定・非 UTF-8・

@@ -787,6 +787,26 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第42ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
+  補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
+  【high】PAYMENT_RECEIVING_ADDRESSのゼロアドレスを拒否（is_valid_eth_address）+回帰テスト、
+  .env.exampleを起動可能テンプレートへ（JWT RSAコメントアウト・IPFS {cid}・非ゼロアドレス）、
+  RunbookのAUDIT_EXPECT_ROOT初期取得を「最初の監査エントリ発行後」へ（空ログ拒否と整合）、
+  ダーク背景の非アクティブナビ/集計th/監査日時をgray-400へ+集計thへlang=en。
+  R4指摘3件（envゼロアドレス・テスト不足・ナビ残り）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、npm audit3lockfile、
+  markdownlint39ファイル、server485テスト）。
+  設計判断待ち（本人確認監査、通知/再審査、UNPIN、脅威モデル、JPYC手数料/返金、
+  機能検出代替、JPKI信頼アンカー/OIDC azp、第三者監査アンカー、起動設定一括Config化、
+  BIND_ADDR/PORT設定化、workspace依存集約、孤立Pinataピン補償、alert unitテンプレート、
+  IPFSゲートウェイ異常運用手順、監査エクスポート自動スケジューラ、doctor --strict CIゲート、
+  E2E本番相当昇格、refresh Cookie __Host- prefix、instance.lock部分書込み、
+  build.rs rerun-if-env-changed、リクエストタイムアウト、E2E artifact公開、GPG署名、
+  RPO/RTO定義、バックアップ鮮度監視、trunk部分アーカイブ、cronタイムアウト、GPG trust、
+  cron allowlistログキー、license_file相対パス、BACKUP_PREFIX検証、doc-numbers照合拡張、
+  axe自動スキャン、開発モックuser_hash衝突、ネットワークエラー再試行導線、
+  クライアント例外テレメトリ、refresh失敗メトリクス、playwright install再試行）は記録のみで保留。
+
 - 2026-11-23 コンボ第41ラウンド（review4+discovery3）: 全7担当完了。TODO未着手0件の状態で
   補充を実行し新規タスクが得られたため継続。R6 で以下を是正:
   【high】auth_verify/OIDC callbackの失効閾値削除をトークン発行後へ遅延（clear_superseded_revocation）、

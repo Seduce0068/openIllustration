@@ -939,7 +939,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     );
     html.push_str("<caption>月次集計</caption>");
     html.push_str(
-        "<thead class=\"border-b border-white/10 text-gray-500 uppercase\"><tr>\
+        "<thead lang=\"en\" class=\"border-b border-white/10 text-gray-400 uppercase\"><tr>\
          <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
          <th scope=\"col\" class=\"py-2 pr-4\">Concluded</th><th scope=\"col\" class=\"py-2 pr-4\">Approved</th>\
          <th scope=\"col\" class=\"py-2 pr-4\">Rejected</th><th scope=\"col\" class=\"py-2 pr-4\">Bans</th>\
@@ -1012,7 +1012,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     );
     html.push_str("<caption>月次集計</caption>");
     html.push_str(
-        "<thead class=\"border-b border-white/10 text-gray-500 uppercase\"><tr>\
+        "<thead lang=\"en\" class=\"border-b border-white/10 text-gray-400 uppercase\"><tr>\
          <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
          <th scope=\"col\" class=\"py-2 pr-4\">Concluded</th><th scope=\"col\" class=\"py-2 pr-4\">Approved</th>\
          <th scope=\"col\" class=\"py-2 pr-4\">Rejected</th></tr></thead>",
@@ -2118,27 +2118,27 @@ pub fn App() -> impl IntoView {
                     <div class="flex gap-6 text-[10px] tracking-widest font-bold">
                         <button lang="en" on:click=move |_| navigate("dashboard", NavigateMode::Push)
                             aria-current=move || if view.get() == "dashboard" { Some("page") } else { None }
-                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-500" })>
+                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "dashboard" { "text-white" } else { "text-gray-400" })>
                             "BROWSE"
                         </button>
                         <button lang="en" on:click=move |_| navigate("upload", NavigateMode::Push)
                             aria-current=move || if view.get() == "upload" { Some("page") } else { None }
-                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-500" })>
+                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "upload" { "text-white" } else { "text-gray-400" })>
                             "UPLOAD"
                         </button>
                         <button lang="en" on:click=move |_| navigate("moderation", NavigateMode::Push)
                             aria-current=move || if view.get() == "moderation" { Some("page") } else { None }
-                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-500" })>
+                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "moderation" { "text-white" } else { "text-gray-400" })>
                             "MODERATION"
                         </button>
                         <button lang="en" on:click=move |_| navigate("ledger", NavigateMode::Push)
                             aria-current=move || if view.get() == "ledger" { Some("page") } else { None }
-                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-500" })>
+                            class=move || format!("hover:text-white transition-colors {}", if view.get() == "ledger" { "text-white" } else { "text-gray-400" })>
                             "LEDGER"
                         </button>
                         <button lang="en" type="button" on:click=handle_logout
                             data-testid="logout-button"
-                            class="text-gray-500 hover:text-white transition-colors">
+                            class="text-gray-400 hover:text-white transition-colors">
                             "LOG OUT"
                         </button>
                         <span data-testid="user-hash" class="text-green-500 border border-green-500/20 px-2">
@@ -3326,7 +3326,7 @@ where
                                     let reason_for_lang = reason.clone();
                                     view! {
                                         <div class="text-[8px] space-y-1">
-                                            <div class="flex justify-between text-gray-500">
+                                            <div class="flex justify-between text-gray-400">
                                                 <span data-testid="audit-created-at" title=created_at>{format_local_datetime(&log.created_at)}</span>
                                                 <span class="text-green-500">{log.new_status.clone()}</span>
                                             </div>

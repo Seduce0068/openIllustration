@@ -10313,6 +10313,10 @@ fn test_eth_address_normalization_is_case_insensitive() {
         "52908400098527886e0f7030069857d2e4169ee7"
     ));
     assert!(!crate::payments::is_valid_eth_address("0x1234"));
+    // 全ゼロは回収不能な送金先なので拒否する。
+    assert!(!crate::payments::is_valid_eth_address(
+        "0x0000000000000000000000000000000000000000"
+    ));
 }
 
 /// JPYC: 円→Wei 変換の境界。0 / 上限超え / i64・u64 境界を拒否し、上限値まで正確に変換する。

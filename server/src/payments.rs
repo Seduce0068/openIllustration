@@ -125,7 +125,8 @@ pub fn is_valid_eth_address(address: &str) -> bool {
     let Some(hex) = address.strip_prefix("0x") else {
         return false;
     };
-    hex.len() == 40 && hex.chars().all(|c| c.is_ascii_hexdigit())
+    // ゼロアドレスは回収不能な送金先なので受け付けない。
+    hex.len() == 40 && hex.chars().all(|c| c.is_ascii_hexdigit()) && hex.bytes().any(|b| b != b'0')
 }
 
 pub fn normalize_address(address: &str) -> String {
