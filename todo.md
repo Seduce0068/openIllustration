@@ -786,6 +786,21 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第75ラウンド（残存high: リロード時セッション復元）:
+  起動時にsessionStorageマーカー（oi_session_restore）がある場合のみ/auth/refreshを
+  呼び、成功時にtoken/user_hash/viewを復元（URLはReplaceで正規化、last_known_viewも更新）。
+  login成功でマーク、logoutで削除。globalSetupの未認証401許可はマーカー導入で
+  不要になったため削除。R4指摘3件（epoch照合・last_known_view更新・global-setup根拠）
+  も修正。npm audit一時障害は再試行で解消。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  tsc/wasm green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: axe WCAG AA自動スキャン導入、globalSetup認証後ビュー監視、
+  fail-closedカウンタ2種のテスト・仕様、error_lang UTC例外テスト、jxl fuzz独立オラクル、
+  pushState失敗告知、ナビ/LOG OUT/投票の24pxタッチ目標、投票.disabled理由、
+  noscript/fallback、apple-touch-icon PNG、公開集計閾値の設定化、RuntimeConfig一括化、
+  doctor MIGRATIONS_DIR診断、REQUEST_TIMEOUT二重読込、REVIEW_REPORT未更新、
+  url_decode不正percentテスト、ui_errorテスト仕様化）は記録のみで保留。
+
 - 2026-11-24 コンボ第74ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh2件を是正: migration適用済み判定をwrite_lock取得後・tx内SELECTへ移動
   （前回のwrite_lock化がロック外判定を残していた）、CI cronゲートがroot crontab例を

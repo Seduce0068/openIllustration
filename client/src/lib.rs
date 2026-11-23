@@ -414,6 +414,31 @@ fn set_shared_jwt(jwt: Option<String>) {
     });
 }
 
+/// 起動時セッション復元のオプトイン・マーカー。
+/// ログイン成功時に sessionStorage へ書き、ログアウト時に削除する。
+/// E2E の /auth/refresh モック（常に 200）が未認証スモークで誤復元しないよう、
+/// 実際にログイン済みだったセッションだけがリロード時に refresh を試す。
+const SESSION_RESTORE_KEY: &str = "oi_session_restore";
+
+fn mark_session_active() {
+    if let Some(storage) = web_sys::window().and_then(|w| w.session_storage().ok().flatten()) {
+        let _ = storage.set_item(SESSION_RESTORE_KEY, "1");
+    }
+}
+
+fn clear_session_active() {
+    if let Some(storage) = web_sys::window().and_then(|w| w.session_storage().ok().flatten()) {
+        let _ = storage.remove_item(SESSION_RESTORE_KEY);
+    }
+}
+
+fn session_restore_pending() -> bool {
+    web_sys::window()
+        .and_then(|w| w.session_storage().ok().flatten())
+        .and_then(|storage| storage.get_item(SESSION_RESTORE_KEY).ok().flatten())
+        .is_some()
+}
+
 /// refresh の完了結果。待機者は `Token` の新 JWT を使って再送し、`Failed` なら
 /// 自分の 401 レスポンスをそのまま呼び出し元へ返す。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2124,6 +2149,35 @@ pub fn App() -> impl IntoView {
     // その直前の既知 view（dashboard 等）へ正規化できる。
     let last_known_view: StoredValue<String> = StoredValue::new("dashboard".to_string());
 
+    // ADR-0013 P4: リロード／PWA 起動時に HttpOnly refresh Cookie でセッションを復元する。
+    // Effect を使わず直接 spawn_local することで、signal 更新による再実行を避ける。
+    // 初期化時は user_hash が未確定のため、別ユーザー照合（join_refresh）は使わず
+    // perform_refresh の応答 user_hash をそのまま採用する。失敗時は login を維持。
+    if session_restore_pending() {
+        let target_view = pending_view.get_value();
+        // 開始時の epoch を捕捉し、完了時に一致しなければ logout/login の後続操作を尊重する。
+        let restore_epoch = current_refresh_epoch();
+        spawn_local(async move {
+            let (outcome, refresh_hash) = perform_refresh().await;
+            if current_refresh_epoch() != restore_epoch {
+                return; // 復元中に logout/login が起きた → その結果を上書きしない。
+            }
+            if let (RefreshOutcome::Token(jwt), Some(hash)) = (outcome, refresh_hash) {
+                clear_refreshed_jwt();
+                set_user_hash.set(Some(hash));
+                set_shared_jwt(Some(jwt.clone()));
+                set_token.set(Some(jwt));
+                set_view.set(target_view.to_string());
+                last_known_view.set_value(target_view.to_string());
+                let _ = write_view_history(
+                    target_view,
+                    &current_content_query(),
+                    NavigateMode::Replace,
+                );
+            }
+        });
+    }
+
     // 全 view 遷移をここへ集約する。タブ切替だけ pushState、ログイン成功・
     // ログアウト・初期化は replaceState。検索条件（query）は current_content_query()
     // で正規化して埋め込み、未知キーを引き継がない。
@@ -2272,6 +2326,7 @@ pub fn App() -> impl IntoView {
     });
 
     let handle_login_success = move |hash: String, jwt: String| {
+        mark_session_active();
         set_logout_error.set(String::new());
         set_user_hash.set(Some(hash));
         // 先に epoch を進め、前回セッションの in-flight refresh を無効化する。
@@ -2297,6 +2352,7 @@ pub fn App() -> impl IntoView {
         // 旧 token signal を読むと refresh 後のログアウトで新セッションが残る。
         let token = current_jwt();
         clear_refreshed_jwt();
+        clear_session_active();
         set_token.set(None);
         set_user_hash.set(None);
         // hash を #login へ replaceState（navigate 経由で履歴を汚さない）。
