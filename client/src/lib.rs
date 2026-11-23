@@ -976,7 +976,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     };
     let _ = writeln!(
         html,
-        "<p data-testid=\"moderation-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        "<p data-testid=\"moderation-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\"><span lang=\"en\">GENERATED_AT: </span>{}</p>",
         error_lang(&generated_at),
         escape_html_text(&stats.generated_at),
         generated_html
@@ -1063,7 +1063,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     };
     let _ = writeln!(
         html,
-        "<p data-testid=\"public-mod-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\">GENERATED_AT: {}</p>",
+        "<p data-testid=\"public-mod-stats-generated-at\" lang=\"{}\" class=\"mb-4 text-[10px] text-gray-500\" title=\"{}\"><span lang=\"en\">GENERATED_AT: </span>{}</p>",
         error_lang(&generated_at),
         escape_html_text(&stats.generated_at),
         generated_html
@@ -3218,7 +3218,7 @@ fn retry_control(test_id: &'static str, on_retry: impl Fn() + 'static) -> impl I
     view! {
         <div data-testid=container_id class="flex flex-wrap items-center gap-3 mb-4">
             <button type="button" lang=move || error_lang(RETRY_BUTTON_LABEL)
-                aria-busy=move || retry_busy.get()
+                aria-busy=move || if retry_busy.get() { "true" } else { "false" }
                 on:click=move |_| {
                     if set_retry_busy
                         .try_update(|busy| std::mem::replace(busy, true))
@@ -4350,7 +4350,7 @@ fn Ledger(token: String) -> impl IntoView {
             </Show>
             <div class="border border-white/10 overflow-hidden">
                 <table class="w-full text-left text-[10px] font-mono">
-                    <caption>"取引履歴"</caption>
+                    <caption lang="ja">"取引履歴"</caption>
                     <thead class="bg-white/5 border-b border-white/10 uppercase tracking-tighter">
                         <tr>
                             <th lang="en" scope="col" class="p-4">"Date"</th>
@@ -4972,7 +4972,7 @@ where
                 </Show>
                 // 401 のときだけ、既存の LOG OUT ボタンからの再ログインを案内する。
                 <Show when=move || public_stats_error.get() == PUBLIC_STATS_UNAUTHORIZED fallback=|| ()>
-                    <p data-testid="public-mod-stats-relogin-hint" class="text-xs text-gray-400">
+                    <p data-testid="public-mod-stats-relogin-hint" lang="ja" class="text-xs text-gray-400">
                         "LOG OUT からログアウトし、再度 JPKI でログインしてください。"
                     </p>
                 </Show>
@@ -6811,6 +6811,11 @@ mod tests {
             "2026-11-18T00:00:00",
             "mock_sub_hash",
             "2026-11-18T00:00:00+00:00",
+            // 範囲外の月日時分秒（fail-closed 契約）。
+            "2026-13-01T00:00:00Z",
+            "2026-01-01T24:00:00Z",
+            "2026-01-01T23:60:00Z",
+            "2026-01-01T23:59:60Z",
         ];
         for invalid in invalid_values {
             assert_eq!(

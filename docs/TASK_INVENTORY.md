@@ -507,7 +507,7 @@ status: current
 - [対応済み] バックアップ失敗通知: `ALERT_CMD`（実行ファイルのパス）を `<メッセージ>` 1引数で呼び出し。成功時無通知、通知失敗は元の終了コードを維持、不正パスは fail-closed。実3ケース確認（
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)）。
 - [対応済み] `scripts/test-backup-rotate.sh` を追加し、backup-rotate の設定分岐（`expect_failure` 31件＋
-  `expect_success` 15件、計46件の `expect_*` 呼び出し）をダミーコマンドで自動検証（外部サービス不要）。
+  `expect_success` 16件、計47件の `expect_*` 呼び出し）をダミーコマンドで自動検証（外部サービス不要）。
   上限 RETENTION_DAYS=20000 で古い世代が実際に prune される境界テストを含む。4fb80e0 で追加した
   `AUDIT_EXPECT_ROOT` 不一致 fail-closed オラクル（不一致 root 値は非エコー・警告は固定文言）も含む。
 - [中] 通知先ラッパーの導入環境への接続と実運用での復旧訓練。

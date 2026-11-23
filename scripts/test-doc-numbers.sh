@@ -621,8 +621,8 @@ check_cli_group_table "CLI-03 verify_backup" '^#### CLI-03:' server/src/bin/veri
 # 「expect_failure N件＋expect_success M件、計K件」記載と照合する。
 # 行が折り返されているため改行を空白へ結合してから3数値を抽出する。
 # 抽出失敗・不一致は fail-closed で FAIL（実コード増減時にドキュメントは追随しない）。
-backup_failure_actual="$(grep -c '^expect_failure ' scripts/test-backup-rotate.sh || true)"
-backup_success_actual="$(grep -c '^expect_success ' scripts/test-backup-rotate.sh || true)"
+backup_failure_actual="$(grep -c '^[[:space:]]*expect_failure[[:space:]]' scripts/test-backup-rotate.sh || true)"
+backup_success_actual="$(grep -c '^[[:space:]]*expect_success[[:space:]]' scripts/test-backup-rotate.sh || true)"
 backup_failure_actual="${backup_failure_actual:-0}"
 backup_success_actual="${backup_success_actual:-0}"
 backup_total_actual=$((backup_failure_actual + backup_success_actual))
