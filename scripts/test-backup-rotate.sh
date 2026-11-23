@@ -879,6 +879,9 @@ else
 	# 一時 GNUPGHOME は work 配下に作り、既存の EXIT trap で削除する（リポジトリへ鍵を置かない）。
 	gnupg_home="$(mktemp -d "${work}/gnupg.XXXXXX")"
 	chmod 700 "$gnupg_home"
+	# テスト専用の使い捨て鍵を GNUPGHOME に生成するため、ここでは trust-model always を使う。
+	# 本番 Runbook は公開鍵を ultimately trusted (5) に設定し --trust-model always を使わない。
+	# このオラクルは「署名生成・検証の往復」のみを検証し、trust 設定手順自体は検証しない。
 	cat >"${gnupg_home}/gpg.conf" <<'EOF'
 trust-model always
 no-tty

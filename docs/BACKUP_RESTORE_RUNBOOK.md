@@ -407,14 +407,20 @@ systemctl list-timers openillustration-backup.timer
 （サーバー側の `MIGRATIONS_DIR` override 実装と合わせて有効化）。
 
 - 停止待ち時間の契約: window unit の `TimeoutStartSec=1800` は自 unit の Exec にしかかからず、
-  `ExecStartPre` の `systemctl stop` が待つアプリ unit の `TimeoutStopSec`（既定90秒）は別値。
-  アプリの drain 上限 `GRACEFUL_DRAIN_TIMEOUT_SECS`（最大300秒）を超えないよう、
-  アプリ unit の drop-in で `TimeoutStopSec` を drain 上限より大きく設定すること。
+  `ExecStartPre` の `systemctl stop` が待つアプリ unit の `TimeoutStopSec` は別値。
+  同梱の `deploy/openillustration.service` は `TimeoutStopSec=330`（drain 上限300秒 + 予備）を
+  設定済み。`GRACEFUL_DRAIN_TIMEOUT_SECS` を上限300秒まで変更した場合のみ、
+  それを超える値へ drop-in で追随させること。
   停止がタイムアウトすると ExecStartPre が失敗してバックアップがスキップされるため、
   アラート対象に含めること。
 - バックアップ窓の間はアプリ unit が停止しているため `/ready` は応答しない（接続拒否が正常）。
   停止確認は `systemctl is-active <APP_UNIT>` が `inactive` であることで行う。
   `/ready` が 503 を返すのは SIGTERM 直後の graceful drain 窓だけであり、窓全体ではない。
+- アプリ unit は `StartLimitIntervalSec=300` / `StartLimitBurst=5` を設定している。
+  設定不正で5回失敗すると `failed` / `start-limit-hit` 状態になり、値を修正しても
+  ウィンドウ経過まで起動しない。復旧手順:
+  `systemctl reset-failed openillustration.service` → `systemctl start openillustration.service`
+  → `/health` と `/ready` の 200 を確認する。設定不正は事前に `doctor --strict` で検知する。
 - 再起動後は `/health` 200 と `/ready` 200 を**手動で**確認する。
   `ExecStopPost` の `systemctl start` は起動ジョブの受付成否しか unit 結果へ反映せず、
   ヘルス確認は unit 側で行わない（`systemctl start` が 0 を返しても起動直後に

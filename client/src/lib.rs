@@ -1007,7 +1007,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html.push_str(
         "<table data-testid=\"moderation-stats-monthly\" class=\"w-full mt-6 text-left text-[10px] font-mono\">",
     );
-    html.push_str("<caption>月次集計</caption>");
+    html.push_str("<caption lang=\"ja\">月次集計</caption>");
     html.push_str(
         "<thead lang=\"en\" class=\"border-b border-white/10 text-gray-400 uppercase\"><tr>\
          <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
@@ -1037,7 +1037,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     html.push_str("</tbody></table>");
     if stats.monthly.is_empty() {
         html.push_str(
-            "<p class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
+            "<p lang=\"ja\" class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
         );
     }
     html
@@ -1091,7 +1091,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     html.push_str(
         "<table data-testid=\"public-mod-stats-monthly\" class=\"w-full mt-6 text-left text-[10px] font-mono\">",
     );
-    html.push_str("<caption>月次集計</caption>");
+    html.push_str("<caption lang=\"ja\">月次集計</caption>");
     html.push_str(
         "<thead lang=\"en\" class=\"border-b border-white/10 text-gray-400 uppercase\"><tr>\
          <th scope=\"col\" class=\"py-2 pr-4\">Month</th><th scope=\"col\" class=\"py-2 pr-4\">Reports</th>\
@@ -1115,7 +1115,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     html.push_str("</tbody></table>");
     if stats.monthly.is_empty() {
         html.push_str(
-            "<p class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
+            "<p lang=\"ja\" class=\"mt-2 text-[9px] text-gray-400 italic\">月次集計はありません。</p>",
         );
     }
     html
@@ -2395,7 +2395,7 @@ pub fn App() -> impl IntoView {
                     }
                 }
                 class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:bg-white focus:px-4 focus:py-2 focus:text-black focus:font-bold">
-                "本文へスキップ"
+                <span lang="ja">"本文へスキップ"</span>
             </a>
             <nav aria-label="メインナビゲーション" lang="ja" class="border-b border-white/10 p-4 flex justify-between items-center sticky top-0 bg-black z-50">
                 <h1 lang="en" class="text-xl font-bold tracking-tighter">OPENILLUSTRATION / GUILD</h1>
@@ -2466,7 +2466,7 @@ pub fn App() -> impl IntoView {
                     "ledger" => view! {
                         <Ledger token=token.get().unwrap_or_default() />
                     }.into_any(),
-                    _ => view! { <div class="text-center mt-20 text-gray-400">"不明な画面です。"</div> }.into_any(),
+                    _ => view! { <div lang="ja" class="text-center mt-20 text-gray-400">"不明な画面です。"</div> }.into_any(),
                 }}
             </main>
         </div>
@@ -3129,7 +3129,7 @@ fn ExportMyData(token: String) -> impl IntoView {
                 {move || if busy.get() { "エクスポート中..." } else { "データをエクスポート" }}
             </button>
             <Show when=move || !download_hint.get().is_empty() fallback=|| ()>
-                <p data-testid="export-download-hint" class="text-xs text-gray-400">
+                <p data-testid="export-download-hint" lang="ja" class="text-xs text-gray-400">
                     {move || download_hint.get()}
                 </p>
             </Show>
@@ -3228,6 +3228,8 @@ fn retry_control(test_id: &'static str, on_retry: impl Fn() + 'static) -> impl I
                     }
                     // 同期トリガのみ（fetch Effect 側の generation guard が古い応答を捨てる）。
                     on_retry();
+                    // 同一ハンドラの再入のみを抑止する。fetch 完了の検知は呼び出し側の
+                    // generation guard に委ね、連続した別操作（E2E の段階遷移等）は即座に通す。
                     set_retry_busy.set(false);
                 }
                 class="px-3 py-1 border border-white/20 text-[10px] uppercase tracking-widest hover:bg-white/10">

@@ -786,6 +786,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第76ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: GPG署名テストの本番trust-model違いをテスト専用と明記、
+  RunbookのTimeoutStopSec根拠（同梱unitは330秒）とStartLimit到達時の
+  reset-failed復旧手順、静的日本語ノードへlang="ja"付与。
+  retry連打ガードはE2Eの段階遷移契約（401→403→429即時遷移）と衝突したため
+  同一ハンドラ再入のみの現状を維持し、generationベースの完全修正は残存へ。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、markdownlint35ファイル、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、axe WCAG AA自動スキャン導入、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、jxl fuzz独立オラクル、pushState失敗告知、
+  ナビ/LOG OUT/投票の24pxタッチ目標、投票.disabled理由、noscript/fallback、
+  apple-touch-icon PNG、公開集計閾値の設定化、RuntimeConfig一括化、
+  doctor MIGRATIONS_DIR診断、REQUEST_TIMEOUT二重読込、REVIEW_REPORT未更新、
+  url_decode不正percentテスト、ui_errorテスト仕様化、日本語文言ピリオド統一）は記録のみで保留。
+
 - 2026-11-24 コンボ第75ラウンド（残存high: リロード時セッション復元）:
   起動時にsessionStorageマーカー（oi_session_restore）がある場合のみ/auth/refreshを
   呼び、成功時にtoken/user_hash/viewを復元（URLはReplaceで正規化、last_known_viewも更新）。
