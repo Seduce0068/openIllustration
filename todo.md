@@ -786,6 +786,26 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-23 コンボ第66ラウンド（ADR完了後5回目review/discovery）: 全7担当完了。
+  高は0件。R6 で以下を是正: ContentViewer本文取得401へdedicated再ログイン案内、
+  検索条件クリアでdeep_link_cidも除去、OIL_CLIENT_METRICS=0ビルドの
+  client_event_payloadテストをフラグ対応（ui_error側と契約統一）、
+  doctor-ci-env.shの自己完結化（ALLOW_IPV4_LOCALHOST等unset）、
+  READMEの/metrics一覧+公開範囲+prometheus例リンク、
+  OPERATIONAL_POLICYのtestid一覧拡張+dashboard-reloginへrole=status、
+  globalSetupを選択プロジェクト全エンジン監視へ（chrome固定解消）。
+  R4指摘1件（testid一覧と実装の不整合）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  backup-rotate tests OK、npm audit3lockfile、markdownlint35ファイル、
+  OIL_CLIENT_METRICS=0 client test green）。
+  discovery静的は指摘0。残存（次ラウンド: retry_status二重アナウンス、再試行フィードバック、
+  nav landmark名、タブbutton→a、error_lang中国語判定、RuntimeConfig一括化、
+  restore原子的ロールバック、ContentViewer世代ガード、公開集計サーバー時刻方式、
+  バックアップunit network-online、REVIEW_REPORT未更新、owner不一致テスト、
+  license件数不整合テスト、TimeoutLayer408統合テスト、jxl fuzz不感、
+  url_decode不正percentテスト、ui_errorテスト仕様化、assert_major_numeric到達不能分岐）は
+  記録のみで保留。
+
 - 2026-11-23 コンボ第65ラウンド（ADR完了後4回目review/discovery）: 全7担当完了。
   R6 で以下を是正: 【high】CI cron構文ゲートがSHELL/PATH/MAILTO行をジョブ行と誤判定
   して常時失敗する問題（KEY=VALUE行スキップ）、unban_userのmemory poisonを

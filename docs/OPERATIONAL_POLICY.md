@@ -432,7 +432,12 @@ generated:
   失敗は専用の `role="alert"` で利用者へ告知する。失敗用の testid は `Login` の
   `data-testid="login-error"`、エクスポートの `data-testid="export-error"`、
   ContentViewer の監査の `data-testid="audit-error"`、モデレーション集計の
-  `data-testid="moderation-stats-error"` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
+  `data-testid="moderation-stats-error"` に加え、主要画面の
+  `dashboard-error` / `ledger-error` / `reports-error` / `public-mod-stats-error` /
+  `content-load-error` を使い、HTTP ステータス・通信失敗・JSON 解析失敗を区別する。
+  401 は専用の再ログイン案内（`dashboard-relogin-hint` / `ledger-relogin` /
+  `reports-relogin-hint` / `public-mod-stats-relogin-hint` / `content-relogin-hint`）を
+  `role="status"` で出し、サーバー本文はエコーしない。
   アップロードは成功・進捗を `data-testid="upload-status"`（`role="status"`）、失敗を
   `data-testid="upload-failed"`（`role="alert"`）へ表示し、準備失敗は
   `アップロードの準備に失敗しました。`、応答読取失敗は `アップロード結果の読み取りに失敗しました。`

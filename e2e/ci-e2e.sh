@@ -42,6 +42,8 @@ assert_major_numeric() {
 	# 同じ「桁数＋辞書順」方式で上限を拒否する（算術は使わない）。先頭ゼロは
 	# 上の正規表現で拒否済みなので、同桁の辞書順は数値順と一致する。
 	# major version は実用上 3 桁程度であり、9 桁 (999999999) を上限とする。
+	# 現在の max は全桁9のため同桁辞書順の fail 分岐は到達不能だが、
+	# 将来上限を下げた際の比較向き誤りを防ぐため残す（桁数分岐は到達可能）。
 	local max_major="999999999"
 	if ((${#value} > ${#max_major})); then
 		e2e_stage_fail_early "${label} exceeds the supported major version range."

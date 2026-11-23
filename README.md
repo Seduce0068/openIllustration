@@ -18,8 +18,11 @@ OpenIllustrationは、OSSによる反検閲性、高速・軽量・クロスプ�
 - 現行プロトタイプはJPEG XL静止画・Markdown小説、CID/SHA-256照合、JWT、DB内通報・投票を備えます。
 - ログは標準出力へ出し、`RUST_LOG` で制御します（例: `RUST_LOG=server=debug`。未設定時は INFO）。
   `LOG_FORMAT=json` で1行1JSONの構造化ログを出力します（詳細は [HANDOFF](docs/HANDOFF.md)）。
-- `GET /metrics` で Prometheus カウンタ（requests / errors / neutralized_urls / finalizer 各、
-  再起動でゼロに戻る）を公開します（詳細は [OPERATIONAL_POLICY](docs/OPERATIONAL_POLICY.md)）。
+- `GET /metrics` で Prometheus カウンタ（requests / errors / neutralized_urls / client_ui_errors /
+  unpin_compensation_failures / token_cleanup_failures / finalizer 各、再起動でゼロに戻る）を公開します。
+  IP ゲート・認証の対象外のため、監視ネットワーク内に限定してください（設定例:
+  [prometheus.yml.example](deploy/prometheus.yml.example)）。再起動による counter reset は
+  `rate()` / `increase()` で扱います（詳細は [OPERATIONAL_POLICY](docs/OPERATIONAL_POLICY.md)）。
 - クライアント側メトリクスはビルド時に `OIL_CLIENT_METRICS=0` で無効化できます（未設定時は有効）。
   `POST /metrics/client-events` に送るのは `event` と `count` のみで、URL・IP アドレス・User-Agent は送りません。
 - `ALLOW_MOCK_AUTH=1` は開発専用です。指定マイナアプリ/JPKI認証の代替ではなく、本番では有効化しません。

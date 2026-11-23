@@ -1,4 +1,4 @@
-import { chromium, type FullConfig } from '@playwright/test';
+import { chromium, firefox, webkit, type BrowserType, type FullConfig } from '@playwright/test';
 
 /**
  * E2E グローバルセットアップ（R2-P4: console.error / pageerror 監視）。
@@ -47,33 +47,48 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
 
   await waitForServer(baseURL);
 
-  const browser = await chromium.launch({ channel: 'chrome', headless: true });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
-  const page = await context.newPage();
+  // 選択された全プロジェクトのエンジンを監視する（chrome 固定だと firefox/webkit の
+  // エンジン固有例外が静かに通る）。channel は chromium の chrome のみに適用する。
+  const names = new Set<string>();
+  for (const project of config.projects) {
+    const name = (project.use?.browserName ?? 'chromium') as string;
+    names.add(name);
+  }
+  if (names.size === 0) names.add('chromium');
+  const types: Record<string, BrowserType> = { chromium, firefox, webkit };
   const offenders: string[] = [];
 
-  page.on('console', message => {
-    if (message.type() !== 'error') return;
-    const text = message.text();
-    if (!isAllowed(text)) offenders.push(`console.error: ${text}`);
-  });
-  page.on('pageerror', error => {
-    const text = error.message;
-    if (!isAllowed(text)) offenders.push(`pageerror: ${text}`);
-  });
-
-  try {
-    for (const hash of SMOKE_HASHES) {
-      await page.goto(`${baseURL}/${hash}`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 15_000,
-      });
-      // Leptos のマウント直後のエラーを拾うための短い観測ウィンドウ。
-      await page.waitForTimeout(300);
+  for (const name of names) {
+    const type = types[name];
+    if (!type) {
+      throw new Error(`[E2E global setup] unsupported browserName: ${name}`);
     }
-  } finally {
-    await context.close();
-    await browser.close();
+    const browser = await type.launch(
+      name === 'chromium' ? { channel: 'chrome', headless: true } : { headless: true },
+    );
+    try {
+      const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+      const page = await context.newPage();
+      page.on('console', message => {
+        if (message.type() !== 'error') return;
+        const text = message.text();
+        if (!isAllowed(text)) offenders.push(`${name} console.error: ${text}`);
+      });
+      page.on('pageerror', error => {
+        const text = error.message;
+        if (!isAllowed(text)) offenders.push(`${name} pageerror: ${text}`);
+      });
+      for (const hash of SMOKE_HASHES) {
+        await page.goto(`${baseURL}/${hash}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 15_000,
+        });
+        await page.waitForTimeout(300);
+      }
+      await context.close();
+    } finally {
+      await browser.close();
+    }
   }
 
   if (offenders.length > 0) {

@@ -2868,7 +2868,8 @@ where
             </Show>
             // 401 のときだけ、既存の LOG OUT ボタンからの再ログインを案内する。
             <Show when=move || error.get() == CONTENT_INDEX_UNAUTHORIZED fallback=|| ()>
-                <p data-testid="dashboard-relogin-hint" class="text-xs text-gray-400 mb-4">
+                <p data-testid="dashboard-relogin-hint" role="status" aria-live="polite"
+                    lang="ja" class="text-xs text-gray-400 mb-4">
                     "LOG OUT からログアウトし、再度 JPKI でログインしてください。"
                 </p>
             </Show>
@@ -2909,6 +2910,9 @@ where
                                     set_tag.set(String::new());
                                     set_content_type.set(String::new());
                                     set_favorite_only.set(false);
+                                    // ディープリンク CID も検索条件の一部。残すと URL 正規化 Effect が
+                                    // cid を復元し、該当カードの強調表示が消えないため同時にクリアする。
+                                    set_deep_link_cid.set(String::new());
                                     // ADR-0013 P4: 条件を消すとボタン自体が DOM から消えるため、
                                     // フォーカスを検索フォーム先頭へ移して操作位置を保持する。
                                     if let Some(input) = web_sys::window()
@@ -3139,6 +3143,9 @@ fn retry_control(
 const PUBLIC_STATS_STALE_MESSAGE: &str =
     "公開集計の生成から一定時間が経過しています。更新して最新の状態を確認してください。";
 
+/// 本文取得が 401 のときに LOG OUT からの再ログインを案内する dedicated 文言。
+const CONTENT_RELOGIN_HINT: &str = "LOG OUT からログアウトし、再度 JPKI でログインしてください。";
+
 /// コンテンツ本文の取得失敗時に表示する固定文言を HTTP ステータスから選ぶ。
 /// `None` はバイナリ読取失敗や通信エラー（ステータスが無い）を表す。
 /// レスポンス本文や生エラーは機微情報を含み得るため一切渡さない。
@@ -3221,6 +3228,8 @@ where
     let (content_load_error, set_content_load_error) = signal(String::new());
     // ADR-0013 P4: 本文取得失敗からの復帰用トリガ。
     let (content_reload, set_content_reload) = signal(0u64);
+    // 401 のときだけ dedicated な再ログイン案内を出す（本文はエコーしない）。
+    let (content_unauthorized, set_content_unauthorized) = signal(false);
     let (novel_html, set_novel_html) = signal(String::new());
     let (novel_toc, set_novel_toc) = signal(String::new());
     let (audit_logs, set_audit_logs) = signal(Vec::<AuditLog>::new());
@@ -3382,6 +3391,7 @@ where
             set_decode_error.set(false);
             set_novel_decode_error.set(false);
             set_content_load_error.set(String::new());
+            set_content_unauthorized.set(false);
             let url = format!("{}/content/{}", API_BASE, url_encode(&cid));
             let res = api_fetch(
                 |jwt| {
@@ -3454,6 +3464,7 @@ where
                 Ok(response) => {
                     set_verified.set(Some(false));
                     let status = response.status();
+                    set_content_unauthorized.set(status == 401);
                     set_content_load_error.set(content_load_error_message(Some(status)));
                 }
                 Err(_) => {
@@ -3584,6 +3595,12 @@ where
                                 <p data-testid="content-load-error-detail" lang=move || error_lang(&content_load_error.get()) class="text-gray-500 text-[8px]">
                                     {move || content_load_error.get()}
                                 </p>
+                                <Show when=move || content_unauthorized.get() fallback=|| ()>
+                                    <p data-testid="content-relogin-hint" role="status" aria-live="polite"
+                                        lang=move || error_lang(CONTENT_RELOGIN_HINT) class="text-xs text-gray-400 mb-2">
+                                        {CONTENT_RELOGIN_HINT}
+                                    </p>
+                                </Show>
                                 {move || retry_control("content", content_load_error.get(), {
                                     let set_reload = set_content_reload;
                                     move || set_reload.update(|n| *n += 1)
@@ -5800,6 +5817,13 @@ mod tests {
     /// 監視イベントは event 名と count だけを持ち、サーバーの範囲 1..=1000 を守る。
     #[test]
     fn client_event_payload_is_minimal_and_clamped() {
+        // OIL_CLIENT_METRICS=0 のビルドでは全件 None（ui_error 側と同じ契約）。
+        if !super::CLIENT_METRICS_ENABLED {
+            assert_eq!(super::client_event_payload(0), None);
+            assert_eq!(super::client_event_payload(1), None);
+            assert_eq!(super::client_event_payload(7), None);
+            return;
+        }
         // 0 件は送信しない。
         assert_eq!(super::client_event_payload(0), None);
         assert_eq!(
