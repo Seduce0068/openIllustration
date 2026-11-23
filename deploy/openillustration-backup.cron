@@ -62,4 +62,7 @@ MAILTO=__SET_ME__
 # BACKUP_DIR（openillustration 所有・0700）配下に置くため、初期配置時にディレクトリを
 # 作成しておくこと。タイムアウトで強制終了した実行はハートビートが更新されないため、
 # 上記の鮮度チェックが検知する。
-17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /opt/openIllustration/scripts/backup-cron-wrapper.sh
+# 既定は無効。上記「配置手順の必須ステップ」を完了してから下記行のコメントを外すこと。
+# 常時稼働環境では systemd timer 版（openillustration-backup-window.service）との
+# 二重有効化を避けるため、どちらか一方のみを有効にする。
+#17 3 * * * openillustration BACKUP_DIR=/var/backups/openillustration BIN_DIR=/opt/openIllustration/target/release RETENTION_DAYS=30 MIN_KEEP=3 DATABASE_URL=file:/var/lib/openillustration/local.db /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /opt/openIllustration/scripts/backup-cron-wrapper.sh

@@ -322,6 +322,9 @@ artifact_dir="${E2E_ARTIFACT_DIR:-${repo_root}/e2e-artifacts}"
 # e2e/playwright.config.ts を参照）。
 E2E_JWT_SECRET="$(openssl rand -hex 32)"
 export E2E_JWT_SECRET
+# 共有 DB/ポートの再利用を禁止し、毎回クリーンなサーバーを起動する。
+# 既存プロセスの有無に依存せず、CI とローカルで同じ挙動にする（ADR-0013 P3）。
+export E2E_REUSE=0
 export DATABASE_URL="file:${workdir}/e2e.db"
 # ローカルで 8080 が code-server 等に占有されている場合でも実行できるよう、
 # 未指定時は代替ポートを使う（CI では環境変数で上書き可能）。

@@ -786,6 +786,24 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第67ラウンド（ADR完了後6回目review/discovery）: 全7担当完了。
+  R6 でhigh2件を是正: 【high】/metricsがIPv4ゲートで403になる問題（ dedicated router
+  化、/health /ready は従来どおり）、【high】logout部分失敗でCookie削除が付かない問題
+  （ファミリ失効失敗を警告+token_cleanup_failures格下げ、oidc::revoke_refresh_familyを
+  pub(crate)化）。medium: cron雛形の有効ジョブ行をコメントアウトし手順と整合、
+  CI cronフィールド範囲検証（分0-59/時0-23/日1-31/月1-12/曜0-7、下限も検証）、
+  ci-e2e.shへE2E_REUSE=0追加。R4指摘1件（cron下限）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  server全テスト green、E2E_CLIENT_PORT=18123で実施。既定18080がllama-serverと
+  衝突した環境要因）。
+  discovery静的のOIDC 403/501はADR-0013区分A既知項目として却下。
+  残存（次ラウンド: retry_status二重アナウンス・再試行フィードバック・nav landmark名・
+  タブbutton→a・error_lang中国語判定・RuntimeConfig一括化・doctor MIGRATIONS_DIR診断・
+  REQUEST_TIMEOUT二重読込・restore原子的ロールバック・ContentViewer世代ガード・
+  公開集計サーバー時刻方式・バックアップunit network-online・REVIEW_REPORT未更新・
+  TimeoutLayer408統合テスト・url_decode不正percentテスト・ui_errorテスト仕様化）は
+  記録のみで保留。
+
 - 2026-11-23 コンボ第66ラウンド（ADR完了後5回目review/discovery）: 全7担当完了。
   高は0件。R6 で以下を是正: ContentViewer本文取得401へdedicated再ログイン案内、
   検索条件クリアでdeep_link_cidも除去、OIL_CLIENT_METRICS=0ビルドの

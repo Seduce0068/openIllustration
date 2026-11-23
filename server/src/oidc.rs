@@ -514,7 +514,10 @@ pub(crate) async fn delete_superseded_revocation(
 }
 
 /// ファミリ全体を失効させる（盗用検知時）。
-async fn revoke_refresh_family(state: &AppState, family_id: &str) -> Result<(), AppError> {
+pub(crate) async fn revoke_refresh_family(
+    state: &AppState,
+    family_id: &str,
+) -> Result<(), AppError> {
     let (write_guard, tx) = crate::begin_write_tx(&state.db).await?;
     tx.execute(
         "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",

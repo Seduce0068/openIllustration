@@ -3662,7 +3662,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             .on_eos(())
     };
 
-    let common_layers = |router: Router<Arc<AppState>>| -> Router<Arc<AppState>> {
+    let common_layers_with_ip_gate = |router: Router<Arc<AppState>>| -> Router<Arc<AppState>> {
         router
             // 起動時に解釈して AppState へ保持した EXPOSE_INTERNAL_ERRORS だけを注入する。
             // 環境変数はここでは読まない（per-request 読みの廃止）。
@@ -3762,20 +3762,30 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     // ADR-0013 P4: 監視パスを除く全リクエストへ REQUEST_TIMEOUT_SECS（既定30秒）を適用する。
     // observe_metrics の内側（ルート直近）へ積むことで 408 短絡もカウンタへ計上される。
-    let app = common_layers(app.layer(TimeoutLayer::with_status_code(
+    let app = common_layers_with_ip_gate(app.layer(TimeoutLayer::with_status_code(
         StatusCode::REQUEST_TIMEOUT,
         Duration::from_secs(request_timeout_secs),
     )));
 
     // 監視パスは同じ共通ミドルウェアを通すが TimeoutLayer は積まない。
-    let monitoring = common_layers(
+    let monitoring = common_layers_with_ip_gate(
         Router::new()
             .route("/health", get(|| async { "ok" }))
-            .route("/ready", get(readiness))
-            .route("/metrics", get(metrics)),
+            .route("/ready", get(readiness)),
     );
 
-    app.merge(monitoring).with_state(state)
+    // ADR-0013 P3: /metrics のみ IPv4 監視ネットワークからもスクレイプ可能とする。
+    // 共通ミドルウェアの ipv6_only_middleware を外した専用ルート（IP ゲート対象外）。
+    // 公開オリジンへの露出制限は導入側のネットワーク設計で担保する。
+    let metrics_route = Router::new()
+        .route("/metrics", get(metrics))
+        .layer(from_fn(request_id_and_access_log))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            observe_metrics,
+        ));
+
+    app.merge(metrics_route).merge(monitoring).with_state(state)
 }
 
 /// GET /mod/reports の取得上限。全行を Vec 化しないよう SQL の LIMIT にバインドする。
@@ -4421,15 +4431,19 @@ pub async fn logout(
         };
         match token_row {
             Some((family_id, token_sub)) if token_sub == claims.sub => {
-                let (_write_guard, tx) = begin_write_tx(&state.db).await?;
-                tx.execute(
-                    "UPDATE refresh_tokens SET used_at = datetime('now') WHERE family_id = ? AND used_at IS NULL",
-                    [family_id],
-                )
-                .await?;
-                tx.commit()
-                    .await
-                    .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
+                // sid の失効は既に確定済み。ファミリ失効が失敗しても Cookie は必ず削除し、
+                // 警告＋カウンタへ格下げて 200 を返す（部分失敗で再ログイン可能にする）。
+                // UPDATE ... WHERE used_at IS NULL なので再試行は冪等。
+                match oidc::revoke_refresh_family(&state, &family_id).await {
+                    Ok(()) => {}
+                    Err(error) => {
+                        state
+                            .metrics
+                            .token_cleanup_failures
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        tracing::warn!("logout refresh family cleanup failed: {error}");
+                    }
+                }
             }
             Some(_) => {
                 // Cookie の sub が JWT と不一致。ファミリ更新を行わず 401 とする。

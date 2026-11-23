@@ -197,13 +197,47 @@ jobs:
               exit 1
             fi
             read -r c_minute c_hour c_dom c_month c_dow _ <<<"$cron_line"
-            for c_field in "$c_minute" "$c_hour" "$c_dom" "$c_month" "$c_dow"; do
-              if [[ ! "$c_field" =~ ^[0-9A-Za-z*,/-]+$ ]]; then
-                echo "::error::${cron_src}: invalid cron field '${c_field}': ${cron_line}" >&2
-                exit 1
-              fi
-            done
-          done < <(grep -vE '^[[:space:]]*(#|$)' "$cron_src")
+            # 文字種だけでなく数値範囲・Range/Step 構文も検査する（fail-closed）。
+            cron_field_valid() {
+              local field="$1" max="$2" min="$3" part low high step
+              [[ "$field" =~ ^[0-9A-Za-z*,/-]+$ ]] || return 1
+              IFS=',' read -ra parts <<<"$field"
+              for part in "${parts[@]}"; do
+                [[ -n "$part" ]] || return 1
+                # Step: /*N 形式（N>=1）
+                if [[ "$part" == *"/"* ]]; then
+                  step="${part##*/}"
+                  [[ "$step" =~ ^[0-9]+$ ]] && ((step >= 1)) || return 1
+                  part="${part%%/*}"
+                fi
+                # Range: A-B / 単一値 / ワイルドカード
+                if [[ "$part" == *"-"* ]]; then
+                  low="${part%%-*}"
+                  high="${part##*-}"
+                  [[ "$low" =~ ^[0-9]+$ && "$high" =~ ^[0-9]+$ ]] || return 1
+                  ((min <= low && low <= high && high <= max)) || return 1
+                elif [[ "$part" == "*" ]]; then
+                  :
+                elif [[ "$part" =~ ^[0-9]+$ ]]; then
+                  ((min <= part && part <= max)) || return 1
+                else
+                  return 1
+                fi
+              done
+              return 0
+            }
+            if ! cron_field_valid "$c_minute" 59 0 || ! cron_field_valid "$c_hour" 23 0 ||
+               ! cron_field_valid "$c_dom" 31 1 || ! cron_field_valid "$c_month" 12 1 ||
+               ! cron_field_valid "$c_dow" 7 0; then
+              echo "::error::${cron_src}: invalid cron field range: ${cron_line}" >&2
+              exit 1
+            fi
+          done < <(
+            # 有効ジョブ行に加え、テンプレート内でコメントアウトされたジョブ行も検証する
+            # （既定無効のテンプレートでも構文回帰を検出できるようにする）。
+            sed -E 's/^[[:space:]]*#[[:space:]]*//' "$cron_src" |
+              grep -E '^[0-9*][^=]+[[:space:]]/?'
+          )
           while IFS= read -r referenced; do
             [[ -z "$referenced" ]] && continue
             rel_path="${referenced#/opt/openIllustration/}"
