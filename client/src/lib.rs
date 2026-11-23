@@ -968,7 +968,7 @@ fn render_moderation_stats_html(stats: &ModerationStats) -> String {
     for row in &stats.monthly {
         let _ = writeln!(
             html,
-            "<tr><td class=\"py-2 pr-4 text-gray-300\">{}</td>\
+            "<tr><th scope=\"row\" class=\"py-2 pr-4 text-gray-300\">{}</th>\
              <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
              <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
              <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
@@ -1040,7 +1040,7 @@ fn render_public_mod_stats_html(stats: &PublicModerationStats) -> String {
     for row in &stats.monthly {
         let _ = writeln!(
             html,
-            "<tr><td class=\"py-2 pr-4 text-gray-300\">{}</td>\
+            "<tr><th scope=\"row\" class=\"py-2 pr-4 text-gray-300\">{}</th>\
              <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td>\
              <td class=\"py-2 pr-4\">{}</td><td class=\"py-2 pr-4\">{}</td></tr>",
             escape_html_text(&row.month),
@@ -1267,7 +1267,14 @@ fn should_report_source(source_hash: u64) -> bool {
 /// 同じ描画ソースが再描画（画面の再マウント等）されたときは送信しない。
 /// 描画をブロックしないよう `spawn_local` で非同期に送る。認証ヘッダは付けず、
 /// 失敗しても画面にもコンソールにも何も出さない（機微情報をログに残さない）。
-fn report_neutralized_urls(count: usize, markdown: &str) {
+#[cfg(not(target_arch = "wasm32"))]
+fn report_neutralized_urls(_count: usize, _markdown: &str, _scope: &str) {
+    // 非 wasm では送信経路が無いが、ビルド時フラグの判定はコンパイル対象に保つ。
+    let _ = CLIENT_METRICS_ENABLED;
+}
+
+#[cfg(target_arch = "wasm32")]
+fn report_neutralized_urls(count: usize, markdown: &str, scope: &str) {
     // client_event_payload に渡す前にもガードし、送信経路を完全に止める。
     if !CLIENT_METRICS_ENABLED {
         return;
@@ -1277,7 +1284,9 @@ fn report_neutralized_urls(count: usize, markdown: &str) {
         let Some(payload) = client_event_payload(count) else {
             return;
         };
-        let source_hash = markdown_source_hash(markdown);
+        // 本文ハッシュだけだと同一本文の別コンテンツが過小計上されるため、
+        // CID 由来のスコープもキーへ含める（URL 本文や CID 自体は送信しない）。
+        let source_hash = markdown_source_hash(&format!("{scope}\0{markdown}"));
         if !should_report_source(source_hash) {
             return;
         }
@@ -1376,7 +1385,7 @@ fn render_markdown_scoped(markdown: &str, prefix: &str) -> String {
     let (html, neutralized_count) = render_markdown_with_neutralized_count_scoped(markdown, prefix);
     // 集約した件数を描画完了後に送る。同じ本文の再描画は送信側で除外される
     // （描画はブロックせず、HTML を返す契約は据え置き）。
-    report_neutralized_urls(neutralized_count, markdown);
+    report_neutralized_urls(neutralized_count, markdown, prefix);
     html
 }
 
@@ -3916,7 +3925,7 @@ fn Ledger(token: String) -> impl IntoView {
                                 let created_at = tx.created_at.clone();
                                 view! {
                                     <tr class="hover:bg-white/5 transition-colors">
-                                        <td class="p-4 text-gray-500" title=created_at>{format_local_datetime(&tx.created_at)}</td>
+                                        <th scope="row" class="p-4 text-gray-400" title=created_at>{format_local_datetime(&tx.created_at)}</th>
                                         <td class="p-4 text-blue-400">{sender_prefix} "..."</td>
                                         <td class="p-4 text-green-400">{receiver_prefix} "..."</td>
                                         <td class="p-4 text-right font-bold">{tx.amount} " JPYC"</td>

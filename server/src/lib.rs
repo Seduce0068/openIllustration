@@ -172,6 +172,10 @@ pub struct AppState {
 }
 
 /// `Content-Length` が上限を超えるリクエストを拒否する。
+/// 通常エンドポイントの本文上限（10 MiB）。ヘッダ検査と DefaultBodyLimit の
+/// 単一情報源とし、片方だけの変更で境界がずれることを防ぐ。
+const MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
+
 /// axum の Multipart extractor はストリームを先に解析し 400 を返すため、
 /// その前にヘッダーで拒否して適切なステータスを返す（多層防御の1段目）。
 /// `/metrics/client-events` は 1 KiB 上限で、他エンドポイントより厳しい 400 を返す。
@@ -179,7 +183,6 @@ async fn reject_oversized_body(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
-    const MAX_BODY_BYTES: u64 = 10 * 1024 * 1024;
     let is_client_events = request.uri().path() == "/metrics/client-events";
     let max = if is_client_events {
         MAX_CLIENT_EVENT_BODY_BYTES as u64
@@ -3256,7 +3259,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             state.clone(),
             inject_expose_internal_errors,
         ))
-        .layer(axum::extract::DefaultBodyLimit::max(10 * 1024 * 1024))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            MAX_BODY_BYTES as usize,
+        ))
         .layer(from_fn(reject_oversized_body))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
