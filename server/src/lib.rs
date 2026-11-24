@@ -5730,7 +5730,21 @@ pub async fn record_unpin(
         return Err(AppError::NotFound);
     }
     drop(rows);
-    record_governance_action(&tx, "UNPIN", &cid, &claims.sub, reason, None).await?;
+    // 再送冪等性: 同一 (action,target,actor) の直近レコードが 60 秒以内なら監査を追加しない。
+    // BAN/UNBAN と同じ再送セマンティクスを UNPIN にも適用し、unpins 集計の過大計上を防ぐ。
+    let mut dup = tx
+        .query(
+            "SELECT 1 FROM governance_audit_log
+             WHERE action = 'UNPIN' AND target = ? AND actor_hash = ?
+               AND created_at >= datetime('now', '-60 seconds') LIMIT 1",
+            (cid.clone(), claims.sub.clone()),
+        )
+        .await?;
+    let already_recorded = dup.next().await?.is_some();
+    drop(dup);
+    if !already_recorded {
+        record_governance_action(&tx, "UNPIN", &cid, &claims.sub, reason, None).await?;
+    }
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;

@@ -2543,13 +2543,17 @@ where
             // 開発用モック認証でも nonce を取得して単回消費のフローを通す。
             // 501（本番認証未実装）は固定文言を出して verify を送らず早期 return する。
             // それ以外の失敗は従来どおり verify を試み、表示するエラーは verify の結果で上書きする。
-            let nonce = match Request::post(&format!("{}/auth/login", API_BASE))
-                .send()
-                .await
+            // fetch_with_timeout を通し、通信停滞でも BusyGuard が解除されるようにする。
+            let nonce = match async {
+                let request = Request::post(&format!("{}/auth/login", API_BASE))
+                    .build()
+                    .map_err(|_| ())?;
+                fetch_with_timeout(request).await.map_err(|_| ())
+            }
+            .await
             {
                 Ok(response) if response.status() == 501 => {
                     set_error.set(PRODUCTION_AUTH_NOT_IMPLEMENTED.to_string());
-                    set_loading.set(false);
                     return;
                 }
                 Ok(response) if response.ok() => match response.json::<Oid4vpRequest>().await {
@@ -2570,8 +2574,11 @@ where
             };
             // リクエスト準備（URL / JSON シリアライズ）失敗で panic させず、
             // 既存の login-error 固定文言を role=alert で出し、ボタンを再活性化する。
-            let Ok(request) =
-                Request::post(&format!("{}/auth/verify", API_BASE)).json(&serde_json::json!({
+            let Ok(request) = Request::post(&format!("{}/auth/verify", API_BASE))
+                // verify 応答の Set-Cookie(refresh_token) をクロスオリジン本番でも保存する
+                // （perform_refresh / logout と同じ credentials 契約）。
+                .credentials(RequestCredentials::Include)
+                .json(&serde_json::json!({
                     "presentation_token": "mock_token",
                     "nonce": nonce,
                     "birth_date": "2000-01-01",
@@ -2579,10 +2586,9 @@ where
                 }))
             else {
                 set_error.set("ネットワークエラーが発生しました。".to_string());
-                set_loading.set(false);
                 return;
             };
-            let res = request.send().await;
+            let res = fetch_with_timeout(request).await;
 
             match res {
                 Ok(response) if response.ok() => match response.json::<VerifyResponse>().await {
@@ -2609,7 +2615,6 @@ where
                 }
                 Err(_) => set_error.set("ネットワークエラーが発生しました。".to_string()),
             }
-            set_loading.set(false);
         });
     };
 
