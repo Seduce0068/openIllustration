@@ -786,6 +786,30 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第86ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: ADR-0013 P3のaxe自動スキャンを導入（@axe-core/playwright、
+  dashboardでwcag2a/wcag2aa、color-contrastのみ既知課題として除外）、
+  E2E失敗アーカイブ7世代保持（mtime順）、prometheus targetを実値3000へ、
+  EXPORT-06を実装（HTTP固定名/保存名はクライアント世代付き）へ修正。
+  R4指摘4件（EXPORT-06戻し、color-contrastのtodo記録、mtimeソート、
+  node engines>=22.12）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  tsc/yaml green、E2E_CLIENT_PORT=18123で実施）。
+  ※ axe の color-contrast 違反（Dashboard で contrastRatio 4.34 等）は既知課題として
+  disableRules で除外。配色是正後に除外を外すこと。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面拡張、
+  globalSetup認証後ビュー監視、fail-closedカウンタ2種のテスト・仕様、
+  error_lang UTC例外テスト、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  export revoke delayオラクル、fetch timeout分岐テスト、real-api refresh往復、
+  jxl fuzz独立オラクル、UNPIN re-send回帰、CIツールchecksumピン留め、
+  署名公開失敗回帰、GPG署名者固定、doctor backup設定診断、バックアップ鮮度timer、
+  公開集計generated_atのtx内采番、TASK_INVENTORY historical化、E2E69下限緩和、
+  HD分岐のrows drop、purge poison格下げ）は記録のみで保留。
+
+- axe 既知課題: Dashboard の color-contrast 違反（contrastRatio 4.34 等）。
+  e2e/tests/auth.spec.ts の axe step では disableRules(['color-contrast']) で除外中。
+  配色是正後に disableRules を外して violations ゼロを再検証すること。
+
 - 2026-11-24 コンボ第85ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh2件を是正: /auth/verifyへcredentials:Include（クロスオリジン本番で
   refresh_token Cookie保存、起動時復元の実効化）、/auth/login+/auth/verifyを

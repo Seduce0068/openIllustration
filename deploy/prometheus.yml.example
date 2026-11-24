@@ -11,8 +11,8 @@ scrape_configs:
     scheme: http
     static_configs:
       - targets:
-          # PORT を変更した場合は target も追随させること（既定 3000）。
-          - '127.0.0.1:<PORT>'
+          # 実際の scrape 先。PORT を変更した場合は target も追随させること。
+          - '127.0.0.1:3000'
         labels:
           service: openillustration
 

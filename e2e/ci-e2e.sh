@@ -637,3 +637,18 @@ fi
 if ! (cd e2e && npm test -- "${remaining_specs[@]}" "${project_args[@]}"); then
 	report_e2e_failure "unit-specs"
 fi
+
+# ADR-0013 P2: 失敗アーカイブは新しい順に7世代だけ保持する。
+# 成功パスで古い世代を削除し、機微情報の残留とディスク枯渇を防ぐ。
+prune_failure_archives() {
+	local kept=0
+	local archive
+	while IFS= read -r -d '' archive; do
+		kept=$((kept + 1))
+		if ((kept > 7)); then
+			rm -f -- "$archive" || true
+		fi
+		# ラベル（real-api / unit-specs）に依存せず、更新時刻の新しい順に保持する。
+	done < <(find "$artifact_dir" -maxdepth 1 -name 'e2e-failure-*.tar.gz' -printf '%T@ %p\0' 2>/dev/null | sort -zrn | cut -d' ' -f2-)
+}
+prune_failure_archives

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
   test('should login successfully with mock JPKI token', async ({ page }) => {
@@ -21,6 +22,15 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(userHash).toBeVisible();
     const hashText = await userHash.innerText();
     expect(hashText.length).toBeGreaterThan(0);
+
+    // ADR-0013 P3: dashboard の WCAG 2 A/AA 自動スキャン（既存ケース内 step）。
+    // color-contrast は既知の設計課題（低コントラストのグレー文字）として
+    // todo.md の残存へ記録済み。それ以外の違反はゼロを必須とする。
+    const results = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa'])
+      .disableRules(['color-contrast'])
+      .analyze();
+    expect(results.violations).toEqual([]);
   });
 
   test('SEC-03: should reject underage user', async ({ page }) => {
@@ -180,7 +190,9 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
     await expect(page.getByRole('button', { name: 'CONNECT WITH JPKI' })).toBeVisible();
 
     // リクエストは spawn_local で飛ぶため、到達までポールで待つ。
-    await expect.poll(() => logoutAuthHeader).toBe('Bearer mock_jwt_token');
+    // /auth/verify の Set-Cookie が保存されるようになり、401 後の refresh で
+    // JWT が更新され得る。契約は「Bearer トークンが付くこと」なのでいずれも受理する。
+    await expect.poll(() => logoutAuthHeader).toMatch(/^Bearer (mock_jwt_token|refreshed_jwt_token)$/);
     expect(logoutMethod).toBe('POST');
 
     // R2-CLIENT-05: /auth/logout が失敗しても画面遷移は現行どおりログインへ戻し、
