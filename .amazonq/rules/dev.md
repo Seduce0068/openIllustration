@@ -41,7 +41,7 @@ tags: [development, ai-guidance]
   1. ローカルリファレンス内に当該情報が存在する場合、それを唯一かつ絶対のソースとして使用せよ。
   2. ローカルに情報が存在しない場合、あるいは応用的な文脈や最新の外部ライブラリ（crates.io等）の情報を必要とする場合にのみ、外部 Web 検索（Grounding）を許可する。
   3. 外部情報を使用する際は、ローカルの既存の知識ベースと矛盾がないか検証し、必要に応じてローカルへ情報を反映させよ。
-- **Rust Implementation:** 特にRustへの移行・実装時は `/home/koppe/references/languages/rust-advanced` および `reference` を徹底的に活用し、標準に忠実な実装を行え。
+- **Rust Implementation:** 特にRustへの移行・実装時は `<user-home>/references/languages/rust-advanced` および `reference` を徹底的に活用し、標準に忠実な実装を行え。
 
 </directives_reference>
 
