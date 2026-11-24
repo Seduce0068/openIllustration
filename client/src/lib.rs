@@ -3560,6 +3560,9 @@ where
             set_novel_decode_error.set(false);
             set_content_load_error.set(String::new());
             set_content_unauthorized.set(false);
+            // 前回の VERIFIED が新レスポンス到着まで残ると古い検証結果を事実として
+            // 提示してしまう。再取得中は PENDING（None）へ戻す。
+            set_verified.set(None);
             let url = format!("{}/content/{}", API_BASE, url_encode(&cid));
             let res = api_fetch(
                 |jwt| {
@@ -3759,7 +3762,7 @@ where
                         // 支援は無効（Settlement Pending）のためタブ停止点を作らない。
                         // aria-disabled と説明テキストで状態を伝え、lang を明示する。
                         <div data-testid="support-overlay" lang="en" aria-disabled="true"
-                            class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
+                            class="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity flex flex-col items-center justify-center p-6 text-center space-y-4">
                             <p lang="en" class="text-[10px] font-bold tracking-widest text-white uppercase">"Support Creator"</p>
                             <p lang="en" class="text-[20px] font-bold text-green-500 font-mono">{price} " JPYC"</p>
                             <button disabled lang="en"
@@ -4939,9 +4942,17 @@ where
         // POST 前に空入力を止める。検証エラーは role=alert で読み上げる。
         // 既存の "Report failed." 固定文言は成否の通知として変更しない。
         if let Err(message) = validate_report_input(&cid, &reason) {
-            // 空だったフィールドだけを invalid とし、エラー要素を aria-describedby で参照する。
-            set_report_cid_invalid.set(cid.trim().is_empty());
-            set_report_reason_invalid.set(!cid.trim().is_empty());
+            // 空だったフィールドをすべて invalid とし、エラー要素を aria-describedby で参照する。
+            // 純粋関数は先に CID を返すが、両方空のとき理由側も告知しないと再 Submit を強いる。
+            let cid_empty = cid.trim().is_empty();
+            let reason_empty = reason.trim().is_empty();
+            set_report_cid_invalid.set(cid_empty);
+            set_report_reason_invalid.set(reason_empty);
+            let message = if cid_empty && reason_empty {
+                "対象 CID と通報理由を入力してください。"
+            } else {
+                message
+            };
             set_report_validation_error.set(message.to_string());
             set_status.set(String::new());
             return;
@@ -5152,8 +5163,11 @@ where
                         maxlength=REPORT_CID_MAX_LEN
                         on:input=move |ev| {
                             set_cid.set(event_target_value(&ev));
-                            // 訂正したら前回の検証エラーを即時解除する（aria-invalid も false へ）。
+                            // 訂正したら前回の検証エラーを即時解除する。共有エラー文言を消す
+                            // 以上、両フィールドの invalid/aria-describedby も同時に戻す
+                            // （片方だけ残すと参照先のない要素を指し続ける）。
                             set_report_cid_invalid.set(false);
+                            set_report_reason_invalid.set(false);
                             set_report_validation_error.set(String::new());
                         }
                         prop:value=cid
@@ -5172,6 +5186,7 @@ where
                         maxlength=REPORT_REASON_MAX_LEN
                         on:input=move |ev| {
                             set_reason.set(event_target_value(&ev));
+                            set_report_cid_invalid.set(false);
                             set_report_reason_invalid.set(false);
                             set_report_validation_error.set(String::new());
                         }

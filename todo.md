@@ -786,6 +786,27 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第96ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: 通報フォームでCID/理由が両方空のとき両フィールドへ
+  aria-invalid+統合文言を告知（再Submit強制を解消）、本文再取得中は
+  verifiedをNoneへ戻し古いVERIFIEDの事実表明を防止、
+  Support Creatorオーバーレイを@media(hover:none)で常時表示
+  （タッチ端末で価格・停止理由が読めるように）。
+  R4指摘1件（共有エラー消去時に片側invalid/aria-describedbyが残る）
+  も両フラグ同時クリアで修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  clippy/wasm/build-css green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、JXL成功側オラクル、セッション復元の進捗/失敗通知、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  real-api refresh往復、UNPIN再送回帰、SameSite検討、PWA Service Worker、
+  systemd watchdog/health復旧、OnFailure通知の失敗元unit表示、署名検証自動ゲート化、
+  CI checksumピン留め、孤立IPFSピン再スキャン、DB_WRITE_LOCKS poison回収、
+  doc-numbers focused/空白呼び出し/総数表記、migration SQLスキャナ拡張、
+  REVIEW_REPORT更新停止、クライアントtimeout設定化、ディープリンク強調の
+  aria-current、Ledger取得失敗時の古い履歴注記、MSRV1.88実証、
+  TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第95ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: tags入力の検証エラー即時解除漏れ、upload送信ボタンの
   busy時lang矛盾（表示文言連動化）、redact_url fileスキーム回帰、
