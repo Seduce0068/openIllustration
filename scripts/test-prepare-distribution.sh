@@ -28,7 +28,10 @@ case "${1:-}" in
 	metadata)
 		# license_file が実在する通常 fixture と、存在しないパスを指す
 		# fail-closed 検証用 fixture を DUMMY_METADATA_MISSING_LICENSE で切り替える。
-		if [[ "${DUMMY_METADATA_MISSING_LICENSE:-0}" == "1" ]]; then
+		if [[ "${DUMMY_METADATA_EMPTY:-0}" == "1" ]]; then
+			# 依存 0 件: ライセンス本文が 1 件も公開されないため fail-closed。
+			jq -n '{ packages: [] }'
+		elif [[ "${DUMMY_METADATA_MISSING_LICENSE:-0}" == "1" ]]; then
 			# license_file も manifest_dir 配下の候補も存在しないため、
 			# prepare-distribution.sh は非 0 で失敗する必要がある。
 			jq -n --arg dir "${DUMMY_FIXTURE_DIR:?}" '{
@@ -505,6 +508,11 @@ if compgen -G "${delete_fail_out}.old.*" >/dev/null; then
 else
 	echo "PASS case12: stashed directory not left behind"
 fi
+
+echo "=== ケース13: 依存 0 件の配布物を fail-closed で拒否 ==="
+empty_out="${repo_copy}/out-empty-metadata"
+expect_failure "case13 zero dependency metadata" env DUMMY_METADATA_EMPTY=1 bash "$script" "$empty_out"
+assert_absent "$empty_out" "case13 artifacts"
 
 if ((failures > 0)); then
 	echo "prepare-distribution tests FAILED (${failures})" >&2

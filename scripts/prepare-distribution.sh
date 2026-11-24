@@ -187,6 +187,13 @@ if [[ -z "$notice_entries" || "$notice_entries" != "$tsv_lines" ]]; then
 	echo "license entry count mismatch: NOTICE=${notice_entries} DEPENDENCIES.tsv=${tsv_lines}" >&2
 	exit 1
 fi
+# 0 件の配布物（cargo metadata / jq フィルタ誤り等）は AGPL 本文同梱要件違反。
+# NOTICE と DEPENDENCIES.tsv の一致は上で検証済み。ライセンス本文は 1 件以上必要
+# （registry に本文が無い依存もあるため count と tsv_lines の一致は要求しない）。
+if [[ "$count" -lt 1 ]]; then
+	echo "no license texts bundled; refusing to publish" >&2
+	exit 1
+fi
 
 # ここまで全て成功したので、旧成果物を退避してから新成果物を atomic に公開する。
 if [[ -e "$out_dir" ]]; then

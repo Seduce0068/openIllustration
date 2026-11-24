@@ -13912,6 +13912,49 @@ async fn test_ban_sets_ban_until_for_duration() {
         (parsed - expected).num_seconds().abs() <= 120,
         "ban_until は約1日後であるべき: {stored}"
     );
+
+    // 期限切れの期間付き BAN は is_banned=TRUE のまま残る。再 BAN が CAS で
+    // 無効化されず、ban_until が未来へ更新され監査行が1件増えることを固定する。
+    db.execute(
+        "UPDATE users SET ban_until = datetime('now', '-1 day') WHERE user_hash = 'target'",
+        (),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "re-ban after expiry", "duration_days": 2}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let mut rows = db
+        .query("SELECT ban_until FROM users WHERE user_hash = 'target'", ())
+        .await
+        .unwrap();
+    let renewed: String = rows.next().await.unwrap().unwrap().get(0).unwrap();
+    let renewed = chrono::NaiveDateTime::parse_from_str(&renewed, "%Y-%m-%d %H:%M:%S").unwrap();
+    assert!(
+        renewed > chrono::Utc::now().naive_utc(),
+        "expired ban must be renewed into the future: {renewed}"
+    );
+    let audit_count: i64 = db
+        .query(
+            "SELECT COUNT(*) FROM governance_audit_log WHERE target = 'target' AND action = 'BAN'",
+            (),
+        )
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(audit_count, 2, "re-ban after expiry must be audited");
 }
 
 /// BAN 期限: 期限切れは is_banned=TRUE のままだが API 利用は妨げない。

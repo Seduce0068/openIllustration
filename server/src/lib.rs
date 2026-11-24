@@ -5548,14 +5548,16 @@ pub async fn ban_user(
     // 期間付き BAN は ban_until に期限を記録する。NULL は無期限を表す。
     // duration_days は上流で 1..=3650 に検証済みのため文字列連結による SQL 注入はないが、
     // 引数としてバインドして日数を組み立てる。
-    // 既に BAN 済み（0 行）なら再送とみなし、監査行の重複と期限の暗黙延長を防ぐ。
+    // 有効な BAN 済み（0 行）のみ再送として扱い、監査行の重複と期限の暗黙延長を防ぐ。
+    // 期限切れの期間付き BAN は CAS で再 BAN を許可し、監査行を追加する。
     // 閾値 UPSERT と下流のトークン消費は両分岐で必ず実行する（未使用トークン残存を防ぐ）。
     let already_banned = if let Some(days) = body.duration_days {
         let updated = tx
             .execute(
                 "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'),
                         ban_until = datetime('now', '+' || ? || ' days')
-                 WHERE user_hash = ? AND is_banned = FALSE",
+                 WHERE user_hash = ? AND (is_banned = FALSE
+                       OR (ban_until IS NOT NULL AND ban_until <= datetime('now')))",
                 libsql::params![days, user_hash.to_string()],
             )
             .await?;
@@ -5564,7 +5566,8 @@ pub async fn ban_user(
         let updated = tx
             .execute(
                 "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'), ban_until = NULL
-                 WHERE user_hash = ? AND is_banned = FALSE",
+                 WHERE user_hash = ? AND (is_banned = FALSE
+                       OR (ban_until IS NOT NULL AND ban_until <= datetime('now')))",
                 [user_hash],
             )
             .await?;
