@@ -1335,7 +1335,15 @@ fn acquire_instance_lock(lock_path: &str) -> anyhow::Result<()> {
                 // PID 不明のロックを残すと次回起動が fail-closed で拒否されるため、
                 // 作成したファイルを片付けてから失敗を返す。
                 drop(file);
-                let _ = std::fs::remove_file(lock_path);
+                if let Err(cleanup_error) = std::fs::remove_file(lock_path) {
+                    // 不完全ロックが残ると次回起動が fail-closed で拒否されるため、
+                    // 回収 failure をログへ残す（元のエラーは維持する）。
+                    tracing::warn!(
+                        "failed to remove incomplete instance lock {}: {}",
+                        lock_path,
+                        cleanup_error
+                    );
+                }
                 Err(error)
             } else {
                 Ok(())
@@ -4568,45 +4576,48 @@ pub async fn logout(
 /// パース失敗時のフォールバックは `scheme://` 形のみ authority を走査し、
 /// スキームレス URL（`//` 始まりを含む）は authority 対象外で userinfo を除去しない。
 pub fn redact_url(url: &str) -> String {
+    // 文字列ベースのフォールバック（set_username/set_password が失敗した
+    // cannot-be-a-base URL でも userinfo を確実に落とすために再利用する）。
+    fn fallback(url: &str) -> String {
+        // 先に authority（scheme:// 直後から最初の '/' まで）だけを切り出して userinfo を
+        // 除去し、その後にクエリ/フラグメントを除去する。順序を逆にすると userinfo 内の
+        // '?' / '#' がクエリ開始と誤判定され、userinfo の一部が残存する。
+        let redacted = if let Some(scheme_end) = url.find("://") {
+            let authority_start = scheme_end + 3;
+            let rest = &url[authority_start..];
+            // authority 内に '@' が無ければ URL 全体をそのまま残す。
+            let authority_end = rest.find('/').unwrap_or(rest.len());
+            let authority = &rest[..authority_end];
+            if let Some(at) = authority.rfind('@') {
+                let mut s = String::with_capacity(url.len());
+                s.push_str(&url[..authority_start]);
+                s.push_str(&rest[at + 1..]);
+                s
+            } else {
+                url.to_string()
+            }
+        } else {
+            url.to_string()
+        };
+        redacted
+            .split(['?', '#'])
+            .next()
+            .unwrap_or(&redacted)
+            .to_string()
+    }
     match reqwest::Url::parse(url) {
         Ok(mut parsed) => {
-            let _ = parsed.set_username("");
-            let _ = parsed.set_password(None);
+            // cannot-be-a-base URL では set_username/set_password が Err を返し、
+            // 無視すると userinfo が残る。失敗時は文字列フォールバックへ倒す。
+            if parsed.set_username("").is_err() || parsed.set_password(None).is_err() {
+                return fallback(url);
+            }
             parsed.set_query(None);
             // フラグメントにもトークン等の秘密が入り得るため除去する。
             parsed.set_fragment(None);
             parsed.to_string()
         }
-        Err(_) => {
-            // パース失敗時も userinfo とクエリ/フラグメントを除去する。
-            // reqwest::Url に頼らず std の文字列操作だけで扱うため、
-            // シェル/URL の特殊文字・小数点・パーセントエンコードに影響されない。
-            // 先に authority（scheme:// 直後から最初の '/' まで）だけを切り出して userinfo を
-            // 除去し、その後にクエリ/フラグメントを除去する。順序を逆にすると userinfo 内の
-            // '?' / '#' がクエリ開始と誤判定され、userinfo の一部が残存する。
-            let redacted = if let Some(scheme_end) = url.find("://") {
-                let authority_start = scheme_end + 3;
-                let rest = &url[authority_start..];
-                // authority 内に '@' が無ければ URL 全体をそのまま残す。
-                let authority_end = rest.find('/').unwrap_or(rest.len());
-                let authority = &rest[..authority_end];
-                if let Some(at) = authority.rfind('@') {
-                    let mut s = String::with_capacity(url.len());
-                    s.push_str(&url[..authority_start]);
-                    s.push_str(&rest[at + 1..]);
-                    s
-                } else {
-                    url.to_string()
-                }
-            } else {
-                url.to_string()
-            };
-            redacted
-                .split(['?', '#'])
-                .next()
-                .unwrap_or(&redacted)
-                .to_string()
-        }
+        Err(_) => fallback(url),
     }
 }
 

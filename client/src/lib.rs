@@ -2956,13 +2956,14 @@ where
                         <select
                             id="content-type"
                             name="type"
+                            lang="en"
                             on:change=move |ev| set_content_type.set(event_target_value(&ev))
                             prop:value=content_type
                             class="w-full bg-black border border-white/20 p-3 text-xs"
                         >
-                            <option value="">"ALL"</option>
-                            <option value="Illustration">"Illustration"</option>
-                            <option value="Novel">"Novel"</option>
+                            <option value="" lang="en">"ALL"</option>
+                            <option value="Illustration" lang="en">"Illustration"</option>
+                            <option value="Novel" lang="en">"Novel"</option>
                         </select>
                     </div>
                     <div class="flex items-center gap-2 pb-3">
@@ -4252,6 +4253,9 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                             if let Some(value) = price_from_number(input.value_as_number()) {
                                 set_price.set(value);
                             }
+                            // 訂正したら前回の価格エラーを即時解除する。
+                            set_price_invalid.set(false);
+                            set_failed.set(String::new());
                         }
                         prop:value=price
                         class="w-full bg-black border border-white/20 p-4 text-xl font-mono text-green-500" />
@@ -4269,7 +4273,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         placeholder="TITLE"
                         aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
                         aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
-                        on:input=move |ev| set_title.set(event_target_value(&ev))
+                        on:input=move |ev| {
+                            set_title.set(event_target_value(&ev));
+                            set_metadata_invalid.set(false);
+                            set_failed.set(String::new());
+                        }
                         prop:value=title
                         class="w-full bg-black border border-white/20 p-3 text-sm"
                     />
@@ -4286,7 +4294,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         placeholder="DESCRIPTION"
                         aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
                         aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
-                        on:input=move |ev| set_description.set(event_target_value(&ev))
+                        on:input=move |ev| {
+                            set_description.set(event_target_value(&ev));
+                            set_metadata_invalid.set(false);
+                            set_failed.set(String::new());
+                        }
                         prop:value=description
                         class="w-full bg-black border border-white/20 p-3 text-sm h-24 resize-y"
                     />
@@ -5134,7 +5146,12 @@ where
                         aria-describedby=move || if report_cid_invalid.get() { Some("report-validation-error") } else { None }
                         placeholder="TARGET CID"
                         maxlength=REPORT_CID_MAX_LEN
-                        on:input=move |ev| set_cid.set(event_target_value(&ev))
+                        on:input=move |ev| {
+                            set_cid.set(event_target_value(&ev));
+                            // 訂正したら前回の検証エラーを即時解除する（aria-invalid も false へ）。
+                            set_report_cid_invalid.set(false);
+                            set_report_validation_error.set(String::new());
+                        }
                         prop:value=cid
                         class="w-full bg-black border border-white/20 p-3 text-sm"
                     />
@@ -5150,7 +5167,11 @@ where
                         aria-describedby=move || if report_reason_invalid.get() { Some("report-validation-error") } else { None }
                         placeholder="REASON"
                         maxlength=REPORT_REASON_MAX_LEN
-                        on:input=move |ev| set_reason.set(event_target_value(&ev))
+                        on:input=move |ev| {
+                            set_reason.set(event_target_value(&ev));
+                            set_report_reason_invalid.set(false);
+                            set_report_validation_error.set(String::new());
+                        }
                         class="w-full bg-black border border-white/20 p-3 text-sm h-24"
                     />
                     <button type="submit" lang="en"

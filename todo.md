@@ -786,6 +786,25 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第93ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: redact_urlのset_username/set_password失敗時に文字列
+  フォールバックへ倒しuserinfo残留を防止、instance.lock片付け失敗をwarn化、
+  通報/アップロードのon:inputで検証エラーとaria-invalidを即時解除、
+  検索select/optionへlang="en"。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、clippy green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、セッション復元の進捗/失敗通知+オプトインマーカー仕様/
+  テスト、globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、
+  通信失敗テレメトリ+sendBeacon、real-api refresh往復、UNPIN再送回帰、
+  SameSite検討、PWA Service Worker、systemd watchdog/health復旧、
+  OnFailure通知の失敗元unit表示、署名検証自動ゲート化、CI checksumピン留め、
+  cargo-deny advisories lint、GPG署名者固定、doctor backup設定診断、
+  公開集計generated_atのtx内采番、孤児IPFSピン再スキャン、
+  DB_WRITE_LOCKS poison回収、doc-numbers focused/空白呼び出し/総数表記、
+  cron allowlist全キー回帰、REVIEW_REPORT更新停止、クライアントtimeout設定化、
+  MSRV1.88実証、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第92ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: backup-rotate.shへINT/TERM→exit変換（平文tmp残置防止）、
   BACKUP_PREFIXを安全文字セットへ制限（空/glob/パス脱出をfail-closed、
