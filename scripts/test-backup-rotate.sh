@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/backup-rotate.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-# expect_* 呼び出し件数（実数）: expect_failure 35 件 / expect_success 16 件（計 51 件）。
+# expect_* 呼び出し件数（実数）: expect_failure 36 件 / expect_success 16 件（計 52 件）。
 # doc-numbers の空白許容 grep がケース8（実 gpg）も計上する。
 # 件数を扱う docs は担当外のため、ケースを増減したらこのコメントを実数へ更新すること。
 
@@ -130,6 +130,20 @@ expect_failure "path-escaping BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=t
 expect_failure "empty BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='' "$script"
 expect_failure "glob BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='a*' "$script"
 expect_failure "slash BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='a/b' "$script"
+# 不正 prefix でも ALERT_CMD が発火する（EXIT trap 登録後の検証であることの固定）。
+prefix_alert_log="${work}/prefix-alert.log"
+cat >"${work}/prefix-alert.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$1" >> "${PREFIX_ALERT_LOG:?}"
+EOF
+chmod +x "${work}/prefix-alert.sh"
+expect_failure "invalid prefix fires alert" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='../escape' ALERT_CMD="${work}/prefix-alert.sh" PREFIX_ALERT_LOG="$prefix_alert_log" "$script"
+if grep -q 'openIllustration backup failed' "$prefix_alert_log" 2>/dev/null; then
+	echo "PASS invalid BACKUP_PREFIX notified via ALERT_CMD"
+else
+	echo "FAIL invalid BACKUP_PREFIX did not notify"
+	failures=$((failures + 1))
+fi
 if compgen -G "${escaping_prefix_dir}/*" >/dev/null; then
 	echo "FAIL artifact written with escaping BACKUP_PREFIX"
 	failures=$((failures + 1))

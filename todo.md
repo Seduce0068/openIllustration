@@ -786,6 +786,28 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第98ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: sign_audit_exportが連鎖検証せずに署名し、
+  第三者検証で拒否されるスナップショットを公開していた問題
+  （署名直前にverify_chainを必須ゲート化、reasons_maskedの
+  entry_hash再計算スキップ契約は維持）。他: 監査statusへlang=en、
+  file-upload label固定aria-label、BACKUP_PREFIX検証をEXIT trap登録後へ
+  移動し不正prefixでもALERT_CMDが発火（expect 36/16/52へ更新）。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、backup expect36/16/52、clippy green、
+  E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、JXL成功側オラクル、セッション復元の進捗/失敗通知、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  ui_error実ブラウザオラクル、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker、systemd watchdog/health復旧+プロセス硬化、
+  署名監査2表のtx一貫性、OnFailure通知の失敗元unit表示、CI checksumピン留め、
+  sanitizeForLog回帰オラクル、trunkアーカイブ削除分岐テスト、孤立IPFSピン再スキャン、
+  補償unpinのCID共有問題、instance.lock stale再取得の片付け、定数時間比較、
+  Playwright/@types/nodeバージョン整合、doc-numbers focused/空白呼び出し/総数表記、
+  REVIEW_REPORT更新停止、クライアントtimeout設定化、MSRV1.88実証、
+  TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第97ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: 期間付きBAN→無期限昇格のCAS漏れ（監査欠落）を修正+
   昇格/同一再送スキップ回帰、verified_claims経路の自己申告必須チェックを

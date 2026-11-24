@@ -3859,7 +3859,7 @@ where
                                         <div class="text-[8px] space-y-1">
                                             <div class="flex justify-between text-gray-400">
                                                 <span data-testid="audit-created-at" title=created_at lang=created_lang>{datetime_content(created_display)}</span>
-                                                <span class="text-green-500">{log.new_status.clone()}</span>
+                                                <span lang="en" class="text-green-500">{log.new_status.clone()}</span>
                                             </div>
                                             <p lang="en" class="text-gray-300">"By: " {log.changed_by.clone()}</p>
                                             <p class="italic"><span lang="en">"Reason: "</span><span>{reason}</span></p>
@@ -4203,6 +4203,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         id="file-upload" />
                     <label for="file-upload"
                         lang="en"
+                        aria-label="SELECT JXL OR MARKDOWN"
                         role="button"
                         tabindex=move || if loading.get() { -1 } else { 0 }
                         aria-disabled=move || if loading.get() { "true" } else { "false" }

@@ -12,13 +12,6 @@ cd "$repo_root"
 backup_dir="${BACKUP_DIR:-${repo_root}/backups}"
 # unset 時のみ既定を適用（空文字は下の検証で拒否する）。
 prefix="${BACKUP_PREFIX-openillustration}"
-# prefix は backup_dir 直下のファイル名一部。パス区切り・".."・glob メタ文字を
-# 許すと成果物が backup_dir 外へ作られたり、find -name のパターンへ伝播して
-# 他 prefix の世代を誤削除し得る。安全な文字セットへ制限する。
-if [[ ! "$prefix" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$prefix" == *'..'* ]]; then
-	echo "invalid BACKUP_PREFIX: use letters, digits, '.', '_' or '-' (no '..')" >&2
-	exit 1
-fi
 retention_days="${RETENTION_DAYS:-30}"
 min_keep="${MIN_KEEP:-3}"
 bin_dir="${BIN_DIR:-${repo_root}/target/debug}"
@@ -65,6 +58,15 @@ trap on_failure EXIT
 # timeout 1800 / TimeoutStartSec=1800 の強制終了で tmp_db が残置されないようにする。
 trap "exit 130" INT
 trap "exit 143" TERM
+
+# prefix は backup_dir 直下のファイル名一部。パス区切り・".."・glob メタ文字を
+# 許すと成果物が backup_dir 外へ作られたり、find -name のパターンへ伝播して
+# 他 prefix の世代を誤削除し得る。安全な文字セットへ制限する。
+# EXIT trap と ALERT_CMD 解決の後に置くことで、設定ミスも专用通知経路へ届く。
+if [[ ! "$prefix" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ || "$prefix" == *'..'* ]]; then
+	echo "invalid BACKUP_PREFIX: use letters, digits, '.', '_' or '-' (no '..')" >&2
+	exit 1
+fi
 
 # 別経路で保存した監査 Merkle root（hex、非機微）。設定時は verify_audit_log の
 # --expect-root へ渡し、監査ログの空化・末尾切詰めを自動検証で検出する。

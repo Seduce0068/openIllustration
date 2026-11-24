@@ -387,6 +387,13 @@ async fn main() -> anyhow::Result<()> {
         merkle_root: digest.root_hash,
         signature: String::new(),
     };
+    // 公開前に連鎖・連番・Merkle root を再検証する。DB 側の改ざんや欠番を
+    // 含むスナップショットに署名して第三者検証で拒否されるのを防ぐ。
+    // reasons_masked=true のとき verify_chain は entry_hash 再計算をスキップする
+    // 既存契約を維持しつつ、連鎖・連番・Merkle の検査は常に必須とする。
+    snapshot
+        .verify_chain()
+        .map_err(|error| anyhow!("audit chain verification failed: {error}"))?;
     snapshot.signature =
         sign_audit_snapshot(&snapshot, &private_key_pem).map_err(|error| anyhow!("{error}"))?;
     let json = serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
