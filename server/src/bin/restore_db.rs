@@ -365,9 +365,19 @@ async fn main() -> anyhow::Result<()> {
     }
     create_safety_copy(&backup, &tmp, "staging file").context("failed to stage backup")?;
     // 壊れた staging を target へ公開しないよう、rename の前に検証する。
-    validate_backup(&tmp)
-        .await
-        .context("staged backup verification failed")?;
+    if let Err(error) = validate_backup(&tmp).await {
+        // 平文 staging を残さない（0600 とはいえ復元前に破棄する）。
+        // 削除自体が失敗した場合は残置を明示し、他 cleanup 経路と通知契約を揃える。
+        let mut error = error.context("staged backup verification failed");
+        if let Err(cleanup_error) = std::fs::remove_file(&tmp) {
+            error = error.context(format!(
+                "additionally failed to remove staging file {}: {}",
+                tmp.display(),
+                cleanup_error
+            ));
+        }
+        return Err(error);
+    }
     replace_target(&tmp, &target, safety_copy.as_deref())?;
 
     // rename 後の再検証。ここで失敗した場合は safety copy へロールバックする。

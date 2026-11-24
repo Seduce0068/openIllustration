@@ -2620,7 +2620,7 @@ where
 
     view! {
         <div class="max-w-md mx-auto mt-20 border border-white/10 p-8 text-center">
-            <h2 class="text-2xl font-bold mb-8 tracking-tighter italic">"本人確認が必要です。"</h2>
+            <h2 lang="ja" class="text-2xl font-bold mb-8 tracking-tighter italic">"本人確認が必要です。"</h2>
             <p lang="en" class="text-[10px] text-gray-500 mb-4 leading-relaxed">
                 "IPv6 connection is required. If you are on an IPv4-only network, please switch to an IPv6-capable connection."
             </p>
@@ -2628,7 +2628,7 @@ where
                 "JPKI-BASED AGE AND IDENTITY VERIFICATION. PERSONAL DATA IS HASHED ONLY."
             </p>
             <Show when=move || MOCK_AUTH_ENABLED>
-                <p data-testid="mock-auth-notice">"開発用モック認証（本番では利用できません）。"</p>
+                <p data-testid="mock-auth-notice" lang="ja">"開発用モック認証（本番では利用できません）。"</p>
             </Show>
             <button lang="en" on:click=do_login disabled=loading
                 aria-busy=move || if loading.get() { "true" } else { "false" }
@@ -3682,7 +3682,7 @@ where
                         class="min-h-6 min-w-6 text-[10px] border border-white/20 px-1 hover:bg-white/10 transition-colors disabled:opacity-50">
                         {move || if favorite.get() { "★" } else { "☆" }}
                     </button>
-                    <button on:click=move |_| {
+                    <button lang="en" on:click=move |_| {
                             if show_audit.get_untracked() {
                                 close_audit();
                             } else {

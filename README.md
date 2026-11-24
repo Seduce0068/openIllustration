@@ -136,14 +136,15 @@ bash scripts/test-backup-cron-wrapper.sh
 bash scripts/test-prepare-distribution.sh
 
 # E2E（開発用・ローカル反復向け。初回は cd e2e && npm ci）
-# 前提: Google Chrome 120〜140（MIN_CHROME_MAJOR / MAX_CHROME_MAJOR）・trunk v0.21.14・Node 22 以上。
+# 前提: Google Chrome 120〜140（MIN_CHROME_MAJOR / MAX_CHROME_MAJOR）・trunk v0.21.14・Node 22.12 以上。
+# （client の Tailwind optional wasm 依存は 22.13+ を推奨。engine-strict では 22.13 以上を使うこと。）
 # 上限超過は fail-closed。CI ランナーの Chrome 更新時は ci.yml の MAX_CHROME_MAJOR を追随させる。
 # 既定は chromium のみ。firefox/webkit は E2E_PROJECTS=firefox,webkit で opt-in。
 # 開発サーバーは Playwright が自動起動する。
 (cd e2e && npm test)
 
 # CI E2E ゲート（開発用モック認証 ALLOW_MOCK_AUTH=1 で実行）
-# 前提: trunk v0.21.14（sha256 検証）・Google Chrome・Node 22 以上。
+# 前提: trunk v0.21.14（sha256 検証）・Google Chrome・Node 22.12 以上。
 # E2E_JWT_SECRET / DATABASE_URL は ci-e2e.sh が実行ごとに生成・export するため注入不要
 # （既存環境変数は上書きされる。ローカル npm test とは契約が異なる）。
 # 本番相当の設定診断は doctor --strict 側（後述）で行う。

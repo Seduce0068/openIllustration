@@ -786,6 +786,21 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第87ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: Node下限22.12をルート/CI/READMEへ統一（major+minor検査）、
+  restore_dbのstaging検証失敗時に平文tmpを削除（削除失敗はcontextへ）、
+  本人確認見出し/mock認証注記へlang="ja"、Auditボタンへlang="en"。
+  R4指摘2件（staging削除エラー通知、Tailwind optional依存の22.13推奨注記）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  tsc/yaml green、E2E_CLIENT_PORT=18123で実施）。npm audit一時障害は再試行で解消。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面拡張+
+  color-contrast是正、globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、
+  通信失敗テレメトリ、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker/オフライン、CI checksumピン留め、署名公開失敗回帰、
+  GPG署名者固定、doctor backup設定診断、バックアップ鮮度timer、
+  公開集計generated_atのtx内采番、孤児IPFSピン再スキャン、HD分岐rows drop、
+  purge poison格下げ、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第86ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: ADR-0013 P3のaxe自動スキャンを導入（@axe-core/playwright、
   dashboardでwcag2a/wcag2aa、color-contrastのみ既知課題として除外）、
