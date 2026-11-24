@@ -642,13 +642,26 @@ fi
 # 成功パスで古い世代を削除し、機微情報の残留とディスク枯渇を防ぐ。
 prune_failure_archives() {
 	local kept=0
-	local archive
-	while IFS= read -r -d '' archive; do
+	local entry
+	local list_file
+	local sorted_file
+	list_file="$(mktemp)"
+	sorted_file="$(mktemp)"
+	# find / sort の失敗を隠蔽しない（一時ファイル経由で終了コードを検査する）。
+	if ! find "$artifact_dir" -maxdepth 1 -name 'e2e-failure-*.tar.gz' \
+		-printf '%T@ %p\0' >"$list_file" || ! sort -zrn "$list_file" >"$sorted_file"; then
+		rm -f -- "$list_file" "$sorted_file"
+		echo "::error::failed to sort E2E failure archives"
+		exit 1
+	fi
+	# GNU cut は NUL 区切りを扱えないため、シェル展開でタイムスタンプを除去する。
+	# ラベル（real-api / unit-specs）に依存せず、更新時刻の新しい順に保持する。
+	while IFS= read -r -d '' entry; do
 		kept=$((kept + 1))
 		if ((kept > 7)); then
-			rm -f -- "$archive" || true
+			rm -f -- "${entry#* }"
 		fi
-		# ラベル（real-api / unit-specs）に依存せず、更新時刻の新しい順に保持する。
-	done < <(find "$artifact_dir" -maxdepth 1 -name 'e2e-failure-*.tar.gz' -printf '%T@ %p\0' 2>/dev/null | sort -zrn | cut -d' ' -f2-)
+	done <"$sorted_file"
+	rm -f -- "$list_file" "$sorted_file"
 }
 prune_failure_archives

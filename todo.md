@@ -786,6 +786,22 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第88ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: E2E失敗アーカイブpruneのNUL/cut非互換を修正
+  （${entry#* }方式+find/sort双方を一時ファイル経由fail-closed、実8→7世代を検証）、
+  mailto image中立化の単体アサーション追加。R4指摘（sortのfail-open）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  tsc/shfmt/shellcheck green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面拡張+
+  color-contrast是正、globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、
+  通信失敗テレメトリ、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker/オフライン、systemd watchdog/health復旧、
+  OnFailure通知の失敗元unit表示、CI checksumピン留め、署名公開失敗回帰、
+  GPG署名者固定、doctor backup設定診断、バックアップ鮮度timer、
+  公開集計generated_atのtx内采番、孤児IPFSピン再スキャン、HD分岐rows drop、
+  purge poison格下げ、realpath/readlink不在テスト、所有者分岐テスト、
+  MSRV1.88実証、E2E行番号参照、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第87ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: Node下限22.12をルート/CI/READMEへ統一（major+minor検査）、
   restore_dbのstaging検証失敗時に平文tmpを削除（削除失敗はcontextへ）、

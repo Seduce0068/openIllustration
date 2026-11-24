@@ -6233,6 +6233,16 @@ mod tests {
         assert!(rendered.contains("href=\"mailto:user@example.com\""));
         assert!(rendered.contains("href=\"../chapter/1\""));
         assert!(rendered.contains("href=\"#section\""));
+        // mailto は link のみ許可。image として埋め込むと中立化される。
+        assert!(!super::is_safe_markdown_url(
+            "mailto:user@example.com",
+            true
+        ));
+        let image = super::render_markdown("![x](mailto:user@example.com)");
+        assert!(
+            image.contains("src=\"#\""),
+            "mailto image must be neutralized: {image}"
+        );
     }
 
     /// 参照リンク定義・自動リンク・実体参照で難読化したスキームも中立化する。
