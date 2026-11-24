@@ -14007,6 +14007,79 @@ async fn test_ban_sets_ban_until_for_duration() {
         .get(0)
         .unwrap();
     assert_eq!(audit_count, 2, "re-ban after expiry must be audited");
+
+    // 有効な期間付き BAN を無期限化（duration_days=null）すると ban_until が
+    // NULL になり、監査行が1件増える（同一内容の無期限再送はスキップされる）。
+    db.execute(
+        "UPDATE users SET ban_until = datetime('now', '+1 day') WHERE user_hash = 'target'",
+        (),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "escalate to indefinite"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let until: Option<String> = db
+        .query("SELECT ban_until FROM users WHERE user_hash = 'target'", ())
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert!(until.is_none(), "timed ban must be escalated to indefinite");
+    let audit_count: i64 = db
+        .query(
+            "SELECT COUNT(*) FROM governance_audit_log WHERE target = 'target' AND action = 'BAN'",
+            (),
+        )
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(audit_count, 3, "escalation to indefinite must be audited");
+
+    // 同一内容の無期限再送は冪等で、監査行が増えないこと。
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/ban",
+            "operator",
+            json!({"reason": "duplicate indefinite"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let audit_count: i64 = db
+        .query(
+            "SELECT COUNT(*) FROM governance_audit_log WHERE target = 'target' AND action = 'BAN'",
+            (),
+        )
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(
+        audit_count, 3,
+        "duplicate indefinite ban must not add audit"
+    );
 }
 
 /// BAN 期限: 期限切れは is_banned=TRUE のままだが API 利用は妨げない。

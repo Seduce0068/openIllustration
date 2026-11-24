@@ -17,7 +17,7 @@ rust-version = "1.88"
 # url / time は直接依存が無いため（推移依存のみ）ここには置かない。
 [workspace.dependencies]
 base64 = "0.23"
-chrono = "0.4"
+chrono = { version = "0.4", default-features = false }
 hex = "0.4"
 reqwest = { version = "0.13", default-features = false }
 rsa = "0.10"

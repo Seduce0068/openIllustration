@@ -211,6 +211,10 @@ fn create_safety_copy(src: &Path, dst: &Path, label: &str) -> anyhow::Result<()>
         }
         return Err(error).context(message);
     }
+    // 部分的な永続化を防ぐため、コピー完了をディスクへ同期してから返す。
+    // クラッシュ後のロールバックで不完全な safety copy を書き戻さないため。
+    dest.sync_all()
+        .with_context(|| format!("failed to fsync {label}: {}", dst.display()))?;
     Ok(())
 }
 

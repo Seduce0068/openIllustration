@@ -4076,14 +4076,25 @@ pub async fn auth_verify(
             common::age::AgeValidationError::ConfigurationRequired,
         ));
     }
-    let birth_date = payload
-        .birth_date
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("birth_date is required".to_string()))?;
-    let country_code = payload
-        .country_code
-        .as_deref()
-        .ok_or_else(|| AppError::BadRequest("country_code is required".to_string()))?;
+    // trusted_mode（署名済み属性必須）では verified_claims 提示時に自己申告の
+    // birth_date / country_code を必須としない（署名済みクレームのみで判定する）。
+    // 既定モードでは自己申告が年齢判定の入力のため欠落を許容せず、
+    // 既存契約どおり nonce 検証より前に必須チェックを行う。
+    let self_reported = payload.verified_claims.is_none();
+    let birth_date = match payload.birth_date.as_deref() {
+        Some(value) => Some(value),
+        None if self_reported => {
+            return Err(AppError::BadRequest("birth_date is required".to_string()));
+        }
+        None => None,
+    };
+    let country_code = match payload.country_code.as_deref() {
+        Some(value) => Some(value),
+        None if self_reported => {
+            return Err(AppError::BadRequest("country_code is required".to_string()));
+        }
+        None => None,
+    };
     // DEC-01: verified_claims は allow_mock_auth 有効時のみ受理する。
     // 自己申告の birth_date / country_code は「検証済み属性」へ昇格させない。
     let is_mock = payload.presentation_token == "mock_token" && state.allow_mock_auth;
@@ -4178,6 +4189,10 @@ pub async fn auth_verify(
             }
         } else {
             // 既定モードは自己申告ベースを維持（R1 item9: 自動昇格しない）。
+            let birth_date = birth_date
+                .ok_or_else(|| AppError::BadRequest("birth_date is required".to_string()))?;
+            let country_code = country_code
+                .ok_or_else(|| AppError::BadRequest("country_code is required".to_string()))?;
             validate_age(&state.age_policy, birth_date, country_code)?;
         }
 
@@ -4236,12 +4251,17 @@ pub async fn auth_verify(
         )?)
     };
 
-    let user_hash = if let Some(ref der) = verified_key {
-        sha256_hex(&der[..])
-    } else if let Some(ref verified) = verified_age {
+    let user_hash = if let Some(ref verified) = verified_age {
         // 信頼属性経路は issuer + signed_subject 由来（R2-USERHASH）。
+        // public_key_der が併送されても主体識別子を切り替えない。
         verified_age_user_hash(verified)?
+    } else if let Some(ref der) = verified_key {
+        sha256_hex(&der[..])
     } else {
+        let birth_date =
+            birth_date.ok_or_else(|| AppError::BadRequest("birth_date is required".to_string()))?;
+        let country_code = country_code
+            .ok_or_else(|| AppError::BadRequest("country_code is required".to_string()))?;
         sha256_hex(format!("{}:{}", birth_date, country_code).as_bytes())
     };
 
@@ -5152,7 +5172,7 @@ pub async fn mod_report(
     // before touching the DB. The exact moderation policy is pending
     // ADR-0004; this only enforces basic input hygiene.
     let reason = report.reason.trim();
-    if reason.is_empty() || reason.len() > 2000 {
+    if reason.is_empty() || reason.len() > common::MAX_REPORT_REASON_BYTES {
         return Err(AppError::BadRequest("Invalid report reason".to_string()));
     }
 
@@ -5560,7 +5580,8 @@ pub async fn ban_user(
     // duration_days は上流で 1..=3650 に検証済みのため文字列連結による SQL 注入はないが、
     // 引数としてバインドして日数を組み立てる。
     // 有効な BAN 済み（0 行）のみ再送として扱い、監査行の重複と期限の暗黙延長を防ぐ。
-    // 期限切れの期間付き BAN は CAS で再 BAN を許可し、監査行を追加する。
+    // 期限切れの期間付き BAN の再 BAN、および有効な期間付き BAN の無期限化も
+    // CAS で許可し、監査行を追加する（同一内容の無期限再送だけをスキップ）。
     // 閾値 UPSERT と下流のトークン消費は両分岐で必ず実行する（未使用トークン残存を防ぐ）。
     let already_banned = if let Some(days) = body.duration_days {
         let updated = tx
@@ -5578,7 +5599,7 @@ pub async fn ban_user(
             .execute(
                 "UPDATE users SET is_banned = TRUE, banned_at = datetime('now'), ban_until = NULL
                  WHERE user_hash = ? AND (is_banned = FALSE
-                       OR (ban_until IS NOT NULL AND ban_until <= datetime('now')))",
+                       OR ban_until IS NOT NULL)",
                 [user_hash],
             )
             .await?;

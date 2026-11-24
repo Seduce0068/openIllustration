@@ -786,6 +786,27 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第97ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: 期間付きBAN→無期限昇格のCAS漏れ（監査欠落）を修正+
+  昇格/同一再送スキップ回帰、verified_claims経路の自己申告必須チェックを
+  trusted_mode限定へ緩和+user_hashでverified_ageを優先、
+  restore_db safety copyのfsync、mod_report定数共有、
+  chrono workspace default-features=false（wasmからiana-time-zone除去）。
+  R4指摘2件（無期限再送回帰、trusted_mode限定のコメント）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  clippy/wasm green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、JXL成功側オラクル、セッション復元の進捗/失敗通知、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  ui_error実ブラウザオラクル、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker、systemd watchdog/health復旧+プロセス硬化、
+  OnFailure通知の失敗元unit表示、署名検証自動ゲート化、CI checksumピン留め、
+  sanitizeForLog回帰オラクル、trunkアーカイブ削除分岐テスト、
+  孤立IPFSピン再スキャン、DB_WRITE_LOCKS poison回収、定数時間比較、
+  doc-numbers focused/空白呼び出し/総数表記、REVIEW_REPORT更新停止、
+  クライアントtimeout設定化、MSRV1.88実証、TASK_INVENTORY historical化、
+  E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第96ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: 通報フォームでCID/理由が両方空のとき両フィールドへ
   aria-invalid+統合文言を告知（再Submit強制を解消）、本文再取得中は
