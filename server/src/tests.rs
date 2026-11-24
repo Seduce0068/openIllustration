@@ -13788,6 +13788,53 @@ async fn test_unban_restores_user_with_audit() {
         revoked_at >= before_epoch,
         "フォールバック INSERT は UNBAN 時刻以降の epoch を保持すること"
     );
+
+    // 再送冪等性: 同一 UNBAN をもう一度送っても 200、監査は1行のまま、
+    // revoked_subs の閾値は前進しない（再認証済みの有効セッションを守る）。
+    assert_eq!(
+        send_mod_action(
+            &app,
+            "/mod/operators/target/unban",
+            "operator",
+            json!({"reason": "appeal accepted"}),
+        )
+        .await,
+        StatusCode::OK
+    );
+    let audit_count: i64 = db
+        .query(
+            "SELECT COUNT(*) FROM governance_audit_log WHERE action = 'UNBAN' AND target = 'target'",
+            (),
+        )
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(
+        audit_count, 1,
+        "replayed UNBAN must not duplicate the audit row"
+    );
+    let current_epoch: i64 = db
+        .query(
+            "SELECT revoked_at FROM revoked_subs WHERE sub = 'target'",
+            (),
+        )
+        .await
+        .unwrap()
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get(0)
+        .unwrap();
+    assert_eq!(
+        current_epoch, revoked_at,
+        "replayed UNBAN must not advance the revocation threshold"
+    );
 }
 
 /// UNBAN は BAN 由来の revoked_subs 閾値を削除せず、sub epoch を現在時刻へ進める。

@@ -45,7 +45,7 @@ MAILTO=__SET_ME__
 # root crontab にも MAILTO=<実宛先> を明示すること（cron の MAILTO は crontab 単位で、
 # /etc/cron.d 側の指定は root ジョブへは適用されない）。
 # root crontab 形式（/etc/cron.d 検証対象外、ユーザ欄なし）
-# cron-d-example 17 3 * * * /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /bin/bash -c '/usr/bin/systemctl stop openillustration.service && { /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh; rc=$?; } || rc=$?; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}'
+# cron-d-example 17 3 * * * /usr/bin/flock -n /var/backups/openillustration/.backup.lock /usr/bin/timeout 1800 /bin/bash -c '/usr/bin/systemctl stop openillustration.service; rc=$?; if ((rc == 0)); then /usr/bin/runuser -u openillustration -- /opt/openIllustration/scripts/backup-cron-wrapper.sh || rc=$?; fi; /usr/bin/systemctl start openillustration.service || rc=$?; exit ${rc:-0}'
 #   （DATABASE_URL / BACKUP_DIR 等は backup.env 側へ集約して渡す。wrapper の allowlist
 #     に DATABASE_URL / DATABASE_TOKEN が含まれるため env ファイル経由で伝播する。
 #     start は backup 成否にかかわらず実行する。）

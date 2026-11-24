@@ -21,6 +21,11 @@ const SMOKE_HASHES = ['', '#dashboard', '#ledger'];
 const isAllowed = (text: string): boolean =>
   ALLOWED_MESSAGES.some(pattern => pattern.test(text));
 
+// ブラウザ由来の文字列は信頼できない。改行/制御文字を除き、長さも制限して
+// CI ログのワークフローコマンド偽装とアーカイブ肥大を防ぐ（本文は残さない）。
+const sanitizeForLog = (text: string): string =>
+  text.replace(/[\r\n\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, ' ').slice(0, 200);
+
 async function waitForServer(url: string): Promise<void> {
   const deadline = Date.now() + 30_000;
   for (;;) {
@@ -71,11 +76,11 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
       page.on('console', message => {
         if (message.type() !== 'error') return;
         const text = message.text();
-        if (!isAllowed(text)) offenders.push(`${name} console.error: ${text}`);
+        if (!isAllowed(text)) offenders.push(`${name} console.error: ${sanitizeForLog(text)}`);
       });
       page.on('pageerror', error => {
         const text = error.message;
-        if (!isAllowed(text)) offenders.push(`${name} pageerror: ${text}`);
+        if (!isAllowed(text)) offenders.push(`${name} pageerror: ${sanitizeForLog(text)}`);
       });
       for (const hash of SMOKE_HASHES) {
         await page.goto(`${baseURL}/${hash}`, {

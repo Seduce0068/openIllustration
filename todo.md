@@ -786,6 +786,24 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第90ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: UNBAN再送を完全冪等化（users UPDATE 0行で閾値前進・監査を
+  スキップ、再認証済み有効セッションを保護）+回帰テスト、
+  cron例のsystemctl stop失敗をrc反映、ブラウザエラー本文のサニタイズ
+  （改行/制御文字/C1/U+2028/2029除去+200文字制限）。
+  R4指摘2件（UNBAN冪等回帰、サニタイズ拡張）も修正。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  tsc green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、
+  通信失敗テレメトリ、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker/オフライン、systemd watchdog/health復旧、
+  OnFailure通知の失敗元unit表示、署名検証自動ゲート化、CI checksumピン留め、
+  署名公開失敗回帰、GPG署名者固定、doctor backup設定診断、バックアップ鮮度timer、
+  公開集計generated_atのtx内采番、孤児IPFSピン再スキャン、HD分岐rows drop、
+  purge poison格下げ、error_lang仕様更新、暦日検証、MSRV1.88実証、
+  TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第89ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: バックアップ鮮度チェックが04:30実行+1445分判定で
   正常運用でも毎日誤アラートになる問題（cron例を窓内03:55へ、Runbookに

@@ -5665,6 +5665,13 @@ pub async fn unban_user(
     // 旧 JWT を失効のままにする。back-channel logout 由来の閾値も同じ行で保持され、
     // MAX により後退させない。refresh は revoked_subs の存在を理由に拒否され続け、
     // 再認証が新しい iat で閾値を上書きしたときだけセッションが復活する（再ログイン必須）。
+    // 既に UNBAN 済み（users UPDATE が 0 行）なら完全な冪等成功とする。
+    // 閾値を前進させると再認証済みの有効セッション（iat > 旧閾値）が再送で
+    // 失効するため、users 更新・監査・閾値のすべてを変更しない。
+    if unbanned == 0 {
+        tx.commit().await?;
+        return Ok(Json(true));
+    }
     // DB を正本として users 更新と同じ tx で確定する。
     let epoch = chrono::Utc::now().timestamp();
     let updated = tx
@@ -5683,10 +5690,7 @@ pub async fn unban_user(
         )
         .await?;
     }
-    // 既に UNBAN 済み（0 行）なら再送とみなし、監査行の重複を避ける。
-    if unbanned > 0 {
-        record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
-    }
+    record_governance_action(&tx, "UNBAN", user_hash, &claims.sub, reason, None).await?;
     tx.commit()
         .await
         .map_err(|e| AppError::Internal(format!("Transaction commit failed: {}", e)))?;
