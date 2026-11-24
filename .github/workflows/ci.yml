@@ -64,6 +64,8 @@ jobs:
         # dev-console feature 配下（初期化・EXPORT_RESULT）もコンパイル/テストして未検証経路を残さない。
         cargo clippy -p client --all-targets --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         cargo test -p client --all-features --quiet
+        # wasm が実際に使う checksum-only 構成も別途検証する（feature ドリフト防止）。
+        cargo test -p common --no-default-features --features checksum --quiet
         # wasm 専用 cfg 分岐（format_stats_generated_at / public_stats_is_stale 等）も lint 対象にする。
         cargo clippy -p client --target wasm32-unknown-unknown --all-features -- -D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks
         # シークレットスキャン（pre-commit 主軸・CI は最終ゲート）。

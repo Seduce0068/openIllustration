@@ -786,6 +786,27 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第94ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: E2E成功時にartifact_dirが存在しないクリーン環境で
+  prune_failure_archivesのfindが失敗しCIが赤になる問題（不在ガード追加、
+  ディレクトリ不在/8世代両方を手動検証）。他: 通報理由textareaの固定lang削除
+  （自由入力は言語確定不可・投票一覧側と契約統一）、未使用feature除去
+  （reqwest stream / web-sys UrlSearchParams）、common checksum-onlyテストをCIへ、
+  PWAアイコン実在・globalSetup英語文言オラクル追加。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、wasm/tsc green、E2E_CLIENT_PORT=18123で実施）。
+  npm audit一時障害は再試行で解消。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、セッション復元の進捗/失敗通知+オプトインマーカー仕様、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  real-api refresh往復、UNPIN再送回帰、SameSite検討、PWA Service Worker、
+  systemd watchdog/health復旧、OnFailure通知の失敗元unit表示、署名検証自動ゲート化、
+  CI checksumピン留め、cargo-deny advisories lint、孤立IPFSピン再スキャン、
+  DB_WRITE_LOCKS poison回収、doc-numbers focused/空白呼び出し/総数表記、
+  AUDIT-04/MOD-09テスト名反映、cron allowlist全キー回帰、REVIEW_REPORT更新停止、
+  クライアントtimeout設定化、鮮度警告の更新導線、履歴API失敗警告のdashboard反映、
+  MSRV1.88実証、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第93ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: redact_urlのset_username/set_password失敗時に文字列
   フォールバックへ倒しuserinfo残留を防止、instance.lock片付け失敗をwarn化、

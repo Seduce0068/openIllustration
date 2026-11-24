@@ -5160,7 +5160,6 @@ where
                     </label>
                     <textarea
                         id="report-reason"
-                        lang="en"
                         aria-label="REASON"
                         aria-required="true"
                         aria-invalid=move || if report_reason_invalid.get() { "true" } else { "false" }

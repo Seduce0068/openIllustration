@@ -27,7 +27,7 @@ libsql = "0.10"
 # ADR-0013 P4: default-features=false で native-tls 系を外し rustls へ統一する。
 # reqwest 0.13 の rustls feature 名は `rustls`（0.11/0.12 の `rustls-tls` ではない）。
 # 既存の charset / http2 / system-proxy は従来の default features から維持する。
-reqwest = { workspace = true, default-features = false, features = ["rustls", "charset", "http2", "system-proxy", "json", "multipart", "stream", "form"] }
+reqwest = { workspace = true, default-features = false, features = ["rustls", "charset", "http2", "system-proxy", "json", "multipart", "form"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 rsa = { workspace = true, features = ["pkcs1v15"] }

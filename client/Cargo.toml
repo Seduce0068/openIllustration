@@ -30,7 +30,7 @@ gloo-utils = "0.3"
 futures = "0.3"
 # client/src が直接参照する web-sys 型をすべて明示する（推移依存の feature
 # unification に依存しない）。Console は console::log_1 を使う dev-console 用。
-web-sys = { version = "0.3", features = ["Window", "Document", "EventTarget", "Storage", "HtmlInputElement", "HtmlAnchorElement", "HtmlElement", "File", "FileList", "FormData", "Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData", "History", "Location", "Url", "UrlSearchParams", "Event", "KeyboardEvent", "MouseEvent", "console"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "EventTarget", "Storage", "HtmlInputElement", "HtmlAnchorElement", "HtmlElement", "File", "FileList", "FormData", "Blob", "BlobPropertyBag", "CanvasRenderingContext2d", "HtmlCanvasElement", "ImageData", "History", "Location", "Url", "Event", "KeyboardEvent", "MouseEvent", "console"] }
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 jxl-oxide = "0.12"

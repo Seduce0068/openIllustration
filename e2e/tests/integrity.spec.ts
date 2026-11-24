@@ -653,7 +653,8 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await expect(prefilledCid).toHaveAttribute('lang', 'en');
     await expect(prefilledCid).toHaveAttribute('aria-label', 'TARGET CID');
     const reasonField = page.locator('textarea[placeholder="REASON"]');
-    await expect(reasonField).toHaveAttribute('lang', 'en');
+    // 自由入力欄はユーザー言語に依存するため固定 lang を付けない（投票一覧側と同契約）。
+    await expect(reasonField).not.toHaveAttribute('lang');
     await expect(reasonField).toHaveAttribute('aria-label', 'REASON');
     // R2-LANG: Moderation の代表的英文ノードへ lang="en" を付与する（新規 test なし）。
     for (const heading of ['PUBLIC STATS', 'Submit Report', 'Jury Voting Queue']) {

@@ -647,6 +647,9 @@ fi
 # ADR-0013 P2: 失敗アーカイブは新しい順に7世代だけ保持する。
 # 成功パスで古い世代を削除し、機微情報の残留とディスク枯渇を防ぐ。
 prune_failure_archives() {
+	# 失敗アーカイブが一度も作られていない通常成功パス（クリーンな CI/ローカル）では
+	# artifact_dir 自体が存在しない。find の失敗を ::error:: にしないため no-op にする。
+	[[ -d "$artifact_dir" ]] || return 0
 	local kept=0
 	local entry
 	local list_file

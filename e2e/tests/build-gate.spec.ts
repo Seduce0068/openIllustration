@@ -117,6 +117,12 @@ test.describe('Build gate (BG-01)', () => {
     expect(manifest.start_url).toBe('/');
     expect(manifest.display).toBe('standalone');
     expect(Array.isArray(manifest.icons) && manifest.icons.length > 0).toBe(true);
+    // manifest が参照する各アイコンがクライアントルートに実在することを固定する
+    // （data-trunk copy-file 指定漏れによる参照切れをゲートで検出）。
+    for (const icon of manifest.icons) {
+      const src = String(icon.src).replace(/^\//, '');
+      expect(fs.existsSync(path.join(clientRoot, src)), `missing PWA icon: ${src}`).toBe(true);
+    }
     expect(fs.existsSync(path.join(clientRoot, 'favicon.svg'))).toBe(true);
     const html = fs.readFileSync(path.join(clientRoot, 'index.html'), 'utf8');
     expect(html).toContain('rel="manifest"');
@@ -170,6 +176,8 @@ test.describe('Build gate (BG-01)', () => {
     expect(setupText).toContain('message.type() !== \'error\'');
     // 既存の履歴警告は許可リストへ（fail-closed オラクル economy.spec.ts と同じ文言）。
     expect(setupText).toContain('履歴の更新に失敗しました。');
+    // 許可リストは日本語/英語の2文言。片方の削除も検出する。
+    expect(setupText).toContain('history update failed; view unchanged');
     expect(setupText).toContain('offenders.length > 0');
   });
 
