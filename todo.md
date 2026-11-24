@@ -786,6 +786,25 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第89ラウンド（review/discovery）: 全7担当完了。
+  R6 でhigh1件を是正: バックアップ鮮度チェックが04:30実行+1445分判定で
+  正常運用でも毎日誤アラートになる問題（cron例を窓内03:55へ、Runbookに
+  早すぎる時刻の見逃し注意）。他: ADR-0013 tags→implemented、
+  .amazonq/rules/dev.mdを現行AGENTS.md規約へ整合、backup unit/windowへ
+  network-online依存、fetch timeoutタイマーをclearTimeoutで解除。
+  R4指摘2件（Runbookの04:30根拠が数学的に逆→修正、rules残存文言は
+  否定形で規約整合のため記録のみ）も対応。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  markdownlint37ファイル、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面拡張+
+  color-contrast是正、globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、
+  通信失敗テレメトリ、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker/オフライン、systemd watchdog/health復旧、
+  OnFailure通知の失敗元unit表示、CI checksumピン留め、署名公開失敗回帰、
+  GPG署名者固定、doctor backup設定診断、バックアップ鮮度timer、
+  公開集計generated_atのtx内采番、孤児IPFSピン再スキャン、HD分岐rows drop、
+  MSRV1.88実証、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第88ラウンド（review/discovery）: 全7担当完了。高は0件。
   R6 で以下を是正: E2E失敗アーカイブpruneのNUL/cut非互換を修正
   （${entry#* }方式+find/sort双方を一時ファイル経由fail-closed、実8→7世代を検証）、

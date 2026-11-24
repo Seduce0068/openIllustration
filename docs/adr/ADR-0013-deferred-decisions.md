@@ -2,7 +2,7 @@
 type: Architecture Decision Record
 title: "ADR-0013: 保留事項の推奨方針と実装優先順位"
 description: "これまで設計判断待ちとして記録してきた項目に対し、プロジェクト側で決定可能な推奨方針を与え、実装順を定義する。"
-tags: [adr, decisions, backlog, proposed]
+tags: [adr, decisions, backlog, implemented]
 generated:
   by: dsh
   at: "2026-11-23T14:45:00+09:00"

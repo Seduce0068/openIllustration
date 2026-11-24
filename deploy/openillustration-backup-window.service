@@ -1,4 +1,7 @@
 [Unit]
+# オフサイト転送はネットワークを必要とするため、確立後に実行する。
+After=network-online.target
+Wants=network-online.target
 Description=OpenIllustration database backup window (stop -> backup -> start)
 # バックアップ失敗・アプリ起動失敗の両方でアラート unit を起動する。
 # 配置時に <実宛先へ通知する unit> へ差し替えること（ALERT_CMD は backup-rotate.sh 側）。

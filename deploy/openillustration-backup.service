@@ -1,4 +1,7 @@
 [Unit]
+# オフサイト転送はネットワークを必要とするため、確立後に実行する。
+After=network-online.target
+Wants=network-online.target
 # unit failed 時に通知 unit を起動する（配置時に実宛先へ差し替えること）。
 # ALERT_CMD はバックアップ詳細、OnFailure は unit 結果の通知を担う（Runbook 参照）。
 OnFailure=openillustration-backup-alert.service

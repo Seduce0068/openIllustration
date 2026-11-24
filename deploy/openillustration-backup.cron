@@ -31,7 +31,8 @@ MAILTO=__SET_ME__
 # 以下は /etc/cron.d 用のジョブ例（コメント解除して使用）。root crontab に置く場合は
 # ユーザー欄 root を外す。% を含まないため cron のエスケープは不要。
 # /usr/local/bin/openillustration-alert は ALERT_CMD 実行ファイルの例（配置先へ差し替える）。
-# 30 4 * * * root [ -z "$(find /var/backups/openillustration -maxdepth 1 -name .last-success -mmin -1445 -print -quit)" ] && /usr/local/bin/openillustration-alert "openIllustration backup stale: no successful generation within the expected window"
+# cron-d-example: 鮮度チェック例（窓 03:17+300s の内側 03:55 に実行する）。
+# 55 3 * * * root [ -z "$(find /var/backups/openillustration -maxdepth 1 -name .last-success -mmin -1445 -print -quit)" ] && /usr/local/bin/openillustration-alert "openIllustration backup stale: no successful generation within the expected window"
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
 # 停止→backup→起動のオーケストレーションが必須。この cron ジョブは openillustration
 # ユーザーで backup-cron-wrapper.sh のみを実行し、systemctl の stop/start は行わない

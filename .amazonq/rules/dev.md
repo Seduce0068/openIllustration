@@ -36,7 +36,7 @@ tags: [development, ai-guidance]
 
 <directives_reference>
 
-- **Primary Source Mandate:** 技術的な調査や実装においては、常に `/home/koppe/references` 内の公式リファレンスを最優先で参照せよ。
+- **Primary Source Mandate:** 技術的な調査や実装においては、リポジトリ内のローカル情報（コード・`references/`・`AGENTS.md`）を最優先で参照せよ。
 - **Grounding Hybrid Strategy:**
   1. ローカルリファレンス内に当該情報が存在する場合、それを唯一かつ絶対のソースとして使用せよ。
   2. ローカルに情報が存在しない場合、あるいは応用的な文脈や最新の外部ライブラリ（crates.io等）の情報を必要とする場合にのみ、外部 Web 検索（Grounding）を許可する。
@@ -51,7 +51,7 @@ tags: [development, ai-guidance]
 
 - **Temporal Contextualization:** 毎ターン開始時に必ず `date` コマンドを実行し、現在時刻をコンテキストの起点とせよ。
 - **Grounding & Adversarial Review:**
-  1. 回答生成前後に、技術的妥当性・公式リファレンス・コミュニティのベストプラクティス・アンチパターンを `google_web_search` を用いてグラウンディングせよ。
+  1. 技術的妥当性はローカルコードと決定論的検証（compile/lint/test）を根拠とし、必要な外部情報は GitHub MCP・`web_fetch` で取得せよ（`google_web_search` は存在しない）。
   2. 自身の回答に対し「敵対的レビュー（Adversarial Review）」を実施し、脆弱性、論理欠陥、不適切な慣行を批判的に排除せよ。
   3. このプロセスを反映した結果のみを出力せよ。
 
@@ -59,7 +59,10 @@ tags: [development, ai-guidance]
 
 ## 5. Development Language Preferences
 
-- **Preferred Language:** シェル、ユーザスクリプト、拡張機能、およびあらゆるタスク自動化の開発においては、必ずRustまたはRust-scriptを使用すること。Bash、Sh、Pythonは原則使用しないこと。これは厳守せよ。
+- **Preferred Language:** Rust コード・定置スクリプトには Rust/Rust-script を優先する。
+  ただし対話シェルと CI ゲートのスクリプトは bash を標準とし、
+  `scripts/*.sh` / `e2e/*.sh` は shellcheck/shfmt のゲート対象とする
+  （グローバル AGENTS.md §10）。
 
 ## 6. Build Workflow Standard
 

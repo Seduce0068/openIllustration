@@ -601,20 +601,23 @@ async fn join_refresh() -> RefreshOutcome {
 const CLIENT_FETCH_TIMEOUT_MS: i32 = 30_000;
 
 /// 指定ミリ秒後に解決するタイマー future（JsFuture 経由、外部 timer crate 不使用）。
-fn fetch_timeout_future() -> wasm_bindgen_futures::JsFuture {
+fn fetch_timeout_future() -> (wasm_bindgen_futures::JsFuture, Option<i32>) {
+    let mut handle: Option<i32> = None;
     let promise = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(window) = web_sys::window() {
             let callback = Closure::<dyn FnMut()>::new(move || {
                 let _ = resolve.call0(&wasm_bindgen::JsValue::NULL);
             });
-            let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(
-                callback.as_ref().unchecked_ref(),
-                CLIENT_FETCH_TIMEOUT_MS,
-            );
+            handle = window
+                .set_timeout_with_callback_and_timeout_and_arguments_0(
+                    callback.as_ref().unchecked_ref(),
+                    CLIENT_FETCH_TIMEOUT_MS,
+                )
+                .ok();
             callback.into_js_value();
         }
     });
-    wasm_bindgen_futures::JsFuture::from(promise)
+    (wasm_bindgen_futures::JsFuture::from(promise), handle)
 }
 
 /// fetch をタイムアウトで遮断する。タイムアウト時は Err を返し、
@@ -622,8 +625,9 @@ fn fetch_timeout_future() -> wasm_bindgen_futures::JsFuture {
 async fn fetch_with_timeout(request: Request) -> Result<Response, gloo_net::Error> {
     use futures::future::{Either, select};
     let send = Box::pin(request.send());
-    let timeout = Box::pin(fetch_timeout_future());
-    match select(send, timeout).await {
+    let (timeout_future, timeout_handle) = fetch_timeout_future();
+    let timeout = Box::pin(timeout_future);
+    let result = match select(send, timeout).await {
         Either::Left((result, _)) => result,
         Either::Right((_, send)) => {
             drop(send);
@@ -632,7 +636,12 @@ async fn fetch_with_timeout(request: Request) -> Result<Response, gloo_net::Erro
                 js_sys::Error::new("network timeout"),
             )))
         }
+    };
+    // 応答が先に返ってもブラウザ側のタイマーは残るため、必ず解除する。
+    if let (Some(window), Some(handle)) = (web_sys::window(), timeout_handle) {
+        window.clear_timeout_with_handle(handle);
     }
+    result
 }
 
 /// 共通の再試行ループ。`make` は試行ごとに新規 `Request` を組み立てる。
