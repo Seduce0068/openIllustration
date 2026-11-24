@@ -1273,7 +1273,7 @@ CI では `chromium,firefox,webkit` の3プロジェクトが必須で、フォ�
 自動起動する（モック認証 `ALLOW_MOCK_AUTH=1`、ローカルでは開発用の
 固定 JWT シークレット。`E2E_JWT_SECRET` で上書きできる）。
 `channel: chrome` を使うため Google Chrome・クライアントビルド用の
-trunk・Node 22 以上が必要である。trunk は CI と同じ
+trunk・Node 22.12 以上が必要である。trunk は CI と同じ
 `cargo install trunk --version 0.21.14 --locked` を推奨する。
 
 ローカルでは既存プロセスと `server/local.db` を再利用するため、
@@ -2093,7 +2093,7 @@ Runbookの手動確認手順を継続して併用する。同じトークン契�
   `エクスポート中` へ切替える。`export.spec.ts` の既存ケース内で revoke 予約遅延の観測と
   aria-label の idle → busy → idle 遷移を検証する。
 - **CI E2E ゲート**: `README.md` のテスト手順へ `bash e2e/ci-e2e.sh` と前提
-  （本番相当 env・trunk v0.21.14・Google Chrome・Node 22 以上）を追記し、
+  （本番相当 env・trunk v0.21.14・Google Chrome・Node 22.12 以上）を追記し、
   `npm test` は開発用であることを明記する。
 - **投票キュー本文導線**: `Report.target_cid` から `/?cid=<target_cid>#dashboard` へ
   ディープリンク（`data-testid="report-target-link"`）を張り、投票前に本文と監査を確認する。

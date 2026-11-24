@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 script="${repo_root}/scripts/backup-rotate.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-# expect_* 呼び出し件数（実数）: expect_failure 31 件 / expect_success 16 件（計 47 件）。
+# expect_* 呼び出し件数（実数）: expect_failure 35 件 / expect_success 16 件（計 51 件）。
 # doc-numbers の空白許容 grep がケース8（実 gpg）も計上する。
 # 件数を扱う docs は担当外のため、ケースを増減したらこのコメントを実数へ更新すること。
 
@@ -122,6 +122,20 @@ loose_dir="${work}/backups-loose"
 mkdir -p "$loose_dir"
 chmod 755 "$loose_dir"
 expect_failure "loose (0755) backup dir rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$loose_dir" "$script"
+
+echo "=== BACKUP_PREFIX のパス脱出 fail-closed ==="
+escaping_prefix_dir="${work}/backups-prefix-escape"
+mkdir -p "$escaping_prefix_dir"
+expect_failure "path-escaping BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='../escape' "$script"
+expect_failure "empty BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='' "$script"
+expect_failure "glob BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='a*' "$script"
+expect_failure "slash BACKUP_PREFIX rejected" env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$escaping_prefix_dir" BACKUP_PREFIX='a/b' "$script"
+if compgen -G "${escaping_prefix_dir}/*" >/dev/null; then
+	echo "FAIL artifact written with escaping BACKUP_PREFIX"
+	failures=$((failures + 1))
+else
+	echo "PASS escaping BACKUP_PREFIX rejected without artifacts"
+fi
 if compgen -G "${loose_dir}/openillustration-*" >/dev/null; then
 	echo "FAIL artifact written to loosely-permissioned directory"
 	failures=$((failures + 1))
@@ -406,6 +420,16 @@ if compgen -G "${work}/backups/.openillustration-rotate.*" >/dev/null; then
 	failures=$((failures + 1))
 else
 	echo "PASS rotation temp file cleaned up"
+fi
+
+echo "=== SIGINT/SIGTERM が EXIT trap へ変換されることの静的検証 ==="
+# timeout 1800 / TimeoutStartSec=1800 の強制終了で平文 tmp が残らないよう、
+# INT/TERM を exit へ変換して on_failure を通す契約を固定する。
+if grep -q 'trap "exit 130" INT' "$script" && grep -q 'trap "exit 143" TERM' "$script"; then
+	echo "PASS INT/TERM converted to exit (EXIT trap cleanup)"
+else
+	echo "FAIL INT/TERM to exit trap missing"
+	failures=$((failures + 1))
 fi
 
 echo "=== 失敗時の一時ディレクトリ・平文 DB の後片付け ==="

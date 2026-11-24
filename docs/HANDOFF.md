@@ -150,10 +150,13 @@ CI と同一の E2E ゲートは `bash e2e/ci-e2e.sh` でローカル再現で�
 解釈で失敗するため、スクリプト内で `unset NO_COLOR` している。CI ゲート（`e2e/ci-e2e.sh`）では 8080 が他プロセスに占拠されても動くよう
 `E2E_CLIENT_PORT=18080` を export する。ローカル `npm test` の既定は 8080。
 
-E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22 以上が必要。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
-再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が `MIN_NODE_MAJOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。`MAX_NODE_MAJOR` /
-CI では `MAX_CHROME_MAJOR=140` を既定適用し、上限超過時は fail-closed で失敗する
-（`MAX_NODE_MAJOR` は警告のみ）。失敗時は `e2e/test-results` と `e2e/playwright-report` を
+E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22.12 以上が必要
+（engine-strict では 22.13 以上推奨）。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
+再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が
+`MIN_NODE_MAJOR` / `MIN_NODE_MINOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。
+CI では `MAX_CHROME_MAJOR=140` を既定適用し、上限超過時は fail-closed で失敗する。
+`MAX_NODE_MAJOR` は上限超過で警告のみである。失敗時は `e2e/test-results` と
+`e2e/playwright-report` を
 `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
 クライアントの待受ポートは既定 8080。8080 が他プロセス
 （例: code-server）に使われている場合は `E2E_CLIENT_PORT` で変更する。
@@ -292,7 +295,7 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   [BACKUP_RESTORE_RUNBOOK.md](BACKUP_RESTORE_RUNBOOK.md)。
 - `scripts/backup-rotate.sh`: バックアップ取得・検証・ローテーション（cron 等からの定期実行用）。`BACKUP_GPG_RECIPIENT` 設定時は GPG 暗号化し平文を削除。
   `OFFSITE_COPY_CMD` + `OFFSITE_DEST` でオフサイト保存（コピーコマンドのパスと宛先を指定）。`ALERT_CMD` で失敗通知（メッセージ1引数の実行ファイル）。
-- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 31件＋`expect_success` 16件、計47件の
+- `scripts/test-backup-rotate.sh`: 上記の設定分岐（`expect_failure` 35件＋`expect_success` 16件、計51件の
   `expect_*` 呼び出し）を外部サービスなしで検証する回帰テスト。上限 RETENTION_DAYS=20000 での
   prune 境界テストを含む。`AUDIT_EXPECT_ROOT` 不一致の fail-closed オラクルも含む。
 - `deploy/openillustration-backup.{service,timer,cron}`: systemd / cron の設定例。
