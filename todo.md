@@ -786,6 +786,25 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第95ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: tags入力の検証エラー即時解除漏れ、upload送信ボタンの
+  busy時lang矛盾（表示文言連動化）、redact_url fileスキーム回帰、
+  migration SQL回避規約の明文化、AXE-01仕様追記、globalSetupのレディー
+  シグナル待ち（固定sleep撤廃）、backup-windowのAPP_UNIT固定
+  （backup.envから上書き不可・cron allowlistと信頼境界統一）。
+  R4指摘1件（100ms settle残存）も削除。
+  全ゲート green（E2E69/check23/doctor54/migrations14/tests156、doctor 0 problem(s)、
+  markdownlint/wasm/tsc green、E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、JXL成功側オラクル、セッション復元の進捗/失敗通知、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  real-api refresh往復、UNPIN再送回帰、SameSite検討、PWA Service Worker、
+  systemd watchdog/health復旧、OnFailure通知の失敗元unit表示、署名検証自動ゲート化、
+  CI checksumピン留め、cargo-deny advisories lint、孤立IPFSピン再スキャン、
+  DB_WRITE_LOCKS poison回収、doc-numbers focused/空白呼び出し/総数表記、
+  migration SQLスキャナ拡張、REVIEW_REPORT更新停止、クライアントtimeout設定化、
+  MSRV1.88実証、TASK_INVENTORY historical化、E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第94ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: E2E成功時にartifact_dirが存在しないクリーン環境で
   prune_failure_archivesのfindが失敗しCIが赤になる問題（不在ガード追加、

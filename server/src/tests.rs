@@ -3148,6 +3148,11 @@ fn test_redact_url_removes_credentials_and_query() {
         crate::redact_url("https://exa mple.com/path@item?token=x"),
         "https://exa mple.com/path@item"
     );
+    // file スキームでは set_username/set_password が Err を返すため、
+    // 第93ラウンドの fallback 分岐へ入り、userinfo/query が除去される。
+    let file_redacted = crate::redact_url("file://user:pass@host/path?token=secret");
+    assert!(!file_redacted.contains("user:pass"), "{file_redacted}");
+    assert!(!file_redacted.contains("token=secret"), "{file_redacted}");
 }
 
 /// ALLOWED_ORIGINS の警告用マスクはオリジン値そのものを漏らさない。

@@ -15,11 +15,6 @@ Type=oneshot
 TimeoutStartSec=1800
 WorkingDirectory=/opt/openIllustration
 
-# APP_UNIT は設定可能値。deploy/openillustration.service を同梱しているため、
-# 導入環境の実 unit 名へ合わせる（例: systemctl edit の drop-in で
-# [Service] 節に Environment=APP_UNIT=<実 unit 名> を置いて上書き）。
-Environment=APP_UNIT=openillustration.service
-
 Environment=BACKUP_DIR=/var/backups/openillustration
 Environment=BIN_DIR=/opt/openIllustration/target/release
 Environment=RETENTION_DAYS=30
@@ -36,6 +31,10 @@ Environment=MIN_KEEP=3
 # systemd 版は EnvironmentFile= で読み込む。両者で共通の KEY=VALUE 形式のみを使い、
 # コマンド置換・クォート展開・行継続などのシェル記法は記述しないこと。
 EnvironmentFile=-/etc/openillustration/backup.env
+# APP_UNIT は root 特権で stop/start するため backup.env から受け取らない。
+# cron ラッパーの allowlist と信頼境界を揃えるため、ここで固定する。
+# 実 unit 名へ合わせる場合は systemctl edit の drop-in でこの値を上書きすること。
+Environment=APP_UNIT=openillustration.service
 
 # '+' は User=/Group= を無視して root で実行する systemd の Exec 接頭辞。
 # systemctl によるアプリ unit の停止/起動に sudoers / polkit の権限付与を行わない。

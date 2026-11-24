@@ -87,7 +87,11 @@ export default async function globalSetup(config: FullConfig): Promise<void> {
           waitUntil: 'domcontentloaded',
           timeout: 15_000,
         });
-        await page.waitForTimeout(300);
+        // CSR/WASM の初期化を待つ。固定 sleep ではコールド CI や
+        // firefox/webkit で描画前にリスナを外し、エラー監視が空振りする。
+        await page
+          .getByRole('button', { name: 'CONNECT WITH JPKI' })
+          .waitFor({ state: 'visible', timeout: 15_000 });
       }
       await context.close();
     } finally {

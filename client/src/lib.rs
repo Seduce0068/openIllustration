@@ -4316,7 +4316,11 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         placeholder="FANTASY, SCIFI"
                         aria-invalid=move || if metadata_invalid.get() { "true" } else { "false" }
                         aria-describedby=move || if metadata_invalid.get() { Some("upload-failed") } else { None }
-                        on:input=move |ev| set_tags.set(event_target_value(&ev))
+                        on:input=move |ev| {
+                            set_tags.set(event_target_value(&ev));
+                            set_metadata_invalid.set(false);
+                            set_failed.set(String::new());
+                        }
                         prop:value=tags
                         class="w-full bg-black border border-white/20 p-3 text-sm"
                     />
@@ -4326,7 +4330,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 // 通報・投票・ログインと同じ形式で明示する（属性の有無ではない）。
                 <button data-testid="upload-submit" on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
                     aria-busy=move || if loading.get() { "true" } else { "false" }
-                    lang=move || error_lang("Sign & Submit to Evidence Ledger")
+                    lang=move || error_lang(if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" })
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
                     {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
