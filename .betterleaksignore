@@ -1,0 +1,9 @@
+# False positives verified 2026-11-24: OIDC test fixtures and todo notes use
+# placeholder URLs (user:pass@issuer.example.jp, user:pa?ss@exa) — not real secrets.
+0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2307
+0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2314
+0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2318
+21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19533
+21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19534
+21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19536
+b5249d6c360918a4a02ad15ee0dfac0266d7e9bf:todo.md:generic-credential-uri:575
