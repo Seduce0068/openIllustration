@@ -3619,6 +3619,11 @@ where
                             // チェックサムが一致しても空バイトでは JXL をデコードできない。
                             set_decode_error.set(true);
                             set_verified.set(Some(false));
+                        } else if is_ok {
+                            // 空バイトの Novel も本文なしを正常と誤認させない。
+                            // Illustration と同じく dedicated デコード失敗へ落とす。
+                            set_novel_decode_error.set(true);
+                            set_verified.set(Some(false));
                         }
                     }
                     // バイナリ読取失敗は改ざんではなく取得失敗として固定文言を出す。
@@ -4309,6 +4314,7 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                 // 通報・投票・ログインと同じ形式で明示する（属性の有無ではない）。
                 <button data-testid="upload-submit" on:click=sign_and_upload disabled=move || file.get().is_none() || loading.get()
                     aria-busy=move || if loading.get() { "true" } else { "false" }
+                    lang=move || error_lang("Sign & Submit to Evidence Ledger")
                     class="w-full py-4 bg-white text-black font-bold uppercase tracking-widest hover:bg-gray-200 transition-colors disabled:opacity-50">
                     {move || if loading.get() { "処理中..." } else { "Sign & Submit to Evidence Ledger" }}
                 </button>
@@ -4457,7 +4463,7 @@ fn Ledger(token: String) -> impl IntoView {
                 </table>
                 // 取得が完了する前は空状態を出さない（読み込み中を「記録なし」と誤告知しない）。
                 <Show when=move || !loading.get() && txs.get().is_empty() && ledger_error.get().is_empty() fallback=|| ()>
-                    <div class="p-12 text-center text-gray-400 italic">"NO_TRANSACTIONS_RECORDED"</div>
+                    <div lang="en" class="p-12 text-center text-gray-400 italic">"NO_TRANSACTIONS_RECORDED"</div>
                 </Show>
             </div>
         </div>
@@ -5105,7 +5111,7 @@ where
             <div class="border border-white/10 p-8 space-y-6 h-fit">
                 <h2 lang="en" class="text-xl font-bold tracking-widest uppercase">"Submit Report"</h2>
                 <p class="text-[10px] text-gray-500">
-                    "Reporter: " {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
+                    <span lang="en">"Reporter: "</span> {move || user_hash_stored.get_value()[0..8.min(user_hash_stored.get_value().len())].to_string()}
                 </p>
                 // native required の検証バブルは使わず、aria-required + 独自 role=alert へ統一する。
                 // <form on:submit> で Enter 経路も同じ submit_report 検証へ集約する。

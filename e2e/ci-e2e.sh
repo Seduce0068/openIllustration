@@ -264,14 +264,20 @@ npm --version
 # assert_major_numeric はファイル先頭で定義済み。E2E_LIB_ONLY=1 で
 # 関数だけを source して実挙動を検証できるようにしている（VG-01）。
 
-# 最低バージョンを検証する（ルート package.json の engines.node と整合）。
+# 最低バージョンを検証する（ルート package.json の engines.node >=22.12 と整合）。
 E2E_STAGE="version-check"
 min_node_major="${MIN_NODE_MAJOR:-22}"
+min_node_minor="${MIN_NODE_MINOR:-12}"
 assert_major_numeric "MIN_NODE_MAJOR" "$min_node_major" 1
-node_major="$(node --version | sed -E 's/^v([0-9]+).*/\1/')"
-assert_major_numeric "Node major version" "$node_major"
-if ((10#$node_major < 10#$min_node_major)); then
-	e2e_stage_fail "Node ${node_major} is older than the required major ${min_node_major}."
+assert_major_numeric "MIN_NODE_MINOR" "$min_node_minor" 0
+node_version="$(node --version)"
+if [[ ! "$node_version" =~ ^v([0-9]+)\.([0-9]+)\. ]]; then
+	e2e_stage_fail "Unable to parse Node version: ${node_version}"
+fi
+node_major="${BASH_REMATCH[1]}"
+node_minor="${BASH_REMATCH[2]}"
+if ((10#$node_major < 10#$min_node_major || (10#$node_major == 10#$min_node_major && 10#$node_minor < 10#$min_node_minor))); then
+	e2e_stage_fail "Node ${node_version} is older than the required ${min_node_major}.${min_node_minor}."
 fi
 # 上限は互換性未検証の可視化のみ（設定時は警告、失敗はしない）。
 max_node_major="${MAX_NODE_MAJOR:-}"

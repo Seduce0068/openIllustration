@@ -23,16 +23,18 @@ MAILTO=__SET_ME__
 # 【バックアップ鮮度監視／ハートビート（ADR-0013 P2）】
 # backup-rotate.sh は全段階成功時に ${BACKUP_DIR}/.last-success へ UTC RFC3339
 # （例: 2026-11-23T18:41:47Z）を公開する。失敗・ハング・重複スキップ時は更新されない。
-# 想定窓は 03:17 + RandomizedDelaySec=300 + 1日 = 24時間05分（1445分）。
-# これを超過しても当日世代が無い（ハートビートが古い／存在しない）場合は
-# ALERT_CMD へ固定文言のみを渡して通知する（値・パスはエコーしない）。
+# 日次バックアップ窓は 03:17 + RandomizedDelaySec=300（完了は遅くとも 03:52 頃）。
+# 鮮度チェックを 03:55 に実行する場合は、当日の成功（経過 3〜38 分）と
+# 前日の成功（経過 1443 分）を分けるため -mmin -120 を用いる。
+# 1445 分のままでは前日成功を「新鮮」と判定し当日未実行を見逃す。
+# 古い／存在しない場合は ALERT_CMD へ固定文言のみを渡す（値・パスはエコーしない）。
 # 実監視基盤へ接続する場合は、ALERT_CMD のラッパーで既存の通知経路へ転送するか、
 # 監視基盤側で .last-success の mtime／RFC3339 内容を直接監視すること。
 # 以下は /etc/cron.d 用のジョブ例（コメント解除して使用）。root crontab に置く場合は
 # ユーザー欄 root を外す。% を含まないため cron のエスケープは不要。
 # /usr/local/bin/openillustration-alert は ALERT_CMD 実行ファイルの例（配置先へ差し替える）。
-# cron-d-example: 鮮度チェック例（窓 03:17+300s の内側 03:55 に実行する）。
-# 55 3 * * * root [ -z "$(find /var/backups/openillustration -maxdepth 1 -name .last-success -mmin -1445 -print -quit)" ] && /usr/local/bin/openillustration-alert "openIllustration backup stale: no successful generation within the expected window"
+# cron-d-example: 鮮度チェック例（03:55 実行、-mmin -120 で当日成功を判定）。
+# 55 3 * * * root [ -z "$(find /var/backups/openillustration -maxdepth 1 -name .last-success -mmin -120 -print -quit)" ] && /usr/local/bin/openillustration-alert "openIllustration backup stale: no successful generation within the expected window"
 # 既定 03:17。backup_db は生存 instance.lock を検出するとバックアップを拒否するため、
 # 停止→backup→起動のオーケストレーションが必須。この cron ジョブは openillustration
 # ユーザーで backup-cron-wrapper.sh のみを実行し、systemctl の stop/start は行わない
