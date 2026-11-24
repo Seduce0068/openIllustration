@@ -73,8 +73,10 @@ fi
 # 未設定時は内部整合性チェックのみ（既存運用を壊さない後方互換）。
 # root 値はエラー文言へエコーしない既存契約を維持する。
 audit_expect_root="${AUDIT_EXPECT_ROOT:-}"
+
 # 非空時は Merkle root の hex 形式のみ受理する。空白のみ・先頭ダッシュ等の
 # 不正値は fail-closed で拒否し、エラーには設定名のみを出して値はエコーしない。
+# EXIT trap 登録後に置き、不正値も ALERT_CMD 経由で通知する。
 if [[ -n "$audit_expect_root" && ! "$audit_expect_root" =~ ^[0-9a-fA-F]{64}$ ]]; then
 	echo "AUDIT_EXPECT_ROOT must be a 64-character hexadecimal Merkle root" >&2
 	exit 1

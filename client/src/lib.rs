@@ -4203,7 +4203,10 @@ fn Upload(user_hash: String, token: String) -> impl IntoView {
                         id="file-upload" />
                     <label for="file-upload"
                         lang="en"
-                        aria-label="SELECT JXL OR MARKDOWN"
+                        aria-label=move || match file.get() {
+                            Some(ref selected) => format!("SELECTED: {}", selected.name()),
+                            None => "SELECT JXL OR MARKDOWN".to_string(),
+                        }
                         role="button"
                         tabindex=move || if loading.get() { -1 } else { 0 }
                         aria-disabled=move || if loading.get() { "true" } else { "false" }

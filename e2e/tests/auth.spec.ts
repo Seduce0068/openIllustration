@@ -35,8 +35,9 @@ test.describe('Authentication Flow (SEC-01, SEC-03)', () => {
 
   test('SEC-03: should reject underage user', async ({ page }) => {
     await page.route('**/auth/verify', async route => {
-      // 送信中の aria-busy / role=status を観測するため、応答を少し保留する。
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // 送信中の aria-busy / role=status を観測するため、応答を確実に保留する。
+      // CI のコールドスタートでは 300ms では描画前に完了して flaky になる。
+      await new Promise(resolve => setTimeout(resolve, 1000));
       await route.fulfill({
         status: 403,
         contentType: 'application/json',

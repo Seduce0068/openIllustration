@@ -36,6 +36,11 @@ test.describe('Content Upload Flow', () => {
       mimeType: 'image/jxl',
       buffer: mockFile,
     });
+    // 選択済みファイル名がアクセシブル名へ反映される（固定名で隠さない）。
+    await expect(page.locator('label[for="file-upload"]')).toHaveAttribute(
+      'aria-label',
+      'SELECTED: test.jxl',
+    );
 
     // 送信中フェーズを観測するため、レスポンスを明示的に解放するまで保留する。
     let releaseUpload: () => void = () => {};

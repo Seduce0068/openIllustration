@@ -786,6 +786,30 @@ P2（品質・保守・プロダクト拡張）:
 
 ## メモ
 
+- 2026-11-24 コンボ第99ラウンド（review/discovery）: 全7担当完了。高は0件。
+  R6 で以下を是正: 第98ラウンドで導入したfile-upload label固定aria-labelの
+  回帰を修正（選択時に"SELECTED: （ファイル名）"をアクセシブル名へ反映+
+  E2Eアサーション）、AUDIT_EXPECT_ROOT形式検証をEXIT trap登録後へ移動し
+  不正形式（非hex）の固定文言拒否・値非エコー回帰、
+  auth.spec.tsのverify遅延300ms→1000msでflaky緩和。
+  途中、変数定義を誤って削除したことでbackup testsが壊れたが即座に修正。
+  R4指摘0件。全ゲート green（E2E69/check23/doctor54/migrations14/tests156、
+  doctor 0 problem(s)、backup expect36/16/52、clippy/wasm green、
+  E2E_CLIENT_PORT=18123で実施）。
+  残存（次ラウンド: retry generationガード、401時の再読み込み抑制、axe他4画面+
+  color-contrast是正、JXL成功側オラクル、セッション復元の進捗/失敗通知、
+  globalSetup認証後ビュー監視、fetchボディ読取タイムアウト、通信失敗テレメトリ、
+  ui_error実ブラウザオラクル、real-api refresh往復、UNPIN再送回帰、SameSite検討、
+  PWA Service Worker、systemd watchdog/health復旧+プロセス硬化、
+  署名監査2表のtx一貫性、OnFailure通知の失敗元unit表示、CI checksumピン留め、
+  sanitizeForLog回帰オラクル、backup_dir symlink拒否テスト、
+  backup_db birthtime非対応FS、verify_order再読込、logout部分失敗、
+  instance.lock stale再取得の片付け、補償unpinのCID共有問題、
+  Playwright/@types/nodeバージョン整合、TOCアンカーのフォーカス移動、
+  doc-numbers focused/空白呼び出し/総数表記、REVIEW_REPORT更新停止、
+  クライアントtimeout設定化、MSRV1.88実証、TASK_INVENTORY historical化、
+  E2E69下限緩和）は記録のみで保留。
+
 - 2026-11-24 コンボ第98ラウンド（review/discovery）: 全7担当完了。
   R6 でhigh1件を是正: sign_audit_exportが連鎖検証せずに署名し、
   第三者検証で拒否されるスナップショットを公開していた問題

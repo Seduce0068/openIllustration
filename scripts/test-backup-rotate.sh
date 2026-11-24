@@ -627,6 +627,16 @@ else
 	failures=$((failures + 1))
 fi
 
+# 不正形式の AUDIT_EXPECT_ROOT（非 hex）は起動前に固定文言で拒否し、値をエコーしない。
+bad_root_output="$(env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$mismatch_dir" AUDIT_EXPECT_ROOT=not-hex "$script" 2>&1 || true)"
+if grep -q 'AUDIT_EXPECT_ROOT must be a 64-character hexadecimal Merkle root' <<<"$bad_root_output" \
+	&& ! grep -q 'not-hex' <<<"$bad_root_output"; then
+	echo "PASS invalid AUDIT_EXPECT_ROOT format rejected without echo"
+else
+	echo "FAIL invalid AUDIT_EXPECT_ROOT format handling: $bad_root_output"
+	failures=$((failures + 1))
+fi
+
 # (b) verify_audit_log 失敗: Runbook の「両方成功しなければ認めない」に従い、
 #     公開前に失敗して成果物を出さず、一時平文を清掃し、ALERT_CMD が通知する。
 mkdir -p "${work}/fail-audit-bin"
