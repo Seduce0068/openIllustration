@@ -1,9 +1,9 @@
-# False positives verified 2026-11-24: OIDC test fixtures and todo notes use
-# placeholder URLs (user:pass@issuer.example.jp, user:pa?ss@exa) — not real secrets.
-0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2307
-0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2314
-0697310363c497fa61cdf8a63f90e5af1db2e549:server/src/tests.rs:generic-credential-uri:2318
-21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19533
-21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19534
-21e13f25d8f65fdb23032c4fba93fe950cff86b3:server/src/tests.rs:generic-credential-uri:19536
-b5249d6c360918a4a02ad15ee0dfac0266d7e9bf:todo.md:generic-credential-uri:575
+# False positives verified 2026-11-24 and fingerprints regenerated 2026-11-27.
+# OIDC test fixtures and todo notes use placeholder URLs — not real secrets.
+2a8cd45c5166511ab2b86450033cb11299f8be7f:server/src/tests.rs:generic-credential-uri:2307
+2a8cd45c5166511ab2b86450033cb11299f8be7f:server/src/tests.rs:generic-credential-uri:2314
+2a8cd45c5166511ab2b86450033cb11299f8be7f:server/src/tests.rs:generic-credential-uri:2318
+fa24772a39b5c9e49bfa52a4fbb2b0a07b3698c9:server/src/tests.rs:generic-credential-uri:19533
+fa24772a39b5c9e49bfa52a4fbb2b0a07b3698c9:server/src/tests.rs:generic-credential-uri:19534
+fa24772a39b5c9e49bfa52a4fbb2b0a07b3698c9:server/src/tests.rs:generic-credential-uri:19536
+bc7da60a31aeb0b035fd706ff17d827bce234fae:todo.md:generic-credential-uri:575
