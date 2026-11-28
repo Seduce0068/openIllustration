@@ -629,8 +629,8 @@ fi
 
 # 不正形式の AUDIT_EXPECT_ROOT（非 hex）は起動前に固定文言で拒否し、値をエコーしない。
 bad_root_output="$(env BACKUP_GPG_RECIPIENT=test BACKUP_DIR="$mismatch_dir" AUDIT_EXPECT_ROOT=not-hex "$script" 2>&1 || true)"
-if grep -q 'AUDIT_EXPECT_ROOT must be a 64-character hexadecimal Merkle root' <<<"$bad_root_output" \
-	&& ! grep -q 'not-hex' <<<"$bad_root_output"; then
+if grep -q 'AUDIT_EXPECT_ROOT must be a 64-character hexadecimal Merkle root' <<<"$bad_root_output" &&
+	! grep -q 'not-hex' <<<"$bad_root_output"; then
 	echo "PASS invalid AUDIT_EXPECT_ROOT format rejected without echo"
 else
 	echo "FAIL invalid AUDIT_EXPECT_ROOT format handling: $bad_root_output"
