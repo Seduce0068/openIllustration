@@ -45,13 +45,15 @@ status: current
   （仕様変更で事前合意が必要）。今回は未実施。詳細は
   [TASK_INVENTORY.md](docs/TASK_INVENTORY.md) §5 の `[未検証]` 項目を参照。
 
-- [ ] **鍵ローテーション手順を systemd 配布の秘密注入経路へ結線** — 根拠
-  `docs/KEY_ROTATION_RUNBOOK.md:78,82,96-97` / `deploy/openillustration.service:25-30` / d3-OPS / 高。
-  Runbook の `export` は対話シェル限定で systemd サービス環境へ反映されない。`server.env`（0600）更新・
-  `systemctl restart`・`doctor --strict`・health 確認を各段階へ追記し、export 例は開発用と明記。
-- [ ] **IPFS チェックサム不一致の応答コード記述を 401→502 へ是正** — 根拠 `docs/DETAILED_DESIGN.md:76` /
-  `server/src/lib.rs:974-975,1010-1013` / d2-FG / 中。実装は `AppError::BadGateway`（502）で、
-  todo.md も変更済み。設計書だけ旧契約のまま。WARN 記録・fail-closed 契約も併記。
+- [x] **鍵ローテーション手順を systemd 配布の秘密注入経路へ結線** — 2026-11-28 対応済み。
+  根拠 `docs/KEY_ROTATION_RUNBOOK.md:78,82,96-97` / `deploy/openillustration.service:25-30` / d3-OPS / 高。
+  `server.env`（0600）更新 → doctor --strict（開発フラグ明示 unset） → `systemctl restart` →
+  `/health` / `/ready` 確認を各段階へ追記。旧 kid 削除後は旧トークン拒否を明記。export 例は開発用と明記。
+  検証: markdownlint 0 issues / doc-numbers OK / CI run 46139120712 green。
+- [x] **IPFS チェックサム不一致の応答コード記述を 401→502 へ是正** — 2026-11-28 対応済み。
+  根拠 `docs/DETAILED_DESIGN.md:76` / `server/src/lib.rs:974-975,1010-1013` / d2-FG / 中。
+  `AppError::BadGateway`（502・JSON `error` 本文）へ更新。WARN 記録・fail-closed 契約は維持。
+  検証: markdownlint 0 issues / CI run 46139120712 green。
 - [ ] **認証前アクセスの例外集合を単一情報源化** — 根拠 `docs/adr/ADR-0001-mvp-trust-boundaries.md:27` /
   `docs/REQUIREMENTS_SPECIFICATION.md:22` / `docs/DETAILED_DESIGN.md:22-33` / `server/src/lib.rs:3796-3818` /
   d2-FG / 中。ADR は `/policy/age` 不含、要件仕様は4種類「のみ」、実装は callback / backchannel / metrics 等も
@@ -232,14 +234,18 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [ ] **Playwright CI リトライ成功を可視化** — 根拠 `e2e/playwright.config.ts:86` / `scripts/test-doc-numbers.sh:39-46` /
   d1-CI / 中。`retries: 2` で 1〜2 回目失敗が 3 回目成功なら green になりフレーキーが隠れる。
   `::warning::` アノテーションまたはフレーキー率閾値ゲートを追加（方針判断を含む）。
-- [ ] **AUDIT_EXPECT_ROOT の形式記述を64桁 hex へ統一** — 根拠 `docs/DETAILED_DESIGN.md:706-708` /
-  `docs/OPERATIONAL_POLICY.md:639` / `server/src/lib.rs:1709-1717` / d2-FG / 低。実装と ADR-0013 P2 は
-  64桁固定、設計書は任意長 hex と記載。大小文字混在可・前後空白不可も明記。
-- [ ] **設計書の /metrics「8種」を実一覧へ更新** — 根拠 `docs/DETAILED_DESIGN.md:32` / `server/src/lib.rs:601-642,697-702` /
-  d2-FG / 低。実装は counter 12 + gauge 2 の HELP/TYPE 定義。完全一覧は `server/src/lib.rs` を参照させる。
-- [ ] **verify_backup のトークン契約を設計書から是正** — 根拠 `docs/DETAILED_DESIGN.md:735-738` /
-  `server/src/bin/verify_backup.rs:12-19` / `README.md:192-197` / d2-FG / 低。実契約は DB 非接続・トークン不使用、
-  `--database-token` は拒否のみ。設計書の「sign_audit_export と同じ」を削除。
+- [x] **AUDIT_EXPECT_ROOT の形式記述を64桁 hex へ統一** — 2026-11-28 対応済み。
+  根拠 `docs/DETAILED_DESIGN.md:706-708` / `docs/OPERATIONAL_POLICY.md:639` /
+  `server/src/lib.rs:1709-1717` / d2-FG / 低。64桁固定・大小文字混在可・前後空白不可を明記。
+  検証: doc-numbers OK / CI run 46139120712 green。
+- [x] **設計書の /metrics「8種」を実一覧へ更新** — 2026-11-28 対応済み。
+  根拠 `docs/DETAILED_DESIGN.md:32` / `server/src/lib.rs:601-642,697-702` / d2-FG / 低。
+  固定数を削除し、完全一覧は `server/src/lib.rs` の HELP/TYPE 定義参照へ統一。
+  検証: doc-numbers OK / CI run 46139120712 green。
+- [x] **verify_backup のトークン契約を設計書から是正** — 2026-11-28 対応済み。
+  根拠 `docs/DETAILED_DESIGN.md:735-738` / `server/src/bin/verify_backup.rs:12-19` /
+  `README.md:192-197` / d2-FG / 低。DB 非接続・トークン不使用、`--database-token` は拒否のみへ更新。
+  検証: markdownlint 0 issues / CI run 46139120712 green。
 - [ ] **LOG_FORMAT=json の必須化と Runbook/unit への設定例** — 根拠 `docs/KEY_ROTATION_RUNBOOK.md:129-130` /
   `server/src/lib.rs:1280-1281` / `server/src/bin/doctor.rs:265-271` / `deploy/openillustration.service:25-30` /
   d3-OPS / 中。未設定は人間向け text で、Runbook が前提とする構造化証跡が成立しない。
