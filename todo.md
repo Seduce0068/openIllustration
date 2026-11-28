@@ -56,9 +56,12 @@ status: current
   `docs/REQUIREMENTS_SPECIFICATION.md:22` / `docs/DETAILED_DESIGN.md:22-33` / `server/src/lib.rs:3796-3818` /
   d2-FG / 中。ADR は `/policy/age` 不含、要件仕様は4種類「のみ」、実装は callback / backchannel / metrics 等も
   未認証公開。「のみ」表現と実装の矛盾を裁定し両文書へ反映（方針判断を含む）。
-- [ ] **英文フォーム要素へ `lang="en"` を付与** — 根拠 `client/src/lib.rs:3230-3236,5158-5162,5183-5189` /
-  d3-OPS / 中。`error_lang` 契約は英文要素の要素単位宣言を要求するが、REASON textarea 等は未付与で
-  ルート `lang="ja"` を継承。WCAG 3.1.2 観点。テスト仕様/E2E の a11y アサーションも更新。
+- [ ] **固定英文プレースホルダのフォーム要素へ `lang="en"` を付与** — 根拠
+  `client/src/lib.rs:2922-2946,4275-4323` / `e2e/tests/integrity.spec.ts:653` / d3-OPS / 中。
+  検索2要素（TITLE OR DESCRIPTION / TAG）とアップロード3要素（TITLE / DESCRIPTION / FANTASY, SCIFI）が未付与。
+  周辺 label は lang=en 済み。新規 test を作らず既存 a11y ケース内へアサーション追加（E2E69件維持）。
+  **REASON textarea は対象外**: 自由入力への lang 付与を意図的に拒否した過去決定（`todo.md:966`、
+  `e2e/tests/integrity.spec.ts:657` の否定 assertion）を維持する。TARGET CID input は付与済み。
 - [ ] **E2E 失敗時 `error-context` のログ出力をサニタイズ** — 根拠 `e2e/ci-e2e.sh:599-600` /
   `e2e/global-setup.ts:24-27` / d1-CI / 中。global-setup は sanitizeForLog を通すが、こちらは
   `head -c 20000` で無サニタイズ。フォーム入力の機微値が CI ログへ残る可能性。制御文字除去と長さ制限、
