@@ -29,7 +29,7 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 | GET | `/health` | 不要 | プロセスの簡易応答 |
 | GET | `/ready` | 不要 | readiness。DB接続と停止フラグのみを根拠とし、停止シグナルで503へ切り替わる |
 | GET | `/policy/age` | 不要 | 有効な年齢/地域ポリシー設定値（非秘密）を返す。常時公開。 |
-| GET | `/metrics` | 不要 | Prometheus 形式の軽量カウンタ8種（全リクエスト数・4xx/5xx 応答数・中立化URL件数・finalizer/purge の ticks/processed/lock_busy/failures/last_success_timestamp）。外部クレートなし。 |
+| GET | `/metrics` | 不要 | Prometheus 形式の軽量メトリクスを公開。代表例: 全リクエスト数・4xx/5xx 応答数・中立化URL件数・finalizer/purge の ticks/processed/lock_busy/failures/last_success_timestamp。外部クレートなし。完全な一覧は `server/src/lib.rs` の HELP/TYPE 定義を参照（README と同じ方式）。 |
 | POST | `/metrics/client-events` | 不要 | 中立化URL件数を受信。`{"event":"neutralized_url","count":N}`（`event` は固定値、`count` 既定1・範囲1〜1000、`deny_unknown_fields`、本文1 KiB 境界）。カウンタ加算は N によらず1リクエストにつき1固定。成功204・不正400（いずれも本文なし）。IP/User-Agent/URL は送らず記録もせず、レート制限の対象。 |
 | GET | `/content` | Bearer JWT | `Approved` コンテンツを一覧返す。省略可の `q` / `tag` / `type` / `limit` / `offset` で検索・絞り込み・ページング（既定 `limit=50`、範囲 `1..=100`、`offset=0`）、`favorite_only` で本人のお気に入りへ絞り込み |
 | GET | `/content/:cid` | Bearer JWT | IPFS取得、サイズ・チェックサム確認後に返す |
@@ -73,7 +73,10 @@ JPKI、JPYC、Rust優先の方針は [ADR-0001](adr/ADR-0001-mvp-trust-boundarie
 - リクエスト本文は最大10 MiB。`Content-Length` が上限を超える場合はミドルウェアが Multipart 解析より先に 413 を返す（単体テストと実サーバーで確認）。`Content-Length`
   が無い／虚偽のチャンクド転送は axum の本文制限と Multipart パーサが守り、その場合は 400 になる（多層防御）。IPFS取得応答は `IPFS_TIMEOUT_SECS`（既定15秒）でタイムアウトし、最大10
   MiB（超過は 400）。
-- IPFS 取得時にチェックサム不一致を検出した場合は 401 で拒否し、CID と redact 済みゲートウェイ URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を確認済み。
+- IPFS 取得時にチェックサム不一致を検出した場合は `AppError::BadGateway`（502、本文は
+  JSON `{"error":"Upstream content failed integrity verification"}`）で拒否し、CID と redact 済みゲートウェイ
+  URL のみを WARN ログへ記録する（本文・チェックサム値は出さない）。実サーバーで警告出力を
+  確認済み。
   ゲートウェイは設定順に試し、ネットワークエラー（接続失敗・タイムアウト）に限り `IPFS_MAX_ATTEMPTS`（既定1、最大5）まで同じゲートウェイを再試行する。
   HTTP クライアントは `build_http_client`（`server/src/lib.rs`）で
   `reqwest::redirect::Policy::none()` を設定し、すべてのリダイレクトを追従しない（SSRF 対策）。
@@ -703,9 +706,10 @@ INSERT を同じトランザクションでコミットする。この原子的�
   `network::ipv4_permitted` は per-request 読込のため、受理値外は `None`→`false`（IPv4 不許可）とし、
   起動時警告と doctor 警告の二段構えとする。いずれも設定値は出力せず有無のみを警告する。
 - `audit_expect_root` は本番相当（`ALLOW_MOCK_AUTH` 無効）の `AUDIT_EXPECT_ROOT` を診断する。
-  `backup-rotate.sh` と同じく `lookup` の生値へ `[0-9a-fA-F]+`（hex Merkle root）を適用し
-  （trim しない）、非空で全文字が hex なら警告なし、未設定・空白のみ・前後空白付き・不正 hex
-  なら固定文言の警告1件を計上する。値はエコーしない。
+  `backup-rotate.sh` と同じく `lookup` の生値へ共有の `is_hex_merkle_root` を適用し
+  （trim しない、64 桁固定の hex Merkle root・大小文字混在可・前後空白不可）、
+  64 桁の hex なら警告なし、未設定・空白のみ・前後空白付き・不正 hex なら
+  固定文言の警告1件を計上する。値はエコーしない。64 桁固定は ADR-0013 P2 で決定済み。
   共有の `production_config_errors` は変更せず、`backup-rotate.sh` が未設定時に内部整合性
   チェックのみで動作する既存契約も維持する。既定は警告のみで exit 0、`--strict` のときだけ失敗する。
 
@@ -732,10 +736,12 @@ INSERT を同じトランザクションでコミットする。この原子的�
 
 - 使用形は `verify_backup --input PATH`。`parse_args_from` は argv のみを解釈し、
   環境変数・プロセス引数を読まない。
-- トークン契約は `sign_audit_export` と同じ。`--database-token` が argv に現れた時点で
+- トークン契約: 本ツールは DB へ接続せずトークン自体を使わない。CLI ヘルプも
+  `This tool does not connect to a database; no token is used.` と明記し、`DATABASE_TOKEN`
+  環境変数も読まない。`--database-token` が argv に現れた時点で
   `--database-token is not accepted; set DATABASE_TOKEN in the environment instead`
-  を返し、渡された値はエラーへエコーしない。リモート DB トークンは `DATABASE_TOKEN`
-  環境変数からのみ読む（argv は `ps` 等で公開されるため）。
+  を返し、渡された値はエラーへエコーしない（argv は `ps` 等で公開されるため
+  秘密値を argv で受け付けない共通契約に従う）。
 - `ensure_no_sidecars(path)` は `<path>-wal` / `<path>-shm` / `<path>-journal` を DB オープン
   前に検査し、残っていれば `backup has a <path> sidecar; stop the server before verifying`
   で拒否する（restore_db と同じ fail-closed）。
