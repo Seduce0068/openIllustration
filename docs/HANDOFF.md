@@ -17,11 +17,14 @@ generated:
 - 参照コミット: 作業開始時点は `745810e`。以降の変更は `git log` を参照。
 - 作業ツリー: 作業開始時点は clean。本セッションの CI 修正は `c513b1a` / `ff2a248` として
   コミット・push 済み。`client/dist/` 等の生成物はコミット対象外として扱う。
-- CI 成功例（履歴）: 直近は run 43675475991（2026-11-15T04:08:59Z、headSha `45e751c`;
-  履歴書換後のローカル相当コミットは `dc39776`、tree 同一）。
-  過去の記録は `8fb989c`（run 41579032881）。env ステップ通過の直近成功は前者。
-- 2026-11-24 以降は CI が連続失敗（直近5件は「環境変数（追加）」ステップで停止）。
-  原因の env_vars 内コメント行は修正済みだが再実行前で、後続ゲートは未検証。
+- CI 成功例（現行）: run 46132362920（commit `f2952f8`、2026-11-28、15m44s）。
+  env / fmt / check / test / clippy / 追加ゲート（deny・betterleaks・shell・cron・doctor・
+  バックアップ回帰・E2E chromium/firefox/webkit）すべて success。
+  過去の成功: run 43675475991（2026-11-15、headSha `45e751c`、ローカル相当 `dc39776`）、
+  `8fb989c`（run 41579032881）。
+- 2026-11-24 以降の連続失敗（env_vars コメント行 → wasm clippy → betterleaks 版 → スキャン範囲 →
+  cargo deny 勧告 → shfmt → cron コメント → Chrome 上限 → ブラウザ OS 依存 → firefox フォーカス）
+  はすべて是正済みで、上記 run で green を確認。
 - 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、
   `cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、
   `cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
@@ -141,7 +144,8 @@ KEY=VALUE 4行のみ、`MAX_CHROME_MAJOR=140` は維持）。修正後の2実行
 46114430664）で env → fmt → check → test → clippy はすべて成功し、env_vars 原因は解消した。
 追加ゲートは最初に wasm 向け clippy の `collapsible_if`（`ff2a248` で修正）、次に
 `go install` 由来 betterleaks の `version.Version="dev"` による版チェック失敗が判明し、
-リリース tarball＋`checksums.txt` 経路へ修正済み。最終修正後の CI は未検証（緑と断定しない）。
+リリース tarball＋`checksums.txt` 経路へ修正済み。以降の連鎖失敗も順次是正し、
+run 46132362920（commit `f2952f8`）で全ゲート green を確認済み。
 上記コマンドをローカルで順に実行する代替ゲート自体は有効。参考までに 2026-11-17 の
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した（9件は当時値。現在値は TEST_SPECIFICATION を参照）。
