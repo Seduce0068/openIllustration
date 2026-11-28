@@ -12,36 +12,39 @@ generated:
   at: "2026-11-22T23:15:00+09:00"
 verified:
   by: dsh
-  at: "2026-11-22T23:15:00+09:00"
+  at: "2026-11-28T16:06:31+09:00"
 status: current
 stale_after: "2027-02-15T00:00:00+09:00"
 ---
 
 ## 1. 結論
 
-- `cargo deny check advisories`（cargo-deny 0.20.2）は 10件の勧告で
-  失敗する（初回は 14 件）。内訳は脆弱性 9 件（当時・現在値は TEST_SPECIFICATION の実測を参照）、unmaintained 1 件。
-- 10件は 3 系統に集約できる。
-  - libsql 0.10.0 の TLS / gRPC スタック: 8 件
+- `cargo deny check advisories`（cargo-deny 0.20.2）は 13件の勧告で
+  失敗する（初回は 14 件）。内訳は脆弱性 9 件（当時・現在値は TEST_SPECIFICATION の実測を参照）、
+  unmaintained 4 件。
+- 13件は 4 系統に集約できる。
+  - libsql 0.10.0 の TLS / gRPC スタック: 10 件
   - chrono の unmaintained 情報勧告: 1 件
   - url 2.5.8 の blob: URL スタックオーバーフロー（RUSTSEC-2026-0592）: 1 件
+  - paste 1.0.15 のビルド時マクロ（RUSTSEC-2024-0436、unmaintained）: 1 件
 - RustCrypto 0.13 系（RUSTSEC-2023-0071、RUSTSEC-2026-0387）は
   2026-11-15 の依存更新で解消済み（§3.2、§8）。
 - 未使用の imageproc 経由で入っていた ttf-parser は、依存削除により
   解消済み（§3.3、§8）。
-- `cargo deny check advisories` は既知の 10件を理由付きで ignore して
+- `cargo deny check advisories` は既知の 13件を理由付きで ignore して
   CI に導入済み。新しい勧告は CI を失敗させる（§5）。
 - 本番は `production_database_url_error` のゲートでリモート DSN
   （`libsql://` / `https://` / `http://` / `wss://` / `foo://` 等）を
   固定文言で起動拒否し、`file:` 絶対パスのみ受理する（fail-closed）。
-  libsql 由来の 8 件の受容根拠は、本番がリモート DSN をゲートで禁止する
+  libsql 由来の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する
   点にある（§4.1、§5）。
 - ECDSA は公開鍵検証のみ。RSA は `JWT_RSA_PRIVATE_KEY_PEM` 設定時に
   RS256 本番署名で秘密鍵演算を実行する。受容根拠は「演算なし」ではなく、
   rsa 0.10 の定数時間実装と 2048bit 以上の鍵長要求であり、
   Marvin 攻撃と timing 系勧告は解消済み（§3.2、§4.2）。
 - 本番はリモート DSN をゲートで禁止する。リモート DB を採用する場合は、
-  ゲートの解除と合わせて 3.1 の 8 件の解消を必須とする。
+  ゲートの解除と合わせて 3.1 の 10 件（bincode / rustls-pemfile を
+  含む）の解消を必須とする。
 
 ## 2. 検出条件
 
@@ -55,12 +58,13 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ## 3. 指摘一覧
 
-### 3.1 libsql 0.10.0 の TLS / gRPC スタック（現行 8 件＋解消済み履歴 2 件）
+### 3.1 libsql 0.10.0 の TLS / gRPC スタック（現行 10 件）
 
-- `RUSTSEC-2025-0141`（2026-11-22 解消済み・履歴） bincode 1.3.3（unmaintained）
+- `RUSTSEC-2025-0141`（2026-11-28 ignore 復帰、2026-11-22 の解消判断は誤り） bincode 1.3.3（unmaintained）
   - 経路: `libsql 0.10.0` → `bincode 1.3.3`
   - 修正版: なし（代替候補は wincode / postcard 等）
-  - 評価: 本リポジトリのコードから直接使用しない。
+  - 評価: 本リポジトリのコードから直接使用しない。libsql の remote 接続時にのみ
+    到達し、本番はリモート DSN をゲートで禁止する。
 - `RUSTSEC-2026-0258` h2 0.3.27（低深刻度）
   - 経路: `libsql` → `tonic 0.11.0` → `hyper 0.14.32` → `h2 0.3.27`
   - 修正版: `>=0.4.16`（tonic / libsql の更新待ち）
@@ -73,10 +77,10 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - 経路: 同上
   - 修正版: `>=0.23.46`
   - 評価: リモート TLS 接続時のみ。PQ 機密性の低下であり鍵漏えいはない。
-- `RUSTSEC-2025-0134`（2026-11-22 解消済み・履歴） rustls-pemfile 2.2.0（unmaintained）
+- `RUSTSEC-2025-0134`（2026-11-28 ignore 復帰、2026-11-22 の解消判断は誤り） rustls-pemfile 2.2.0（unmaintained）
   - 経路: `libsql` → `rustls-native-certs 0.7.3`
   - 修正版: なし（rustls-pki-types の `PemObject` へ移行）
-  - 評価: 証明書読み込みの補助。既知の脆弱性はない。
+  - 評価: 証明書読み込みの補助。TLS / remote 接続時にのみ到達し、既知の脆弱性はない。
 - `RUSTSEC-2026-0049` rustls-webpki 0.102.8（CRL 照合）
   - 経路: `libsql` → `rustls 0.22.4` → `rustls-webpki 0.102.8`
   - 修正版: `>=0.103.10`
@@ -97,7 +101,7 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - 経路: 同上
   - 修正版: `>=0.103.16`
   - 評価: 既知の emSign 中間鍵を含む経路を受理し得る。リモート接続時に
-    注意が必要で、10 件の中では優先度が高い。
+    注意が必要で、13 件の中では優先度が高い。
 
 ### 3.2 RustCrypto 0.13 系（2 件）— 解消済み
 
@@ -117,13 +121,14 @@ stale_after: "2027-02-15T00:00:00+09:00"
 
 ### 3.3 ビルド時・未使用依存（2 件、うち ttf-parser は解消済み）
 
-- `RUSTSEC-2024-0436` paste 1.0.15（unmaintained・2026-11-22 解消済み、履歴）
+- `RUSTSEC-2024-0436` paste 1.0.15（unmaintained・2026-11-28 ignore 復帰、2026-11-22 の解消判断は誤り）
   - 経路: `leptos 0.8.22`（`either_of` / `reactive_graph` / `tachys`）
   - 修正版: なし（pastey / with_builtin_macros への移行）
   - 評価: 手続きマクロ。ビルド時にのみ使われ、実行時コードに残らない。
   - 対応: leptos 0.8.23 と 0.9.0-rc1 も `paste ^1.0` に依存するため
     削除は不可。既知の脆弱性がないため ignore で受容し、leptos の
-    更新時に再評価する（§5）。現行は DB 上検出されず ignore から削除済み。
+    更新時に再評価する（§5）。2026-11-28 に ignore を復帰（2026-11-22 の
+    削除判断は誤り）。Cargo.lock に実在し、RustSec DB にも継続掲載。
 - `RUSTSEC-2026-0192` ttf-parser 0.25.1（unmaintained）— 解消済み
   - 経路: `imageproc 0.27.0` → `ab_glyph 0.2.32` → `ttf-parser 0.25.1`
   - 対応: `image` / `imageproc` / `image-webp` を 2026-11-15 に削除。
@@ -143,8 +148,11 @@ stale_after: "2027-02-15T00:00:00+09:00"
   `run()` と doctor の FK 検査用 `open_db_for_foreign_key_check()` は
   同じヘルパで分岐する。
 - 本番で受理される値は `Builder::new_local` を通り、TLS も gRPC も張らない。
-  3.1 の 8 件の受容根拠は、本番がリモート DSN をゲートで禁止する点にある。
+  3.1 の 10 件の受容根拠は、本番がリモート DSN をゲートで禁止する点にある。
   開発（`ALLOW_MOCK_AUTH=1`）では従来どおりリモート DSN も許容する。
+- 残リスク: 本番の production gate は `server` 本体と `doctor` にのみ実装され、
+  CLI bin（`backup_db` / `restore_db` 等）には適用されないため remote DSN を
+  許容する。CLI 経路からのリモート接続は別途ゲートを検討する。
 
 ### 4.2 暗号検証（RSA / ECDSA）
 
@@ -174,9 +182,10 @@ stale_after: "2027-02-15T00:00:00+09:00"
   当時の `client/Cargo.toml` は `image` / `imageproc` / `image-webp` を宣言していたが、
   `client/src` から参照されておらず、その後削除済み（§8 参照）。現行の `client/Cargo.toml`
   にはこれらの直接依存は存在しない。
-- paste（RUSTSEC-2024-0436）は RustSec DB 上で検出されなくなり、2026-11-22 に
-  ignore から削除済み（解消）。ttf-parser は未使用依存の削除により
-  依存グラフから外れた（2026-11-15）。
+- paste（RUSTSEC-2024-0436）は 2026-11-28 に ignore を復帰（2026-11-22 の
+  解消判断は誤り）。Cargo.lock に実在し RustSec DB にも継続掲載されるが、
+  ビルド時マクロで実行時コードに残らず到達なし。ttf-parser は未使用依存の
+  削除により依存グラフから外れた（2026-11-15）。
 
 ## 5. 対応方針
 
@@ -195,14 +204,14 @@ stale_after: "2027-02-15T00:00:00+09:00"
   - chrono: 2026-11-17 発行の RUSTSEC-2026-0543 は unmaintained（情報区分）で、
     修正版なし。一次情報 [RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543.html)
     で確認。`common`/`server`/`libsql` 経由で使用。jiff / time への移行を
-    別タスクとして計画し、現状は理由付きで受容（10件目）。
+    別タスクとして計画し、現状は理由付きで受容（13件中 1 件）。
 - D3: `cargo deny check advisories` を ignore リスト付きで CI に導入した。
   新しい勧告は CI を失敗させ、不要になった ignore も検出する。
 - D4: 再評価のトリガーは、依存更新時、四半期ごと、本番化判断時。
 
 ### CI ゲートと ignore 運用
 
-- `deny.toml` の `[advisories].ignore` に既知の 10件を理由付きで列挙する。
+- `deny.toml` の `[advisories].ignore` に既知の 13件を理由付きで列挙する。
   理由は「経路」と「受容の根拠（本番はリモート DSN をゲートで禁止する）」を
   1 行で示す。
 - `unused-ignored-advisory = "deny"` により、依存から消えた勧告の
@@ -238,8 +247,13 @@ cargo deny check advisories
   CI に導入。paste は上流修正がないため受容した。
 - 2026-11-17: 依存更新時に再評価。libsql は 0.10.0（現行と同一）が最新で、
   受容 11 件（2026-11-17 時点は11件）に変更なし。uuid 1.29.2 / coins-bip32 0.17.2 へパッチ更新済み。
-- 2026-11-17: 11→12件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
+- 2026-11-17（履歴）: 11→12件。新規勧告 RUSTSEC-2026-0543（chrono unmaintained）を
   受容。脆弱性ではなく情報区分で修正版なし。jiff/time 移行を計画。
-- 2026-11-22: 12→10件。RUSTSEC-2025-0141 / 2025-0134 / 2024-0436 が DB 上検出されなく
-  なったため ignore を削除し、新規 RUSTSEC-2026-0592（url 2.5.8）を理由付きで追加。
-  現行内訳は脆弱性 9 件 / unmaintained 1 件（libsql 系 8 件 + chrono 1 件 + url 1 件）。
+- 2026-11-22（履歴）: 12→10件。RUSTSEC-2025-0141 / 2025-0134 / 2024-0436 が
+  DB 上検出されなくなったため ignore を削除し、新規 RUSTSEC-2026-0592
+  （url 2.5.8）を理由付きで追加。当時の内訳は脆弱性 9 件 / unmaintained 1 件
+  （libsql 系 8 件 + chrono 1 件 + url 1 件）。
+- 2026-11-28: 10→13件（3件復帰）。RUSTSEC-2025-0141 / 2025-0134 / 2024-0436 は
+  Cargo.lock に実在し RustSec DB にも継続掲載（withdraw なし）。2026-11-22 の
+  解消判断は誤りとして ignore を復帰。現行内訳は脆弱性 9 件 / unmaintained 4 件
+  （libsql 系 10 件 + chrono 1 件 + url 1 件 + paste 1 件、4 系統）。

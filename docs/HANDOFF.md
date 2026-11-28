@@ -364,8 +364,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
   は `MODERATION_OPERATOR_HASHES` で設定した運用者だけが実行でき、`governance_audit_log` に記録する（未設定時は全拒否）。期限到達は起動時のワーカーが自動検知する（
   `MODERATION_FINALIZE_INTERVAL_SECS`、既定300秒、停止シグナルで終了）。残るは投票者選出・Sybil耐性、第三者検証可能な監査（DEC-04）。
 - DB: ロールバック方針、並行起動の排他、バックアップ手順。
-- 依存: 残る RUSTSEC は既知の10件（脆弱性9件 / unmaintained1件 =
-  `libsql` 由来 8 件＋`chrono` 1 件＋`url` 1 件。現行内訳は
+- 依存: 残る RUSTSEC は現行13件（既知の13件、脆弱性9件 / unmaintained4件 =
+  `libsql` 由来 10 件＋`chrono` 1 件＋`url` 1 件＋`paste` 1 件。現行内訳は
   [SECURITY_ADVISORIES](SECURITY_ADVISORIES.md) を正とする）。
   到達可能性と更新案は
   [脆弱性トリアージ](SECURITY_ADVISORIES.md) を参照する。
@@ -410,8 +410,8 @@ OIDC の必須項目が揃わない場合、OIDC エンドポイントは 501 �
 - JPYC のコントラクトアドレスと確認数は、実装前に JPYC の一次ソース
   （公式リポジトリ、公式サイト、Explorer）で再確認する。
 - 旧 JPYC Prepaid の `0x431D...` は現行コントラクトではない。
-- `cargo deny check advisories` は既知の 10件（脆弱性 9 件 / unmaintained 1 件 =
-  `libsql` 由来 8 件、`chrono` 1 件、`url` 1 件）を理由付きで ignore して CI に
+- `cargo deny check advisories` は現行13件（既知の 13件、脆弱性 9 件 / unmaintained 4 件 =
+  `libsql` 由来 10 件、`chrono` 1 件、`url` 1 件、`paste` 1 件）を理由付きで ignore して CI に
   導入済み。本番は `production_database_url_error` のゲートでリモート DSN を
   禁止する（fail-closed）。新しい勧告は CI を失敗させる。
   詳細は [脆弱性トリアージ](SECURITY_ADVISORIES.md)。

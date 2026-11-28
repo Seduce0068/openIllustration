@@ -150,8 +150,8 @@ status: current
     `register` / `take` / `sweep` で共有。`run_moderation_finalizer` へ `OidcState` を配線し
     起動時と周期 tick で回収。3テスト追加、配線 mutation で検出を確認
     （[DETAILED_DESIGN.md](DETAILED_DESIGN.md), [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md)）。
-- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知10件＝脆弱性9/unmaintained1
-  、libsql系8・chrono1・url1（paste は解消済み）を理由付き ignore
+- 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知13件＝現行13件＝脆弱性9/unmaintained4
+  、libsql系10・chrono1・url1・paste1（2026-11-22 の削除は誤りで 2026-11-28 復帰）を理由付き ignore
   `unused-ignored-advisory = "deny"`
   ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功
   （当時の成功: run `43675475991`、2026-11-15T04:08:59Z、headSha `45e751c`;
@@ -582,11 +582,12 @@ status: current
 
 ### 3.8 依存・セキュリティ衛生
 
-- [中] **既知の脆弱性勧告（受容中・10件）**: `libsql` 由来 8 件、`chrono` 1 件
-  （RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）、`url` 1 件（RUSTSEC-2026-0592）の
-  計10件（脆弱性9/unmaintained1）。`paste` は解消済みで ignore から削除。CI で
-  `cargo deny check advisories` を通過させつつ四半期/更新時に再評価。chrono は
-  jiff/time への移行を計画（[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
+- [中] **既知の脆弱性勧告（受容中・現行13件）**: `libsql` 由来 10 件、`chrono` 1 件
+  （RUSTSEC-2026-0543、unmaintained・情報区分・修正版なし）、`url` 1 件（RUSTSEC-2026-0592）、
+  `paste` 1 件の計13件（脆弱性9/unmaintained4）。`paste` の2026-11-22 削除は誤りで
+  2026-11-28 に deny.toml へ復帰。CI で `cargo deny check advisories` を
+  通過させつつ四半期/更新時に再評価。chrono は jiff/time への移行を計画
+  （[SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md), [deny.toml](../deny.toml)）。
 - [対応済み] 配布物のライセンス同梱: `scripts/prepare-distribution.sh` が LICENSE・NOTICE・依存一覧・依存ライセンス本文（2026-11-18 実測: 467件、TSV 822行）を生成（
   [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md)）。
 - [対応済み] 配布時のライセンス再監査: `scripts/prepare-distribution.sh` が `cargo deny check licenses` を事前実行し、不整合なら成果物を生成しない。NOTICE
@@ -682,7 +683,7 @@ status: current
   [REQUIREMENTS_SPECIFICATION.md](REQUIREMENTS_SPECIFICATION.md), [README.md](../README.md) に反映（法的確定/専門家レビューは未完）。
 - [対応済み 3662145] `GET /policy/age` が非秘密の公開設定のみを返すことを検証する回帰テストを追加（既知の秘密識別子を含まないことの防御的確認を含む）。
 - [対応済み] `docs/index.md` の索引を全文書（Runbook 含む）へ反映。
-- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、11件の受容を再確認（2026-11-17 時点は11件、現在は10件）。
+- [対応済み] [SECURITY_ADVISORIES.md](SECURITY_ADVISORIES.md) に `verified` メタデータを追加し、受容件数を再確認（2026-11-17 時点は11件は履歴、現在は13件）。
 - [対応済み R2-oidc-doc] [OPERATIONAL_POLICY.md](OPERATIONAL_POLICY.md) の `OIDC_MAX_AUTH_AGE_SECS`
   説明を実装へ整合: 「未設定は `auth_time` / `max_age` 検証を行わず、不正値は起動拒否」へ修正し
   [HANDOFF.md](HANDOFF.md) の表現へ揃えた（`docs/OPERATIONAL_POLICY.md`）。

@@ -41,11 +41,16 @@ allow = [
 # 失敗させる。見直しは四半期ごと、依存更新時、本番化判断時に行う。
 # 評価の詳細は docs/SECURITY_ADVISORIES.md を参照する。
 #
-# 受容は 10 件（脆弱性 9 件 / unmaintained 1 件）。内訳は libsql 系 8 件、
-# chrono 1 件、url 1 件（paste は解消済みで ignore から削除）。
+# 受容は 13 件（脆弱性 9 件 / unmaintained 4 件）。内訳は libsql 系 10 件、
+# chrono 1 件、url 1 件、paste 1 件。
 # libsql 系の受容根拠は、本番が production_database_url_error のゲートで
 # リモート DSN を禁止し、`file:` 絶対パスのみ受理する（fail-closed）点にある。
+# 2026-11-22 の 7f96cac で unmaintained 3 件を誤削除したため復元した。
 [advisories]
+# unmaintained 勧告の検査範囲。cargo-deny 0.20.2（CI 固定版）は既定が
+# Scope::All（全依存を検査）、ローカルの 0.22.1 は既定が Scope::Workspace で
+# 版差によりローカルでは通過していた。明示的に "all" 指定で版差を揃える。
+unmaintained = "all"
 # 依存から消えた勧告の ignore が残っていないか検査する。
 unused-ignored-advisory = "deny"
 ignore = [
@@ -65,6 +70,10 @@ ignore = [
   # 2026-11-22 発行: url 2.5.8 の blob: URL 再帰スタックオーバーフロー。
   # 本アプリは Url::origin() を無信頼入力へ呼ばない（leptos/reqwest 経由の間接依存）。
   { id = "RUSTSEC-2026-0592", reason = "url 2.5.8 は leptos/reqwest 経由。Url::origin() を無信頼入力へ呼ばない。上流更新待ち" },
+  # 2026-11-22 誤削除分の復元（unmaintained 3 件）。RustSec DB に継続掲載、withdraw 履歴なし。
+  { id = "RUSTSEC-2025-0141", reason = "bincode 1.3.3 は libsql 0.10.0 の replication feature 経由、proxy Value 変換で remote 接続時のみ到達。本番 server はリモートDSNをゲートで禁止し new_local のみ。修正版なし。リモートDB採用時は要解消" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 は libsql→rustls-native-certs 0.7.3 経由、証明書読込は TLS/remote 接続時のみ。本番 server はリモートDSNをゲートで禁止。rustls-pki-types の PemObject 移行待ち" },
+  { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 は leptos/tachys/reactive_graph のビルド時マクロ、実行時コードに残らず既知脆弱性なし。leptos は paste ^1.0 固定で上流移行待ち。DSN ゲートを根拠に流用しない" },
 ]
 
 # 依存の重複と取得元の検査。licenses / advisories に加えて CI の extra_gates で
