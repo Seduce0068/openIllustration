@@ -82,7 +82,7 @@ generated:
 | betterleaks 固定版の供給 | リリース tarball（`linux_x64`）と `checksums.txt` を第1経路で検証してキャッシュし、`--version` で固定版を証明する。`go install` は `version.Version="dev"` となり版ゲートを通れないため使用しない（2026-11-28 に CI で実証）。 |
 | playwright install 再試行 | 有限回数（3 回）のリトライとバックオフを追加。 |
 | モバイル viewport | オプトインのモバイルプロジェクトを追加し、主要画面のスモークを既存ケース内へ統合。 |
-| Chrome 上限固定 | `ci-e2e.sh` の CI 分岐で `MAX_CHROME_MAJOR=140` を既定適用し、下限（`MIN_CHROME_MAJOR=120`）とともに検証。超過時は fail-closed。 |
+| Chrome 上限固定 | CI の `env_vars` で `MAX_CHROME_MAJOR` を検証済み major（2026-11-28 時点 158）へ固定し、下限（`MIN_CHROME_MAJOR=120`）とともに検証。超過時は fail-closed。ランナーの Chrome 自動更新時にローカル E2E で互換を実証してから追随する。 |
 | build.rs rerun-if-env-changed | `OIL_API_BASE`／`OIL_MOCK_AUTH`／`OIL_CLIENT_METRICS` を監視し、環境変更時の再ビルドを保証。 |
 | real-api 宛先 env 化 | `E2E_SERVER_PORT`／`E2E_API_BASE` を追加し、3000 ハードコードを解消。 |
 | ライセンス本文数照合 | `prepare-distribution.sh` の生成件数を実測し、`DOCUMENT_STATUS` と照合するゲートを追加。 |

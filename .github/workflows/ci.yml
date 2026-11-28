@@ -44,7 +44,7 @@ jobs:
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
         ALLOW_IPV4_LOCALHOST=1
-        MAX_CHROME_MAJOR=140
+        MAX_CHROME_MAJOR=158
       # 共通ワークフローは -D warnings を先頭に付けるが、ローカル検証ループと
       # 同じ引数を明示する（重複しても無害）。
       clippy_args: "-D warnings -A clippy::module-inception -D clippy::undocumented_unsafe_blocks"

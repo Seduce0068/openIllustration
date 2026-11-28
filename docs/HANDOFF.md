@@ -173,7 +173,9 @@ E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22.12 以上�
 （engine-strict では 22.13 以上推奨）。固定版 trunk（v0.21.14 + checksum）は `.e2e-cache/` にキャッシュされ、
 再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が
 `MIN_NODE_MAJOR` / `MIN_NODE_MINOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。
-CI では `MAX_CHROME_MAJOR=140` を既定適用し、上限超過時は fail-closed で失敗する。
+CI では `MAX_CHROME_MAJOR=158` を適用し、上限超過時は fail-closed で失敗する
+（2026-11-28 にランナーの Chrome 自動更新へ追随。ローカル Chrome 158.0.8127.88 で E2E 65件成功を実証）。
+`ci-e2e.sh` 単体実行時の既定は 140 のため、ローカルでは環境変数で上書きする。
 この説明コメントは `env_vars:` キーの直前へ YAML コメントとして置き、`env_vars` ブロック内には
 KEY=VALUE のみを置く契約（再利用ワークフローは空行しか除去しないため、ブロック内の
 コメント行は `$GITHUB_ENV` へ流入して env ステップを失敗させる）。

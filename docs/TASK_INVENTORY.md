@@ -638,8 +638,9 @@ status: current
 - [対応済み] CI の `env_vars` コメント行除去（親が修正済み）: `7d41758`（2026-11-24T03:28:54+09:00 追加）で
   `env_vars` 内に入った YAML コメントが再利用ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` により
   `$GITHUB_ENV` へそのまま書き出され Invalid format となり、「環境変数（追加）」ステップで停止していた。
-  コメントを `env_vars` 外の YAML コメントへ移動し `KEY=VALUE` 4行のみを残した。`MAX_CHROME_MAJOR=140` は
-  維持。直近5件の失敗（run `46019956213` 等）はすべて同ステップで、後続ゲートは未実行。
+  コメントを `env_vars` 外の YAML コメントへ移動し `KEY=VALUE` 4行のみを残した。当時の
+  `MAX_CHROME_MAJOR=140` は維持し、2026-11-28 にランナー更新へ追随して 158 へ変更（ローカル実証済み）。
+  直近5件の失敗（run `46019956213` 等）はすべて同ステップで、後続ゲートは未実行。
 - [未検証] 最終修正後の CI で追加ゲート（deny/shell/E2E 等）の通過を確認。
   修正後2実行（run 46112869326 / 46114430664）で env/fmt/check/test/clippy は成功。追加ゲートは
   wasm clippy の `collapsible_if`（`ff2a248` で修正）と betterleaks の dev 版（`go install` 由来、
