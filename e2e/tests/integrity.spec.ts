@@ -758,10 +758,12 @@ test.describe('Forensic Integrity Verification (INT-01)', () => {
     await page.keyboard.press('Tab');
     await expect(closeButton).toBeFocused();
 
-    // P4: このパネルは non-modal。CLOSE フォーカス中に Tab / Shift+Tab を送ると
-    // prevent_default せず背景の操作可能要素へ移動する（Escape / CLOSE で閉じる契約は維持）。
-    await page.keyboard.press('Tab');
-    await expect(closeButton).not.toBeFocused();
+    // P4: このパネルは non-modal。CLOSE フォーカス中に Shift+Tab を送ると
+    // prevent_default せず、直前の背景操作可能要素（同カードの Report）へ戻る。
+    // 前方 Tab は CLOSE が文書末尾のタブ停止点になるため wrap 挙動（ブラウザ差）に
+    // 依存する。逆方向の移動で non-modal をブラウザ非依存に検証する。
+    await page.keyboard.press('Shift+Tab');
+    await expect(card.getByRole('button', { name: 'Report' })).toBeFocused();
     const afterTab = await page.evaluate(() => {
       const active = document.activeElement as HTMLElement | null;
       return active ? (active.getAttribute('data-testid') ?? active.textContent?.trim() ?? '') : '';
