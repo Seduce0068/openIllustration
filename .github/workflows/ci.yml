@@ -117,9 +117,13 @@ jobs:
             scan_range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
             ;;
           push)
-            # 新規ブランチ初回 push / force push の all-zero before は範囲解決不能なので全履歴へ。
+            # all-zero（新規ブランチ/force push）に加え、shallow checkout で before が
+            # ローカルに無い場合や HEAD の祖先でない場合も範囲解決不能なので全履歴へフォールバック。
+            # 複数コミット push では before が直前 push の HEAD を指し、depth 1 では欠落し得る。
             before="${{ github.event.before }}"
-            if [[ -z "$before" || "$before" =~ ^0{40}$ ]]; then
+            if [[ -z "$before" || "$before" =~ ^0{40}$ ]] ||
+               ! git cat-file -e "${before}^{commit}" 2>/dev/null ||
+               ! git merge-base --is-ancestor "$before" HEAD 2>/dev/null; then
               scan_range=""
             else
               scan_range="${before}..HEAD"
