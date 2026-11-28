@@ -37,7 +37,10 @@ jobs:
       # 共通ワークフローの apt 導入ステップでインストールする。
       # systemd: systemd-analyze verify による deploy unit 構文ゲート用。
       # betterleaks は固定版リリース tarball を直接取得するため go は不要（ADR-0013 P3）。
-      apt_packages: shellcheck shfmt gpg systemd
+      # ブラウザ依存: Playwright 1.60 は ubuntu26.04 の install-deps 非対応のため、
+      # Chrome 158 / Firefox / WebKit に必要な library を apt_packages で明示導入する。
+      # 不足 .so は CI の browserType.launch エラーから列挙し dpkg -S で包名を特定。
+      apt_packages: shellcheck shfmt gpg systemd libgtk-4-1 libgraphene-1.0-0 libevent-2.1-7t64 libopus0 libgstreamer-plugins-base1.0-0 libgstreamer-gl1.0-0 libgstreamer-plugins-extra1.0-0 libflite1 libavif16 libharfbuzz-icu0 libwayland-server0 libmanette-0.2-0 libhyphen0 libsecret-1-0 libwoff1 libgles2 libx264-165
       # Chrome 上限: ランナーの Chrome を自動更新した際は検証済み major へ追随させる。
       # 注意: env_vars は $GITHUB_ENV へそのまま書き出されるため KEY=VALUE 行のみ置く（コメント行は job 失敗）。
       env_vars: |

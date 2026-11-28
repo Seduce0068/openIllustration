@@ -481,8 +481,9 @@ echo "==> E2E 依存の導入（channel: chrome のバイナリは取得しな�
 (cd e2e && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts --no-audit --no-fund)
 if ((${#install_browsers[@]} > 0)); then
 	E2E_STAGE="browser-install"
-	# --with-deps は root 権限が必要なため CI では使わない。
-	# firefox/webkit に必要なライブラリは同梱環境で揃っていることを確認済み。
+	# --with-deps は root 権限が必要なため使わない。また Playwright 1.60 は
+	# runner の ubuntu26.04 で install-deps 自体が非対応（2026-11-28 に実証）。
+	# 必要な OS ライブラリは ci.yml の apt_packages で明示導入する。
 	echo "==> Playwright ブラウザ導入: ${install_browsers[*]}"
 	if ! install_playwright_browsers "${install_browsers[@]}"; then
 		E2E_ERROR_REPORTED=1
