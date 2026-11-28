@@ -7337,44 +7337,41 @@ pub fn main() {
     }
     // クライアント例外は件数だけを定期的に送る（メッセージ・URL・IP は保持しない）。
     #[cfg(target_arch = "wasm32")]
-    if CLIENT_METRICS_ENABLED {
-        if let Some(window) = web_sys::window() {
-            let errors = Rc::new(Cell::new(0usize));
-            let counter = Rc::clone(&errors);
-            let on_error: EventClosure = Closure::new(move |_ev: web_sys::Event| {
-                counter.set(counter.get().saturating_add(1));
-            });
-            let _ =
-                window.add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref());
-            // 非同期例外（spawn_local 内の Promise rejection）は window.error が出ないため、
-            // unhandledrejection も同じカウンタへ件数だけ積む（reason は保持しない）。
-            let rejection_counter = Rc::clone(&errors);
-            let on_rejection: EventClosure = Closure::new(move |_ev: web_sys::Event| {
-                rejection_counter.set(rejection_counter.get().saturating_add(1));
-            });
-            let _ = window.add_event_listener_with_callback(
-                "unhandledrejection",
-                on_rejection.as_ref().unchecked_ref(),
-            );
-            // リスナーをページ寿命で保持する（Rust 側の Closure を破棄しない）。
-            on_error.into_js_value();
-            on_rejection.into_js_value();
-            let tick = {
-                let errors = Rc::clone(&errors);
-                Closure::<dyn FnMut()>::new(move || {
-                    let count = errors.get();
-                    if count > 0 {
-                        errors.set(0);
-                        report_ui_error(count);
-                    }
-                })
-            };
-            let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
-                tick.as_ref().unchecked_ref(),
-                5_000,
-            );
-            tick.into_js_value();
-        }
+    if CLIENT_METRICS_ENABLED && let Some(window) = web_sys::window() {
+        let errors = Rc::new(Cell::new(0usize));
+        let counter = Rc::clone(&errors);
+        let on_error: EventClosure = Closure::new(move |_ev: web_sys::Event| {
+            counter.set(counter.get().saturating_add(1));
+        });
+        let _ = window.add_event_listener_with_callback("error", on_error.as_ref().unchecked_ref());
+        // 非同期例外（spawn_local 内の Promise rejection）は window.error が出ないため、
+        // unhandledrejection も同じカウンタへ件数だけ積む（reason は保持しない）。
+        let rejection_counter = Rc::clone(&errors);
+        let on_rejection: EventClosure = Closure::new(move |_ev: web_sys::Event| {
+            rejection_counter.set(rejection_counter.get().saturating_add(1));
+        });
+        let _ = window.add_event_listener_with_callback(
+            "unhandledrejection",
+            on_rejection.as_ref().unchecked_ref(),
+        );
+        // リスナーをページ寿命で保持する（Rust 側の Closure を破棄しない）。
+        on_error.into_js_value();
+        on_rejection.into_js_value();
+        let tick = {
+            let errors = Rc::clone(&errors);
+            Closure::<dyn FnMut()>::new(move || {
+                let count = errors.get();
+                if count > 0 {
+                    errors.set(0);
+                    report_ui_error(count);
+                }
+            })
+        };
+        let _ = window.set_interval_with_callback_and_timeout_and_arguments_0(
+            tick.as_ref().unchecked_ref(),
+            5_000,
+        );
+        tick.into_js_value();
     }
     mount_to_body(|| view! { <App /> });
 }
