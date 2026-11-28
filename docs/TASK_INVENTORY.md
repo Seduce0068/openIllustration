@@ -153,7 +153,10 @@ status: current
 - 直近の主な到達点: RustCrypto 更新・`cargo deny check advisories` CIゲート（既知10件＝脆弱性9/unmaintained1
   、libsql系8・chrono1・url1（paste は解消済み）を理由付き ignore
   `unused-ignored-advisory = "deny"`
-  ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
+  ）・RS256 JWT署名のオプション実装（`JWT_RSA_PRIVATE_KEY_PEM` 設定時のみ、既定は HS256）・CI 成功
+  （当時の成功: commit `dc39776` / run `43675475991`、run 完了 2026-11-15T04:08:59Z）。
+  直近の CI は 2026-11-24 以降、`env_vars` コメント行が原因で失敗が継続していたが修正済み
+  （再実行前、詳細は §5）。DEC-02採用方針のフレームワーク実装/文書化（`0958c60`:
   保守的一律既定21・構成可能な年齢/地域ポリシー・明示設定必須/信頼属性必須のフェイルクローズ・認証不要 `GET /policy/age` による非秘密の有効設定公開、
   法的確定/専門家レビューは未完）と公開レスポンスの非秘密性回帰テスト追加（`3662145`）。
 - 直近6〜7コミットの反映（`5d9f5bd` 時点。いずれも master へ取り込み済みの監査指摘対応。
@@ -624,7 +627,19 @@ status: current
 
 - [対応済み] Playwright E2E の起動失敗: `server` クレートに `verify_audit_log` bin があり `cargo run` が曖昧になっていた。`default-run = "server"`
   を設定して解消（ローカル E2E 9件成功）。
-- [外部要因] 2026-11-16 時点で GitHub Actions のジョブが請求/上限により開始されない。CI 再開までローカル検証ループ（fmt/clippy/test/deny/wasm/E2E）を代替ゲートとする。
+- [履歴・外部要因] 2026-11-16 時点で GitHub Actions のジョブが請求/上限により開始されなかった
+  （当時の代替ゲート: ローカル検証ループ fmt/clippy/test/deny/wasm/E2E）。請求停止は
+  2026-11-24 午前の3〜5秒の失敗のみで解消済み。直近の赤ゲートは別原因で、
+  2026-11-24 以降の run `46019956213` 等5件すべてが「環境変数（追加）」ステップで停止し、
+  後続ゲートは未実行。修正済み・再実行前のため、詳細は下記の `[対応済み]` / `[未検証]` 項目を参照。
+- [対応済み] CI の `env_vars` コメント行除去（親が修正済み）: `7d41758`（2026-11-24T03:28:54+09:00 追加）で
+  `env_vars` 内に入った YAML コメントが再利用ワークフロー `Seduce0068/workflows/rust-gates.yml@v1` により
+  `$GITHUB_ENV` へそのまま書き出され Invalid format となり、「環境変数（追加）」ステップで停止していた。
+  コメントを `env_vars` 外の YAML コメントへ移動し `KEY=VALUE` 4行のみを残した。`MAX_CHROME_MAJOR=140` は
+  維持。直近5件の失敗（run `46019956213` 等）はすべて同ステップで、後続ゲートは未実行。
+- [未検証] 修正後の CI 実行で fmt/check/test/clippy/deny/shell/E2E の後続ゲートを確認。
+  2026-11-28T14:23:40+09:00 時点で次回 CI は未実行。環境変数ステップの通過後、各ゲートの結果を
+  Runtime Proof で確認する。請求/上限による開始抑止は既に解消済みで再現は想定していない。
 
 - [対応済み] 固定版 trunk のローカルキャッシュ: `.e2e-cache/`（Git 管理外）へ checksum 検証済みバイナリを保存し、再ダウンロードを回避。GitHub の一時 SSL 障害で E2E
   が止まった問題への対策。キャッシュ利用で E2E 9件成功。

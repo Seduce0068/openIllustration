@@ -38,11 +38,12 @@ jobs:
       # golang-go: betterleaks 未導入時の go install 前提（ADR-0013 P3）。
       # systemd: systemd-analyze verify による deploy unit 構文ゲート用。
       apt_packages: shellcheck shfmt gpg golang-go systemd
+      # Chrome 上限: ランナーの Chrome を自動更新した際は検証済み major へ追随させる。
+      # 注意: env_vars は $GITHUB_ENV へそのまま書き出されるため KEY=VALUE 行のみ置く（コメント行は job 失敗）。
       env_vars: |
         JWT_SECRET=ci_test_secret_for_ci_0123456789abcdef
         ALLOW_MOCK_AUTH=1
         ALLOW_IPV4_LOCALHOST=1
-        # Chrome 上限: ランナーの Chrome を自動更新した際は検証済み major へ追随させる。
         MAX_CHROME_MAJOR=140
       # 共通ワークフローは -D warnings を先頭に付けるが、ローカル検証ループと
       # 同じ引数を明示する（重複しても無害）。

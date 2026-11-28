@@ -37,6 +37,14 @@ status: current
 
 ### 優先度: 高
 
+- [ ] **CI `env_vars` 入力契約の恒久的な機械検証を追加** — 根拠 `.github/workflows/ci.yml:41-47` /
+  `rust-gates.yml@v1:126` / swarm R4 / 中。呼び出し側 `env_vars` は再利用ワークフローにより
+  `$GITHUB_ENV` へそのまま書き出され、行頭 `#` のコメントが job 失敗を起こす（2026-11-24 に発生、
+  2026-11-28 にコメント移動で回避済み）。恒久対策は上流 `Seduce0068/workflows` 側のコメント除外＋
+  不正行 fail-fast（v1 タグ移動は破壊的操作で事前承認が必要）またはローカル pre-commit フック
+  （仕様変更で事前合意が必要）。今回は未実施。詳細は
+  [TASK_INVENTORY.md](docs/TASK_INVENTORY.md) §5 の `[未検証]` 項目を参照。
+
 - [x] **LOG OUTのrefresh Cookie失効を修正** — 2026-11-22 実装済み（`credentials: Include`）。E2Eはlocalhost/127.0.0.1別ホストのためCookie送信は未検証、同一サイト構成で検証可能な旨を記録。
 - [x] **未適用マイグレーションのカーソルを閉じてからBEGIN** — 根拠 `server/src/migration.rs:283` / review R2-ER / high。
 - [x] **auth_verify失効閾値削除をDB正本先行へ** — 根拠 `server/src/lib.rs:2936` / review R2-ER / high。

@@ -15,8 +15,12 @@ generated:
 
 - ブランチ: `master`
 - 参照コミット: 作業開始時点は `745810e`。以降の変更は `git log` を参照。
-- 作業ツリー: clean（未コミット変更なし）。`client/dist/` 等の生成物はコミット対象外として扱う。
-- 参考: 過去の記録として `8fb989c` 時点の CI success（run 41579032881）あり。以降のローカルコミットは未CI（push済みだがCI結果は別途確認）。
+- 作業ツリー: 作業開始時点は clean。本セッションの CI 修正（ci.yml と上記2ドキュメント）は未コミット。
+  `client/dist/` 等の生成物はコミット対象外として扱う。
+- CI 成功例（履歴）: 直近は `dc39776`（run 43675475991、2026-11-15T04:08:59Z）。
+  過去の記録は `8fb989c`（run 41579032881）。env ステップ通過の直近成功は前者。
+- 2026-11-24 以降は CI が連続失敗（直近5件は「環境変数（追加）」ステップで停止）。
+  原因の env_vars 内コメント行は修正済みだが再実行前で、後続ゲートは未検証。
 - 直近のローカル検証（2026-11-15、touch範囲）: `cargo fmt --all --check`、
   `cargo clippy -p common -p server --all-targets -- -D warnings -A clippy::module_inception`、
   `cargo test -p common -p server --quiet`（`common` 11件、`server` 93件成功）。
@@ -121,9 +125,19 @@ bash scripts/test-prepare-distribution.sh
 ( source scripts/doctor-ci-env.sh && cargo run -p server --bin doctor -- --strict )
 ```
 
-CI は 2026-11-16 時点で GitHub アカウントの請求/上限によりジョブが開始されない
+【履歴】2026-11-16 時点では GitHub アカウントの請求/上限によりジョブが開始されなかった
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
-解除まで上記コマンドをローカルで順に実行して代替ゲートとする。2026-11-17 の
+この課金停止は 2026-11-24 午前中のみで解消済み（開始直前 3〜5 秒で失敗した run 45344635158 / 45376093531 等）。
+直近の赤ゲート原因は別で、`.github/workflows/ci.yml` の `env_vars` リテラルブロック内の
+コメント行（原因コミット `7d41758`、2026-11-24T03:28:54+09:00）。再利用ワークフロー
+rust-gates.yml@v1 は空行しか除去しないため、コメント行が `$GITHUB_ENV` へ流入し
+「環境変数（追加）」ステップで `Invalid format '# Chrome 上限: ...'` として失敗する
+（`Unable to process file command 'env' successfully.`）。後続の fmt / check / test /
+clippy / deny / shell / E2E は未実行。
+親がコメント行を `env_vars:` キーの直前（YAML コメント）へ移動して修正済み（ブロック内は
+KEY=VALUE 4行のみ、`MAX_CHROME_MAJOR=140` は維持）。修正直後の再実行前のため、
+後続ゲートが緑になったかは未検証（緑と断定しない）。
+上記コマンドをローカルで順に実行する代替ゲート自体は有効。参考までに 2026-11-17 の
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した（9件は当時値。現在値は TEST_SPECIFICATION を参照）。
 
@@ -155,6 +169,9 @@ E2E は Google Chrome（major 120 以上）、trunk 0.21.14、Node 22.12 以上�
 再利用時はダウンロードをスキップする（Git 管理外）。`ci-e2e.sh` が
 `MIN_NODE_MAJOR` / `MIN_NODE_MINOR` / `MIN_CHROME_MAJOR` で下限を検査する（環境変数で上書き可）。
 CI では `MAX_CHROME_MAJOR=140` を既定適用し、上限超過時は fail-closed で失敗する。
+この説明コメントは `env_vars:` キーの直前へ YAML コメントとして置き、`env_vars` ブロック内には
+KEY=VALUE のみを置く契約（再利用ワークフローは空行しか除去しないため、ブロック内の
+コメント行は `$GITHUB_ENV` へ流入して env ステップを失敗させる）。
 `MAX_NODE_MAJOR` は上限超過で警告のみである。失敗時は `e2e/test-results` と
 `e2e/playwright-report` を
 `E2E_ARTIFACT_DIR`（既定 `e2e-artifacts/`）へタイムスタンプ付き tar.gz で保存する。
