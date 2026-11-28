@@ -45,6 +45,25 @@ status: current
   （仕様変更で事前合意が必要）。今回は未実施。詳細は
   [TASK_INVENTORY.md](docs/TASK_INVENTORY.md) §5 の `[未検証]` 項目を参照。
 
+- [ ] **鍵ローテーション手順を systemd 配布の秘密注入経路へ結線** — 根拠
+  `docs/KEY_ROTATION_RUNBOOK.md:78,82,96-97` / `deploy/openillustration.service:25-30` / d3-OPS / 高。
+  Runbook の `export` は対話シェル限定で systemd サービス環境へ反映されない。`server.env`（0600）更新・
+  `systemctl restart`・`doctor --strict`・health 確認を各段階へ追記し、export 例は開発用と明記。
+- [ ] **IPFS チェックサム不一致の応答コード記述を 401→502 へ是正** — 根拠 `docs/DETAILED_DESIGN.md:76` /
+  `server/src/lib.rs:974-975,1010-1013` / d2-FG / 中。実装は `AppError::BadGateway`（502）で、
+  todo.md も変更済み。設計書だけ旧契約のまま。WARN 記録・fail-closed 契約も併記。
+- [ ] **認証前アクセスの例外集合を単一情報源化** — 根拠 `docs/adr/ADR-0001-mvp-trust-boundaries.md:27` /
+  `docs/REQUIREMENTS_SPECIFICATION.md:22` / `docs/DETAILED_DESIGN.md:22-33` / `server/src/lib.rs:3796-3818` /
+  d2-FG / 中。ADR は `/policy/age` 不含、要件仕様は4種類「のみ」、実装は callback / backchannel / metrics 等も
+  未認証公開。「のみ」表現と実装の矛盾を裁定し両文書へ反映（方針判断を含む）。
+- [ ] **英文フォーム要素へ `lang="en"` を付与** — 根拠 `client/src/lib.rs:3230-3236,5158-5162,5183-5189` /
+  d3-OPS / 中。`error_lang` 契約は英文要素の要素単位宣言を要求するが、REASON textarea 等は未付与で
+  ルート `lang="ja"` を継承。WCAG 3.1.2 観点。テスト仕様/E2E の a11y アサーションも更新。
+- [ ] **E2E 失敗時 `error-context` のログ出力をサニタイズ** — 根拠 `e2e/ci-e2e.sh:599-600` /
+  `e2e/global-setup.ts:24-27` / d1-CI / 中。global-setup は sanitizeForLog を通すが、こちらは
+  `head -c 20000` で無サニタイズ。フォーム入力の機微値が CI ログへ残る可能性。制御文字除去と長さ制限、
+  またはアーカイブのみへ残す対応を選択。
+
 - [x] **LOG OUTのrefresh Cookie失効を修正** — 2026-11-22 実装済み（`credentials: Include`）。E2Eはlocalhost/127.0.0.1別ホストのためCookie送信は未検証、同一サイト構成で検証可能な旨を記録。
 - [x] **未適用マイグレーションのカーソルを閉じてからBEGIN** — 根拠 `server/src/migration.rs:283` / review R2-ER / high。
 - [x] **auth_verify失効閾値削除をDB正本先行へ** — 根拠 `server/src/lib.rs:2936` / review R2-ER / high。
@@ -197,6 +216,36 @@ P0（本番公開前に解消すべきセキュリティ／データ完全性）
 - [x] Tailwind をビルド時 CSS 化し、外部 CDN/フォント依存と無 SRI を解消（R1-10、2026-11-17 対応済み）
 
 ### 優先度: 中
+
+- [ ] **シェル静的ゲートをサブディレクトリへ再帰化** — 根拠 `.github/workflows/ci.yml:181-187` / d1-CI / 中。
+  `scripts/*.sh e2e/*.sh` の glob 固定のため、将来 `scripts/lib/*.sh` 等を追加すると検査をすり抜ける。
+  `find scripts e2e -type f -name '*.sh' -print0` ＋ `xargs -0` または `shfmt -l scripts e2e` へ変更。
+- [ ] **CI ツールキャッシュを実効化** — 根拠 `.github/workflows/ci.yml:53-60,155-167` / `e2e/ci-e2e.sh:227-241` /
+  d1-CI / 中。actions/cache 未接続で `cache_hit` は常に 0、毎回コールドインストール。上流の
+  `cache-directories` 入力または actions/cache で version+checksum キー永続化（上流変更は承認が必要）。
+- [ ] **pre-commit へ静的ゲートを追加** — 根拠 `.pre-commit-config.yaml:4-9` / `.github/workflows/ci.yml:148,154,184-185` /
+  d1-CI / 中。現在は Betterleaks のみで markdownlint / doc-numbers / shellcheck / shfmt がコミット前に走らない。
+  新規フック追加は仕様変更のため事前合意が必要。
+- [ ] **Playwright CI リトライ成功を可視化** — 根拠 `e2e/playwright.config.ts:86` / `scripts/test-doc-numbers.sh:39-46` /
+  d1-CI / 中。`retries: 2` で 1〜2 回目失敗が 3 回目成功なら green になりフレーキーが隠れる。
+  `::warning::` アノテーションまたはフレーキー率閾値ゲートを追加（方針判断を含む）。
+- [ ] **AUDIT_EXPECT_ROOT の形式記述を64桁 hex へ統一** — 根拠 `docs/DETAILED_DESIGN.md:706-708` /
+  `docs/OPERATIONAL_POLICY.md:639` / `server/src/lib.rs:1709-1717` / d2-FG / 低。実装と ADR-0013 P2 は
+  64桁固定、設計書は任意長 hex と記載。大小文字混在可・前後空白不可も明記。
+- [ ] **設計書の /metrics「8種」を実一覧へ更新** — 根拠 `docs/DETAILED_DESIGN.md:32` / `server/src/lib.rs:601-642,697-702` /
+  d2-FG / 低。実装は counter 12 + gauge 2 の HELP/TYPE 定義。完全一覧は `server/src/lib.rs` を参照させる。
+- [ ] **verify_backup のトークン契約を設計書から是正** — 根拠 `docs/DETAILED_DESIGN.md:735-738` /
+  `server/src/bin/verify_backup.rs:12-19` / `README.md:192-197` / d2-FG / 低。実契約は DB 非接続・トークン不使用、
+  `--database-token` は拒否のみ。設計書の「sign_audit_export と同じ」を削除。
+- [ ] **LOG_FORMAT=json の必須化と Runbook/unit への設定例** — 根拠 `docs/KEY_ROTATION_RUNBOOK.md:129-130` /
+  `server/src/lib.rs:1280-1281` / `server/src/bin/doctor.rs:265-271` / `deploy/openillustration.service:25-30` /
+  d3-OPS / 中。未設定は人間向け text で、Runbook が前提とする構造化証跡が成立しない。
+- [ ] **バックアップ鮮度チェックへ `.last-success` 内容検証を追加** — 根拠 `docs/BACKUP_RESTORE_RUNBOOK.md:53-58` /
+  `deploy/openillustration-backup.cron:24-37` / d3-OPS / 中。cron 例は mtime のみで、UTC RFC3339 値と
+  世代 stamp の照合が無い。壊れた/旧世代の stamp を当日成功と誤判定し得る。
+- [ ] **署名鍵漏えい時の sub 失効手順を実行可能化** — 根拠 `docs/KEY_ROTATION_RUNBOOK.md:103-105` /
+  `docs/HANDOFF.md:351` / `server/src/lib.rs:5619-5622` / d3-OPS / 中。書き込み経路は BAN/back-channel のみで
+  任意 sub を失効させる CLI が無い。SQL 例（unix 秒・前進のみ UPSERT）または専用 CLI を追加。
 
 - [x] **投票一覧取得失敗時に古い通報を表示し投票ボタンを有効にしない** — 根拠 `client/src/lib.rs:3529` / discovery R5-VU / 中。
 - [x] **監査タイムラインを再オープン時に再取得** — 根拠 `client/src/lib.rs:2597` / discovery R5-VU / 中。
@@ -393,6 +442,16 @@ P1（本番運用の健全性）:
 - [x] 主要画面に実サーバー認証を使うスモーク E2E を1本追加（C1、2026-11-17 対応済み）
 
 ### 優先度: 低
+
+- [ ] **CI apt 導入ツールのバージョンを固定** — 根拠 `.github/workflows/ci.yml:36-40` / d1-CI / 低。
+  shellcheck / shfmt / gpg / golang-go / systemd が未ピンで、ランナー更新時に無関係コミットが赤くなり得る。
+  固定版コンテナまたは `--version` 検証 fail-fast を検討。
+- [ ] **Node バージョン検証を単一情報源化** — 根拠 `.github/workflows/ci.yml:136-146` / `e2e/ci-e2e.sh:267-287` /
+  d1-CI / 低。extra_gates と ci-e2e.sh で二重実装され、前者は `10#` 無し算術比較・閾値固定。
+  共通ヘルパへ集約し環境変数上書きでゲートを緩められないようにする。
+- [ ] **エラー詳細文言のコントラストを計測・是正** — 根拠 `client/src/lib.rs:3769,3781,3799,3808,3814` / d3-OPS / 中。
+  `text-gray-500` ＋ `text-[8px]` は黒背景で約 4.3:1 と WCAG 1.4.3 の 4.5:1 を下回る可能性。
+  `text-gray-400` 以上へ変更し、実背景で計測して axe/E2E にアサーション追加。
 
 - [x] **k-匿名性の要否を裁定 — 却下（2026-11-22）** — 根拠 `todo.md:709` / discovery R5-VU / 保留(speculative)。
   公開集計の小セル推論（review R3-AU medium）と同一課題。ADR-0008と照らして採用/却下を決定。

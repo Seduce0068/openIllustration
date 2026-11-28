@@ -15,9 +15,10 @@ generated:
 
 - ブランチ: `master`
 - 参照コミット: 作業開始時点は `745810e`。以降の変更は `git log` を参照。
-- 作業ツリー: 作業開始時点は clean。本セッションの CI 修正（ci.yml と上記2ドキュメント）は未コミット。
-  `client/dist/` 等の生成物はコミット対象外として扱う。
-- CI 成功例（履歴）: 直近は `dc39776`（run 43675475991、2026-11-15T04:08:59Z）。
+- 作業ツリー: 作業開始時点は clean。本セッションの CI 修正は `c513b1a` / `ff2a248` として
+  コミット・push 済み。`client/dist/` 等の生成物はコミット対象外として扱う。
+- CI 成功例（履歴）: 直近は run 43675475991（2026-11-15T04:08:59Z、headSha `45e751c`;
+  履歴書換後のローカル相当コミットは `dc39776`、tree 同一）。
   過去の記録は `8fb989c`（run 41579032881）。env ステップ通過の直近成功は前者。
 - 2026-11-24 以降は CI が連続失敗（直近5件は「環境変数（追加）」ステップで停止）。
   原因の env_vars 内コメント行は修正済みだが再実行前で、後続ゲートは未検証。
@@ -127,7 +128,8 @@ bash scripts/test-prepare-distribution.sh
 
 【履歴】2026-11-16 時点では GitHub アカウントの請求/上限によりジョブが開始されなかった
 （annotation: `recent account payments have failed or your spending limit needs to be increased`）。
-この課金停止は 2026-11-24 午前中のみで解消済み（開始直前 3〜5 秒で失敗した run 45344635158 / 45376093531 等）。
+この課金停止は 2026-11-24 の run 45344635158（07:00:19Z / 16:00:19+09:00）と
+45376093531（10:34:38Z / 19:34:38+09:00）で継続し、その後解消済み（いずれも開始直後 3〜5 秒で失敗）。
 直近の赤ゲート原因は別で、`.github/workflows/ci.yml` の `env_vars` リテラルブロック内の
 コメント行（原因コミット `7d41758`、2026-11-24T03:28:54+09:00）。再利用ワークフロー
 rust-gates.yml@v1 は空行しか除去しないため、コメント行が `$GITHUB_ENV` へ流入し
@@ -135,8 +137,11 @@ rust-gates.yml@v1 は空行しか除去しないため、コメント行が `$GI
 （`Unable to process file command 'env' successfully.`）。後続の fmt / check / test /
 clippy / deny / shell / E2E は未実行。
 親がコメント行を `env_vars:` キーの直前（YAML コメント）へ移動して修正済み（ブロック内は
-KEY=VALUE 4行のみ、`MAX_CHROME_MAJOR=140` は維持）。修正直後の再実行前のため、
-後続ゲートが緑になったかは未検証（緑と断定しない）。
+KEY=VALUE 4行のみ、`MAX_CHROME_MAJOR=140` は維持）。修正後の2実行（run 46112869326 /
+46114430664）で env → fmt → check → test → clippy はすべて成功し、env_vars 原因は解消した。
+追加ゲートは最初に wasm 向け clippy の `collapsible_if`（`ff2a248` で修正）、次に
+`go install` 由来 betterleaks の `version.Version="dev"` による版チェック失敗が判明し、
+リリース tarball＋`checksums.txt` 経路へ修正済み。最終修正後の CI は未検証（緑と断定しない）。
 上記コマンドをローカルで順に実行する代替ゲート自体は有効。参考までに 2026-11-17 の
 ローカル実行では fmt / clippy / test(workspace: 188件) / deny(licenses, advisories) /
 wasm build / E2E(9件) がすべて成功した（9件は当時値。現在値は TEST_SPECIFICATION を参照）。
