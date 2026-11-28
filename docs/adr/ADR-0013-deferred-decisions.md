@@ -79,7 +79,7 @@ generated:
 | E2E ビルド `::error::` | trunk build／型検査／外部アセットゲートの各失敗点へ段階名付き `::error::` を追加。 |
 | systemd/cron 構文 CI ゲート | `systemd-analyze verify` と cron フィールド検査を extra_gates へ追加。 |
 | CI バイナリキャッシュ | cargo-deny／betterleaks をバージョン＋checksum 付きでキャッシュし、ヒット時も `--version` を検証。 |
-| go ツールチェーン前提 | `command -v go` を事前検査し、無い場合は固定版バイナリを直接ダウンロード。 |
+| betterleaks 固定版の供給 | リリース tarball（`linux_x64`）と `checksums.txt` を第1経路で検証してキャッシュし、`--version` で固定版を証明する。`go install` は `version.Version="dev"` となり版ゲートを通れないため使用しない（2026-11-28 に CI で実証）。 |
 | playwright install 再試行 | 有限回数（3 回）のリトライとバックオフを追加。 |
 | モバイル viewport | オプトインのモバイルプロジェクトを追加し、主要画面のスモークを既存ケース内へ統合。 |
 | Chrome 上限固定 | `ci-e2e.sh` の CI 分岐で `MAX_CHROME_MAJOR=140` を既定適用し、下限（`MIN_CHROME_MAJOR=120`）とともに検証。超過時は fail-closed。 |

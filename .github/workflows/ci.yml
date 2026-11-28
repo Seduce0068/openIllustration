@@ -35,9 +35,9 @@ jobs:
       timeout_minutes: 30
       # シェル静的ゲート（extra_gates）で shellcheck / shfmt を使うため、
       # 共通ワークフローの apt 導入ステップでインストールする。
-      # golang-go: betterleaks 未導入時の go install 前提（ADR-0013 P3）。
       # systemd: systemd-analyze verify による deploy unit 構文ゲート用。
-      apt_packages: shellcheck shfmt gpg golang-go systemd
+      # betterleaks は固定版リリース tarball を直接取得するため go は不要（ADR-0013 P3）。
+      apt_packages: shellcheck shfmt gpg systemd
       # Chrome 上限: ランナーの Chrome を自動更新した際は検証済み major へ追随させる。
       # 注意: env_vars は $GITHUB_ENV へそのまま書き出されるため KEY=VALUE 行のみ置く（コメント行は job 失敗）。
       env_vars: |
@@ -57,7 +57,7 @@ jobs:
         # 保存先は共通ワークフロー rust-gates.yml 側の cache-directories 入力を待つ
         # （追加された場合はキーに tool 名＋固定バージョン＋checksum を使う）。
         # いずれの場合も sha256sum -c と固定版 --version を再確認して fail-closed にし、
-        # 検証失敗時は従来の cargo install / go install 経路へ戻す。
+        # 検証失敗時は exit 1（旧 go install フォールバックは版ゲートを通れないため廃止）。
         tool_cache_dir="${HOME}/.cache/oil-ci-tools"
         mkdir -p "$tool_cache_dir"
         cargo_deny_version="0.20.2"
@@ -73,8 +73,9 @@ jobs:
         # --staged は checkout 直後に index が HEAD と一致し 0 バイト走査になるため、
         # CI では --log-opts でイベント別の範囲を明示して走査する。
         # pull_request は base..head（マルチコミット PR を漏らさない）、push は before..HEAD。
-        # go ツールチェーン前提（ADR-0013 P3）: go install の前に command -v go を検査し、
-        # 無い場合は固定版リリースバイナリを checksum 検証付きで直接ダウンロードする。
+        # ADR-0013 P3: 固定版リリース資産（ldflags 済みバイナリ）を第1経路にする。
+        # go install は version.Version="dev" のままとなり --version ゲートを通過できない
+        # （CI で実証）ため、リリース tarball + checksums.txt を優先する。
         betterleaks_bin="${tool_cache_dir}/betterleaks-${betterleaks_version}"
         betterleaks_sum="${betterleaks_bin}.sha256"
         betterleaks_hit=0
@@ -83,25 +84,27 @@ jobs:
           betterleaks_hit=1
         fi
         if ((betterleaks_hit == 0)); then
-          if command -v go >/dev/null 2>&1; then
-            # 従来の go install フォールバック（固定版を維持）。
-            go install github.com/betterleaks/betterleaks@${betterleaks_version}
-            cp "$(go env GOPATH)/bin/betterleaks" "$betterleaks_bin"
-          else
-            # go 不在: 固定版リリース資産と付属 checksum を取得して検証する。
-            bl_asset="betterleaks_${betterleaks_version#v}_linux_amd64.tar.gz"
-            bl_base="https://github.com/betterleaks/betterleaks/releases/download/${betterleaks_version}"
-            curl -fsSL -o "${RUNNER_TEMP:-/tmp}/${bl_asset}" "${bl_base}/${bl_asset}"
-            curl -fsSL -o "${RUNNER_TEMP:-/tmp}/${bl_asset}.sha256" "${bl_base}/${bl_asset}.sha256"
-            (cd "${RUNNER_TEMP:-/tmp}" && sha256sum -c "${bl_asset}.sha256")
-            tar -xzf "${RUNNER_TEMP:-/tmp}/${bl_asset}" -C "${RUNNER_TEMP:-/tmp}" betterleaks
-            cp "${RUNNER_TEMP:-/tmp}/betterleaks" "$betterleaks_bin"
-          fi
+          # GoReleaser の amd64 asset 名は linux_x64（linux_amd64 ではない）。
+          bl_asset="betterleaks_${betterleaks_version#v}_linux_x64.tar.gz"
+          bl_base="https://github.com/betterleaks/betterleaks/releases/download/${betterleaks_version}"
+          bl_tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/betterleaks.XXXXXX")"
+          curl -fsSL -o "${bl_tmp}/${bl_asset}" "${bl_base}/${bl_asset}"
+          curl -fsSL -o "${bl_tmp}/checksums.txt" "${bl_base}/checksums.txt"
+          bl_sha="$(awk -v asset="$bl_asset" '$2 == asset { print $1 }' "${bl_tmp}/checksums.txt")"
+          [[ -n "$bl_sha" ]] || {
+            echo "::error::checksum entry not found for ${bl_asset}" >&2
+            exit 1
+          }
+          (cd "$bl_tmp" && printf '%s  %s\n' "$bl_sha" "$bl_asset" | sha256sum -c -)
+          tar -xzf "${bl_tmp}/${bl_asset}" -C "$bl_tmp" betterleaks
+          cp "${bl_tmp}/betterleaks" "$betterleaks_bin"
           (cd "$tool_cache_dir" && sha256sum "$(basename "$betterleaks_bin")" > "$(basename "$betterleaks_sum")")
         fi
         # キャッシュヒット／ミスを問わず固定版 --version を確認する（ADR-0013 P3）。
-        "$betterleaks_bin" --version 2>&1 | grep -qF "${betterleaks_version#v}" || {
+        betterleaks_version_output="$("$betterleaks_bin" --version 2>&1)"
+        [[ "$betterleaks_version_output" == *"${betterleaks_version#v}"* ]] || {
           echo "::error::betterleaks version mismatch: expected ${betterleaks_version}" >&2
+          printf '%s\n' "$betterleaks_version_output" >&2
           exit 1
         }
         ln -sf "$(basename "$betterleaks_bin")" "${tool_cache_dir}/betterleaks"
